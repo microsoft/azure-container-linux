@@ -1,0 +1,9 @@
+#!/bin/bash
+# Wrapper to fix shadow-utils login stdout issue
+# shadow-utils' login incorrectly sets stdout to a pipe instead of the TTY
+# This wrapper re-opens stdout/stderr to the TTY before exec'ing bash
+if [ -t 0 ]; then
+    TTY=$(tty)
+    exec 1>"$TTY" 2>"$TTY"
+fi
+exec /bin/bash "$@"

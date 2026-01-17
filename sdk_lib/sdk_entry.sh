@@ -74,6 +74,18 @@ grep -q 'export MODULE_SIGNING_KEY_DIR' /home/sdk/.bashrc || {
 #    ./update_chroot --toolchain_boards="amd64-usr arm64-usr".
 #    This is done via a separate ".cmd" file since we have used up
 #    our quotes for su -c "<cmd>" already.
+
+# Preserve HYBRID mode environment variables for RPM builds
+if [[ -n "${PACKAGE_SOURCE_MODE:-}" ]]; then
+    # Remove any existing entries first
+    sed -i -e '/export PACKAGE_SOURCE_MODE=/d' -e '/export RPM_STAGING_DIR=/d' /home/sdk/.bashrc 2>/dev/null || true
+    # Add current values
+    echo "export PACKAGE_SOURCE_MODE='${PACKAGE_SOURCE_MODE}'" >> /home/sdk/.bashrc
+    if [[ -n "${RPM_STAGING_DIR:-}" ]]; then
+        echo "export RPM_STAGING_DIR='${RPM_STAGING_DIR}'" >> /home/sdk/.bashrc
+    fi
+fi
+
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"
     echo -n "exec bash -l -i -c '" >"$cmd"

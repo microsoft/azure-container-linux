@@ -1,0 +1,10 @@
+[Match]
+Kind=!*
+Type=ether
+
+[Network]
+DHCP=yes
+
+[DHCPv4]
+UseDNS=true
+UseRoutes=true

@@ -1,0 +1,23 @@
+[Unit]
+Description=Populate /etc from /usr/share/flatcar/etc (RPM mode)
+DefaultDependencies=no
+Before=sysinit.target systemd-tmpfiles-setup.service local-fs.target
+After=local-fs-pre.target
+ConditionPathExists=/usr/share/flatcar/etc
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Copy PAM configs - CRITICAL for login
+ExecStart=/bin/sh -c 'if [ -d /usr/share/flatcar/etc/pam.d ] && [ ! -d /etc/pam.d ]; then cp -a /usr/share/flatcar/etc/pam.d /etc/; fi'
+# Copy security configs
+ExecStart=/bin/sh -c 'if [ -d /usr/share/flatcar/etc/security ] && [ ! -d /etc/security ]; then cp -a /usr/share/flatcar/etc/security /etc/; fi'
+# Copy passwd/group/shadow if not present
+ExecStart=/bin/sh -c 'for f in passwd group shadow gshadow; do if [ -f /usr/share/flatcar/etc/$f ] && [ ! -f /etc/$f ]; then cp -a /usr/share/flatcar/etc/$f /etc/; fi; done'
+# Copy other essential configs
+ExecStart=/bin/sh -c 'for f in nsswitch.conf login.defs profile shells environment; do if [ -f /usr/share/flatcar/etc/$f ] && [ ! -f /etc/$f ]; then cp -a /usr/share/flatcar/etc/$f /etc/; fi; done'
+# Copy directories
+ExecStart=/bin/sh -c 'for d in profile.d default skel ssh ssl; do if [ -d /usr/share/flatcar/etc/$d ] && [ ! -d /etc/$d ]; then cp -a /usr/share/flatcar/etc/$d /etc/; fi; done'
+
+[Install]
+WantedBy=sysinit.target

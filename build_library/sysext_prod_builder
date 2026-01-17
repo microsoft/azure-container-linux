@@ -63,7 +63,10 @@ create_prod_sysext() {
   # The --install_root_basename="${name}-base-sysext-rootfs" flag is
   # important - it sets the name of a rootfs directory, which is used
   # to determine the package target in coreos/base/profile.bashrc
-  sudo "FLATCAR_BUILD_ID=$FLATCAR_BUILD_ID" "${SCRIPTS_DIR}/build_sysext" \
+  sudo "FLATCAR_BUILD_ID=$FLATCAR_BUILD_ID" \
+      "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE:-PORTAGE}" \
+      "RPM_STAGING_DIR=${RPM_STAGING_DIR:-}" \
+      "${SCRIPTS_DIR}/build_sysext" \
             --board="${BOARD}" \
             --image_builddir="${workdir}/sysext-build" \
             --squashfs_base="${base_sysext}" \

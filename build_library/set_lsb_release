@@ -29,7 +29,14 @@ OS_NAME="Flatcar Container Linux by Kinvolk"
 OS_CODENAME="Oklo"
 OS_ID="flatcar"
 OS_ID_LIKE="coreos"
-OS_PRETTY_NAME="$OS_NAME $FLATCAR_VERSION (${OS_CODENAME})"
+PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
+
+# Check if we're in hybrid mode to add Azure Linux attribution
+if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+  OS_PRETTY_NAME="$OS_NAME $FLATCAR_VERSION (${OS_CODENAME})"
+elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+  OS_PRETTY_NAME="$OS_NAME $FLATCAR_VERSION (${OS_CODENAME}) with Azure Linux"
+fi
 
 FLATCAR_APPID="{e96281a6-d1af-4bde-9a0a-97b76e56dc57}"
 
@@ -45,7 +52,7 @@ sudo ln -sf "../usr/share/flatcar/lsb-release" "${ROOT_FS_DIR}/etc/lsb-release"
 
 # And the new standard, os-release
 # https://www.freedesktop.org/software/systemd/man/os-release.html
-sudo_clobber "${ROOT_FS_DIR}/usr/lib/os-release" <<EOF
+  sudo_clobber "${ROOT_FS_DIR}/usr/lib/os-release" <<EOF
 NAME="$OS_NAME"
 ID=$OS_ID
 ID_LIKE=$OS_ID_LIKE
@@ -61,10 +68,13 @@ FLATCAR_BOARD="$FLAGS_board"
 CPE_NAME="cpe:2.3:o:${OS_ID}-linux:${OS_ID}_linux:${FLATCAR_VERSION}:*:*:*:*:*:*:*"
 EOF
 sudo ln -sf "../usr/lib/os-release" "${ROOT_FS_DIR}/etc/os-release"
+sudo mkdir -p "${ROOT_FS_DIR}/usr/share/flatcar"
 sudo ln -sf "../../lib/os-release" "${ROOT_FS_DIR}/usr/share/flatcar/os-release"
 # Compat for split of lib64 into lib and lib64
-if [ ! -e "${ROOT_FS_DIR}/usr/lib64/os-release" ]; then
-  sudo ln -sf "../lib/os-release" "${ROOT_FS_DIR}/usr/lib64/os-release"
+if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+  if [ ! -e "${ROOT_FS_DIR}/usr/lib64/os-release" ]; then
+    sudo ln -sf "../lib/os-release" "${ROOT_FS_DIR}/usr/lib64/os-release"
+  fi
 fi
 
 # Create the defaults for the coreos configuration files in the usr directory

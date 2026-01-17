@@ -18,6 +18,7 @@ else
 fi
 BUILD_DIR="${FLAGS_output_root}/${BOARD}/${IMAGE_SUBDIR}"
 OUTSIDE_OUTPUT_DIR="../build/images/${BOARD}/${IMAGE_SUBDIR}"
+PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
 
 source "${BUILD_LIBRARY_DIR}/reports_util.sh" || exit 1
 source "${BUILD_LIBRARY_DIR}/sbsign_util.sh" || exit 1
@@ -472,7 +473,11 @@ EOF
         done
     done
     # Compress the licenses just with gzip because there is no big difference as they are single files
-    sudo gzip -9 "${root_fs_dir}"/usr/share/licenses/common/*
+    if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+        sudo gzip -9 "${root_fs_dir}"/usr/share/licenses/common/*
+    else
+        info "RPM mode: License files may be bundled differently"
+    fi
 }
 
 # Add /usr/share/SLSA reports for packages indirectly contained within the rootfs
@@ -555,7 +560,12 @@ start_image() {
   trap "cleanup_mounts '${root_fs_dir}' && delete_prompt" EXIT
 
   # First thing first, install baselayout to create a working filesystem.
-  emerge_to_image "${root_fs_dir}" --nodeps --oneshot sys-apps/baselayout
+  # Skip in RPM mode - RPM filesystem package provides directory structure
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    emerge_to_image "${root_fs_dir}" --nodeps --oneshot sys-apps/baselayout
+  elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    start_image_rpm "${root_fs_dir}"
+  fi
 
   # FIXME(marineam): Work around glibc setting EROOT=$ROOT
   # https://bugs.gentoo.org/show_bug.cgi?id=473728#c12
@@ -603,28 +613,42 @@ finish_image() {
   # the hash of the /usr partition into the kernel.
   # Remove the kernel from the /usr partition to save space.
   sudo mkdir -p "${root_fs_dir}/boot/flatcar"
-  sudo cp "${root_fs_dir}/usr/boot/vmlinuz" \
-       "${root_fs_dir}/boot/flatcar/vmlinuz-a"
-  sudo rm "${root_fs_dir}/usr/boot/vmlinuz"*
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    sudo cp "${root_fs_dir}/usr/boot/vmlinuz" \
+         "${root_fs_dir}/boot/flatcar/vmlinuz-a"
+    sudo rm "${root_fs_dir}/usr/boot/vmlinuz"*
+  elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    finish_image_rpm "${root_fs_dir}"
+  fi
 
   # Forbid dynamic user ID allocation because we want stable IDs
-  local found=""
-  # We want to forbid "-", "X:-" (.*:-), "-:X" (-:.*), "/X" (/.*)
-  found=$({ grep '^[ug]' "${root_fs_dir}"/usr/lib/sysusers.d/*.conf || true ; } | awk '{print $3}' | { grep -x -- "-\|.*:-\|-:.*\|/.*" || true ; })
-  if [ "${found}" != "" ]; then
-    die "Found dynamic ID allocation instead of hardcoded ID in /usr/lib/sysusers.d/*.conf (third column must not use '-', 'X:-', '-:X', or '/path')"
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    local found=""
+    # We want to forbid "-", "X:-" (.*:-), "-:X" (-:.*), "/X" (/.*)
+    found=$({ grep '^[ug]' "${root_fs_dir}"/usr/lib/sysusers.d/*.conf || true ; } | awk '{print $3}' | { grep -x -- "-\|.*:-\|-:.*\|/.*" || true ; })
+    if [ "${found}" != "" ]; then
+      die "Found dynamic ID allocation instead of hardcoded ID in /usr/lib/sysusers.d/*.conf (third column must not use '-', 'X:-', '-:X', or '/path')"
+    fi
+  elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    finish_image_uids_rpm "${root_fs_dir}"
   fi
   # Run systemd-sysusers once to create users in /etc/passwd so that
   # we can move them to /usr (relying on nss-altfiles to provide them
   # at runtime, but we could use systemd's userdb, too).
   sudo systemd-sysusers --root="${root_fs_dir}"
-  for databasefile in passwd group shadow gshadow; do
-    newentries=$(comm -23 <(sudo cut -d ":" -f 1 "${root_fs_dir}/etc/${databasefile}" | sort) <(sudo cut -d ":" -f 1 "${root_fs_dir}/usr/share/baselayout/${databasefile}" | sort))
-    for newentry in ${newentries}; do
-      sudo grep "^${newentry}:" "${root_fs_dir}/etc/${databasefile}" | sudo tee -a "${root_fs_dir}/usr/share/baselayout/${databasefile}"
+  
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    for databasefile in passwd group shadow gshadow; do
+      newentries=$(comm -23 <(sudo cut -d ":" -f 1 "${root_fs_dir}/etc/${databasefile}" | sort) <(sudo cut -d ":" -f 1 "${root_fs_dir}/usr/share/baselayout/${databasefile}" | sort))
+      for newentry in ${newentries}; do
+        sudo grep "^${newentry}:" "${root_fs_dir}/etc/${databasefile}" | sudo tee -a "${root_fs_dir}/usr/share/baselayout/${databasefile}"
+      done
+      sudo rm -f "${root_fs_dir}/etc/${databasefile}" "${root_fs_dir}/etc/${databasefile}-"
     done
-    sudo rm -f "${root_fs_dir}/etc/${databasefile}" "${root_fs_dir}/etc/${databasefile}-"
-  done
+  else
+    # In RPM mode, we don't use baselayout - users stay in /etc/passwd
+    info "RPM mode: Keeping users in /etc/passwd (no baselayout migration)"
+  fi
   # Record directories installed to the state partition.
   # Explicitly ignore entries covered by existing configs.
   local ignores=() allowed_users=() allowed_groups=()
@@ -641,8 +665,15 @@ finish_image() {
   # into:
   # --allow-user=root
   # --allow-user=core
-  mapfile -t allowed_users < <(grep '^COPY_USERS=' "${root_fs_dir}/sbin/flatcar-tmpfiles" | sed -e 's/.*="\([^"]*\)"/\1/' | tr '|' '\n' | sed -e 's/^/--allow-user=/')
-  mapfile -t allowed_groups < <(grep '^COPY_GROUPS=' "${root_fs_dir}/sbin/flatcar-tmpfiles" | sed -e 's/.*="\([^"]*\)"/\1/' | tr '|' '\n' | sed -e 's/^/--allow-group=/')
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    mapfile -t allowed_users < <(grep '^COPY_USERS=' "${root_fs_dir}/sbin/flatcar-tmpfiles" | sed -e 's/.*="\([^"]*\)"/\1/' | tr '|' '\n' | sed -e 's/^/--allow-user=/')
+    mapfile -t allowed_groups < <(grep '^COPY_GROUPS=' "${root_fs_dir}/sbin/flatcar-tmpfiles" | sed -e 's/.*="\([^"]*\)"/\1/' | tr '|' '\n' | sed -e 's/^/--allow-group=/')
+  elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    # In RPM mode, allow common system users/groups
+    allowed_users=("--allow-user=root" "--allow-user=core")
+    allowed_groups=("--allow-group=root" "--allow-group=core" "--allow-group=wheel")
+    info "RPM mode: Using default allowed users/groups (no flatcar-tmpfiles)"
+  fi
   sudo "${BUILD_LIBRARY_DIR}/gen_tmpfiles.py" --root="${root_fs_dir}" \
       --output="${root_fs_dir}/usr/lib/tmpfiles.d/base_image_var.conf" \
       "${ignores[@]}" "${allowed_users[@]}" "${allowed_groups[@]}" "${root_fs_dir}/var"
@@ -678,12 +709,17 @@ EOF
   fi
 
   if [[ -n "${image_kconfig}" ]]; then
-    cp "${root_fs_dir}/usr/boot/config" \
-        "${BUILD_DIR}/${image_kconfig}"
+    if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+      cp "${root_fs_dir}/usr/boot/config" \
+          "${BUILD_DIR}/${image_kconfig}"
+    elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+      finish_image_kernel_config_rpm "${root_fs_dir}"
+    fi
   fi
 
   # Build the selinux policy
-  if pkg_use_enabled coreos-base/coreos selinux; then
+  # Skip in RPM mode - Azure Linux handles SELinux differently
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]] && pkg_use_enabled coreos-base/coreos selinux; then
       sudo chroot "${root_fs_dir}" bash -c "cd /usr/share/selinux/mcs && semodule -s mcs -i *.pp"
   fi
 
@@ -695,14 +731,24 @@ EOF
   # container with flatcar-tmpfiles (not really needed but maybe nice to have
   # as it also lands as reference in /usr/share/flatcar/etc).
   local dbfile
-  for dbfile in passwd shadow group gshadow; do
-    sudo cp -f "${root_fs_dir}"/usr/share/baselayout/"${dbfile}" "${root_fs_dir}"/etc/
-  done
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    # Portage mode: copy from baselayout
+    for dbfile in passwd shadow group gshadow; do
+      sudo cp -f "${root_fs_dir}"/usr/share/baselayout/"${dbfile}" "${root_fs_dir}"/etc/
+    done
+  else
+    # RPM mode: Azure Linux already has these files in /etc from filesystem RPM
+    info "RPM mode: Using existing passwd/group files from Azure Linux filesystem"
+  fi
   sudo systemd-tmpfiles --create --remove --boot --exclude-prefix=/dev --root="${root_fs_dir}"
-  for dbfile in passwd shadow group gshadow; do
-    sudo rm -f "${root_fs_dir}"/etc/"${dbfile}"
-  done
-  sudo "${root_fs_dir}"/usr/sbin/flatcar-tmpfiles "${root_fs_dir}"
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    for dbfile in passwd shadow group gshadow; do
+      sudo rm -f "${root_fs_dir}"/etc/"${dbfile}"
+    done
+    sudo "${root_fs_dir}"/usr/sbin/flatcar-tmpfiles "${root_fs_dir}"
+  elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    finish_image_tmpfiles_rpm "${root_fs_dir}"
+  fi
   # Now that we used the tmpfiles for creating /etc we delete them because
   # the L, d, D, and C entries cause upcopies. Also filter out rules with ! or - but no other modifiers
   # like + or = which explicitly recreate files.
@@ -712,13 +758,19 @@ EOF
   # These rules are combined with the + modifier in addition.
   # Other rules like w, e, x, do not create files that don't exist.
   # Note: '-' must come first in the modifier pattern.
-  grep -Ph '^[fcCdDLvqQpb][-=~^!+]*[ \t]*/etc' "${root_fs_dir}"/usr/lib/tmpfiles.d/* | grep -oP '/etc[^ \t]*' | sudo_clobber "${root_fs_dir}"/usr/share/flatcar/etc-no-whiteouts
-  sudo sed -i '/^[CdDL][-=~^!]*[ \t]*\/etc\//d' "${root_fs_dir}"/usr/lib/tmpfiles.d/*
+  # In RPM mode, skip modifying hybrid-etc.conf as we need those rules for boot-time population
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    grep -Ph '^[fcCdDLvqQpb][-=~^!+]*[ \t]*/etc' "${root_fs_dir}"/usr/lib/tmpfiles.d/* | grep -oP '/etc[^ \t]*' | sudo_clobber "${root_fs_dir}"/usr/share/flatcar/etc-no-whiteouts
+    sudo sed -i '/^[CdDL][-=~^!]*[ \t]*\/etc\//d' "${root_fs_dir}"/usr/lib/tmpfiles.d/*
+  else
+    info "RPM mode: Skipping tmpfiles.d /etc rule removal (needed for boot-time population)"
+  fi
 
   # SELinux: Label the root filesystem for using 'file_contexts'.
   # The labeling has to be done before moving /etc to /usr/share/flatcar/etc to prevent wrong labels for these files and as
   # the relabeling on boot would cause upcopies in the overlay.
-  if pkg_use_enabled coreos-base/coreos selinux; then
+  # Skip in RPM mode - Azure Linux handles SELinux differently
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]] && pkg_use_enabled coreos-base/coreos selinux; then
     # TODO: Breaks the system:
     # sudo setfiles -Dv -r "${root_fs_dir}" "${root_fs_dir}"/etc/selinux/mcs/contexts/files/file_contexts "${root_fs_dir}"
     # sudo setfiles -Dv -r "${root_fs_dir}" "${root_fs_dir}"/etc/selinux/mcs/contexts/files/file_contexts "${root_fs_dir}"/usr
@@ -732,11 +784,16 @@ EOF
   # files, so we remove nothing important. There shouldn't be any
   # symlinks either. Add "! -type d" to exclude directories as "stat"
   # usually returns a size of a directory being 4096 or so.
-  if [[ $(sudo find "${root_fs_dir}/usr/share/flatcar/etc" -size +0 ! -type d 2>/dev/null | wc -l) -gt 0 ]]; then
-    die "Unexpected non-empty files in ${root_fs_dir}/usr/share/flatcar/etc"
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    if [[ $(sudo find "${root_fs_dir}/usr/share/flatcar/etc" -size +0 ! -type d 2>/dev/null | wc -l) -gt 0 ]]; then
+      die "Unexpected non-empty files in ${root_fs_dir}/usr/share/flatcar/etc"
+    fi
+    sudo rm -rf "${root_fs_dir}/usr/share/flatcar/etc"
+    sudo cp -a "${root_fs_dir}/etc" "${root_fs_dir}/usr/share/flatcar/etc"
+  else
+    # Skip this check in RPM mode - we intentionally populate /usr/share/flatcar/etc earlier
+    finish_image_backup_etc_rpm "${root_fs_dir}"  
   fi
-  sudo rm -rf "${root_fs_dir}/usr/share/flatcar/etc"
-  sudo cp -a "${root_fs_dir}/etc" "${root_fs_dir}/usr/share/flatcar/etc"
 
   # Remove the rootfs state as it should be recreated through the
   # tmpfiles and may not be present on updating machines. This
@@ -755,6 +812,17 @@ EOF
         /lost+found)
           # Keep lost+found because e2fsck expects it.
           :
+          ;;
+        /bin|/lib|/lib64|/sbin)
+          # In RPM mode, keep these symlinks to /usr/* as they're
+          # created by the filesystem RPM and needed for boot
+          # (e.g., /bin/bash is referenced in /etc/passwd for root's shell)
+          if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+            info "RPM mode: Preserving ${folder#"${root_fs_dir}"} symlink"
+            :
+          else
+            sudo rm --one-file-system -rf "${folder}"
+          fi
           ;;
         *)
           sudo rm --one-file-system -rf "${folder}"
@@ -828,6 +896,13 @@ EOF
     local grub_args=()
     if [[ ${disable_read_write} -eq ${FLAGS_TRUE} ]]; then
       grub_args+=(--verity)
+      if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+        # Pass verity hash file path if it exists (for RPM mode)
+        local verity_hash_file="${BUILD_DIR}/${image_name%.bin}_verity.txt"
+        if [[ -f "${verity_hash_file}" ]]; then
+          grub_args+=(--verity_hash="${verity_hash_file}")
+        fi
+      fi
     else
       grub_args+=(--noverity)
     fi
@@ -838,6 +913,7 @@ EOF
       )
     fi
     for target in ${target_list}; do
+      info "Installing GRUB for target ${target}..."
       ${BUILD_LIBRARY_DIR}/grub_install.sh \
           --board="${BOARD}" \
           --target="${target}" \
@@ -865,16 +941,22 @@ EOF
   write_contents "${root_fs_dir}" "${BUILD_DIR}/${image_contents}"
   write_contents_with_technical_details "${root_fs_dir}" "${BUILD_DIR}/${image_contents_wtd}"
 
-  if [[ -n "${image_initrd_contents}" ]] || [[ -n "${image_initrd_contents_wtd}" ]]; then
-      "${BUILD_LIBRARY_DIR}/extract-initramfs-from-vmlinuz.sh" "${root_fs_dir}/boot/flatcar/vmlinuz-a" "${BUILD_DIR}/tmp_initrd_contents"
-      if [[ -n "${image_initrd_contents}" ]]; then
-          write_contents "${BUILD_DIR}/tmp_initrd_contents" "${BUILD_DIR}/${image_initrd_contents}"
-      fi
+  # Extract embedded initramfs from kernel - skip in RPM mode as Azure Linux kernel
+  # doesn't have an embedded initramfs like Flatcar's kernel does
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    if [[ -n "${image_initrd_contents}" ]] || [[ -n "${image_initrd_contents_wtd}" ]]; then
+        "${BUILD_LIBRARY_DIR}/extract-initramfs-from-vmlinuz.sh" "${root_fs_dir}/boot/flatcar/vmlinuz-a" "${BUILD_DIR}/tmp_initrd_contents"
+        if [[ -n "${image_initrd_contents}" ]]; then
+            write_contents "${BUILD_DIR}/tmp_initrd_contents" "${BUILD_DIR}/${image_initrd_contents}"
+        fi
 
-      if [[ -n "${image_initrd_contents_wtd}" ]]; then
-          write_contents_with_technical_details "${BUILD_DIR}/tmp_initrd_contents" "${BUILD_DIR}/${image_initrd_contents_wtd}"
-      fi
-      rm -rf "${BUILD_DIR}/tmp_initrd_contents"
+        if [[ -n "${image_initrd_contents_wtd}" ]]; then
+            write_contents_with_technical_details "${BUILD_DIR}/tmp_initrd_contents" "${BUILD_DIR}/${image_initrd_contents_wtd}"
+        fi
+        rm -rf "${BUILD_DIR}/tmp_initrd_contents"
+    fi
+  else
+    info "RPM mode: Skipping embedded initramfs extraction (Azure Linux kernel has no embedded initramfs)"
   fi
 
   if [[ -n "${image_disk_space_usage}" ]]; then
@@ -916,9 +998,14 @@ sbsign_image() {
         "${BUILD_DIR}/${image_kernel}"
   fi
 
-  # Sign GRUB and mokmanager(mm) with the shim-embedded key.
-  do_sbsign --output "${root_fs_dir}/boot/EFI/boot/grub${EFI_ARCH}.efi"{,}
-  do_sbsign --output "${root_fs_dir}/boot/EFI/boot/mm${EFI_ARCH}.efi"{,}
+  # In RPM mode, skip signing EFI files - Azure Linux provides pre-signed binaries
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    # Sign GRUB and mokmanager(mm) with the shim-embedded key.
+    do_sbsign --output "${root_fs_dir}/boot/EFI/boot/grub${EFI_ARCH}.efi"{,}
+    do_sbsign --output "${root_fs_dir}/boot/EFI/boot/mm${EFI_ARCH}.efi"{,}
+  else
+    info "RPM mode: Skipping EFI file signing (Azure Linux provides pre-signed binaries)"
+  fi
 
   # copying from vfat so ignore permissions
   if [[ -n "${image_grub}" ]]; then
@@ -948,3 +1035,8 @@ sbsign_image() {
     rm -rf "${BUILD_DIR}/pcrs"
   fi
 }
+
+# Source RPM-specific build utilities if in RPM mode
+if [ "$PACKAGE_SOURCE_MODE" == "RPM" ]; then
+  source "${BUILD_LIBRARY_DIR}/rpm/build_image_util.sh"
+fi

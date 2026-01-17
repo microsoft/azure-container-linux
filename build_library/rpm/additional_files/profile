@@ -1,0 +1,40 @@
+# /etc/profile - System-wide environment and startup programs (RPM mode)
+
+# Path manipulation functions (Azure Linux compatibility)
+pathprepend() {
+    [ -d "$2" ] || return
+    case ":$(eval echo \$$1):" in
+        *:"$2":*) ;;
+        *) eval "$1=$2:\$$1" ;;
+    esac
+}
+
+pathappend() {
+    [ -d "$2" ] || return
+    case ":$(eval echo \$$1):" in
+        *:"$2":*) ;;
+        *) eval "$1=\$$1:$2" ;;
+    esac
+}
+
+pathremove() {
+    :
+}
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Set default umask
+umask 022
+
+# Load profile.d scripts
+if [ -d /etc/profile.d ]; then
+    for script in /etc/profile.d/*.sh; do
+        [ -r "$script" ] && . "$script"
+    done
+    unset script
+fi
+
+# Interactive shell settings
+if [ "$PS1" ]; then
+    PS1='[\u@\h \W]\$ '
+fi

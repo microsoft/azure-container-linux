@@ -164,7 +164,7 @@ die_notrace() {
   for line in "$@"; do
     error "${DIE_PREFIX}${line}"
   done
-  if [[ ! -e "${SCRIPTS_DIR}/NO_DEBUG_OUTPUT_DELETE_ME" ]]; then
+  if [[ ! -e "${SCRIPTS_DIR}/NO_DEBUG_OUTPUT_DELETE_ME" && "${SKIP_DIE_DEBUG_OUTPUT:-}" != "true" ]]; then
       error "${DIE_PREFIX}!!!!!!!!!!!!!!!!!!!!!!!!!"
       error "${DIE_PREFIX}!! BEGIN DEBUG OUTPUT: !!"
       error "${DIE_PREFIX}!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -177,10 +177,13 @@ die_notrace() {
       error "${DIE_PREFIX}========"
       error_command_output "${DIE_PREFIX}" df -h
       error
-      error "${DIE_PREFIX}== DMESG =="
-      error "${DIE_PREFIX}==========="
-      error_command_output "${DIE_PREFIX}" sudo dmesg
-      error
+      # Skip dmesg by default - it's usually too verbose and not helpful
+      if [[ "${SHOW_DMESG_ON_ERROR:-}" == "true" ]]; then
+          error "${DIE_PREFIX}== DMESG =="
+          error "${DIE_PREFIX}==========="
+          error_command_output "${DIE_PREFIX}" sudo dmesg
+          error
+      fi
       error "${DIE_PREFIX}!!!!!!!!!!!!!!!!!!!!!!!"
       error "${DIE_PREFIX}!! END DEBUG OUTPUT: !!"
       error "${DIE_PREFIX}!!!!!!!!!!!!!!!!!!!!!!!"

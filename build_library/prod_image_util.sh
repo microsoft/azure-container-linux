@@ -3,6 +3,8 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
+
 # Lookup the current version of a binary package, downloading it if needed.
 # Usage: get_binary_pkg some-pkg/name
 # Prints: some-pkg/name-1.2.3
@@ -89,8 +91,27 @@ create_prod_image() {
 
   # Install minimal GCC (libs only) and then everything else
   set_image_profile prod
-  extract_prod_gcc "${root_fs_dir}"
-  emerge_to_image "${root_fs_dir}" "${base_pkg}"
+  
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    # Traditional Portage mode
+    extract_prod_gcc "${root_fs_dir}"
+    emerge_to_image "${root_fs_dir}" "${base_pkg}"
+  elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    # RPM mode - audit all deps and route through catalog
+    # The install_packages_to_image function will:
+    # 1. Audit all dependencies for base_pkg
+    # 2. Route each through the catalog (RPM vs Portage)
+    # 3. Install RPM packages first (including glibc for ldconfig)
+    # 4. Install Portage packages with --nodeps
+    # NOTE: grub packages are installed separately to BOARD_ROOT by grub_install.sh
+    info "Installing base packages in RPM mode (audit + explicit install)"
+    install_packages_to_image "${root_fs_dir}" "${base_pkg}"
+    
+    # Install ca-certificates for SSL/TLS support
+    info "Installing ca-certificates"
+    install_packages_to_image "${root_fs_dir}" "app-misc/ca-certificates"
+  fi
+  
   run_ldconfig "${root_fs_dir}"
   run_localedef "${root_fs_dir}"
 
@@ -135,20 +156,23 @@ create_prod_image() {
   sudo rm -rf "${BUILD_DIR}/root_fs_dir2"
 
   # clean-ups of things we do not need
-  sudo rm ${root_fs_dir}/etc/csh.env
+  # Use -f flag to avoid errors if files don't exist
+  sudo rm -f ${root_fs_dir}/etc/csh.env
   sudo rm -rf ${root_fs_dir}/etc/env.d
   sudo rm -rf ${root_fs_dir}/usr/include
   sudo rm -rf ${root_fs_dir}/var/cache/edb
   sudo rm -rf ${root_fs_dir}/var/db/pkg
+    
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    sudo mv ${root_fs_dir}/etc/profile.env \
+        ${root_fs_dir}/usr/share/baselayout/profile.env
 
-  sudo mv ${root_fs_dir}/etc/profile.env \
-      ${root_fs_dir}/usr/share/baselayout/profile.env
+    # Move the ld.so configs into /usr so they can be symlinked from /
+    sudo mv ${root_fs_dir}/etc/ld.so.conf ${root_fs_dir}/usr/lib
+    sudo mv ${root_fs_dir}/etc/ld.so.conf.d ${root_fs_dir}/usr/lib
 
-  # Move the ld.so configs into /usr so they can be symlinked from /
-  sudo mv ${root_fs_dir}/etc/ld.so.conf ${root_fs_dir}/usr/lib
-  sudo mv ${root_fs_dir}/etc/ld.so.conf.d ${root_fs_dir}/usr/lib
-
-  sudo ln --symbolic ../usr/lib/ld.so.conf ${root_fs_dir}/etc/ld.so.conf
+    sudo ln --symbolic ../usr/lib/ld.so.conf ${root_fs_dir}/etc/ld.so.conf
+  fi
 
   # Add a tmpfiles rule that symlink ld.so.conf from /usr into /
   sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/baselayout-ldso.conf" \

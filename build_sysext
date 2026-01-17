@@ -35,7 +35,7 @@ DEFINE_boolean generate_pkginfo "${FLAGS_FALSE}" \
   "Generate an additional squashfs '<sysext_name>_pkginfo.raw' with portage package meta-information (/var/db ...). Useful for creating sysext dependencies; see 'base_pkginfo' below."
 DEFINE_string base_pkginfo "" \
   "Colon-separated list of pkginfo squashfs paths / files generated via 'generate_pkginfo' to base this sysext on. The corresponding base sysexts are expected to be merged with the sysext generated."
-DEFINE_string compression "zstd" \
+DEFINE_string compression "gzip" \
   "Compression to use for sysext squashfs. One of 'gzip', 'lzo', 'lz4', 'xz', or 'zstd'. Must be supported by the Flatcar squashfs kernel module in order for the sysext to work."
 DEFINE_string mksquashfs_opts "" \
   "Additional command line options to pass to mksquashfs. See 'man 1 mksquashfs'. If <compression> is 'zstd' (the default), this option defaults to '-Xcompression-level 22 -b 512K'. Otherwise the default is empty."
@@ -119,6 +119,11 @@ fi
 source "${BUILD_LIBRARY_DIR}/toolchain_util.sh" || exit 1
 source "${BUILD_LIBRARY_DIR}/board_options.sh" || exit 1
 source "${BUILD_LIBRARY_DIR}/reports_util.sh" || exit 1
+
+PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+  source "${BUILD_LIBRARY_DIR}/rpm/build_sysext"
+fi
 
 # Architecture values are taken from systemd.unit(5).
 declare -A SYSEXT_ARCHES
@@ -224,16 +229,22 @@ info "Building '${SYSEXTNAME}' squashfs with (meta-)packages '${@}' in '${BUILD_
 
 for package; do
   echo "Installing package into sysext image: $package"
-  FEATURES="-ebuild-locks binpkg-multi-instance" emerge \
-    --root="${BUILD_DIR}/${FLAGS_install_root_basename}" \
-    --config-root="/build/${FLAGS_board}"  \
-    --sysroot="/build/${FLAGS_board}"  \
-    --usepkgonly \
-    --binpkg-respect-use=y \
-    --getbinpkg \
-    --verbose \
-    --jobs=${NUM_JOBS} \
-    "${package}"
+  
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    # Fall back to Portage for PORTAGE mode or packages not in RPM catalog
+    FEATURES="-ebuild-locks binpkg-multi-instance" emerge \
+      --root="${BUILD_DIR}/${FLAGS_install_root_basename}" \
+      --config-root="/build/${FLAGS_board}"  \
+      --sysroot="/build/${FLAGS_board}"  \
+      --usepkgonly \
+      --binpkg-respect-use=y \
+      --getbinpkg \
+      --verbose \
+      --jobs=${NUM_JOBS} \
+      "${package}"
+  elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    install_package_rpm "$package"
+  fi
 done
 
 # Make squashfs generation more reproducible.
@@ -246,14 +257,31 @@ umount "${BUILD_DIR}/fs-root"
 if [[ "$FLAGS_generate_pkginfo" = "${FLAGS_TRUE}" ]] ; then
   info "  Creating pkginfo squashfs '${BUILD_DIR}/${SYSEXTNAME}_pkginfo.raw'"
   mkdir -p "${BUILD_DIR}/img-pkginfo/var/db"
-  cp -R "${BUILD_DIR}/${FLAGS_install_root_basename}/var/db/pkg" "${BUILD_DIR}/img-pkginfo/var/db/"
+  
+  # In RPM mode, Portage's /var/db/pkg may not exist if packages were installed via RPM
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    cp -R "${BUILD_DIR}/${FLAGS_install_root_basename}/var/db/pkg" "${BUILD_DIR}/img-pkginfo/var/db/"
+  else
+    info "  No Portage package database found (RPM mode) - creating empty pkginfo"
+  fi
+  
   mksquashfs "${BUILD_DIR}/img-pkginfo" "${BUILD_DIR}/${SYSEXTNAME}_pkginfo.raw" \
               -noappend -xattrs-exclude '^btrfs.' -comp "${FLAGS_compression}" ${FLAGS_mksquashfs_opts}
 fi
 
 info "Writing ${SYSEXTNAME}_packages.txt"
-ROOT="${BUILD_DIR}/${FLAGS_install_root_basename}" PORTAGE_CONFIGROOT="${BUILD_DIR}/${FLAGS_install_root_basename}" \
-      equery --no-color list --format '$cpv::$repo' '*' > "${BUILD_DIR}/${SYSEXTNAME}_packages.txt"
+if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+  ROOT="${BUILD_DIR}/${FLAGS_install_root_basename}" PORTAGE_CONFIGROOT="${BUILD_DIR}/${FLAGS_install_root_basename}" \
+        equery --no-color list --format '$cpv::$repo' '*' > "${BUILD_DIR}/${SYSEXTNAME}_packages.txt"
+else
+  # In RPM mode, create a placeholder packages.txt
+  info "  No Portage database - creating packages.txt from RPM info"
+  echo "# Packages installed via RPM in RPM mode" > "${BUILD_DIR}/${SYSEXTNAME}_packages.txt"
+  # If RPM database exists, list packages from it
+  if [[ -d "${BUILD_DIR}/${FLAGS_install_root_basename}/var/lib/rpm" ]]; then
+    rpm --root="${BUILD_DIR}/${FLAGS_install_root_basename}" -qa >> "${BUILD_DIR}/${SYSEXTNAME}_packages.txt" 2>/dev/null || true
+  fi
+fi
 
 
 if [[ "${FLAGS_strip_binaries}" = "${FLAGS_TRUE}" ]]; then

@@ -1,0 +1,20 @@
+
+  # Source RPM package management modules
+  source "${BUILD_LIBRARY_DIR}/rpm/package_catalog.sh" || exit 1
+  source "${BUILD_LIBRARY_DIR}/rpm/package_source_config.sh" || exit 1
+  source "${BUILD_LIBRARY_DIR}/rpm/rpm_install.sh" || exit 1
+  source "${BUILD_LIBRARY_DIR}/rpm/package_install.sh" || exit 1
+
+  install_package_rpm() {
+    local package="$1"
+    # Check if package is available via RPM
+    rpm_name=""
+    rpm_name=$(get_rpm_package_name "$package" 2>/dev/null) || true
+
+    info "RPM mode: package=$package, rpm_name=$rpm_name"
+
+    if [[ -n "$rpm_name" && "$rpm_name" != "SKIP" ]]; then
+      info "Installing $package via RPM ($rpm_name) in RPM mode"
+      install_packages_to_image "${BUILD_DIR}/${FLAGS_install_root_basename}" "$package"
+    fi
+  }
