@@ -10,10 +10,13 @@
 # Options:
 #   --board=BOARD       Target board (default: amd64-usr)
 #   --group=GROUP       Image group: developer|production|prod (default: production)
+#   --build-sdk-container   Update/rebuild SDK container with RPM tools (can run standalone)
 #   --download-only     Only download RPMs, don't build
 #   --skip-download     Skip RPM download, use existing staging
 #   --clean             Clean staging directory before download
 #   --rebuild           Force rebuild even if image exists
+#   --rebuild-and-test    Rebuild image and run container tests (equivalent to
+#                       --rebuild --build-vm-image --start-vm --run-script ./run-container-test.sh)
 #   --build-vm-image    Build VM images after creating base image
 #   --start-vm          Start the VM after building (implies --build-vm-image)
 #   --vm-name=NAME      Name for the VM (default: flatcar-hybrid)
@@ -151,6 +154,14 @@ parse_args() {
             --rebuild)
                 FORCE_REBUILD=true
                 BUILD_IMAGE=true
+                shift
+                ;;
+            --rebuild-and-test)
+                FORCE_REBUILD=true
+                BUILD_IMAGE=true
+                BUILD_VM_IMAGE=true
+                START_VM=true
+                RUN_SCRIPTS+=("./run-container-test.sh")
                 shift
                 ;;
             --build-image)
@@ -372,6 +383,49 @@ verify_critical_packages() {
     info "✓ All critical packages present"
 }
 
+# Update/rebuild the SDK container with RPM tools
+update_sdk_container() {
+    section "Updating SDK Container"
+
+    info "Rebuilding SDK container with RPM/dnf tools..."
+
+    # Source SDK common functions to get version info
+    source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
+
+    # Restore original version file and read base SDK version
+    git restore sdk_container/.repo/manifests/version.txt 2>/dev/null || true
+    source sdk_container/.repo/manifests/version.txt
+    local base_sdk_version="${FLATCAR_SDK_VERSION}"
+    local rpm_sdk_version="${base_sdk_version}-rpm"
+
+    info "Base SDK version: ${base_sdk_version}"
+    info "RPM SDK version:  ${rpm_sdk_version}"
+
+    # Ensure base SDK container exists
+    info "Ensuring base SDK container is available..."
+    ./run_sdk_container -t hostname
+
+    # Update SDK container with RPM tools
+    info "Installing RPM/dnf tools in SDK container..."
+    ./update_sdk_container_image "${rpm_sdk_version}"
+
+    # Clean up old SDK containers
+    info "Cleaning up old SDK containers..."
+    docker ps -a --filter "name=flatcar-sdk-" --format "{{.ID}} {{.Names}}" | while read -r id name; do
+        info "  Removing container: $name ($id)"
+        docker rm -f "$id" 2>/dev/null || true
+    done
+
+    # Get updated SDK version
+    local sdk_version=$(get_sdk_version_from_versionfile)
+    local docker_sdk_vernum=$(vernum_to_docker_image_version "$sdk_version")
+    local sdk_image="${sdk_container_common_registry}/flatcar-sdk-all:${docker_sdk_vernum}"
+
+    info "✓ SDK container updated successfully"
+    info "  Image: ${sdk_image}"
+    echo
+}
+
 # Build the hybrid image using SDK container
 build_image() {
     section "Building Hybrid Flatcar Image"
@@ -411,30 +465,6 @@ build_image() {
     local sdk_version=$(get_sdk_version_from_versionfile)
     local docker_sdk_vernum=$(vernum_to_docker_image_version "$sdk_version")
     local sdk_image="${sdk_container_common_registry}/flatcar-sdk-all:${docker_sdk_vernum}"
-
-    # Check if SDK image exists locally
-    if [[ "$BUILD_SDK_CONTAINER" == "true" ]]; then
-        info "Will rebuild the SDK container..."
-
-        git restore sdk_container/.repo/manifests/version.txt
-        source sdk_container/.repo/manifests/version.txt
-        local base_sdk_version="${FLATCAR_SDK_VERSION}"
-        local rpm_sdk_version="${base_sdk_version}-rpm"
-        ./run_sdk_container -t hostname
-        ./update_sdk_container_image "${rpm_sdk_version}"
-
-        # Clean up old SDK containers
-        info "Cleaning up old SDK containers..."
-        docker ps -a --filter "name=flatcar-sdk-" --format "{{.ID}} {{.Names}}" | while read -r id name; do
-            info "  Removing container: $name ($id)"
-            docker rm -f "$id" 2>/dev/null || true
-        done
-
-        # Reload the SDK version
-        local sdk_version=$(get_sdk_version_from_versionfile)
-        local docker_sdk_vernum=$(vernum_to_docker_image_version "$sdk_version")
-        local sdk_image="${sdk_container_common_registry}/flatcar-sdk-all:${docker_sdk_vernum}"
-    fi
 
     info "Using SDK image: ${sdk_image}"
     # Use -C to specify the custom image (skips registry download)
@@ -936,6 +966,16 @@ main() {
 
     check_prerequisites
     print_summary
+
+    # Step 0: Update SDK container if requested (before download/build)
+    if [[ "$BUILD_SDK_CONTAINER" == "true" ]]; then
+        update_sdk_container
+        info "Updated SDK container. Existing SDK containers removed. For subsequent runs, remove the --build-sdk-container flag to speed up."
+    else 
+        info "Skipping SDK container update"
+        info "Found the following SDK containers:"
+        docker ps -a --filter "name=flatcar-sdk-" --format "{{.ID}} {{.Names}}"
+    fi
 
     # Step 1: Download RPMs (unless skipped)
     if [[ "$SKIP_DOWNLOAD" != "true" ]]; then
