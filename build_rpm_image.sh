@@ -161,7 +161,8 @@ parse_args() {
                 BUILD_IMAGE=true
                 BUILD_VM_IMAGE=true
                 START_VM=true
-                RUN_SCRIPTS+=("./run-container-test.sh")
+                RUN_SCRIPTS+=("./build_library/rpm/tests/run-secureboot-test.sh")
+                RUN_SCRIPTS+=("./build_library/rpm/tests/run-container-test.sh")
                 shift
                 ;;
             --build-image)
@@ -758,6 +759,13 @@ run_command_via_console() {
 
     info "Running command via serial console: $command"
 
+    # Escape the command for TCL - replace backslashes, quotes, and dollars
+    local tcl_safe_command="${command//\\/\\\\}"  # Escape backslashes first
+    tcl_safe_command="${tcl_safe_command//\"/\\\"}"  # Escape double quotes
+    tcl_safe_command="${tcl_safe_command//\$/\\\$}"  # Escape dollar signs
+    tcl_safe_command="${tcl_safe_command//\[/\\\[}"  # Escape square brackets
+    tcl_safe_command="${tcl_safe_command//\]/\\\]}"  # Escape square brackets
+
     # Create expect script
     local expect_script=$(mktemp)
     cat > "$expect_script" <<EXPECT_EOF
@@ -779,18 +787,27 @@ expect {
     }
 }
 
-# Wait for login prompt and send username
+# Wait for login prompt or shell prompt
 expect {
     -re "login:|Login:" {
         send "$user\r"
+        # Handle password if needed
+        expect {
+            -re "[Pp]assword:" {
+                send "$password\r"
+                expect -re "\\$|#"
+            }
+            -re "\\$|#" {
+                # No password needed
+            }
+            timeout {
+                puts "ERROR: Timeout after login"
+                exit 1
+            }
+        }
     }
     -re "\\$|#" {
-        # Already logged in
-        send "$command\r"
-        expect -re "\\$|#"
-        send "exit\r"
-        expect eof
-        exit 0
+        # Already logged in at shell prompt
     }
     timeout {
         puts "ERROR: Timeout waiting for login prompt"
@@ -798,28 +815,19 @@ expect {
     }
 }
 
-# Handle password if needed
-expect {
-    -re "[Pp]assword:" {
-        send "$password\r"
-        expect -re "\\$|#"
-    }
-    -re "\\$|#" {
-        # No password needed
-    }
-    timeout {
-        puts "ERROR: Timeout after login"
-        exit 1
-    }
-}
-
 # Send command
-send "$command\r"
+send "$tcl_safe_command\r"
 
-# Wait for command completion
+# Wait for command completion and capture exit code
 expect {
-    -re "\\$|#" {
-        # Command completed
+    -re "SCRIPT_EXIT_CODE:(\[0-9\]+)" {
+        set exit_code \$expect_out(1,string)
+        # Wait a moment for any remaining output
+        sleep 0.5
+        if {\$exit_code != "0"} {
+            puts "Command failed with exit code: \$exit_code"
+            exit 1
+        }
     }
     timeout {
         puts "ERROR: Command timeout"
@@ -861,13 +869,13 @@ run_scripts_via_console() {
             # Base64 encode the script and decode+execute on VM
             local encoded
             encoded=$(base64 -w0 "$script")
-            local remote_cmd="echo '$encoded' | base64 -d > /tmp/script.sh && chmod +x /tmp/script.sh && /tmp/script.sh"
+            local remote_cmd="echo '$encoded' | base64 -d > /tmp/script.sh && chmod +x /tmp/script.sh && /tmp/script.sh; echo \"SCRIPT_EXIT_CODE:\$?\""
 
             run_command_via_console "$vm_name" "$remote_cmd" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD" || {
                 error "Script failed: $script"
-                continue
+                exit 1
             }
-            info "Script completed: $script"
+            info "✓ Script completed successfully: $script"
         elif [[ "$script" == *";"* ]] || [[ "$script" == *"&&"* ]] || [[ "$script" =~ ^[a-zA-Z] ]]; then
             # Treat as inline command
             info "Running command via console: $script"
@@ -1029,9 +1037,8 @@ main() {
     fi
 
     if [[ "$START_VM" == "true" ]]; then
-        # Deploy to libvirt (if virsh is available)
         if ! command -v virsh &>/dev/null; then
-            error "Cannot start VM: virsh not found or VM image not available"
+            error "Cannot start VM: virsh not found"
             exit 1
         fi
 
@@ -1041,21 +1048,100 @@ main() {
 
         booted_image_path="${vm_image_path}.booted"
         cp "${vm_image_path}" "${booted_image_path}"
+        
+        # Get absolute path for disk image
+        local abs_disk_path="$(cd "$(dirname "${booted_image_path}")" && pwd)/$(basename "${booted_image_path}")"
+        
+        # Get paths to OVMF firmware files with secure boot
+        local ovmf_code="/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd"
+        local ovmf_vars_template="/usr/share/edk2/x64/OVMF_VARS.ms.4m.fd"
+        
+        # Fallback paths if the above don't exist
+        if [[ ! -f "$ovmf_code" ]]; then
+            ovmf_code="/usr/share/OVMF/OVMF_CODE.secboot.fd"
+        fi
+        if [[ ! -f "$ovmf_vars_template" ]]; then
+            # Try ms.fd (Microsoft keys enrolled) first, then secboot, then regular
+            for vars_file in "/usr/share/edk2/x64/OVMF_VARS.ms.fd" "/usr/share/OVMF/OVMF_VARS.ms.fd" "/usr/share/edk2/x64/OVMF_VARS.secboot.fd" "/usr/share/OVMF/OVMF_VARS.secboot.fd" "/usr/share/edk2/x64/OVMF_VARS.4m.fd" "/usr/share/OVMF/OVMF_VARS.fd"; do
+                if [[ -f "$vars_file" ]]; then
+                    ovmf_vars_template="$vars_file"
+                    break
+                fi
+            done
+        fi
+        
+        if [[ ! -f "$ovmf_code" ]] || [[ ! -f "$ovmf_vars_template" ]]; then
+            error "OVMF firmware files not found"
+            error "Searched for: $ovmf_code and $ovmf_vars_template"
+            exit 1
+        fi
+        
+        info "Using OVMF firmware:"
+        info "  Code: $ovmf_code"
+        info "  Vars: $ovmf_vars_template"
+        
+        # Create a writable copy of OVMF_VARS for this VM
+        local vm_vars_path="${abs_disk_path}.vars"
+        cp "$ovmf_vars_template" "$vm_vars_path"
+        
+        # Create VM XML definition with secure boot enabled
+        info "Creating VM definition with secure boot..."
+        cat > /tmp/${VM_NAME}.xml <<EOF
+<domain type='kvm'>
+  <name>${VM_NAME}</name>
+  <memory unit='KiB'>2097152</memory>
+  <currentMemory unit='KiB'>2097152</currentMemory>
+  <vcpu placement='static'>2</vcpu>
+  <os>
+    <type arch='x86_64' machine='q35'>hvm</type>
+    <loader readonly='yes' secure='yes' type='pflash'>${ovmf_code}</loader>
+    <nvram>${vm_vars_path}</nvram>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+    <smm state='on'/>
+  </features>
+  <cpu mode='host-passthrough'/>
+  <clock offset='utc'>
+    <timer name='rtc' tickpolicy='catchup'/>
+    <timer name='pit' tickpolicy='delay'/>
+    <timer name='hpet' present='no'/>
+  </clock>
+  <pm>
+    <suspend-to-mem enabled='no'/>
+    <suspend-to-disk enabled='no'/>
+  </pm>
+  <devices>
+    <emulator>/usr/bin/qemu-system-x86_64</emulator>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='${abs_disk_path}'/>
+      <target dev='sda' bus='sata'/>
+    </disk>
+    <interface type='network'>
+      <source network='default'/>
+      <model type='e1000'/>
+    </interface>
+    <console type='pty'>
+      <target type='serial'/>
+    </console>
+    <tpm model='tpm-crb'>
+      <backend type='emulator' version='2.0'/>
+    </tpm>
+  </devices>
+</domain>
+EOF
 
-        # Start the VM (without Ignition - using serial console for execution)
-        info "Starting VM with virt-install..."
-        virt-install \
-            --name "${VM_NAME}" \
-            --memory 2048 \
-            --vcpus 2 \
-            --os-variant generic \
-            --import \
-            --disk "${booted_image_path}" \
-            --network default \
-            --machine q35 \
-            --boot uefi \
-            --noautoconsole
-
+        # Define and start the VM with virsh
+        info "Defining VM with virsh..."
+        virsh define /tmp/${VM_NAME}.xml
+        
+        info "Starting VM..."
+        virsh start "${VM_NAME}"
+        
+        rm -f /tmp/${VM_NAME}.xml
         info "VM '${VM_NAME}' started successfully!"
 
         # If scripts are specified, run them via serial console or SSH
@@ -1104,8 +1190,11 @@ main() {
                     warn "You can still connect manually: virsh console ${VM_NAME}"
                 fi
             fi
-            vm_ip=$(get_vm_ip "${VM_NAME}")
-            curl --connect-timeout 10 --max-time 30 http://$vm_ip | grep "Thank you for using nginx."
+            # Only run nginx curl test if we executed the container test
+            if [[ ${#RUN_SCRIPTS[@]} -gt 0 ]] && [[ "${RUN_SCRIPTS[-1]}" == *"run-container-test.sh" ]]; then
+                vm_ip=$(get_vm_ip "${VM_NAME}")
+                curl --connect-timeout 10 --max-time 30 http://$vm_ip | grep "Thank you for using nginx."
+            fi
             print_size_summary
         else
             echo

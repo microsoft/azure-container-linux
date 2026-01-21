@@ -4,4 +4,4 @@ iptables -I INPUT -p tcp --dport 80 -j ACCEPT
 systemctl start containerd
 sleep 2
 ctr image pull docker.io/library/nginx:latest
-ctr run --net-host --rm docker.io/library/nginx:latest nginx
+ctr run --detach --net-host docker.io/library/nginx:latest nginx

@@ -122,9 +122,6 @@ Convert the production image to a VM-ready format.
 
 ### Phase 5: Start VM and Run Tests
 
-Note that running VM using the current script does not currently work on Azure
-Linux, as Azure Linux is missing a dependency.
-
 #### Using build_rpm_image.sh (Integrated Testing)
 
 ```bash
@@ -177,9 +174,9 @@ Efficient workflow for iterative development:
 
 # Rebuild and retest
 ./build_rpm_image.sh --rebuild --build-vm-image --start-vm \
-  --run-script=./run-container-test.sh
+  --run-script=./build_library/rpm/tests/run-container-test.sh
 
-# Or use the short cut of the command above:
+# Or use the short cut of the command above (runs additional tests as well):
 ./build_rpm_image.sh --rebuild-and-test
 ```
 
