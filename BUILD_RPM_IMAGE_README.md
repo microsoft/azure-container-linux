@@ -40,7 +40,7 @@ Note that `docker.io` (instead of `docker-ce`) might work as well.
 Install on Azure Linux:
 
 ```bash
-sudo tdnf install -y moby-engine qemu-kvm libvirt libvirt-client expect curl createrepo_c
+sudo tdnf install -y moby-engine qemu-kvm libvirt libvirt-client expect curl createrepo_c edk2-ovmf
 ```
 
 ### System Requirements
