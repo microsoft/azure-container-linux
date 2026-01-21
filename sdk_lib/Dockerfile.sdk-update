@@ -11,131 +11,46 @@ RUN echo 'export FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -
         >> /home/sdk/.bashrc
 
 RUN chown sdk:sdk /mnt/host/source
+
+# Regenerate manifest for sdk-depends to pick up the new r57 revision with RPM/DNF
+# Use the actual source location since /var/lib/portage/repos/coreos-overlay doesn't exist yet
+RUN sudo bash -c 'cd /mnt/host/source/src/third_party/coreos-overlay/coreos-devel/sdk-depends && for ebuild in *.ebuild; do ebuild "$ebuild" manifest; done'
+
+# Explicitly set USE flags for RPM/DNF dependencies in /etc/portage before update_chroot runs
+# This ensures the flags are active when sdk-depends installs packages
+RUN sudo mkdir -p /etc/portage/package.use && \
+    echo 'app-arch/rpm python caps acl sqlite zstd' | sudo tee /etc/portage/package.use/rpm-dnf && \
+    echo 'dev-libs/libdnf python' | sudo tee -a /etc/portage/package.use/rpm-dnf && \
+    echo 'dev-libs/libsolv rpm' | sudo tee -a /etc/portage/package.use/rpm-dnf && \
+    echo 'dev-libs/glib introspection' | sudo tee -a /etc/portage/package.use/rpm-dnf && \
+    echo 'dev-python/pygobject -cairo' | sudo tee -a /etc/portage/package.use/rpm-dnf && \
+    echo 'dev-libs/libcomps python' | sudo tee -a /etc/portage/package.use/rpm-dnf
+
+# Unmask introspection USE flag
+RUN sudo mkdir -p /etc/portage/profile && \
+    echo '-introspection' | sudo tee /etc/portage/profile/use.mask
+
 RUN /home/sdk/sdk_entry.sh ./update_chroot --toolchain_boards="amd64-usr arm64-usr"
+
+# Force rebuild of packages that need new USE flags (especially libcomps with python)
+# The base SDK may have these installed without the correct USE flags
+RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n --changed-use --deep dev-libs/libcomps dev-libs/libdnf dev-libs/libsolv app-arch/rpm sys-apps/dnf'
 
 RUN /home/sdk/sdk_entry.sh ./setup_board --board="arm64-usr" --regen_configs
 RUN /home/sdk/sdk_entry.sh ./setup_board --board="amd64-usr" --regen_configs
 
-# Install Lua 5.4 dependency and eselect-lua
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/dev-lang
-RUN sudo cp -r /mnt/host/source/src/third_party/portage-stable/dev-lang/lua /var/lib/portage/repos/coreos-overlay/dev-lang/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/dev-lang/lua && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/dev-lang/lua
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/app-eselect
-RUN sudo cp -r /mnt/host/source/src/third_party/portage-stable/app-eselect/eselect-lua /var/lib/portage/repos/coreos-overlay/app-eselect/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/app-eselect/eselect-lua && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/app-eselect/eselect-lua
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n app-eselect/eselect-lua dev-lang/lua:5.4'
-
-# Install RPM tools for hybrid Azure Linux + Flatcar builds
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/app-crypt
-RUN sudo cp -r /mnt/host/source/src/third_party/portage-stable/app-crypt/rpm-sequoia /var/lib/portage/repos/coreos-overlay/app-crypt/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/app-crypt/rpm-sequoia && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/app-crypt/rpm-sequoia
-# Install RPM tools with Python support (needed for DNF later)
-RUN sudo mkdir -p /etc/portage/package.use
-RUN echo 'app-arch/rpm python caps acl sqlite zstd' | sudo tee /etc/portage/package.use/dnf
-RUN echo 'dev-libs/libdnf python' | sudo tee -a /etc/portage/package.use/dnf
-RUN echo 'dev-libs/libsolv rpm' | sudo tee -a /etc/portage/package.use/dnf
-RUN echo 'dev-libs/glib introspection' | sudo tee -a /etc/portage/package.use/dnf
-RUN echo 'dev-python/pygobject -cairo' | sudo tee -a /etc/portage/package.use/dnf
-RUN echo 'dev-libs/libcomps python' | sudo tee -a /etc/portage/package.use/dnf
-# Unmask introspection USE flag for packages that need it
-RUN sudo mkdir -p /etc/portage/profile
-RUN echo '-introspection' | sudo tee /etc/portage/profile/use.mask
-# Unmask newer glib and gobject-introspection needed for libmodulemd
-RUN sudo mkdir -p /etc/portage/package.unmask
-RUN echo 'dev-libs/glib' | sudo tee /etc/portage/package.unmask/glib
-RUN echo 'dev-libs/gobject-introspection' | sudo tee -a /etc/portage/package.unmask/glib
-RUN echo 'dev-libs/gobject-introspection-common' | sudo tee -a /etc/portage/package.unmask/glib
-RUN echo 'dev-util/gdbus-codegen' | sudo tee -a /etc/portage/package.unmask/glib
-RUN sudo mkdir -p /etc/portage/package.accept_keywords
-RUN echo 'dev-libs/glib ~amd64' | sudo tee /etc/portage/package.accept_keywords/glib
-RUN echo 'dev-libs/gobject-introspection ~amd64' | sudo tee -a /etc/portage/package.accept_keywords/glib
-RUN echo 'dev-libs/gobject-introspection-common ~amd64' | sudo tee -a /etc/portage/package.accept_keywords/glib
-RUN echo 'dev-util/gdbus-codegen ~amd64' | sudo tee -a /etc/portage/package.accept_keywords/glib
-# Copy newer glib ebuild from portage-stable
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/dev-libs
-RUN sudo cp -r /mnt/host/source/src/third_party/portage-stable/dev-libs/glib /var/lib/portage/repos/coreos-overlay/dev-libs/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/dev-libs/glib && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/dev-libs/glib
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/app-arch
-RUN sudo cp -r /mnt/host/source/src/third_party/portage-stable/app-arch/rpm /var/lib/portage/repos/coreos-overlay/app-arch/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/app-arch/rpm && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/app-arch/rpm
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n app-crypt/rpm-sequoia app-arch/rpm'
-
-# Install libsolv (dependency for libdnf)
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/dev-libs
-RUN sudo cp -r /mnt/host/source/src/third_party/coreos-overlay/dev-libs/libsolv /var/lib/portage/repos/coreos-overlay/dev-libs/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/dev-libs/libsolv && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/dev-libs/libsolv
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n dev-libs/libsolv'
-
-# Install shared-mime-info (dependency for gobject-introspection)
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/x11-misc
-RUN sudo cp -r /mnt/host/source/src/third_party/portage-stable/x11-misc/shared-mime-info /var/lib/portage/repos/coreos-overlay/x11-misc/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/x11-misc/shared-mime-info && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/x11-misc/shared-mime-info
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n x11-misc/shared-mime-info'
-
-# Install desktop-file-utils (dependency for gobject-introspection)
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/dev-util
-RUN sudo cp -r /mnt/host/source/src/third_party/portage-stable/dev-util/desktop-file-utils /var/lib/portage/repos/coreos-overlay/dev-util/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/dev-util/desktop-file-utils && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/dev-util/desktop-file-utils
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n dev-util/desktop-file-utils'
-
-# Install gobject-introspection (dependency for libmodulemd)
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/dev-libs
-RUN sudo cp -r /mnt/host/source/src/third_party/portage-stable/dev-libs/gobject-introspection /var/lib/portage/repos/coreos-overlay/dev-libs/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/dev-libs/gobject-introspection && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/dev-libs/gobject-introspection
-# Upgrade gdbus-codegen first to resolve blocker, then install gobject-introspection
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n --oneshot dev-util/gdbus-codegen dev-libs/glib'
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n dev-libs/gobject-introspection'
-
-# Install pygobject (dependency for libmodulemd)
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/dev-python
-RUN sudo cp -r /mnt/host/source/src/third_party/portage-stable/dev-python/pygobject /var/lib/portage/repos/coreos-overlay/dev-python/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/dev-python/pygobject && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/dev-python/pygobject
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n dev-python/pygobject'
-
-# Install libmodulemd (dependency for libdnf)
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/sys-libs
-RUN sudo cp -r /mnt/host/source/src/third_party/portage-stable/sys-libs/libmodulemd /var/lib/portage/repos/coreos-overlay/sys-libs/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/sys-libs/libmodulemd && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/sys-libs/libmodulemd
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n sys-libs/libmodulemd'
-
-# Install libcomps (dependency for DNF)
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/dev-libs
-RUN sudo cp -r /mnt/host/source/src/third_party/coreos-overlay/dev-libs/libcomps /var/lib/portage/repos/coreos-overlay/dev-libs/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/dev-libs/libcomps && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/dev-libs/libcomps
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n dev-libs/libcomps'
-
-# Install libdnf (dependency for DNF)
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/dev-libs
-RUN sudo cp -r /mnt/host/source/src/third_party/coreos-overlay/dev-libs/libdnf /var/lib/portage/repos/coreos-overlay/dev-libs/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/dev-libs/libdnf && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/dev-libs/libdnf
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n dev-libs/libdnf'
-
-# Install dnf tools for hybrid Azure Linux + Flatcar builds
-RUN sudo mkdir -p /var/lib/portage/repos/coreos-overlay/sys-apps
-RUN sudo cp -r /mnt/host/source/src/third_party/coreos-overlay/sys-apps/dnf /var/lib/portage/repos/coreos-overlay/sys-apps/
-RUN bash -c 'cd /var/lib/portage/repos/coreos-overlay/sys-apps/dnf && for ebuild in *.ebuild; do sudo ebuild "$ebuild" manifest; done'
-RUN sudo chown -R portage:portage /var/lib/portage/repos/coreos-overlay/sys-apps/dnf
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n sys-apps/dnf'
-
-# Verify DNF was installed successfully
-RUN echo "Checking for DNF installation..." && \
-    find /usr -name 'dnf*' -type f 2>/dev/null | grep -E '(bin|sbin)' || echo "No dnf files found in /usr/bin or /usr/sbin"
+# RPM and DNF tools are now installed automatically via sdk-depends
+# (see sdk_container/src/third_party/coreos-overlay/coreos-devel/sdk-depends/sdk-depends-0.0.1-r57.ebuild)
+# Verify DNF installation and dependencies
+RUN echo "=== Checking for DNF installation ===" && \
+    find /usr -name 'dnf*' -type f 2>/dev/null | grep -E '(bin|sbin)' || echo "No dnf files found"
 RUN test -x /usr/bin/dnf-3 || (echo "ERROR: dnf-3 not found at /usr/bin/dnf-3" && exit 1)
 RUN echo "Found DNF at: /usr/bin/dnf-3"
-RUN /usr/bin/dnf-3 --version || (echo "ERROR: dnf-3 failed to run" && exit 1)
+RUN echo "=== Checking for libcomps Python module ===" && \
+    python3 -c "import libcomps; print('libcomps module loaded successfully')" || \
+    (echo "ERROR: libcomps Python module not found - check if dev-libs/libcomps was installed with USE=python" && exit 1)
+RUN echo "=== Testing DNF ===" && \
+    /usr/bin/dnf-3 --version || (echo "ERROR: dnf-3 failed to run" && exit 1)
 
 # Restore original .bashrc to remove sandbox disablement
 RUN mv /home/sdk/.bashrc.bak /home/sdk/.bashrc

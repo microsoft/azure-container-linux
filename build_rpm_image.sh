@@ -468,7 +468,9 @@ build_image() {
 
     info "Using SDK image: ${sdk_image}"
     # Use -C to specify the custom image (skips registry download)
+    # Use --rm to remove old container and ensure environment variables are set correctly
     "${SCRIPT_DIR}/run_sdk_container" \
+        --rm \
         -t \
         -C "${sdk_image}" \
         -- \
@@ -1008,7 +1010,17 @@ main() {
         section "Building VM Images"
         remove_old_vm
         info "Converting base image to VM formats..."
-        ./run_sdk_container ./image_to_vm.sh --image_compression_formats=none --from=../build/images/${BOARD}/latest --board=${BOARD}
+        
+        # Get SDK image to use
+        source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
+        local sdk_version=$(get_sdk_version_from_versionfile)
+        local docker_sdk_vernum=$(vernum_to_docker_image_version "$sdk_version")
+        local sdk_image="${sdk_container_common_registry}/flatcar-sdk-all:${docker_sdk_vernum}"
+        
+        # Use -C to specify custom SDK image (avoids trying to download non-existent version-specific image)
+        # Use --rm to remove old container and ensure environment variables are set correctly
+        ./run_sdk_container --rm -C "${sdk_image}" ./image_to_vm.sh --image_compression_formats=none --from=../build/images/${BOARD}/latest --board=${BOARD}
+        
         if ! [[ -f $vm_image_path ]]; then
             error "Image generation failed"
             exit 1
