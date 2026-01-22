@@ -505,9 +505,29 @@ SUDOERS_EOF
       sudo rm -f "${root_fs_dir}/etc/resolv.conf"
       sudo ln -sf /run/systemd/resolve/stub-resolv.conf "${root_fs_dir}/etc/resolv.conf"
 
-      # Enable containerd service
-      info "RPM mode: Enabling containerd.service"
-      sudo ln -sf ../containerd.service "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/containerd.service"
+      # Enable containerd and docker after sysext merge
+      # The sysext (containerd-flatcar, docker-flatcar) provides the actual service files
+      # We need to trigger daemon-reload and start them after sysext completes
+      info "RPM mode: Creating sysext-services.service to start containerd/docker after sysext"
+      sudo tee "${root_fs_dir}/usr/lib/systemd/system/sysext-services.service" > /dev/null <<'SYSEXT_SVC'
+[Unit]
+Description=Start services provided by sysext after merge
+After=systemd-sysext.service
+Wants=systemd-sysext.service
+ConditionPathExists=/usr/lib/systemd/system/containerd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/systemctl daemon-reload
+ExecStart=/usr/bin/systemctl start containerd.service
+ExecStart=/usr/bin/systemctl start docker.service
+
+[Install]
+WantedBy=multi-user.target
+SYSEXT_SVC
+      sudo mkdir -p "${root_fs_dir}/etc/systemd/system/multi-user.target.wants"
+      sudo ln -sf /usr/lib/systemd/system/sysext-services.service "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/sysext-services.service"
 
       # Enable serial-getty on ttyS0 with AUTOLOGIN
       # This bypasses PAM login and drops directly to root shell
