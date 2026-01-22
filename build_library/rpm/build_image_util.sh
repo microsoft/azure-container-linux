@@ -332,6 +332,12 @@ SYSUSERS_RESOLVE
 u systemd-timesync - "systemd Time Synchronization" /
 SYSUSERS_TIMESYNC
 
+    # docker group - for docker socket permissions
+    sudo tee "${root_fs_dir}/usr/lib/sysusers.d/docker.conf" > /dev/null <<'SYSUSERS_DOCKER'
+# Docker group for socket access
+g docker - -
+SYSUSERS_DOCKER
+
     info "RPM mode: Created sysusers.d configs for system users"
 }
 
@@ -528,20 +534,6 @@ WantedBy=multi-user.target
 SYSEXT_SVC
       sudo mkdir -p "${root_fs_dir}/etc/systemd/system/multi-user.target.wants"
       sudo ln -sf /usr/lib/systemd/system/sysext-services.service "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/sysext-services.service"
-
-      # Enable serial-getty on ttyS0 with AUTOLOGIN
-      # This bypasses PAM login and drops directly to root shell
-      info "RPM mode: Creating autologin serial-getty@ttyS0"
-      sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/serial-getty@ttyS0.service.d"
-      sudo tee "${root_fs_dir}/usr/lib/systemd/system/serial-getty@ttyS0.service.d/autologin.conf" > /dev/null <<'AUTOLOGIN_CONF'
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud %I 115200,38400,9600 $TERM
-AUTOLOGIN_CONF
-
-      # Enable serial-getty on ttyS0
-      sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants"
-      sudo ln -sf ../serial-getty@.service "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
 
       # Create /etc/profile.d directory for additional scripts
       info "RPM mode: Creating profile.d directory"
