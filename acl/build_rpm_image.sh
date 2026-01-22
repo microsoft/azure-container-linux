@@ -1,18 +1,18 @@
 #!/bin/bash
-# Build Flatcar Hybrid Image - Complete workflow
+# Build Flatcar RPM Image - Complete workflow
 #
 # This script builds a Flatcar Linux image using Azure Linux RPMs where available,
 # falling back to Portage packages for Flatcar-specific components.
 #
 # Usage:
-#   ./build_hybrid_image.sh [options]
+#   ./build_rpm_image.sh [options]
 #
 # Options:
 #   --board=BOARD       Target board (default: amd64-usr)
 #   --group=GROUP       Image group: developer|production|prod (default: production)
 #   --build-sdk-container   Update/rebuild SDK container with RPM tools (can run standalone)
-#   --download-only     Only download RPMs, don't build
-#   --skip-download     Skip RPM download, use existing staging
+#   --build-rpms        Build custom RPM packages using Azure Linux toolkit (runs acl/build.sh)
+#   --download-rpms     Download Azure Linux RPMs to staging directory
 #   --clean             Clean staging directory before download
 #   --rebuild           Force rebuild even if image exists
 #   --rebuild-and-test    Rebuild image and run container tests (equivalent to
@@ -35,19 +35,19 @@
 #
 # Examples:
 #   # Build and run a test script on the VM via serial console
-#   ./build_hybrid_image.sh --run-script=./tests/smoke_test.sh
+#   ./build_rpm_image.sh --run-script=./tests/smoke_test.sh
 #
 #   # Run inline command via serial console
-#   ./build_hybrid_image.sh --run-script="cat /etc/os-release"
+#   ./build_rpm_image.sh --run-script="cat /etc/os-release"
 #
 #   # Run multiple scripts
-#   ./build_hybrid_image.sh --run-script=./setup.sh --run-script=./test.sh
+#   ./build_rpm_image.sh --run-script=./setup.sh --run-script=./test.sh
 #
 #   # Use SSH instead of serial console (requires ignition/SSH setup)
-#   ./build_hybrid_image.sh --use-ssh --run-script="systemctl status docker"
+#   ./build_rpm_image.sh --use-ssh --run-script="systemctl status docker"
 #
 #   # Run with specific console user
-#   ./build_hybrid_image.sh --console-user=core --run-script="whoami"
+#   ./build_rpm_image.sh --console-user=core --run-script="whoami"
 #
 # Environment Variables:
 #   RPM_REPO_URL            Azure Linux repository URL
@@ -66,7 +66,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
 cd "${SCRIPT_DIR}"
 
 export LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI:-qemu:///system}"
@@ -75,8 +75,8 @@ export LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI:-qemu:///system}"
 BOARD="${BOARD:-amd64-usr}"
 GROUP="${GROUP:-production}"
 BUILD_SDK_CONTAINER=false
-DOWNLOAD_ONLY=false
-SKIP_DOWNLOAD=false
+BUILD_RPMS=false
+DOWNLOAD_RPMS=false
 CLEAN_STAGING=false
 FORCE_REBUILD=false
 BUILD_IMAGE=false
@@ -92,7 +92,7 @@ VM_SSH_KEY="${VM_SSH_KEY:-}"
 VM_SSH_TIMEOUT="${VM_SSH_TIMEOUT:-120}"  # Seconds to wait for SSH
 VM_SSH_AUTHORIZED_KEYS="${VM_SSH_AUTHORIZED_KEYS:-}"  # SSH public keys to inject (file or string)
 VM_PASSWORD="${VM_PASSWORD:-}"  # Password for VM user (optional)
-USE_SERIAL_CONSOLE="${USE_SERIAL_CONSOLE:-true}"  # Use serial console instead of SSH
+USE_SERIAL_CONSOLE="${USE_SERIAL_CONSOLE:-false}"  # Use serial console instead of SSH
 VM_CONSOLE_USER="${VM_CONSOLE_USER:-root}"  # Console login user
 VM_CONSOLE_PASSWORD="${VM_CONSOLE_PASSWORD:-}"  # Console login password (empty for no password)
 VM_BOOT_TIMEOUT="${VM_BOOT_TIMEOUT:-180}"  # Seconds to wait for VM boot
@@ -141,12 +141,12 @@ parse_args() {
                 BUILD_SDK_CONTAINER=true
                 shift
                 ;;
-            --download-only)
-                DOWNLOAD_ONLY=true
+            --build-rpms)
+                BUILD_RPMS=true
                 shift
                 ;;
-            --skip-download)
-                SKIP_DOWNLOAD=true
+            --download-rpms|--download)
+                DOWNLOAD_RPMS=true
                 shift
                 ;;
             --clean)
@@ -163,8 +163,8 @@ parse_args() {
                 BUILD_IMAGE=true
                 BUILD_VM_IMAGE=true
                 START_VM=true
-                RUN_SCRIPTS+=("./build_library/rpm/tests/run-secureboot-test.sh")
-                RUN_SCRIPTS+=("./build_library/rpm/tests/run-container-test.sh")
+                RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
+                RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
                 shift
                 ;;
             --build-image)
@@ -346,7 +346,7 @@ download_rpms() {
     mkdir -p "${STAGING_DIR}"
 
     info "Using download_azure_linux_rpms.sh"
-    "${SCRIPT_DIR}/download_azure_linux_rpms.sh" "${STAGING_DIR}"
+    "${SCRIPT_DIR}/acl/download_azure_linux_rpms.sh" "${STAGING_DIR}"
 
     # Verify downloads
     local rpm_count=$(ls -1 "${STAGING_DIR}"/*.rpm 2>/dev/null | wc -l)
@@ -359,6 +359,9 @@ download_rpms() {
 
     # Verify critical packages are present
     verify_critical_packages
+
+    # Create repository metadata
+    create_repo
 }
 
 # Verify critical packages are in staging
@@ -384,6 +387,29 @@ verify_critical_packages() {
     fi
 
     info "✓ All critical packages present"
+}
+
+# Create/update repository metadata for the staging directory
+create_repo() {
+    info "Creating repository metadata..."
+    
+    if ! command -v createrepo_c &>/dev/null; then
+        error "createrepo_c not found - required to create repository metadata"
+        error "  Install with: sudo dnf install createrepo_c"
+        exit 1
+    fi
+
+    if ! createrepo_c --update "${STAGING_DIR}" >/dev/null 2>&1; then
+        error "Failed to create repository metadata"
+        exit 1
+    fi
+
+    if [[ -f "${STAGING_DIR}/repodata/repomd.xml" ]]; then
+        info "✓ Repository metadata created/updated successfully"
+    else
+        error "Repository metadata not found after createrepo_c"
+        exit 1
+    fi
 }
 
 # Update/rebuild the SDK container with RPM tools
@@ -427,6 +453,37 @@ update_sdk_container() {
     info "✓ SDK container updated successfully"
     info "  Image: ${sdk_image}"
     echo
+}
+
+# Build custom RPM packages using Azure Linux toolkit
+build_rpms() {
+    section "Building Custom RPM Packages"
+
+    local build_script="${SCRIPT_DIR}/acl/build.sh"
+    
+    if [[ ! -f "$build_script" ]]; then
+        error "RPM build script not found: $build_script"
+        exit 1
+    fi
+
+    info "Running RPM build script..."
+    info "  Build script: $build_script"
+    info "  Output dir:   ${STAGING_DIR}"
+    echo
+
+    # Run the build script
+    if ! "$build_script"; then
+        error "RPM build failed"
+        exit 1
+    fi
+
+    # Count built RPMs
+    local rpm_count=$(ls -1 "${STAGING_DIR}"/*.rpm 2>/dev/null | wc -l)
+    info "✓ RPM build complete"
+    info "  Total RPMs in staging: ${rpm_count}"
+
+    # Update repository metadata with new RPMs
+    create_repo
 }
 
 # Build the hybrid image using SDK container
@@ -524,9 +581,10 @@ suggest_troubleshooting() {
     echo
 }
 
-# Generate Ignition config for VM user provisioning
-generate_ignition_config() {
-    local ignition_file="$1"
+# Generate Ignition config ISO for VM user provisioning
+# Creates a CDROM ISO with label "ignition" containing the config at /ignition/config.ign
+generate_ignition_iso() {
+    local iso_path="$1"
     local ssh_keys=()
     local password_hash=""
 
@@ -583,8 +641,12 @@ generate_ignition_config() {
         ssh_keys_json+="]"
     fi
 
+    # Create temp directory for ISO contents
+    local iso_tmp=$(mktemp -d)
+    mkdir -p "${iso_tmp}/ignition"
+
     # Generate Ignition config (spec 3.3.0)
-    cat > "$ignition_file" <<EOF
+    cat > "${iso_tmp}/ignition/config.ign" <<EOF
 {
   "ignition": {
     "version": "3.3.0"
@@ -595,7 +657,7 @@ generate_ignition_config() {
         "name": "${VM_SSH_USER}",
         "sshAuthorizedKeys": ${ssh_keys_json}$(if [[ -n "$password_hash" ]]; then echo ",
         \"passwordHash\": \"${password_hash}\""; fi),
-        "groups": ["sudo", "docker", "wheel"]
+        "groups": ["wheel"]
       }
     ]
   },
@@ -614,7 +676,24 @@ generate_ignition_config() {
 }
 EOF
 
-    info "Generated Ignition config: $ignition_file"
+    # Create ISO with label "ignition"
+    local iso_tmp_file=$(mktemp)
+    if command -v genisoimage &>/dev/null; then
+        genisoimage -o "$iso_tmp_file" -V "ignition" -r -J "${iso_tmp}" 2>/dev/null
+    elif command -v mkisofs &>/dev/null; then
+        mkisofs -o "$iso_tmp_file" -V "ignition" -r -J "${iso_tmp}" 2>/dev/null
+    else
+        error "Neither genisoimage nor mkisofs found - cannot create ignition ISO"
+        rm -rf "${iso_tmp}" "$iso_tmp_file"
+        return 1
+    fi
+    rm -rf "${iso_tmp}"
+
+    # Move to final location with sudo for libvirt paths
+    sudo mv "$iso_tmp_file" "$iso_path"
+    sudo chmod 644 "$iso_path"
+
+    info "Generated Ignition ISO: $iso_path"
     debug "SSH keys configured: ${#ssh_keys[@]}"
     debug "Password configured: $(if [[ -n "$password_hash" ]]; then echo 'yes'; else echo 'no'; fi)"
 }
@@ -670,6 +749,7 @@ run_scripts_on_vm() {
     local ip="$1"
     shift
     local scripts=("$@")
+    local failed=0
 
     local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
     if [[ -n "$VM_SSH_KEY" ]]; then
@@ -681,27 +761,33 @@ run_scripts_on_vm() {
             info "Running script: $script"
             # Copy script to VM and execute
             local remote_script="/tmp/$(basename "$script")"
-            scp $ssh_opts "$script" "${VM_SSH_USER}@${ip}:${remote_script}" || {
+            if ! scp $ssh_opts "$script" "${VM_SSH_USER}@${ip}:${remote_script}"; then
                 error "Failed to copy script: $script"
+                failed=1
                 continue
-            }
-            ssh $ssh_opts "${VM_SSH_USER}@${ip}" "chmod +x ${remote_script} && sudo ${remote_script}" || {
+            fi
+            if ! ssh $ssh_opts "${VM_SSH_USER}@${ip}" "chmod +x ${remote_script} && sudo ${remote_script}"; then
                 error "Script failed: $script"
-                continue
-            }
-            info "Script completed: $script"
+                failed=1
+            else
+                info "Script completed: $script"
+            fi
         elif [[ "$script" == *";"* ]] || [[ "$script" == *"&&"* ]] || [[ "$script" =~ ^[a-zA-Z] ]]; then
             # Treat as inline command
             info "Running command: $script"
-            ssh $ssh_opts "${VM_SSH_USER}@${ip}" "sudo bash -c '$script'" || {
+            if ! ssh $ssh_opts "${VM_SSH_USER}@${ip}" "sudo bash -c '$script'"; then
                 error "Command failed: $script"
-                continue
-            }
-            info "Command completed"
+                failed=1
+            else
+                info "Command completed"
+            fi
         else
             warn "Script not found and not a valid command: $script"
+            failed=1
         fi
     done
+
+    return $failed
 }
 
 # Wait for VM to boot and show login prompt via serial console
@@ -859,6 +945,7 @@ run_scripts_via_console() {
     local vm_name="$1"
     shift
     local scripts=("$@")
+    local failed=0
 
     for script in "${scripts[@]}"; do
         if [[ -f "$script" ]]; then
@@ -873,23 +960,28 @@ run_scripts_via_console() {
             encoded=$(base64 -w0 "$script")
             local remote_cmd="echo '$encoded' | base64 -d > /tmp/script.sh && chmod +x /tmp/script.sh && /tmp/script.sh; echo \"SCRIPT_EXIT_CODE:\$?\""
 
-            run_command_via_console "$vm_name" "$remote_cmd" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD" || {
+            if ! run_command_via_console "$vm_name" "$remote_cmd" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD"; then
                 error "Script failed: $script"
-                exit 1
-            }
-            info "✓ Script completed successfully: $script"
+                failed=1
+            else
+                info "✓ Script completed successfully: $script"
+            fi
         elif [[ "$script" == *";"* ]] || [[ "$script" == *"&&"* ]] || [[ "$script" =~ ^[a-zA-Z] ]]; then
             # Treat as inline command
             info "Running command via console: $script"
-            run_command_via_console "$vm_name" "$script" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD" || {
+            if ! run_command_via_console "$vm_name" "$script" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD"; then
                 error "Command failed: $script"
-                continue
-            }
-            info "Command completed"
+                failed=1
+            else
+                info "Command completed"
+            fi
         else
             warn "Script not found and not a valid command: $script"
+            failed=1
         fi
     done
+
+    return $failed
 }
 
 # Print summary of what will be done
@@ -899,7 +991,7 @@ print_summary() {
     echo "This script will:"
     echo
 
-    if [[ "$SKIP_DOWNLOAD" != "true" ]]; then
+    if [[ "$DOWNLOAD_RPMS" == "true" ]]; then
         echo "  1. Download Azure Linux RPM packages"
         echo "     Target: ${STAGING_DIR}"
         if [[ "$CLEAN_STAGING" == "true" ]]; then
@@ -910,8 +1002,14 @@ print_summary() {
         echo
     fi
 
-    if [[ "$DOWNLOAD_ONLY" != "true" ]]; then
-        echo "  2. Build Flatcar image using SDK container"
+    if [[ "$BUILD_RPMS" == "true" ]]; then
+        echo "  2. Build custom RPM packages"
+        echo "     Output: ${STAGING_DIR}"
+        echo
+    fi
+
+    if [[ "$BUILD_IMAGE" == "true" ]]; then
+        echo "  3. Build Flatcar image using SDK container"
         echo "     Board: ${BOARD}"
         echo "     Group: ${GROUP}"
         echo "     Mode: HYBRID (Azure Linux RPMs + Portage)"
@@ -989,29 +1087,20 @@ main() {
         docker ps -a --filter "name=flatcar-sdk-" --format "{{.ID}} {{.Names}}"
     fi
 
-    # Step 1: Download RPMs (unless skipped)
-    if [[ "$SKIP_DOWNLOAD" != "true" ]]; then
+    # Step 1: Download RPMs (if requested)
+    if [[ "$DOWNLOAD_RPMS" == "true" ]]; then
         download_rpms
-    else
-        info "Skipping RPM download (using existing staging)"
-        local rpm_count=$(ls -1 "${STAGING_DIR}"/*.rpm 2>/dev/null | wc -l)
-        if [[ "$rpm_count" -eq 0 ]]; then
-            error "No RPMs found in staging directory. Remove --skip-download or run download first."
-            exit 1
-        fi
-        info "Using ${rpm_count} existing RPM packages"
     fi
 
-    # Step 2: Build image (unless download-only)
-    if [[ "$DOWNLOAD_ONLY" != "true" ]] && [[ "$BUILD_IMAGE" == "true" ]]; then
+    # Step 2: Build custom RPM packages (if requested)
+    if [[ "$BUILD_RPMS" == "true" ]]; then
+        build_rpms
+    fi
+
+    # Step 3: Build image (if requested)
+    if [[ "$BUILD_IMAGE" == "true" ]]; then
         build_image
         print_size_summary
-    else
-        info "Download complete. Skipping build (--download-only specified)"
-        info "RPMs available at: ${STAGING_DIR}"
-        echo
-        info "To build the image, run:"
-        echo "  $0 --skip-download --build-image"
     fi
 
     # Step 3: Build VM images (if requested)
@@ -1086,10 +1175,14 @@ main() {
         local vm_vars_path="${abs_disk_path}.vars"
         cp "$ovmf_vars_template" "$vm_vars_path"
         
+        # Generate Ignition config ISO for user provisioning (colocated with disk image)
+        local ignition_iso="${abs_disk_path%.qcow2}-ignition.iso"
+        generate_ignition_iso "$ignition_iso"
+        
         # Create VM XML definition with secure boot enabled
         info "Creating VM definition with secure boot..."
         cat > /tmp/${VM_NAME}.xml <<EOF
-<domain type='kvm'>
+<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>${VM_NAME}</name>
   <memory unit='KiB'>2097152</memory>
   <currentMemory unit='KiB'>2097152</currentMemory>
@@ -1121,6 +1214,12 @@ main() {
       <driver name='qemu' type='qcow2'/>
       <source file='${abs_disk_path}'/>
       <target dev='sda' bus='sata'/>
+    </disk>
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='${ignition_iso}'/>
+      <target dev='sdb' bus='sata'/>
+      <readonly/>
     </disk>
     <interface type='network'>
       <source network='default'/>
@@ -1157,8 +1256,12 @@ EOF
                 sleep 30  # Give VM time to boot
 
                 # Run scripts via console
-                run_scripts_via_console "${VM_NAME}" "${RUN_SCRIPTS[@]}"
-                info "All scripts completed!"
+                if run_scripts_via_console "${VM_NAME}" "${RUN_SCRIPTS[@]}"; then
+                    info "All scripts completed successfully!"
+                else
+                    error "One or more scripts failed"
+                    exit 1
+                fi
             else
                 # Use SSH execution
                 info "Using SSH for script execution"
@@ -1184,8 +1287,12 @@ EOF
 
                 # Wait for SSH
                 if wait_for_ssh "$vm_ip" "$VM_SSH_TIMEOUT"; then
-                    run_scripts_on_vm "$vm_ip" "${RUN_SCRIPTS[@]}"
-                    info "All scripts completed!"
+                    if run_scripts_on_vm "$vm_ip" "${RUN_SCRIPTS[@]}"; then
+                        info "All scripts completed successfully!"
+                    else
+                        error "One or more scripts failed"
+                        exit 1
+                    fi
                 else
                     error "SSH not available - cannot run scripts"
                     warn "Try using --use-serial for serial console execution"

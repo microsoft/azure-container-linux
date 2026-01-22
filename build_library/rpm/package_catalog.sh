@@ -217,8 +217,8 @@ declare -gA PACKAGE_CATALOG=(
     ["app-admin/toolbox"]="SKIP"
 
     # Flatcar-specific packages
-    ["sys-apps/ignition"]="SKIP"
-    ["app-admin/ignition"]="SKIP"
+    ["sys-apps/ignition"]="ignition"
+    ["app-admin/ignition"]="ignition"
     ["coreos-base/flatcar-base"]="azurelinux-release"
 
     # Flatcar-only packages (skipped in RPM mode)

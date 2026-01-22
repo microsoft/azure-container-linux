@@ -61,7 +61,7 @@ The build system requires the Flatcar SDK container, which includes all build to
 
 ```bash
 # Rebuild SDK container with updated tools or dependencies
-./build_rpm_image.sh --build-sdk-container
+./acl/build_rpm_image.sh --build-sdk-container
 ```
 
 **When to rebuild SDK:**
@@ -74,16 +74,14 @@ The build system requires the Flatcar SDK container, which includes all build to
 
 ### Phase 2: Download Azure Linux RPM Packages
 
-Download required RPM packages from Azure Linux repositories.
-
-The `build_rpm_image.sh` script can handle downloading automatically, but you can also run the download step separately:
+Download required RPM packages from Azure Linux repositories:
 
 ```bash
-# Download all required RPMs
-./download_azure_linux_rpms.sh
+# Download all required RPMs (recommended - handles repo creation)
+./acl/build_rpm_image.sh --download-rpms
 
-# Force re-download (refresh all packages)
-./download_azure_linux_rpms.sh --force
+# Force re-download (clean staging first)
+./acl/build_rpm_image.sh --clean --download-rpms
 ```
 
 **Download behavior:**
@@ -98,13 +96,31 @@ downloaded during the image build using `dnf`.
 
 **Staging directory:** `__build__/rpm-staging/`
 
+### Phase 2.5: Build Custom RPM Packages (Optional)
+
+Build custom RPM packages (e.g., ignition) using the Azure Linux toolkit:
+
+```bash
+# Build custom RPMs and add them to staging
+./acl/build_rpm_image.sh --build-rpms
+```
+
+This step:
+
+- Clones Azure Linux 3.0 toolkit if not present
+- Builds packages defined in `acl/SPECS/`
+- Copies built RPMs to the staging directory
+- Updates repository metadata automatically
+
+**Build output:** Custom RPMs are added to `__build__/rpm-staging/`
+
 ### Phase 3: Build the Image
 
 Build the Flatcar production image using hybrid package sources.
 
 ```bash
 # Download RPMs and build image in one command
-./build_rpm_image.sh --rebuild
+./acl/build_rpm_image.sh --rebuild
 ```
 
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
@@ -115,7 +131,7 @@ Convert the production image to a VM-ready format.
 
 ```bash
 # Build VM image after main build
-./build_rpm_image.sh --build-vm-image
+./acl/build_rpm_image.sh --build-vm-image
 ```
 
 **VM image output:** `__build__/images/images/amd64-usr/latest/flatcar_production_qemu_uefi_image.img`
@@ -126,18 +142,18 @@ Convert the production image to a VM-ready format.
 
 ```bash
 # Just start the VM and observe the boot sequence, get access to interactive console.
-./build_rpm_image.sh --start-vm
+./acl/build_rpm_image.sh --start-vm
 
 # Start VM and run inline command via serial console
-./build_rpm_image.sh --start-vm \
+./acl/build_rpm_image.sh --start-vm \
   --run-script="cat /etc/os-release"
 
 # Run test script on VM (this script is included and used for a basic smoke test for now)
-./build_rpm_image.sh --skip-download --start-vm \
+./acl/build_rpm_image.sh --start-vm \
   --run-script=./run-container-test.sh
 
 # Run multiple test scripts
-./build_rpm_image.sh --skip-download --start-vm \
+./acl/build_rpm_image.sh --start-vm \
   --run-script=./tests/01-boot.sh \
   --run-script=./tests/02-network.sh \
   --run-script=./tests/03-services.sh
@@ -170,14 +186,17 @@ Efficient workflow for iterative development:
 
 ```bash
 # Quick rebuild after packaging/script changes
-./build_rpm_image.sh --rebuild
+./acl/build_rpm_image.sh --rebuild
+
+# Build custom RPMs and rebuild image
+./acl/build_rpm_image.sh --build-rpms --rebuild
 
 # Rebuild and retest
-./build_rpm_image.sh --rebuild --build-vm-image --start-vm \
-  --run-script=./build_library/rpm/tests/run-container-test.sh
+./acl/build_rpm_image.sh --rebuild --build-vm-image --start-vm \
+  --run-script=./acl/tests/run-container-test.sh
 
 # Or use the short cut of the command above (runs additional tests as well):
-./build_rpm_image.sh --rebuild-and-test
+./acl/build_rpm_image.sh --rebuild-and-test
 ```
 
 ## Troubleshooting
@@ -188,5 +207,5 @@ Efficient workflow for iterative development:
   **Solution**: Ensure SDK container is rebuilt with RPM tools:
 
   ```bash
-  ./build_rpm_image.sh --build-sdk-container
+  . /acl/build_rpm_image.sh --build-sdk-container
   ```

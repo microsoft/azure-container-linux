@@ -1,15 +1,23 @@
 [Unit]
 Description=Set up /etc overlay for Flatcar RPM mode
 DefaultDependencies=no
-# Run after root filesystem is fully mounted and ready
-# sysroot.mount is the actual mount unit for /sysroot
-After=sysroot.mount initrd-root-fs.target
+
+# Run after root filesystem AND /usr are mounted
+# /usr is mounted at /sysusr/usr in initrd (not /sysroot/usr)
+After=sysroot.mount sysusr-usr.mount initrd-root-fs.target ignition-mount.service
 Requires=sysroot.mount
+Wants=sysusr-usr.mount
+
+# CRITICAL: Must run BEFORE ignition-files.service which creates users
+# ignition-files needs to write to /sysroot/etc/passwd, /etc/group, etc.
+Before=ignition-files.service
 Before=initrd-switch-root.target initrd-parse-etc.service
-# Don't fail boot if this fails
+
+# Don't fail boot if this fails (allow fallback)
 OnFailure=
-# Only run if our flatcar etc exists
-ConditionPathExists=/sysroot/usr/share/flatcar/etc
+
+# Check for flatcar etc in the correct location (/sysusr/usr, not /sysroot/usr)
+ConditionPathExists=/sysusr/usr/share/flatcar/etc
 
 [Service]
 Type=oneshot

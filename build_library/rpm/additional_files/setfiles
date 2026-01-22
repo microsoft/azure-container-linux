@@ -1,0 +1,4 @@
+#!/bin/sh
+# Dummy setfiles - SELinux is disabled, nothing to do
+# This script satisfies Ignition's SELinux relabeling requirement
+exit 0

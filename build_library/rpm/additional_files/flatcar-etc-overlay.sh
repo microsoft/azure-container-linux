@@ -8,21 +8,34 @@ SYSROOT="/sysroot"
 
 echo "flatcar-etc: Starting /etc overlay setup"
 
-# Check if sysroot has content (simpler than mountpoint command)
-if [ ! -d "${SYSROOT}/usr" ]; then
-    echo "flatcar-etc: ERROR - ${SYSROOT}/usr not found, sysroot may not be mounted"
+# In the initrd, /usr is mounted at /sysusr/usr (not /sysroot/usr)
+# We need to find where the flatcar etc files actually are
+FLATCAR_ETC=""
+
+# Check /sysusr/usr first (initrd layout)
+if [ -d "/sysusr/usr/share/flatcar/etc" ]; then
+    FLATCAR_ETC="/sysusr/usr/share/flatcar/etc"
+    echo "flatcar-etc: Found flatcar etc at /sysusr/usr/share/flatcar/etc"
+# Fall back to /sysroot/usr (if bind mounted)
+elif [ -d "${SYSROOT}/usr/share/flatcar/etc" ]; then
+    FLATCAR_ETC="${SYSROOT}/usr/share/flatcar/etc"
+    echo "flatcar-etc: Found flatcar etc at ${SYSROOT}/usr/share/flatcar/etc"
+else
+    echo "flatcar-etc: /usr/share/flatcar/etc not found in any location, skipping overlay setup"
+    echo "  Checked: /sysusr/usr/share/flatcar/etc"
+    echo "  Checked: ${SYSROOT}/usr/share/flatcar/etc"
+    ls -la /sysusr/usr/share/ 2>/dev/null | head -10 || echo "  Cannot list /sysusr/usr/share/"
+    ls -la "${SYSROOT}/usr/share/" 2>/dev/null | head -10 || echo "  Cannot list ${SYSROOT}/usr/share/"
+    exit 0
+fi
+
+# Check if sysroot is mounted (look for boot dir which should always exist)
+if [ ! -d "${SYSROOT}" ] || [ ! -d "${SYSROOT}/boot" ]; then
+    echo "flatcar-etc: ERROR - ${SYSROOT} not properly mounted"
     ls -la "${SYSROOT}" 2>/dev/null || echo "  Cannot list ${SYSROOT}"
     exit 1
 fi
-echo "flatcar-etc: ${SYSROOT} appears to be mounted (found /usr)"
-
-# Check if source directory exists
-if [ ! -d "${SYSROOT}/usr/share/flatcar/etc" ]; then
-    echo "flatcar-etc: /usr/share/flatcar/etc not found, skipping overlay setup"
-    ls -la "${SYSROOT}/usr/share/" 2>/dev/null | head -10 || echo "  Cannot list /usr/share/"
-    exit 0
-fi
-echo "flatcar-etc: Found ${SYSROOT}/usr/share/flatcar/etc"
+echo "flatcar-etc: ${SYSROOT} appears to be mounted"
 
 # Check if overlay is already mounted (read /proc/mounts directly with shell)
 if [ -f /proc/mounts ]; then
@@ -49,12 +62,12 @@ mkdir -p "${SYSROOT}/.etc-work"
 
 # Mount the overlay
 echo "flatcar-etc: Mounting /etc overlay"
-echo "  lowerdir=${SYSROOT}/usr/share/flatcar/etc"
+echo "  lowerdir=${FLATCAR_ETC}"
 echo "  upperdir=${SYSROOT}/etc"
 echo "  workdir=${SYSROOT}/.etc-work"
 
 mount -t overlay overlay \
-    -o "lowerdir=${SYSROOT}/usr/share/flatcar/etc,upperdir=${SYSROOT}/etc,workdir=${SYSROOT}/.etc-work,redirect_dir=on,metacopy=off,noatime" \
+    -o "lowerdir=${FLATCAR_ETC},upperdir=${SYSROOT}/etc,workdir=${SYSROOT}/.etc-work,redirect_dir=on,metacopy=off,noatime" \
     "${SYSROOT}/etc"
 
 echo "flatcar-etc: /etc overlay mounted successfully"

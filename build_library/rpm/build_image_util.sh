@@ -203,6 +203,19 @@ finish_image_rpm() {
         # NOTE: Must avoid grep/mountpoint commands that may not be in initramfs
         sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/flatcar-etc-overlay.sh" "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/flatcar-etc-overlay.sh"
         sudo chmod +x "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/flatcar-etc-overlay.sh"
+
+        # TODO: only for QEMU testing, remove or refactor later
+        # Ignition config drive loader - loads ignition config from CDROM labeled "ignition"
+        # This runs before ignition services and copies config to /usr/lib/ignition/user.ign
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/ignition-config-drive.sh" "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/ignition-config-drive.sh"
+        sudo chmod +x "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/ignition-config-drive.sh"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/ignition-config-drive.service" "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/ignition-config-drive.service"
+
+        # TODO: remove post SELinux enablement
+        # Dummy setfiles for SELinux-disabled systems - Ignition calls it even with SELINUX=disabled
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/setfiles" "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/setfiles"
+        sudo chmod +x "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/setfiles"
+
         info "RPM mode: Created dracut module 99flatcar-etc with systemd service for /etc overlay"
 
         # Create dracut config to work around issues in chroot environment
@@ -405,6 +418,58 @@ finish_image_tmpfiles_rpm() {
       if [[ -d "${root_fs_dir}/etc/skel" ]]; then
         sudo cp -a "${root_fs_dir}/etc/skel" "${root_fs_dir}/usr/share/flatcar/etc/"
       fi
+
+      # TODO: remove post SELinux enablement
+      # Create SELinux config (required by Ignition even if SELinux is disabled)
+      # Ignition requires SELINUXTYPE even when disabled, and looks for file_contexts
+      # We create an empty file_contexts so relabeling is a no-op
+      info "RPM mode: Creating SELinux config (disabled) with empty policy"
+      sudo mkdir -p "${root_fs_dir}/usr/share/flatcar/etc/selinux/targeted/contexts/files"
+      sudo tee "${root_fs_dir}/usr/share/flatcar/etc/selinux/config" > /dev/null <<'SELINUX_EOF'
+# This file controls the state of SELinux on the system.
+# SELINUX=disabled - No SELinux policy is loaded.
+SELINUX=disabled
+SELINUXTYPE=targeted
+SELINUX_EOF
+      # Create empty file_contexts so Ignition's relabeling is a no-op
+      sudo touch "${root_fs_dir}/usr/share/flatcar/etc/selinux/targeted/contexts/files/file_contexts"
+
+      # Configure sshd to look for authorized_keys in the ignition location
+      # Ignition places SSH keys in ~/.ssh/authorized_keys.d/ignition
+      # NOTE: /etc/ssh was moved to /usr/share/flatcar/etc/ssh above, so we modify it there
+      info "RPM mode: Configuring sshd AuthorizedKeysFile for Ignition"
+      local ssh_config_dir="${root_fs_dir}/usr/share/flatcar/etc/ssh"
+      sudo mkdir -p "${ssh_config_dir}/sshd_config.d"
+      sudo tee "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf" > /dev/null <<'SSHD_CONF'
+# Support both traditional authorized_keys and Ignition's authorized_keys.d/ignition
+AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys.d/ignition
+SSHD_CONF
+      sudo chmod 644 "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf"
+
+      # Ensure sshd_config includes the .d directory
+      local sshd_config="${ssh_config_dir}/sshd_config"
+      if [[ ! -f "${sshd_config}" ]]; then
+        # sshd_config doesn't exist - create a minimal one with Include
+        info "RPM mode: Creating sshd_config with Include directive"
+        sudo tee "${sshd_config}" > /dev/null <<'SSHD_CONFIG_EOF'
+# Include drop-in configurations
+Include /etc/ssh/sshd_config.d/*.conf
+SSHD_CONFIG_EOF
+        sudo chmod 644 "${sshd_config}"
+      elif ! grep -q "^Include.*/etc/ssh/sshd_config.d" "${sshd_config}"; then
+        info "RPM mode: Adding Include directive to existing sshd_config"
+        sudo sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' "${sshd_config}"
+      else
+        info "RPM mode: sshd_config already has Include directive"
+      fi
+
+      # Configure sudo for wheel group (passwordless)
+      info "RPM mode: Configuring passwordless sudo for wheel group"
+      sudo mkdir -p "${root_fs_dir}/usr/share/flatcar/etc/sudoers.d"
+      sudo tee "${root_fs_dir}/usr/share/flatcar/etc/sudoers.d/wheel-nopasswd" > /dev/null <<'SUDOERS_EOF'
+%wheel ALL=(ALL:ALL) NOPASSWD: ALL
+SUDOERS_EOF
+      sudo chmod 440 "${root_fs_dir}/usr/share/flatcar/etc/sudoers.d/wheel-nopasswd"
 
       info "RPM mode: Creating tmpfiles.d entries to populate /etc at boot"
       # Create tmpfiles.d entries to populate /etc at boot time

@@ -5,3 +5,4 @@ systemctl start containerd
 sleep 2
 ctr image pull docker.io/library/nginx:latest
 ctr run --detach --net-host docker.io/library/nginx:latest nginx
+sleep 2
