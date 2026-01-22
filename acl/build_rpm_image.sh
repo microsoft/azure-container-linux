@@ -744,6 +744,54 @@ wait_for_ssh() {
     return 1
 }
 
+# Wait for VM to obtain an IP address
+# Returns: Sets VM_IP global variable, returns 0 on success, 1 on timeout
+wait_for_vm_ip() {
+    local vm_name="$1"
+    local timeout="${2:-60}"
+
+    info "Waiting for VM to obtain IP address (timeout: ${timeout}s)..."
+
+    local start_time=$(date +%s)
+    local end_time=$((start_time + timeout))
+    VM_IP=""
+
+    while [[ -z "$VM_IP" ]] && [[ $(date +%s) -lt $end_time ]]; do
+        sleep 2
+        VM_IP=$(get_vm_ip "$vm_name")
+    done
+
+    if [[ -z "$VM_IP" ]]; then
+        error "Failed to get VM IP address after ${timeout}s"
+        return 1
+    fi
+
+    info "VM IP address: $VM_IP"
+    return 0
+}
+
+# Connect to VM interactively via SSH
+connect_vm_ssh() {
+    local ip="$1"
+    local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    
+    if [[ -n "$VM_SSH_KEY" ]]; then
+        ssh_opts="$ssh_opts -i $VM_SSH_KEY"
+    fi
+    
+    info "Connecting to ${VM_SSH_USER}@${ip}..."
+    ssh $ssh_opts "${VM_SSH_USER}@${ip}"
+}
+
+# Connect to VM interactively via serial console
+connect_vm_console() {
+    local vm_name="$1"
+    info "Connecting to console..."
+    info "Press Ctrl+] to disconnect from console"
+    sleep 1
+    virsh console "$vm_name"
+}
+
 # Execute scripts on VM via SSH
 run_scripts_on_vm() {
     local ip="$1"
@@ -793,40 +841,68 @@ run_scripts_on_vm() {
 # Wait for VM to boot and show login prompt via serial console
 wait_for_vm_boot() {
     local vm_name="$1"
-    local timeout="$2"
+    local timeout="${2:-300}"
 
-    info "Waiting for VM to boot (timeout: ${timeout}s)..."
+    info "Connecting to VM console (will disconnect on login prompt, timeout: ${timeout}s)..."
+    echo "═══════════════════════════════════════════════════════════════════════════════"
 
-    local start_time=$(date +%s)
-    local end_time=$((start_time + timeout))
+    # Check if expect is available
+    if ! command -v expect &>/dev/null; then
+        error "'expect' is required for console monitoring. Install with: apt-get install expect"
+        return 1
+    fi
 
-    # Create a named pipe for console output
-    local console_pipe=$(mktemp -u)
-    mkfifo "$console_pipe"
+    # Create expect script that monitors console and disconnects on login prompt
+    local expect_script=$(mktemp)
+    cat > "$expect_script" <<'EXPECT_EOF'
+#!/usr/bin/expect -f
+set timeout [lindex $argv 0]
+set vm_name [lindex $argv 1]
 
-    # Start reading console in background
-    timeout "$timeout" virsh console "$vm_name" < /dev/null > "$console_pipe" 2>&1 &
-    local console_pid=$!
+log_user 1
 
-    # Wait for login prompt
-    local booted=false
-    while read -r -t 1 line < "$console_pipe" 2>/dev/null || [[ $(date +%s) -lt $end_time ]]; do
-        if [[ "$line" == *"login:"* ]] || [[ "$line" == *"Login:"* ]]; then
-            info "VM boot complete - login prompt detected"
-            booted=true
-            break
-        fi
-        debug "Console: $line"
-    done
+# Connect to VM console
+spawn virsh console $vm_name
 
-    # Cleanup
-    kill $console_pid 2>/dev/null || true
-    rm -f "$console_pipe"
+# Wait for console connection, then monitor for login prompt
+expect {
+    "Escape character" {
+        # Send Enter to trigger any pending output
+        send "\r"
+        exp_continue
+    }
+    -re {(login:|Login:)} {
+        # Login prompt detected - VM has booted
+        puts "\n═══════════════════════════════════════════════════════════════════════════════"
+        puts "✓ Login prompt detected - VM boot complete"
+        # Send escape sequence to disconnect from console
+        send "\x1d"
+        expect eof
+        exit 0
+    }
+    timeout {
+        puts "\n═══════════════════════════════════════════════════════════════════════════════"
+        puts "✗ Timeout waiting for login prompt"
+        send "\x1d"
+        expect eof
+        exit 1
+    }
+    eof {
+        puts "\n═══════════════════════════════════════════════════════════════════════════════"
+        puts "✗ Console connection lost"
+        exit 1
+    }
+}
+EXPECT_EOF
 
-    if [[ "$booted" == "true" ]]; then
+    chmod +x "$expect_script"
+
+    # Run expect script - output goes directly to terminal
+    if "$expect_script" "$timeout" "$vm_name"; then
+        rm -f "$expect_script"
         return 0
     else
-        warn "Timeout waiting for login prompt"
+        rm -f "$expect_script"
         return 1
     fi
 }
@@ -1252,8 +1328,12 @@ EOF
             if [[ "$USE_SERIAL_CONSOLE" == "true" ]]; then
                 # Use serial console execution
                 info "Using serial console for script execution"
-                info "Waiting for VM to boot..."
-                sleep 30  # Give VM time to boot
+                
+                # Wait for VM to boot by monitoring console
+                if ! wait_for_vm_boot "${VM_NAME}" "$VM_BOOT_TIMEOUT"; then
+                    error "VM failed to boot within timeout"
+                    exit 1
+                fi
 
                 # Run scripts via console
                 if run_scripts_via_console "${VM_NAME}" "${RUN_SCRIPTS[@]}"; then
@@ -1266,28 +1346,14 @@ EOF
                 # Use SSH execution
                 info "Using SSH for script execution"
 
-                # Wait for VM to get an IP address
-                info "Waiting for VM to obtain IP address..."
-                local vm_ip=""
-                local ip_timeout=60
-                local ip_start=$(date +%s)
-
-                while [[ -z "$vm_ip" ]] && [[ $(($(date +%s) - ip_start)) -lt $ip_timeout ]]; do
-                    sleep 5
-                    vm_ip=$(get_vm_ip "${VM_NAME}")
-                done
-
-                if [[ -z "$vm_ip" ]]; then
-                    error "Failed to get VM IP address after ${ip_timeout}s"
+                # Wait for VM IP and SSH
+                if ! wait_for_vm_ip "${VM_NAME}" 60; then
                     warn "You can still connect manually: virsh console ${VM_NAME}"
                     exit 1
                 fi
 
-                info "VM IP address: $vm_ip"
-
-                # Wait for SSH
-                if wait_for_ssh "$vm_ip" "$VM_SSH_TIMEOUT"; then
-                    if run_scripts_on_vm "$vm_ip" "${RUN_SCRIPTS[@]}"; then
+                if wait_for_ssh "$VM_IP" "$VM_SSH_TIMEOUT"; then
+                    if run_scripts_on_vm "$VM_IP" "${RUN_SCRIPTS[@]}"; then
                         info "All scripts completed successfully!"
                     else
                         error "One or more scripts failed"
@@ -1301,17 +1367,35 @@ EOF
             fi
             # Only run nginx curl test if we executed the container test
             if [[ ${#RUN_SCRIPTS[@]} -gt 0 ]] && [[ "${RUN_SCRIPTS[-1]}" == *"run-container-test.sh" ]]; then
-                vm_ip=$(get_vm_ip "${VM_NAME}")
-                curl --connect-timeout 10 --max-time 30 http://$vm_ip | grep "Thank you for using nginx."
+                if [[ -z "${VM_IP:-}" ]]; then
+                    VM_IP=$(get_vm_ip "${VM_NAME}")
+                fi
+                curl --connect-timeout 10 --max-time 30 http://$VM_IP | grep "Thank you for using nginx."
             fi
             print_size_summary
         else
+            # No scripts - wait for boot, then connect via console or SSH based on setting
             echo
-            info "Connecting to VM console..."
-            info "Press Ctrl+] to disconnect from console"
-            sleep 2  # Give VM a moment to boot
-            echo
-            virsh console "${VM_NAME}"
+            info "Waiting for VM to boot (showing console output)..."
+            
+            # Wait for boot and show progress
+            if ! wait_for_vm_boot "${VM_NAME}" "$VM_BOOT_TIMEOUT"; then
+                warn "Boot detection timed out"
+            fi
+            
+            if [[ "$USE_SERIAL_CONSOLE" == "true" ]]; then
+                connect_vm_console "${VM_NAME}"
+            else
+                # Connect via SSH
+                info "VM is ready! Connecting via SSH..."
+                
+                if wait_for_vm_ip "${VM_NAME}" 60 && wait_for_ssh "$VM_IP" "$VM_SSH_TIMEOUT"; then
+                    connect_vm_ssh "$VM_IP"
+                else
+                    warn "SSH not available, falling back to console"
+                    connect_vm_console "${VM_NAME}"
+                fi
+            fi
         fi
 
     else
