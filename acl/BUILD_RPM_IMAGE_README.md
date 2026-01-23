@@ -40,8 +40,39 @@ Note that `docker.io` (instead of `docker-ce`) might work as well.
 Install on Azure Linux:
 
 ```bash
-sudo tdnf install -y moby-engine qemu-kvm libvirt libvirt-client expect curl createrepo_c edk2-ovmf
+sudo tdnf install -y moby-engine docker-cli qemu-kvm libvirt libvirt-client expect curl createrepo_c edk2-ovmf cdrkit swtpm make golang-1.24.3 acl rpm-build
 ```
+
+**Note**: Go 1.24.3 is explicitly pinned. Go 1.25+ on Azure Linux uses `systemcrypto` which requires `CGO_ENABLED=1`, but the Azure Linux toolkit currently only supports `CGO_ENABLED=0`.
+
+**Important**: On Azure Linux, `moby-engine` does not include the Docker CLI - you must install `docker-cli` separately.
+
+### Start Services and Configure Groups (Azure Linux)
+
+After installation, start required services:
+
+```bash
+sudo systemctl start docker libvirtd
+sudo systemctl enable docker libvirtd
+```
+
+Add your user to the required groups:
+
+```bash
+sudo usermod -aG docker,libvirt $USER
+```
+
+**Note**: Group membership requires logout/login or reboot to take effect.
+
+### SSH Key Setup (Required for VM Access)
+
+The build script uses Ignition to provision SSH keys into the VM. Generate an SSH keypair if you don't have one:
+
+```bash
+[ ! -f ~/.ssh/id_ed25519 ] && ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
+```
+
+The script will automatically use keys from `~/.ssh/id_*.pub` when starting the VM.
 
 ### System Requirements
 
@@ -96,9 +127,11 @@ downloaded during the image build using `dnf`.
 
 **Staging directory:** `__build__/rpm-staging/`
 
-### Phase 2.5: Build Custom RPM Packages (Optional)
+### Phase 2.5: Build Custom RPM Packages
 
-Build custom RPM packages (e.g., ignition) using the Azure Linux toolkit:
+**Important**: This step is required because `ignition` is not available in Azure Linux repositories.
+
+Build custom RPM packages using the Azure Linux toolkit:
 
 ```bash
 # Build custom RPMs and add them to staging
@@ -140,6 +173,8 @@ Convert the production image to a VM-ready format.
 
 #### Using build_rpm_image.sh (Integrated Testing)
 
+The script automatically configures libvirt (default network, URI) on Azure Linux 3. On Ubuntu, libvirt's networking works out-of-the-box.
+
 ```bash
 # Just start the VM and observe the boot sequence, get access to interactive console.
 ./acl/build_rpm_image.sh --start-vm
@@ -159,11 +194,16 @@ Convert the production image to a VM-ready format.
   --run-script=./tests/03-services.sh
 ```
 
-**Serial Console Access (Default):**
+**SSH Access (Default):**
 
-- No SSH or ignition configuration needed
+- The script generates an Ignition ISO with your SSH public keys from `~/.ssh/id_*.pub`
+- SSH user: `core` (default) - customize with `--ssh-user=USER`
+- Ignition runs on first boot only
+
+**Serial Console Access (Alternative):**
+
+- Use `--use-serial` flag for console-based script execution
 - Uses `expect` to automate console login
-- Default user: `root` (no password)
 - Customize: `--console-user=core --console-password=mypass`
 
 #### Cleanup
@@ -207,5 +247,21 @@ Efficient workflow for iterative development:
   **Solution**: Ensure SDK container is rebuilt with RPM tools:
 
   ```bash
-  . /acl/build_rpm_image.sh --build-sdk-container
+  ./acl/build_rpm_image.sh --build-sdk-container
+  ```
+- **Issue**: VM startup fails with `tpm-emulator: could not send INIT` (Azure Linux 3)
+  **Cause**: swtpm on some Azure Linux 3 builds crashes due to SECCOMP blocking the `clone3` syscall.
+  **Solution**: Create a wrapper script that disables SECCOMP:
+
+  ```bash
+  # Create wrapper script
+  cat << 'EOF' | sudo tee /usr/local/bin/swtpm-wrapper
+  #!/bin/bash
+  exec /usr/bin/swtpm.orig "$@" --seccomp action=none
+  EOF
+  sudo chmod +x /usr/local/bin/swtpm-wrapper
+
+  # Replace swtpm with wrapper
+  sudo mv /usr/bin/swtpm /usr/bin/swtpm.orig
+  sudo ln -s /usr/local/bin/swtpm-wrapper /usr/bin/swtpm
   ```

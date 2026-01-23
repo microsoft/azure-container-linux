@@ -111,6 +111,78 @@ error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 debug()   { [[ "${DEBUG:-false}" == "true" ]] && echo -e "${BLUE}[DEBUG]${NC} $*" || true; }
 section() { echo -e "\n${GREEN}=========================================${NC}"; echo -e "${GREEN}$*${NC}"; echo -e "${GREEN}=========================================${NC}\n"; }
 
+# Detect if running on Azure Linux 3
+is_azure_linux_3() {
+    [[ -f /etc/os-release ]] && grep -q 'ID=azurelinux' /etc/os-release && grep -q 'VERSION_ID="3' /etc/os-release
+}
+
+# Ensure libvirt default network exists and is active
+ensure_libvirt_network() {
+    if ! command -v virsh &>/dev/null; then
+        error "virsh not found - required for VM operations"
+        if is_azure_linux_3; then
+            error "Install with: sudo tdnf install -y libvirt libvirt-client"
+        else
+            error "Install with: sudo apt-get install -y libvirt-clients"
+        fi
+        return 1
+    fi
+    
+    # Check if default network exists
+    if ! virsh net-info default &>/dev/null 2>&1; then
+        warn "libvirt default network not found"
+        if [[ -f /usr/share/libvirt/networks/default.xml ]]; then
+            info "Attempting to define default network from template..."
+            if sudo virsh net-define /usr/share/libvirt/networks/default.xml; then
+                info "Default network defined successfully"
+            else
+                error "Failed to define default network. Please run manually:"
+                error "  sudo virsh net-define /usr/share/libvirt/networks/default.xml"
+                return 1
+            fi
+        else
+            error "Default network template not found at /usr/share/libvirt/networks/default.xml"
+            error "Please install libvirt or create the default network manually"
+            return 1
+        fi
+    fi
+    
+    # Check if default network is active
+    if ! virsh net-info default 2>/dev/null | grep -q 'Active:.*yes'; then
+        info "Starting libvirt default network..."
+        if sudo virsh net-start default; then
+            sudo virsh net-autostart default 2>/dev/null || true
+            info "Default network started successfully"
+        else
+            error "Failed to start default network. Please run manually:"
+            error "  sudo virsh net-start default"
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# Check for swtpm SECCOMP issue on Azure Linux 3
+# Note: Not all Azure Linux 3 builds encounter this issue, so we only log at debug level.
+# The fix is documented in BUILD_RPM_IMAGE_README.md for users who encounter it.
+check_swtpm_azure_linux() {
+    if ! is_azure_linux_3; then
+        return 0
+    fi
+    
+    # Check if swtpm exists and if wrapper is installed
+    if [[ -x /usr/bin/swtpm ]]; then
+        if [[ -L /usr/bin/swtpm ]] && [[ -f /usr/bin/swtpm.orig ]]; then
+            debug "swtpm wrapper already installed"
+            return 0
+        fi
+        
+        debug "swtpm found without wrapper - if VM startup fails with 'tpm-emulator: could not send INIT', see BUILD_RPM_IMAGE_README.md for fix"
+    fi
+    return 0
+}
+
 # Show usage information
 show_help() {
     head -30 "$0" | grep -E "^#" | sed 's/^# *//'
@@ -299,6 +371,7 @@ check_prerequisites() {
     section "Checking Prerequisites"
 
     local missing=()
+    local warnings=0
 
     # Check for required commands
     for cmd in docker; do
@@ -306,6 +379,13 @@ check_prerequisites() {
             missing+=("$cmd")
         fi
     done
+
+    # Azure Linux specific: check for docker-cli
+    if is_azure_linux_3 && ! command -v docker &>/dev/null; then
+        error "Docker CLI not found. On Azure Linux, install with:"
+        error "  sudo tdnf install -y moby-engine docker-cli"
+        exit 1
+    fi
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         error "Missing required commands: ${missing[*]}"
@@ -329,6 +409,34 @@ check_prerequisites() {
     if [[ ! -f "${SCRIPT_DIR}/build_image" ]]; then
         error "build_image script not found"
         exit 1
+    fi
+
+    # Check for genisoimage/mkisofs if VM operations are planned
+    if [[ "$START_VM" == "true" ]] || [[ "$BUILD_VM_IMAGE" == "true" ]]; then
+        if ! command -v genisoimage &>/dev/null && ! command -v mkisofs &>/dev/null; then
+            warn "Neither genisoimage nor mkisofs found - required for ignition ISO creation"
+            if is_azure_linux_3; then
+                warn "Install with: sudo tdnf install -y cdrkit"
+            else
+                warn "Install with: sudo apt-get install -y genisoimage"
+            fi
+            warnings=$((warnings + 1))
+        fi
+        
+        # Check swtpm on Azure Linux 3
+        check_swtpm_azure_linux
+    fi
+
+    # Check libvirt network only when starting a VM
+    if [[ "$START_VM" == "true" ]]; then
+        if ! ensure_libvirt_network; then
+            warnings=$((warnings + 1))
+        fi
+    fi
+
+    if [[ $warnings -gt 0 ]]; then
+        warn "$warnings warning(s) detected - some operations may fail"
+        echo
     fi
 
     info "✓ All prerequisites met"
