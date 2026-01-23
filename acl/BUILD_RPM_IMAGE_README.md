@@ -167,7 +167,7 @@ Convert the production image to a VM-ready format.
 ./acl/build_rpm_image.sh --build-vm-image
 ```
 
-**VM image output:** `__build__/images/images/amd64-usr/latest/flatcar_production_qemu_uefi_image.img`
+**VM image output:** `__build__/images/images/amd64-usr/latest/acl_production_qemu_uefi_image.img`
 
 ### Phase 5: Start VM and Run Tests
 
@@ -212,10 +212,10 @@ Subsequent runs will clean up the VM automatically. To manually clean up the VM:
 
 ```bash
 # Stop VM
-virsh destroy flatcar-hybrid
+virsh destroy acl
 
 # Remove VM
-virsh undefine --nvram flatcar-hybrid
+virsh undefine --nvram acl
 ```
 
 ## Common Workflows

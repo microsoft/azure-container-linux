@@ -315,9 +315,17 @@ for entry in "${BUILD_DIR}/${FLAGS_install_root_basename}"/*; do
   rm -rf "${entry}"
 done
 mkdir -p "${BUILD_DIR}/${FLAGS_install_root_basename}/usr/lib/extension-release.d"
+
+# Set OS branding based on package source mode
+if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+  OS_ID="flatcar"
+elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+  OS_ID="acl"
+fi
+
 version_field="${VERSION_FIELD_OVERRIDE:-VERSION_ID=${FLATCAR_VERSION_ID}}"
 all_fields=(
-  'ID=flatcar'
+  "ID=${OS_ID}"
   "${version_field}"
   "ARCHITECTURE=${ARCH}"
 )

@@ -1,7 +1,7 @@
 #!/bin/bash
-# Build Flatcar RPM Image - Complete workflow
+# Build Azure Container Linux (ACL) Image - Complete workflow
 #
-# This script builds a Flatcar Linux image using Azure Linux RPMs where available,
+# This script builds an Azure Container Linux (ACL) image using Azure Linux RPMs where available,
 # falling back to Portage packages for Flatcar-specific components.
 #
 # Usage:
@@ -10,6 +10,8 @@
 # Options:
 #   --board=BOARD       Target board (default: amd64-usr)
 #   --group=GROUP       Image group: developer|production|prod (default: production)
+#   --img-name=NAME     Base image name prefix (default: acl_production)
+#                       Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --build-sdk-container   Update/rebuild SDK container with RPM tools (can run standalone)
 #   --build-rpms        Build custom RPM packages using Azure Linux toolkit (runs acl/build.sh)
 #   --download-rpms     Download Azure Linux RPMs to staging directory
@@ -19,7 +21,7 @@
 #                       --rebuild --build-vm-image --start-vm --run-script ./run-container-test.sh)
 #   --build-vm-image    Build VM images after creating base image
 #   --start-vm          Start the VM after building (implies --build-vm-image)
-#   --vm-name=NAME      Name for the VM (default: flatcar-hybrid)
+#   --vm-name=NAME      Name for the VM (default: acl)
 #   --run-script=PATH   Run script on VM after boot (can specify multiple times)
 #                       Can be a file path or inline command. Implies --start-vm.
 #   --use-serial        Use serial console for script execution (default, no SSH/ignition needed)
@@ -61,8 +63,7 @@
 #   VM_SSH_KEY              SSH private key path
 #   VM_SSH_TIMEOUT          SSH connection timeout in seconds (default: 120)
 #
-# Copyright (c) 2025 The Flatcar Maintainers.
-# Use of this source code is governed by the Apache 2.0 license.
+# Copyright (c) 2026, Microsoft Corporation.
 
 set -euo pipefail
 
@@ -80,12 +81,13 @@ DOWNLOAD_RPMS=false
 CLEAN_STAGING=false
 FORCE_REBUILD=false
 BUILD_IMAGE=false
+IMG_NAME="${IMG_NAME:-acl_production}"
 BUILD_VM_IMAGE=false
 START_VM=false
-VM_NAME="${VM_NAME:-flatcar-hybrid}"
+VM_NAME="${VM_NAME:-acl}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-__build__}"
 STAGING_DIR="${SCRIPT_DIR}/__build__/rpm-staging"
-DISK_LAYOUT="${DISK_LAYOUT:-vm}"  # Use 'vm' layout for larger ROOT partition (needed for hybrid mode)
+DISK_LAYOUT="${DISK_LAYOUT:-vm}"  # Use 'vm' layout for larger ROOT partition (needed for RPM mode)
 RUN_SCRIPTS=()  # Scripts to run on VM after boot
 VM_SSH_USER="${VM_SSH_USER:-core}"
 VM_SSH_KEY="${VM_SSH_KEY:-}"
@@ -207,6 +209,14 @@ parse_args() {
                 ;;
             --group)
                 GROUP="$2"
+                shift 2
+                ;;
+            --img-name=*)
+                IMG_NAME="${1#*=}"
+                shift
+                ;;
+            --img-name)
+                IMG_NAME="$2"
                 shift 2
                 ;;
             --build-sdk-container)
@@ -594,9 +604,9 @@ build_rpms() {
     create_repo
 }
 
-# Build the hybrid image using SDK container
+# Build the Azure Container Linux (ACL) image using SDK container
 build_image() {
-    section "Building Hybrid Flatcar Image"
+    section "Building Azure Container Linux Image"
 
     info "Configuration:"
     info "  Board:           ${BOARD}"
@@ -615,6 +625,7 @@ build_image() {
         "--board=${BOARD}"
         "--group=${GROUP}"
         "--disk_layout=${DISK_LAYOUT}"
+        "--image_name=${IMG_NAME}_image.bin"
     )
 
     if [[ "$FORCE_REBUILD" == "true" ]]; then
@@ -624,7 +635,7 @@ build_image() {
     # Run the build inside SDK container
     info "Starting SDK container and build process..."
 
-    # Set environment variables for hybrid mode
+    # Set environment variables for RPM mode
     export PACKAGE_SOURCE_MODE=RPM
     export RPM_STAGING_DIR="${STAGING_DIR}"
 
@@ -1170,7 +1181,7 @@ run_scripts_via_console() {
 
 # Print summary of what will be done
 print_summary() {
-    section "Hybrid Image Build Summary"
+    section "Azure Container Linux Image Build Summary"
 
     echo "This script will:"
     echo
@@ -1193,10 +1204,10 @@ print_summary() {
     fi
 
     if [[ "$BUILD_IMAGE" == "true" ]]; then
-        echo "  3. Build Flatcar image using SDK container"
+        echo "  3. Build Azure Container Linux image using SDK container"
         echo "     Board: ${BOARD}"
         echo "     Group: ${GROUP}"
-        echo "     Mode: HYBRID (Azure Linux RPMs + Portage)"
+        echo "     Mode: RPM (Azure Linux RPMs + Portage)"
         echo
     fi
 
@@ -1221,9 +1232,9 @@ print_size_summary() {
         echo
 
         # USR partition image
-        if [[ -f "${BUILD_IMAGE_DIR}/flatcar_production_image.bin" ]]; then
-            usr_size=$(du -h "${BUILD_IMAGE_DIR}/flatcar_production_image.bin" | cut -f1)
-            info "USR Image:    ${usr_size}  (${BUILD_IMAGE_DIR}/flatcar_production_image.bin)"
+        if [[ -f "${BUILD_IMAGE_DIR}/${IMG_NAME}_image.bin" ]]; then
+            usr_size=$(du -h "${BUILD_IMAGE_DIR}/${IMG_NAME}_image.bin" | cut -f1)
+            info "USR Image:    ${usr_size}  (${BUILD_IMAGE_DIR}/${IMG_NAME}_image.bin)"
         fi
 
         # Sysext images
@@ -1240,9 +1251,9 @@ print_size_summary() {
         fi
 
         # Full disk image
-        if [[ -f "${BUILD_IMAGE_DIR}/flatcar_production_image.bin" ]]; then
+        if [[ -f "${BUILD_IMAGE_DIR}/${IMG_NAME}_image.bin" ]]; then
             echo
-            full_size=$(du -h "${BUILD_IMAGE_DIR}/flatcar_production_image.bin" | cut -f1)
+            full_size=$(du -h "${BUILD_IMAGE_DIR}/${IMG_NAME}_image.bin" | cut -f1)
             info "Full Image:   ${full_size}  (total disk image)"
         fi
     else
@@ -1255,7 +1266,7 @@ print_size_summary() {
 main() {
     parse_args "$@"
 
-    section "Flatcar Hybrid Image Builder"
+    section "Azure Container Linux Image Builder"
     info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"
 
     check_prerequisites
@@ -1288,7 +1299,7 @@ main() {
     fi
 
     # Step 3: Build VM images (if requested)
-    local vm_image_path="__build__/images/images/${BOARD}/latest/flatcar_production_qemu_uefi_image.img"
+    local vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_qemu_uefi_image.img"
     if [[ "$BUILD_VM_IMAGE" == "true" ]]; then
         section "Building VM Images"
         remove_old_vm
@@ -1299,10 +1310,21 @@ main() {
         local sdk_version=$(get_sdk_version_from_versionfile)
         local docker_sdk_vernum=$(vernum_to_docker_image_version "$sdk_version")
         local sdk_image="${sdk_container_common_registry}/flatcar-sdk-all:${docker_sdk_vernum}"
+
+        # Build arg-s for image_to_vm.sh
+        local build_args=(
+            "--image_compression_formats=none"
+            "--from=../build/images/${BOARD}/latest"
+            "--board=${BOARD}"
+            "--image_name=${IMG_NAME}_image.bin"
+        )
         
         # Use -C to specify custom SDK image (avoids trying to download non-existent version-specific image)
         # Use --rm to remove old container and ensure environment variables are set correctly
-        ./run_sdk_container --rm -C "${sdk_image}" ./image_to_vm.sh --image_compression_formats=none --from=../build/images/${BOARD}/latest --board=${BOARD}
+        ./run_sdk_container \
+            --rm \
+            -C "${sdk_image}" \
+            ./image_to_vm.sh "${build_args[@]}"
         
         if ! [[ -f $vm_image_path ]]; then
             error "Image generation failed"

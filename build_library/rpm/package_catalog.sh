@@ -1,8 +1,7 @@
 #!/bin/bash
-# Copyright (c) 2025 The Flatcar Maintainers.
-# Use of this source code is governed by the Apache 2.0 license.
+# Copyright (c) 2026, Microsoft Corporation.
 
-# Package catalog mapping Flatcar/Portage packages to Azure Linux RPMs
+# Package catalog mapping Flatcar/Portage packages to Azure Linux RPMs.
 #
 # Format: ["portage/package/name"]="rpm-name"  or  "SKIP"
 #   - rpm-name: Use this Azure Linux RPM package in RPM mode

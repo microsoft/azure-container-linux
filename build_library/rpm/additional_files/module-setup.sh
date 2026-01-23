@@ -13,7 +13,7 @@ depends() {
 
 install() {
     # Install the setup script that will be called by the systemd service
-    inst_script "$moddir/flatcar-etc-overlay.sh" "/usr/sbin/flatcar-etc-overlay"
+    inst_script "$moddir/etc-overlay.sh" "/usr/sbin/etc-overlay"
 
     # Install the systemd service that runs in the initrd
     inst_simple "$moddir/initrd-setup-etc-overlay.service" \

@@ -31,7 +31,7 @@ DEFINE_string board "${DEFAULT_BOARD}" \
 DEFINE_string format "" \
   "Output format, one of: ${VALID_IMG_TYPES[*]}"
 DEFINE_string from "" \
-  "Directory containing flatcar_production_image.bin."
+  "Directory containing the production image file."
 DEFINE_string disk_layout "" \
   "The disk layout type to use for this image."
 DEFINE_integer mem "${DEFAULT_MEM}" \
@@ -40,6 +40,8 @@ DEFINE_string to "" \
   "Destination folder for VM output file(s)"
 DEFINE_string oem_pkg "" \
   "OEM package to install"
+DEFINE_string image_name "" \
+  "Override the base image name. If not set, defaults to flatcar_production_image.bin"
 DEFINE_boolean getbinpkg "${FLAGS_FALSE}" \
   "Download binary packages from remote repository."
 DEFINE_string getbinpkgver "" \
@@ -80,6 +82,16 @@ fi
 # Loaded late because board_options depends on setup_board
 . "${BUILD_LIBRARY_DIR}/board_options.sh" || exit 1
 
+# Override image name if provided via flag
+if [[ -n "${FLAGS_image_name}" ]]; then
+  FLATCAR_PRODUCTION_IMAGE_NAME="${FLAGS_image_name}"
+  # Also update sysext base name to match custom image name
+  FLATCAR_PRODUCTION_IMAGE_SYSEXT_BASE="${FLAGS_image_name%.bin}_sysext.squashfs"
+  info "Using custom image name: ${FLATCAR_PRODUCTION_IMAGE_NAME}"
+  info "Using custom sysext base name: ${FLATCAR_PRODUCTION_IMAGE_SYSEXT_BASE}"
+else
+  info "Using default image name: ${FLATCAR_PRODUCTION_IMAGE_NAME}"
+fi
 
 IMAGES_DIR="${DEFAULT_BUILD_ROOT}/images/${FLAGS_board}"
 # Default to the most recent image

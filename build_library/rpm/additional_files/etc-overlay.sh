@@ -1,12 +1,12 @@
 #!/bin/sh
-# Set up /etc as overlay with /usr/share/flatcar/etc as lowerdir
-# Like Flatcar's initrd-setup-root: upperdir=/sysroot/etc, lowerdir=/sysroot/usr/share/flatcar/etc
+# Set up /etc as overlay with /usr/share/flatcar/etc as lowerdir.
+# Like Flatcar's initrd-setup-root: upperdir=/sysroot/etc, lowerdir=/sysroot/usr/share/flatcar/etc.
 # NOTE: Avoid grep/mountpoint - use basic shell and /proc reads instead
 set -e
 
 SYSROOT="/sysroot"
 
-echo "flatcar-etc: Starting /etc overlay setup"
+echo "etc-overlay: Starting /etc overlay setup"
 
 # In the initrd, /usr is mounted at /sysusr/usr (not /sysroot/usr)
 # We need to find where the flatcar etc files actually are
@@ -31,17 +31,17 @@ fi
 
 # Check if sysroot is mounted (look for boot dir which should always exist)
 if [ ! -d "${SYSROOT}" ] || [ ! -d "${SYSROOT}/boot" ]; then
-    echo "flatcar-etc: ERROR - ${SYSROOT} not properly mounted"
+    echo "etc-overlay: ERROR - ${SYSROOT} not properly mounted"
     ls -la "${SYSROOT}" 2>/dev/null || echo "  Cannot list ${SYSROOT}"
     exit 1
 fi
-echo "flatcar-etc: ${SYSROOT} appears to be mounted"
+echo "etc-overlay: ${SYSROOT} appears to be mounted"
 
 # Check if overlay is already mounted (read /proc/mounts directly with shell)
 if [ -f /proc/mounts ]; then
     while read -r dev mnt fstype opts rest; do
         if [ "$mnt" = "${SYSROOT}/etc" ] && [ "$fstype" = "overlay" ]; then
-            echo "flatcar-etc: /etc overlay already mounted"
+            echo "etc-overlay: /etc overlay already mounted"
             exit 0
         fi
     done < /proc/mounts
@@ -49,11 +49,11 @@ fi
 
 # Ensure /sysroot/etc exists as a directory (it's the upperdir)
 if [ -L "${SYSROOT}/etc" ]; then
-    echo "flatcar-etc: /etc is a symlink, removing it"
+    echo "etc-overlay: /etc is a symlink, removing it"
     rm -f "${SYSROOT}/etc"
 fi
 if [ ! -d "${SYSROOT}/etc" ]; then
-    echo "flatcar-etc: Creating ${SYSROOT}/etc directory"
+    echo "etc-overlay: Creating ${SYSROOT}/etc directory"
     mkdir -p "${SYSROOT}/etc"
 fi
 
@@ -61,7 +61,7 @@ fi
 mkdir -p "${SYSROOT}/.etc-work"
 
 # Mount the overlay
-echo "flatcar-etc: Mounting /etc overlay"
+echo "etc-overlay: Mounting /etc overlay"
 echo "  lowerdir=${FLATCAR_ETC}"
 echo "  upperdir=${SYSROOT}/etc"
 echo "  workdir=${SYSROOT}/.etc-work"
@@ -70,15 +70,15 @@ mount -t overlay overlay \
     -o "lowerdir=${FLATCAR_ETC},upperdir=${SYSROOT}/etc,workdir=${SYSROOT}/.etc-work,redirect_dir=on,metacopy=off,noatime" \
     "${SYSROOT}/etc"
 
-echo "flatcar-etc: /etc overlay mounted successfully"
+echo "etc-overlay: /etc overlay mounted successfully"
 
 # Verify mount
 if [ -f /proc/mounts ]; then
     while read -r dev mnt fstype opts rest; do
         if [ "$mnt" = "${SYSROOT}/etc" ] && [ "$fstype" = "overlay" ]; then
-            echo "flatcar-etc: Verified /etc overlay is active"
+            echo "etc-overlay: Verified /etc overlay is active"
             exit 0
         fi
     done < /proc/mounts
-    echo "flatcar-etc: WARNING - overlay mount not found in /proc/mounts"
+    echo "etc-overlay: WARNING - overlay mount not found in /proc/mounts"
 fi

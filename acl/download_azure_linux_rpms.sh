@@ -1,5 +1,5 @@
 #!/bin/bash
-# Download Azure Linux RPMs for hybrid build
+# Download Azure Linux RPMs for Azure Container Linux (ACL) build
 # Run this on the host (outside SDK) before building
 #
 # Usage: download_azure_linux_rpms.sh [staging_dir] [--force]
@@ -253,7 +253,7 @@ echo "All required RPM packages are ready in: ${STAGING_DIR}"
 echo
 echo "To use these RPMs in a build, set:"
 echo "  export RPM_STAGING_DIR='${STAGING_DIR}'"
-echo "  export PACKAGE_SOURCE_MODE=HYBRID"
+echo "  export PACKAGE_SOURCE_MODE=RPM"
 echo
 echo "To use as a local dnf repository cache:"
 echo "  export RPM_LOCAL_CACHE='${STAGING_DIR}'"

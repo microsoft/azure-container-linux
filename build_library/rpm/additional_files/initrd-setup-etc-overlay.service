@@ -1,5 +1,5 @@
 [Unit]
-Description=Set up /etc overlay for Flatcar RPM mode
+Description=Set up /etc overlay for RPM build mode
 DefaultDependencies=no
 
 # Run after root filesystem AND /usr are mounted
@@ -16,12 +16,12 @@ Before=initrd-switch-root.target initrd-parse-etc.service
 # Don't fail boot if this fails (allow fallback)
 OnFailure=
 
-# Check for flatcar etc in the correct location (/sysusr/usr, not /sysroot/usr)
+# Check for etc in the correct location (/sysusr/usr, not /sysroot/usr)
 ConditionPathExists=/sysusr/usr/share/flatcar/etc
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/sbin/flatcar-etc-overlay
+ExecStart=/usr/sbin/etc-overlay
 StandardOutput=journal+console
 StandardError=journal+console

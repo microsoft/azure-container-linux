@@ -127,13 +127,15 @@ start_image_rpm() {
 finish_image_rpm() {
   local root_fs_dir="$1"
 
-    # In RPM mode, the kernel is installed by Azure Linux RPM to /boot/vmlinuz-*
-    # Find and copy it to the expected location for Flatcar's grub.cfg
+    # In RPM mode, the kernel is installed by Azure Linux RPM to /boot/vmlinuz-*.
+    # Find and copy it to the expected location for grub.cfg
     local kernel_file
     kernel_file=$(ls "${root_fs_dir}"/boot/vmlinuz-* 2>/dev/null | grep -v ".hmac" | head -1)
     if [[ -n "${kernel_file}" ]]; then
-      info "RPM mode: Copying kernel from ${kernel_file} to /boot/flatcar/vmlinuz-a"
-      sudo cp "${kernel_file}" "${root_fs_dir}/boot/flatcar/vmlinuz-a"
+      BOOT_FC_PATH="${root_fs_dir}/boot/flatcar"
+      LINUX_KERNEL_DIR_A="${BOOT_FC_PATH}/vmlinuz-a"
+      info "RPM mode: Copying kernel from ${kernel_file} to ${LINUX_KERNEL_DIR_A}"
+      sudo cp "${kernel_file}" "${LINUX_KERNEL_DIR_A}"
 
       # Extract kernel version from filename (e.g., vmlinuz-6.6.112.1-2.azl3 -> 6.6.112.1-2.azl3)
       local kernel_version
@@ -182,41 +184,43 @@ finish_image_rpm() {
             fi
         done
 
-        # Create custom dracut module for /etc overlay setup (like Flatcar's bootengine)
+        # Create custom dracut module for /etc overlay setup (like Flatcar's bootengine).
         # Key insight: Must use a systemd service in initrd (not a dracut hook) so the mount
         # survives switch-root. Dracut hooks run outside systemd's mount tracking.
+        DRACUT_MOD_DIR="${root_fs_dir}/usr/lib/dracut/modules.d"
+        ETC_OVERLAY_MOD="${DRACUT_MOD_DIR}/99etc-overlay"
         info "RPM mode: Creating dracut module for /etc overlay (systemd service approach)"
-        sudo mkdir -p "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc"
+        sudo mkdir -p "${ETC_OVERLAY_MOD}"
 
         # Module setup script (module-setup.sh)
         # Based on Flatcar's 99setup-root approach which uses a systemd service
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/module-setup.sh" "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/module-setup.sh"
-        sudo chmod +x "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/module-setup.sh"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/module-setup.sh" "${ETC_OVERLAY_MOD}/module-setup.sh"
+        sudo chmod +x "${ETC_OVERLAY_MOD}/module-setup.sh"
 
         # The systemd service that sets up /etc overlay in initrd
         # Running as a systemd service (not hook) ensures the mount survives
         # switch-root
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/initrd-setup-etc-overlay.service" "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/initrd-setup-etc-overlay.service"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/initrd-setup-etc-overlay.service" "${ETC_OVERLAY_MOD}/initrd-setup-etc-overlay.service"
 
         # The actual /etc overlay setup script that runs in initramfs
         # This is like Flatcar's initrd-setup-root but just handles /etc overlay
         # NOTE: Must avoid grep/mountpoint commands that may not be in initramfs
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/flatcar-etc-overlay.sh" "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/flatcar-etc-overlay.sh"
-        sudo chmod +x "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/flatcar-etc-overlay.sh"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/etc-overlay.sh" "${ETC_OVERLAY_MOD}/etc-overlay.sh"
+        sudo chmod +x "${ETC_OVERLAY_MOD}/etc-overlay.sh"
 
         # TODO: only for QEMU testing, remove or refactor later
         # Ignition config drive loader - loads ignition config from CDROM labeled "ignition"
         # This runs before ignition services and copies config to /usr/lib/ignition/user.ign
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/ignition-config-drive.sh" "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/ignition-config-drive.sh"
-        sudo chmod +x "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/ignition-config-drive.sh"
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/ignition-config-drive.service" "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/ignition-config-drive.service"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/ignition-config-drive.sh" "${ETC_OVERLAY_MOD}/ignition-config-drive.sh"
+        sudo chmod +x "${ETC_OVERLAY_MOD}/ignition-config-drive.sh"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/ignition-config-drive.service" "${ETC_OVERLAY_MOD}/ignition-config-drive.service"
 
         # TODO: remove post SELinux enablement
         # Dummy setfiles for SELinux-disabled systems - Ignition calls it even with SELINUX=disabled
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/setfiles" "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/setfiles"
-        sudo chmod +x "${root_fs_dir}/usr/lib/dracut/modules.d/99flatcar-etc/setfiles"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/setfiles" "${ETC_OVERLAY_MOD}/setfiles"
+        sudo chmod +x "${ETC_OVERLAY_MOD}/setfiles"
 
-        info "RPM mode: Created dracut module 99flatcar-etc with systemd service for /etc overlay"
+        info "RPM mode: Created dracut module ${ETC_OVERLAY_MOD} with systemd service for /etc overlay"
 
         # Create dracut config to work around issues in chroot environment
         # We rely on standard systemd-udevd module to include libudev.so
@@ -230,13 +234,16 @@ finish_image_rpm() {
 
         # Run dracut via the wrapper script with verbose logging
         info "RPM mode: Running dracut with verbose output..."
+        INITRAMFS_A_PATH="${BOOT_FC_PATH}/initramfs-a.img"
+        # For chroot, use path relative to chroot environment
+        INITRAMFS_CHROOT_PATH="/boot/flatcar/initramfs-a.img"
         sudo chroot "${root_fs_dir}" /tmp/run-dracut.sh \
           --force \
           --no-hostonly \
           --no-early-microcode \
           --verbose \
           --kver "${kernel_version}" \
-          "/boot/flatcar/initramfs-a.img" 2>&1 | tee "${root_fs_dir}/tmp/dracut-verbose.log" || {
+            "${INITRAMFS_CHROOT_PATH}" 2>&1 | tee "${root_fs_dir}/tmp/dracut-verbose.log" || {
             error "RPM mode: dracut failed. Log saved to ${root_fs_dir}/tmp/dracut-verbose.log"
             cat "${root_fs_dir}/tmp/dracut-verbose.log"
             # Clean up before failing
@@ -261,11 +268,11 @@ finish_image_rpm() {
         sudo umount "${root_fs_dir}/proc" 2>/dev/null || true
         sudo umount "${root_fs_dir}/dev" 2>/dev/null || true
 
-        if [[ -f "${root_fs_dir}/boot/flatcar/initramfs-a.img" ]]; then
+        if [[ -f "${INITRAMFS_A_PATH}" ]]; then
           info "RPM mode: initramfs generated successfully"
-          ls -la "${root_fs_dir}/boot/flatcar/initramfs-a.img"
+          ls -la "${INITRAMFS_A_PATH}"
         else
-          die "RPM mode: initramfs was not generated at ${root_fs_dir}/boot/flatcar/initramfs-a.img"
+          die "RPM mode: initramfs was not generated at ${INITRAMFS_A_PATH}"
         fi
       else
         die "RPM mode: dracut not found - cannot generate initramfs required for Azure Linux kernel"
@@ -279,8 +286,8 @@ finish_image_rpm() {
 finish_image_uids_rpm() {
   local root_fs_dir="$1"
 
-  # RPM mode: Create sysusers.d configs for system users that Azure Linux expects
-  # but doesn't provide via sysusers.d (normally created by RPM scriptlets)
+    # RPM mode: Create sysusers.d configs for system users that Azure Linux expects
+    # but doesn't provide via sysusers.d (normally created by RPM scriptlets)
     info "RPM mode: Creating sysusers.d configs for essential system users"
 
     # D-Bus messagebus user - required for dbus.service
@@ -356,36 +363,36 @@ finish_image_kernel_config_rpm() {
 
 finish_image_tmpfiles_rpm() {
   local root_fs_dir="$1"
-
+  local ETC_FULL_PATH="${root_fs_dir}/usr/share/flatcar/etc"
+  
     # RPM mode: flatcar-tmpfiles may not exist, skip or use fallback
     if [[ -x "${root_fs_dir}/usr/sbin/flatcar-tmpfiles" ]]; then
       sudo "${root_fs_dir}"/usr/sbin/flatcar-tmpfiles "${root_fs_dir}"
     else
-      info "RPM mode: flatcar-tmpfiles not available, relocating /etc configs to /usr/share/flatcar/etc"
+      info "RPM mode: flatcar-tmpfiles not available, relocating /etc configs to ${ETC_FULL_PATH}"
 
-      # In Flatcar, /etc is a tmpfs that gets populated from /usr/share/flatcar/etc at boot
+      # In Flatcar, /etc is a tmpfs that gets populated from /usr/share/flatcar/etc at boot.
       # RPMs install configs to /etc, but we need them in /usr/share/flatcar/etc for persistence
       # Move essential configs from /etc to /usr/share/flatcar/etc
-
-      sudo mkdir -p "${root_fs_dir}/usr/share/flatcar/etc"
+      sudo mkdir -p "${ETC_FULL_PATH}"
 
       # Move PAM configs (from shadow-utils RPM) - CRITICAL for login
       if [[ -d "${root_fs_dir}/etc/pam.d" ]]; then
-        info "RPM mode: Moving /etc/pam.d to /usr/share/flatcar/etc/pam.d"
-        sudo mv "${root_fs_dir}/etc/pam.d" "${root_fs_dir}/usr/share/flatcar/etc/"
-        ls "${root_fs_dir}/usr/share/flatcar/etc/pam.d"
+        info "RPM mode: Moving /etc/pam.d to ${ETC_FULL_PATH}/pam.d"
+        sudo mv "${root_fs_dir}/etc/pam.d" "${ETC_FULL_PATH}/"
+        ls "${ETC_FULL_PATH}/pam.d"
       fi
 
       # Move security configs (from pam RPM)
       if [[ -d "${root_fs_dir}/etc/security" ]]; then
-        info "RPM mode: Moving /etc/security to /usr/share/flatcar/etc/security"
-        sudo mv "${root_fs_dir}/etc/security" "${root_fs_dir}/usr/share/flatcar/etc/"
+        info "RPM mode: Moving /etc/security to ${ETC_FULL_PATH}/security"
+        sudo mv "${root_fs_dir}/etc/security" "${ETC_FULL_PATH}/"
       fi
 
       # Move SSH configs if present
       if [[ -d "${root_fs_dir}/etc/ssh" ]]; then
-        info "RPM mode: Moving /etc/ssh to /usr/share/flatcar/etc/ssh"
-        sudo mv "${root_fs_dir}/etc/ssh" "${root_fs_dir}/usr/share/flatcar/etc/"
+        info "RPM mode: Moving /etc/ssh to ${ETC_FULL_PATH}/ssh"
+        sudo mv "${root_fs_dir}/etc/ssh" "${ETC_FULL_PATH}/"
       fi
 
       # Update root's shell in /etc/passwd BEFORE copying to /usr/share/flatcar/etc
@@ -406,23 +413,23 @@ finish_image_tmpfiles_rpm() {
       # Move individual essential config files (except profile - we create our own)
       for cfg in passwd group shadow gshadow login.defs nsswitch.conf shells environment; do
         if [[ -f "${root_fs_dir}/etc/${cfg}" ]]; then
-          sudo cp -a "${root_fs_dir}/etc/${cfg}" "${root_fs_dir}/usr/share/flatcar/etc/"
+          sudo cp -a "${root_fs_dir}/etc/${cfg}" "${ETC_FULL_PATH}/"
         fi
       done
 
       # Move profile.d if exists
       if [[ -d "${root_fs_dir}/etc/profile.d" ]]; then
-        sudo cp -a "${root_fs_dir}/etc/profile.d" "${root_fs_dir}/usr/share/flatcar/etc/"
+        sudo cp -a "${root_fs_dir}/etc/profile.d" "${ETC_FULL_PATH}/"
       fi
 
       # Move default directory (useradd defaults)
       if [[ -d "${root_fs_dir}/etc/default" ]]; then
-        sudo cp -a "${root_fs_dir}/etc/default" "${root_fs_dir}/usr/share/flatcar/etc/"
+        sudo cp -a "${root_fs_dir}/etc/default" "${ETC_FULL_PATH}/"
       fi
 
       # Move skel directory if exists
       if [[ -d "${root_fs_dir}/etc/skel" ]]; then
-        sudo cp -a "${root_fs_dir}/etc/skel" "${root_fs_dir}/usr/share/flatcar/etc/"
+        sudo cp -a "${root_fs_dir}/etc/skel" "${ETC_FULL_PATH}/"
       fi
 
       # TODO: remove post SELinux enablement
@@ -430,21 +437,21 @@ finish_image_tmpfiles_rpm() {
       # Ignition requires SELINUXTYPE even when disabled, and looks for file_contexts
       # We create an empty file_contexts so relabeling is a no-op
       info "RPM mode: Creating SELinux config (disabled) with empty policy"
-      sudo mkdir -p "${root_fs_dir}/usr/share/flatcar/etc/selinux/targeted/contexts/files"
-      sudo tee "${root_fs_dir}/usr/share/flatcar/etc/selinux/config" > /dev/null <<'SELINUX_EOF'
+      sudo mkdir -p "${ETC_FULL_PATH}/selinux/targeted/contexts/files"
+      sudo tee "${ETC_FULL_PATH}/selinux/config" > /dev/null <<'SELINUX_EOF'
 # This file controls the state of SELinux on the system.
 # SELINUX=disabled - No SELinux policy is loaded.
 SELINUX=disabled
 SELINUXTYPE=targeted
 SELINUX_EOF
       # Create empty file_contexts so Ignition's relabeling is a no-op
-      sudo touch "${root_fs_dir}/usr/share/flatcar/etc/selinux/targeted/contexts/files/file_contexts"
+      sudo touch "${ETC_FULL_PATH}/selinux/targeted/contexts/files/file_contexts"
 
       # Configure sshd to look for authorized_keys in the ignition location
       # Ignition places SSH keys in ~/.ssh/authorized_keys.d/ignition
       # NOTE: /etc/ssh was moved to /usr/share/flatcar/etc/ssh above, so we modify it there
       info "RPM mode: Configuring sshd AuthorizedKeysFile for Ignition"
-      local ssh_config_dir="${root_fs_dir}/usr/share/flatcar/etc/ssh"
+      local ssh_config_dir="${ETC_FULL_PATH}/ssh"
       sudo mkdir -p "${ssh_config_dir}/sshd_config.d"
       sudo tee "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf" > /dev/null <<'SSHD_CONF'
 # Support both traditional authorized_keys and Ignition's authorized_keys.d/ignition
@@ -471,25 +478,25 @@ SSHD_CONFIG_EOF
 
       # Configure sudo for wheel group (passwordless)
       info "RPM mode: Configuring passwordless sudo for wheel group"
-      sudo mkdir -p "${root_fs_dir}/usr/share/flatcar/etc/sudoers.d"
-      sudo tee "${root_fs_dir}/usr/share/flatcar/etc/sudoers.d/wheel-nopasswd" > /dev/null <<'SUDOERS_EOF'
+      sudo mkdir -p "${ETC_FULL_PATH}/sudoers.d"
+      sudo tee "${ETC_FULL_PATH}/sudoers.d/wheel-nopasswd" > /dev/null <<'SUDOERS_EOF'
 %wheel ALL=(ALL:ALL) NOPASSWD: ALL
 SUDOERS_EOF
-      sudo chmod 440 "${root_fs_dir}/usr/share/flatcar/etc/sudoers.d/wheel-nopasswd"
+      sudo chmod 440 "${ETC_FULL_PATH}/sudoers.d/wheel-nopasswd"
 
       info "RPM mode: Creating tmpfiles.d entries to populate /etc at boot"
       # Create tmpfiles.d entries to populate /etc at boot time
-      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/hybrid-etc.conf" "${root_fs_dir}/usr/lib/tmpfiles.d/hybrid-etc.conf"
-      info "RPM mode: Created /usr/lib/tmpfiles.d/hybrid-etc.conf"
+      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/copy-files-etc.conf" "${root_fs_dir}/usr/lib/tmpfiles.d/copy-files-etc.conf"
+      info "RPM mode: Created /usr/lib/tmpfiles.d/copy-files-etc.conf"
 
       # Create an early-boot service to populate /etc from /usr/share/flatcar/etc
       # This runs VERY early, before any login services, to ensure PAM configs are available
-      info "RPM mode: Creating hybrid-etc-populate.service for early /etc population"
-      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/hybrid-etc-populate.service" "${root_fs_dir}/usr/lib/systemd/system/hybrid-etc-populate.service"
+      info "RPM mode: Creating etc-overlay-populate.service for early /etc population"
+      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/etc-overlay-populate.service" "${root_fs_dir}/usr/lib/systemd/system/etc-overlay-populate.service"
       # Enable the service in sysinit.target (very early)
       sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants"
-      sudo ln -sf ../hybrid-etc-populate.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/hybrid-etc-populate.service"
-      info "RPM mode: Enabled hybrid-etc-populate.service in sysinit.target"
+      sudo ln -sf ../etc-overlay-populate.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/etc-overlay-populate.service"
+      info "RPM mode: Enabled etc-overlay-populate.service in sysinit.target"
 
       # Create systemd-networkd configuration for DHCP
       info "RPM mode: Creating systemd-networkd configuration for DHCP"
@@ -537,15 +544,14 @@ SYSEXT_SVC
 
       # Create /etc/profile.d directory for additional scripts
       info "RPM mode: Creating profile.d directory"
-      sudo mkdir -p "${root_fs_dir}/usr/share/flatcar/etc/profile.d"
+      sudo mkdir -p "${ETC_FULL_PATH}/profile.d"
 
       # Create a complete /etc/profile
       info "RPM mode: Creating /etc/profile"
-      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/profile" "${root_fs_dir}/usr/share/flatcar/etc/profile"
-
+      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/profile" "${ETC_FULL_PATH}/profile"
       # Create fallback /etc/shells
       info "RPM mode: Creating fallback /etc/shells"
-      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/shells" "${root_fs_dir}/usr/share/flatcar/etc/shells"
+      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/shells" "${ETC_FULL_PATH}/shells"
 
       # Create bash-login wrapper to fix shadow-utils login stdout issue
       # shadow-utils' login sets stdout to a pipe instead of TTY, causing shell to exit immediately
@@ -576,12 +582,13 @@ SYSEXT_SVC
 
 finish_image_backup_etc_rpm() {
     local root_fs_dir="$1"
+    local ETC_FULL_PATH="${root_fs_dir}/usr/share/flatcar/etc"
 
-    info "RPM mode: Skipping /usr/share/flatcar/etc recreation (already set up with PAM configs)"
+    info "RPM mode: Skipping ${ETC_FULL_PATH} recreation (already set up with PAM configs)"
     # In RPM mode, we already moved configs to /usr/share/flatcar/etc earlier
     # We just need to ensure any remaining /etc files are also copied
     # Use rsync-like behavior: copy files that don't exist in destination
     if [[ -d "${root_fs_dir}/etc" ]]; then
-      sudo cp -an "${root_fs_dir}/etc/." "${root_fs_dir}/usr/share/flatcar/etc/" 2>/dev/null || true
+      sudo cp -an "${root_fs_dir}/etc/." "${ETC_FULL_PATH}/" 2>/dev/null || true
     fi
 }

@@ -758,7 +758,7 @@ EOF
   # These rules are combined with the + modifier in addition.
   # Other rules like w, e, x, do not create files that don't exist.
   # Note: '-' must come first in the modifier pattern.
-  # In RPM mode, skip modifying hybrid-etc.conf as we need those rules for boot-time population
+  # In RPM mode, skip modifying copy-files-etc.conf as we need those rules for boot-time population
   if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
     grep -Ph '^[fcCdDLvqQpb][-=~^!+]*[ \t]*/etc' "${root_fs_dir}"/usr/lib/tmpfiles.d/* | grep -oP '/etc[^ \t]*' | sudo_clobber "${root_fs_dir}"/usr/share/flatcar/etc-no-whiteouts
     sudo sed -i '/^[CdDL][-=~^!]*[ \t]*\/etc\//d' "${root_fs_dir}"/usr/lib/tmpfiles.d/*

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Test script to validate Secure Boot is enabled
-# This script is designed to run inside the Flatcar VM
+# Test script to validate Secure Boot is enabled.
+# This script is designed to run inside the Azure Container Linux (ACL) VM.
 
 set -euo pipefail
 
