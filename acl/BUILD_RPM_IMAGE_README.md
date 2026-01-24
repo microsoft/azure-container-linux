@@ -32,10 +32,12 @@ Install on Debian/Ubuntu:
 
 ```bash
 sudo apt-get install docker-ce qemu-kvm libvirt-daemon-system libvirt-clients \
-  bridge-utils expect curl createrepo-c
+  bridge-utils expect curl createrepo-c golang-1.23 rpm genisoimage ovmf
 ```
 
-Note that `docker.io` (instead of `docker-ce`) might work as well.
+**Note**: `golang-1.23` is explicitly pinned because the default `golang` metapackage installs Go 1.22. The `rpm` package provides `rpmkeys` needed by the build system. The `genisoimage` package is needed for Ignition ISO creation. The `ovmf` package provides UEFI firmware for VM testing.
+
+**Note**: `docker.io` (instead of `docker-ce`) might work as well.
 
 Install on Azure Linux:
 
@@ -147,6 +149,44 @@ This step:
 
 **Build output:** Custom RPMs are added to `__build__/rpm-staging/`
 
+### Phase 2.6: Download Unofficial Kernel (Optional)
+
+For testing with unofficial/unsigned kernel builds from Azure DevOps CI:
+
+```bash
+# Download kernel RPMs from default build ID
+./acl/build_rpm_image.sh --download-unofficial-kernel
+
+# Download from a specific build ID
+./acl/build_rpm_image.sh --download-unofficial-kernel --unofficial-kernel-build-id=1028516
+```
+
+**Prerequisites for unofficial kernel download:**
+
+1. **Azure CLI**: Install the Azure CLI:
+
+   ```bash
+   # Ubuntu/Debian
+   curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+   # Azure Linux
+   sudo tdnf install -y azure-cli
+   ```
+
+2. **Azure DevOps Extension**: The script will auto-install if missing, or install manually:
+
+   ```bash
+   az extension add --name azure-devops
+   ```
+
+3. **Azure Login**: Authenticate with Azure:
+
+   ```bash
+   az login
+   ```
+
+**Note**: The unofficial kernel is unsigned and requires `--no-secure-boot` when starting the VM (see Phase 5).
+
 ### Phase 3: Build the Image
 
 Build the Flatcar production image using hybrid package sources.
@@ -179,7 +219,10 @@ The script automatically configures libvirt (default network, URI) on Azure Linu
 # Just start the VM and observe the boot sequence, get access to interactive console.
 ./acl/build_rpm_image.sh --start-vm
 
-# Start VM and run inline command via serial console
+# Start VM without secure boot (required for unsigned/unofficial kernels)
+./acl/build_rpm_image.sh --start-vm --no-secure-boot
+
+# Start VM and run inline command via SSH
 ./acl/build_rpm_image.sh --start-vm \
   --run-script="cat /etc/os-release"
 
@@ -254,7 +297,15 @@ Efficient workflow for iterative development:
 
 ### Common Issues
 
-- **Issue**: Red block preceeded by: `sudo: rpm: command not found`
+- **Issue**: VM fails to boot with unofficial/unsigned kernel
+  **Cause**: Secure boot rejects unsigned kernels.
+  **Solution**: Use `--no-secure-boot` flag:
+
+  ```bash
+  ./acl/build_rpm_image.sh --start-vm --no-secure-boot
+  ```
+
+- **Issue**: Red block preceded by: `sudo: rpm: command not found`
   **Solution**: Ensure SDK container is rebuilt with RPM tools:
 
   ```bash

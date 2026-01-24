@@ -35,7 +35,7 @@ DEFINE_boolean generate_pkginfo "${FLAGS_FALSE}" \
   "Generate an additional squashfs '<sysext_name>_pkginfo.raw' with portage package meta-information (/var/db ...). Useful for creating sysext dependencies; see 'base_pkginfo' below."
 DEFINE_string base_pkginfo "" \
   "Colon-separated list of pkginfo squashfs paths / files generated via 'generate_pkginfo' to base this sysext on. The corresponding base sysexts are expected to be merged with the sysext generated."
-DEFINE_string compression "gzip" \
+DEFINE_string compression "zstd" \
   "Compression to use for sysext squashfs. One of 'gzip', 'lzo', 'lz4', 'xz', or 'zstd'. Must be supported by the Flatcar squashfs kernel module in order for the sysext to work."
 DEFINE_string mksquashfs_opts "" \
   "Additional command line options to pass to mksquashfs. See 'man 1 mksquashfs'. If <compression> is 'zstd' (the default), this option defaults to '-Xcompression-level 22 -b 512K'. Otherwise the default is empty."

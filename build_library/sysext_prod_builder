@@ -63,6 +63,13 @@ create_prod_sysext() {
   # The --install_root_basename="${name}-base-sysext-rootfs" flag is
   # important - it sets the name of a rootfs directory, which is used
   # to determine the package target in coreos/base/profile.bashrc
+  #
+  # SYSEXT_COMPRESSION can be set to override default compression (zstd).
+  local compression_opt=""
+  if [[ -n "${SYSEXT_COMPRESSION:-}" ]]; then
+    compression_opt="--compression=${SYSEXT_COMPRESSION}"
+  fi
+
   sudo "FLATCAR_BUILD_ID=$FLATCAR_BUILD_ID" \
       "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE:-PORTAGE}" \
       "RPM_STAGING_DIR=${RPM_STAGING_DIR:-}" \
@@ -72,6 +79,7 @@ create_prod_sysext() {
             --squashfs_base="${base_sysext}" \
             --generate_pkginfo \
             --install_root_basename="${name}-base-sysext-rootfs" \
+            ${compression_opt} \
             "${build_sysext_opts[@]}" \
             "${name}" "${grp_pkg[@]}"
 

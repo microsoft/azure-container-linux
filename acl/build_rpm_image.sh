@@ -15,6 +15,8 @@
 #   --build-sdk-container   Update/rebuild SDK container with RPM tools (can run standalone)
 #   --build-rpms        Build custom RPM packages using Azure Linux toolkit (runs acl/build.sh)
 #   --download-rpms     Download Azure Linux RPMs to staging directory
+#   --download-unofficial-kernel  Download unofficial kernel RPMs from Azure DevOps build
+#   --unofficial-kernel-build-id=ID  Specify Azure DevOps build ID for kernel (default: 1028516)
 #   --clean             Clean staging directory before download
 #   --rebuild           Force rebuild even if image exists
 #   --rebuild-and-test    Rebuild image and run container tests (equivalent to
@@ -78,6 +80,8 @@ GROUP="${GROUP:-production}"
 BUILD_SDK_CONTAINER=false
 BUILD_RPMS=false
 DOWNLOAD_RPMS=false
+DOWNLOAD_UNOFFICIAL_KERNEL=false
+UNOFFICIAL_KERNEL_BUILD_ID="1028516"
 CLEAN_STAGING=false
 FORCE_REBUILD=false
 BUILD_IMAGE=false
@@ -99,6 +103,7 @@ VM_CONSOLE_USER="${VM_CONSOLE_USER:-root}"  # Console login user
 VM_CONSOLE_PASSWORD="${VM_CONSOLE_PASSWORD:-}"  # Console login password (empty for no password)
 VM_BOOT_TIMEOUT="${VM_BOOT_TIMEOUT:-180}"  # Seconds to wait for VM boot
 COLLECT_DATA=""  # Path to os-data-collector binary for data collection
+SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-true}"  # Enable secure boot (disable for unsigned kernels)
 
 # Colors for output
 RED='\033[0;31m'
@@ -230,6 +235,15 @@ parse_args() {
                 ;;
             --download-rpms|--download)
                 DOWNLOAD_RPMS=true
+                shift
+                ;;
+            --download-unofficial-kernel)
+                DOWNLOAD_UNOFFICIAL_KERNEL=true
+                shift
+                ;;
+            --unofficial-kernel-build-id=*)
+                UNOFFICIAL_KERNEL_BUILD_ID="${1#*=}"
+                DOWNLOAD_UNOFFICIAL_KERNEL=true
                 shift
                 ;;
             --clean)
@@ -364,6 +378,10 @@ parse_args() {
                 COLLECT_DATA="$2"
                 shift 2
                 ;;
+            --no-secure-boot)
+                SECURE_BOOT_ENABLED=false
+                shift
+                ;;
             --help|-h)
                 show_help
                 ;;
@@ -488,6 +506,116 @@ download_rpms() {
     verify_critical_packages
 
     # Create repository metadata
+    create_repo
+}
+
+# Download unofficial kernel RPMs from Azure DevOps build artifacts
+download_unofficial_kernel() {
+    section "Downloading Unofficial Kernel from Azure DevOps"
+
+    local build_id="${UNOFFICIAL_KERNEL_BUILD_ID}"
+    local org="https://dev.azure.com/mariner-org"
+    local project="mariner"
+    # Artifact name for AMD64 kernel build
+    local artifact_name="drop_buddy_build_amd64_build_amd64"
+    local temp_dir="${STAGING_DIR}/.unofficial-kernel-temp"
+
+    info "Build ID: ${build_id}"
+    info "Organization: ${org}"
+    info "Project: ${project}"
+    info "Artifact: ${artifact_name}"
+
+    # Check for az CLI
+    if ! command -v az &>/dev/null; then
+        error "Azure CLI (az) not found - required to download unofficial kernel"
+        if is_azure_linux_3; then
+            error "Install with: sudo tdnf install -y azure-cli"
+        else
+            error "Install with: curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash"
+        fi
+        exit 1
+    fi
+
+    # Check for azure-devops extension
+    if ! az extension show --name azure-devops &>/dev/null 2>&1; then
+        info "Installing azure-devops extension..."
+        az extension add --name azure-devops
+    fi
+
+    # Create temp directory
+    rm -rf "${temp_dir}"
+    mkdir -p "${temp_dir}"
+
+    info "Downloading artifacts from build ${build_id}..."
+    
+    if ! az pipelines runs artifact download \
+        --artifact-name "${artifact_name}" \
+        --path "${temp_dir}" \
+        --run-id "${build_id}" \
+        --org "${org}" \
+        --project "${project}"; then
+        error "Failed to download artifacts from Azure DevOps"
+        error "Ensure you are logged in with: az login"
+        error "And have access to ${org}/${project}"
+        error "Available artifacts can be listed with:"
+        error "  az pipelines runs artifact list --run-id ${build_id} --org ${org} --project ${project}"
+        rm -rf "${temp_dir}"
+        exit 1
+    fi
+
+    # Look for rpms.tar.gz in the downloaded artifacts
+    local rpms_tarball
+    rpms_tarball=$(find "${temp_dir}" -name "rpms.tar.gz" -type f | head -1)
+    
+    if [[ -z "${rpms_tarball}" || ! -f "${rpms_tarball}" ]]; then
+        # List what was downloaded for debugging
+        warn "Contents of downloaded artifacts:"
+        find "${temp_dir}" -type f 2>/dev/null | head -30 || true
+        error "rpms.tar.gz not found in downloaded artifacts"
+        rm -rf "${temp_dir}"
+        exit 1
+    fi
+
+    info "Found: ${rpms_tarball}"
+    info "Extracting kernel RPMs..."
+    
+    # Detect file type and extract accordingly
+    local file_type
+    file_type=$(file -b "${rpms_tarball}" 2>/dev/null || echo "unknown")
+    info "File type: ${file_type}"
+    
+    # Extract RPMs to staging directory
+    # The Azure DevOps artifact is a plain tar archive (despite .tar.gz extension)
+    local extract_failed=false
+    if ! tar -xf "${rpms_tarball}" -C "${temp_dir}"; then
+        extract_failed=true
+    fi
+    
+    if [[ "${extract_failed}" == "true" ]]; then
+        error "Failed to extract rpms.tar.gz (type: ${file_type})"
+        error "Temp directory preserved for debugging: ${temp_dir}"
+        exit 1
+    fi
+
+    # Find and copy RPM files to staging
+    local rpm_count=0
+    while IFS= read -r -d '' rpm_file; do
+        cp "${rpm_file}" "${STAGING_DIR}/"
+        ((rpm_count++)) || true
+    done < <(find "${temp_dir}" -name "*.rpm" -type f -print0)
+
+    if [[ "${rpm_count}" -eq 0 ]]; then
+        error "No RPM files found in the extracted artifacts"
+        error "Temp directory preserved for debugging: ${temp_dir}"
+        exit 1
+    fi
+
+    info "✓ Extracted ${rpm_count} RPM packages from unofficial kernel build"
+
+    # Clean up temp directory
+    rm -rf "${temp_dir}"
+
+    # Update repository metadata
     create_repo
 }
 
@@ -647,6 +775,13 @@ build_image() {
     # Set environment variables for RPM mode
     export PACKAGE_SOURCE_MODE=RPM
     export RPM_STAGING_DIR="${STAGING_DIR}"
+
+    # Use gzip compression for sysexts when NOT using unofficial kernel or on Azure Linux 3
+    # (ACL kernel doesn't support squashfs-zstd yet, Once unofficial kernel is accepted upstream we can standardize to zstd)
+    if [[ "$DOWNLOAD_UNOFFICIAL_KERNEL" != "true" ]] || is_azure_linux_3; then
+        export SYSEXT_COMPRESSION=gzip
+        info "Using gzip compression for sysexts (official kernel compatibility)"
+    fi
 
     # Source SDK common functions to get version info
     source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
@@ -1212,6 +1347,13 @@ print_summary() {
         echo
     fi
 
+    if [[ "$DOWNLOAD_UNOFFICIAL_KERNEL" == "true" ]]; then
+        echo "  2.6. Download unofficial kernel from Azure DevOps"
+        echo "     Build ID: ${UNOFFICIAL_KERNEL_BUILD_ID}"
+        echo "     Output: ${STAGING_DIR}"
+        echo
+    fi
+
     if [[ "$BUILD_IMAGE" == "true" ]]; then
         echo "  3. Build Azure Container Linux image using SDK container"
         echo "     Board: ${BOARD}"
@@ -1228,6 +1370,169 @@ remove_old_vm() {
     info "cleaning up existing vm '${VM_NAME}' if present..."
     virsh destroy "${VM_NAME}" 2>/dev/null || true
     virsh undefine --nvram "${VM_NAME}" 2>/dev/null || true
+}
+
+# Start a VM with the given image path
+# Sets global: booted_image_path, abs_disk_path
+start_vm() {
+    local vm_image_path="$1"
+    
+    section "Starting VM: ${VM_NAME}"
+    
+    remove_old_vm
+
+    booted_image_path="${vm_image_path}.booted"
+    cp "${vm_image_path}" "${booted_image_path}"
+    
+    # Get absolute path for disk image
+    abs_disk_path="$(cd "$(dirname "${booted_image_path}")" && pwd)/$(basename "${booted_image_path}")"
+    
+    # Get paths to OVMF firmware files
+    local ovmf_code="" ovmf_vars_template="" secure_attr="" smm_feature=""
+    
+    if [[ "${SECURE_BOOT_ENABLED}" != "true" ]]; then
+        info "Secure boot DISABLED - using unsigned kernel"
+        # Use non-secure boot OVMF firmware
+        # Try Azure Linux paths first, then Ubuntu/Debian paths
+        for code_file in \
+            "/usr/share/edk2/ovmf/OVMF_CODE.fd" \
+            "/usr/share/OVMF/OVMF_CODE_4M.fd" \
+            "/usr/share/OVMF/OVMF_CODE.fd"; do
+            if [[ -f "$code_file" ]]; then
+                ovmf_code="$code_file"
+                break
+            fi
+        done
+        for vars_file in \
+            "/usr/share/edk2/ovmf/OVMF_VARS.fd" \
+            "/usr/share/OVMF/OVMF_VARS_4M.fd" \
+            "/usr/share/OVMF/OVMF_VARS.fd"; do
+            if [[ -f "$vars_file" ]]; then
+                ovmf_vars_template="$vars_file"
+                break
+            fi
+        done
+        secure_attr=""
+        smm_feature=""
+    else
+        # Use secure boot OVMF firmware
+        # Try Azure Linux paths first, then Ubuntu/Debian paths
+        for code_file in \
+            "/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd" \
+            "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd" \
+            "/usr/share/OVMF/OVMF_CODE.secboot.fd" \
+            "/usr/share/edk2/ovmf/OVMF_CODE.secboot.fd" \
+            "/usr/share/OVMF/OVMF_CODE_4M.fd" \
+            "/usr/share/OVMF/OVMF_CODE.fd"; do
+            if [[ -f "$code_file" ]]; then
+                ovmf_code="$code_file"
+                break
+            fi
+        done
+        for vars_file in \
+            "/usr/share/edk2/x64/OVMF_VARS.ms.4m.fd" \
+            "/usr/share/OVMF/OVMF_VARS_4M.ms.fd" \
+            "/usr/share/OVMF/OVMF_VARS.ms.fd" \
+            "/usr/share/edk2/x64/OVMF_VARS.secboot.fd" \
+            "/usr/share/OVMF/OVMF_VARS_4M.fd" \
+            "/usr/share/OVMF/OVMF_VARS.fd" \
+            "/usr/share/edk2/x64/OVMF_VARS.4m.fd"; do
+            if [[ -f "$vars_file" ]]; then
+                ovmf_vars_template="$vars_file"
+                break
+            fi
+        done
+        secure_attr=" secure='yes'"
+        smm_feature="    <smm state='on'/>"
+    fi
+    
+    if [[ -z "$ovmf_code" ]] || [[ -z "$ovmf_vars_template" ]]; then
+        error "OVMF firmware files not found"
+        error "Install with: sudo apt-get install -y ovmf"
+        exit 1
+    fi
+    
+    info "Using OVMF firmware:"
+    info "  Code: $ovmf_code"
+    info "  Vars: $ovmf_vars_template"
+    
+    # Create a writable copy of OVMF_VARS for this VM
+    local vm_vars_path="${abs_disk_path}.vars"
+    cp "$ovmf_vars_template" "$vm_vars_path"
+    
+    # Generate Ignition config ISO for user provisioning (colocated with disk image)
+    local ignition_iso="${abs_disk_path%.qcow2}-ignition.iso"
+    generate_ignition_iso "$ignition_iso"
+    
+    # Create VM XML definition
+    if [[ "${SECURE_BOOT_ENABLED}" != "true" ]]; then
+        info "Creating VM definition WITHOUT secure boot..."
+    else
+        info "Creating VM definition with secure boot..."
+    fi
+    cat > /tmp/${VM_NAME}.xml <<EOF
+<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
+  <name>${VM_NAME}</name>
+  <memory unit='KiB'>2097152</memory>
+  <currentMemory unit='KiB'>2097152</currentMemory>
+  <vcpu placement='static'>2</vcpu>
+  <os>
+    <type arch='x86_64' machine='q35'>hvm</type>
+    <loader readonly='yes'${secure_attr} type='pflash'>${ovmf_code}</loader>
+    <nvram>${vm_vars_path}</nvram>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+${smm_feature}
+  </features>
+  <cpu mode='host-passthrough'/>
+  <clock offset='utc'>
+    <timer name='rtc' tickpolicy='catchup'/>
+    <timer name='pit' tickpolicy='delay'/>
+    <timer name='hpet' present='no'/>
+  </clock>
+  <pm>
+    <suspend-to-mem enabled='no'/>
+    <suspend-to-disk enabled='no'/>
+  </pm>
+  <devices>
+    <emulator>/usr/bin/qemu-system-x86_64</emulator>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='${abs_disk_path}'/>
+      <target dev='sda' bus='sata'/>
+    </disk>
+    <disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='${ignition_iso}'/>
+      <target dev='sdb' bus='sata'/>
+      <readonly/>
+    </disk>
+    <interface type='network'>
+      <source network='default'/>
+      <model type='e1000'/>
+    </interface>
+    <console type='pty'>
+      <target type='serial'/>
+    </console>
+    <tpm model='tpm-crb'>
+      <backend type='emulator' version='2.0'/>
+    </tpm>
+  </devices>
+</domain>
+EOF
+
+    # Define and start the VM with virsh
+    info "Defining VM with virsh..."
+    virsh define /tmp/${VM_NAME}.xml
+    
+    info "Starting VM..."
+    virsh start "${VM_NAME}"
+    
+    rm -f /tmp/${VM_NAME}.xml
+    info "VM '${VM_NAME}' started successfully!"
 }
 
 print_size_summary() {
@@ -1296,6 +1601,11 @@ main() {
         download_rpms
     fi
 
+    # Step 1.5: Download unofficial kernel from Azure DevOps (if requested)
+    if [[ "$DOWNLOAD_UNOFFICIAL_KERNEL" == "true" ]]; then
+        download_unofficial_kernel
+    fi
+
     # Step 2: Build custom RPM packages (if requested)
     if [[ "$BUILD_RPMS" == "true" ]]; then
         build_rpms
@@ -1348,117 +1658,7 @@ main() {
             exit 1
         fi
 
-        section "Starting VM: ${VM_NAME}"
-
-        remove_old_vm
-
-        booted_image_path="${vm_image_path}.booted"
-        cp "${vm_image_path}" "${booted_image_path}"
-        
-        # Get absolute path for disk image
-        local abs_disk_path="$(cd "$(dirname "${booted_image_path}")" && pwd)/$(basename "${booted_image_path}")"
-        
-        # Get paths to OVMF firmware files with secure boot
-        local ovmf_code="/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd"
-        local ovmf_vars_template="/usr/share/edk2/x64/OVMF_VARS.ms.4m.fd"
-        
-        # Fallback paths if the above don't exist
-        if [[ ! -f "$ovmf_code" ]]; then
-            ovmf_code="/usr/share/OVMF/OVMF_CODE.secboot.fd"
-        fi
-        if [[ ! -f "$ovmf_vars_template" ]]; then
-            # Try ms.fd (Microsoft keys enrolled) first, then secboot, then regular
-            for vars_file in "/usr/share/edk2/x64/OVMF_VARS.ms.fd" "/usr/share/OVMF/OVMF_VARS.ms.fd" "/usr/share/edk2/x64/OVMF_VARS.secboot.fd" "/usr/share/OVMF/OVMF_VARS.secboot.fd" "/usr/share/edk2/x64/OVMF_VARS.4m.fd" "/usr/share/OVMF/OVMF_VARS.fd"; do
-                if [[ -f "$vars_file" ]]; then
-                    ovmf_vars_template="$vars_file"
-                    break
-                fi
-            done
-        fi
-        
-        if [[ ! -f "$ovmf_code" ]] || [[ ! -f "$ovmf_vars_template" ]]; then
-            error "OVMF firmware files not found"
-            error "Searched for: $ovmf_code and $ovmf_vars_template"
-            exit 1
-        fi
-        
-        info "Using OVMF firmware:"
-        info "  Code: $ovmf_code"
-        info "  Vars: $ovmf_vars_template"
-        
-        # Create a writable copy of OVMF_VARS for this VM
-        local vm_vars_path="${abs_disk_path}.vars"
-        cp "$ovmf_vars_template" "$vm_vars_path"
-        
-        # Generate Ignition config ISO for user provisioning (colocated with disk image)
-        local ignition_iso="${abs_disk_path%.qcow2}-ignition.iso"
-        generate_ignition_iso "$ignition_iso"
-        
-        # Create VM XML definition with secure boot enabled
-        info "Creating VM definition with secure boot..."
-        cat > /tmp/${VM_NAME}.xml <<EOF
-<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
-  <name>${VM_NAME}</name>
-  <memory unit='KiB'>2097152</memory>
-  <currentMemory unit='KiB'>2097152</currentMemory>
-  <vcpu placement='static'>2</vcpu>
-  <os>
-    <type arch='x86_64' machine='q35'>hvm</type>
-    <loader readonly='yes' secure='yes' type='pflash'>${ovmf_code}</loader>
-    <nvram>${vm_vars_path}</nvram>
-    <boot dev='hd'/>
-  </os>
-  <features>
-    <acpi/>
-    <apic/>
-    <smm state='on'/>
-  </features>
-  <cpu mode='host-passthrough'/>
-  <clock offset='utc'>
-    <timer name='rtc' tickpolicy='catchup'/>
-    <timer name='pit' tickpolicy='delay'/>
-    <timer name='hpet' present='no'/>
-  </clock>
-  <pm>
-    <suspend-to-mem enabled='no'/>
-    <suspend-to-disk enabled='no'/>
-  </pm>
-  <devices>
-    <emulator>/usr/bin/qemu-system-x86_64</emulator>
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2'/>
-      <source file='${abs_disk_path}'/>
-      <target dev='sda' bus='sata'/>
-    </disk>
-    <disk type='file' device='cdrom'>
-      <driver name='qemu' type='raw'/>
-      <source file='${ignition_iso}'/>
-      <target dev='sdb' bus='sata'/>
-      <readonly/>
-    </disk>
-    <interface type='network'>
-      <source network='default'/>
-      <model type='e1000'/>
-    </interface>
-    <console type='pty'>
-      <target type='serial'/>
-    </console>
-    <tpm model='tpm-crb'>
-      <backend type='emulator' version='2.0'/>
-    </tpm>
-  </devices>
-</domain>
-EOF
-
-        # Define and start the VM with virsh
-        info "Defining VM with virsh..."
-        virsh define /tmp/${VM_NAME}.xml
-        
-        info "Starting VM..."
-        virsh start "${VM_NAME}"
-        
-        rm -f /tmp/${VM_NAME}.xml
-        info "VM '${VM_NAME}' started successfully!"
+        start_vm "${vm_image_path}"
 
         # If scripts are specified, run them via serial console or SSH
         if [[ ${#RUN_SCRIPTS[@]} -gt 0 ]]; then
