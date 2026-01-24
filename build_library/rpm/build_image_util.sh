@@ -518,6 +518,16 @@ SUDOERS_EOF
       sudo rm -f "${root_fs_dir}/etc/resolv.conf"
       sudo ln -sf /run/systemd/resolve/stub-resolv.conf "${root_fs_dir}/etc/resolv.conf"
 
+      # Create /etc/fstab with /boot and /oem mount points
+      info "RPM mode: Creating /etc/fstab with /boot and /oem mount points"
+      sudo tee "${root_fs_dir}/etc/fstab" > /dev/null <<'FSTAB_EOF'
+# /etc/fstab: static file system information
+# <device>      <mount point>   <type>  <options>       <dump>  <pass>
+LABEL=EFI-SYSTEM /boot          vfat    umask=077       0       2
+LABEL=OEM        /oem           btrfs   defaults        0       2
+FSTAB_EOF
+      sudo chmod 644 "${root_fs_dir}/etc/fstab"
+
       # Enable containerd and docker after sysext merge
       # The sysext (containerd-flatcar, docker-flatcar) provides the actual service files
       # We need to trigger daemon-reload and start them after sysext completes

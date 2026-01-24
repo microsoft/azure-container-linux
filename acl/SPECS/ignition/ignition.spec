@@ -247,16 +247,16 @@ echo "Building ignition-validate..."
 
 %if 0%{?with_cross}
 echo "Building statically-linked Linux ignition-validate..."
-GOEXPERIMENT= CGO_ENABLED=0 GOARCH=%{goarch} GOOS=linux %gocrossbuild -o ./ignition-validate-aarch64-unknown-linux-gnu-static validate/main.go
+GOEXPERIMENT= CGO_ENABLED=0 GOARCH=%{goarch} GOOS=linux %gocrossbuild -o ./ignition-validate-%{_target_cpu}-unknown-linux-gnu-static validate/main.go
 GOEXPERIMENT= CGO_ENABLED=0 GOARCH=s390x GOOS=linux %gocrossbuild -o ./ignition-validate-s390x-unknown-linux-gnu-static validate/main.go
 GOEXPERIMENT= CGO_ENABLED=0 GOARCH=ppc64le GOOS=linux %gocrossbuild -o ./ignition-validate-ppc64le-unknown-linux-gnu-static validate/main.go
 
 echo "Building macOS ignition-validate..."
-GOEXPERIMENT= GOARCH=%{goarch} GOOS=darwin %gocrossbuild -o ./ignition-validate-x86_64-apple-darwin validate/main.go
+GOEXPERIMENT= GOARCH=%{goarch} GOOS=darwin %gocrossbuild -o ./ignition-validate-%{_target_cpu}-apple-darwin validate/main.go
 
 %ifarch x86_64
 echo "Building Windows ignition-validate..."
-GOEXPERIMENT= GOARCH=amd64 GOOS=windows %gocrossbuild -o ./ignition-validate-x86_64-pc-windows-gnu.exe validate/main.go
+GOEXPERIMENT= GOARCH=amd64 GOOS=windows %gocrossbuild -o ./ignition-validate-%{_target_cpu}-pc-windows-gnu.exe validate/main.go
 %endif
 %endif
 
@@ -810,4 +810,3 @@ VERSION=%{version} GOARCH=%{goarch} ./test
 
 * Thu Jun 21 2018 Dusty Mabe <dusty@dustymabe.com> - 0.26.0-0.1.git7610725
 - First package for Fedora
-
