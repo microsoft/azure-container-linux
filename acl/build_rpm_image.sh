@@ -98,6 +98,7 @@ USE_SERIAL_CONSOLE="${USE_SERIAL_CONSOLE:-false}"  # Use serial console instead 
 VM_CONSOLE_USER="${VM_CONSOLE_USER:-root}"  # Console login user
 VM_CONSOLE_PASSWORD="${VM_CONSOLE_PASSWORD:-}"  # Console login password (empty for no password)
 VM_BOOT_TIMEOUT="${VM_BOOT_TIMEOUT:-180}"  # Seconds to wait for VM boot
+COLLECT_DATA=""  # Path to os-data-collector binary for data collection
 
 # Colors for output
 RED='\033[0;31m'
@@ -354,6 +355,14 @@ parse_args() {
             --boot-timeout=*)
                 VM_BOOT_TIMEOUT="${1#*=}"
                 shift
+                ;;
+            --collect-data=*)
+                COLLECT_DATA="${1#*=}"
+                shift
+                ;;
+            --collect-data)
+                COLLECT_DATA="$2"
+                shift 2
                 ;;
             --help|-h)
                 show_help
@@ -1504,7 +1513,7 @@ EOF
             fi
             print_size_summary
         else
-            # No scripts - wait for boot, then connect via console or SSH based on setting
+            # No scripts - wait for boot, then either collect data or connect interactively
             echo
             info "Waiting for VM to boot (showing console output)..."
             
@@ -1513,7 +1522,21 @@ EOF
                 warn "Boot detection timed out"
             fi
             
-            if [[ "$USE_SERIAL_CONSOLE" == "true" ]]; then
+            # Run data collection if requested
+            if [[ -n "$COLLECT_DATA" ]]; then
+                if ! wait_for_vm_ip "${VM_NAME}" 60; then
+                    error "Could not get VM IP for data collection"
+                    exit 1
+                fi
+                if ! wait_for_ssh "$VM_IP" "$VM_SSH_TIMEOUT"; then
+                    error "SSH not available for data collection"
+                    exit 1
+                fi
+                local collect_output_dir="${SCRIPT_DIR}/__build__/data-collection"
+                mkdir -p "$collect_output_dir"
+                info "Running data collection..."
+                "${SCRIPT_DIR}/acl/collect_vm_data.sh" --host="$VM_IP" --collector="$COLLECT_DATA" --user="$VM_SSH_USER" --output="$collect_output_dir"
+            elif [[ "$USE_SERIAL_CONSOLE" == "true" ]]; then
                 connect_vm_console "${VM_NAME}"
             else
                 # Connect via SSH

@@ -206,6 +206,17 @@ The script automatically configures libvirt (default network, URI) on Azure Linu
 - Uses `expect` to automate console login
 - Customize: `--console-user=core --console-password=mypass`
 
+**Data Collection for OS Comparison:**
+
+```bash
+# Collect OS data from VM for comparison analysis
+./acl/build_rpm_image.sh --start-vm --collect-data=/path/to/os-data-collector
+```
+
+- Requires the `os-data-collector` binary (from os-diff repo)
+- Output: `__build__/comparison-data/{HOST}-{TIMESTAMP}-comparison-data.json`
+- For collecting data from external hosts (e.g., Azure nodes), use `acl/collect_vm_data.sh` directly
+
 #### Cleanup
 
 Subsequent runs will clean up the VM automatically. To manually clean up the VM:
