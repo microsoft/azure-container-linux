@@ -153,6 +153,7 @@ if [[ -z ${stat} ]] ; then
         -e SDK_GROUP_ID="$(id -g)"
         -e PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-}"
         -e RPM_STAGING_DIR="/mnt/host/source/src/scripts/__build__/rpm-staging"
+        -e SYSEXT_COMPRESSION="${SYSEXT_COMPRESSION:-}"
         --name="${name}"
         --hostname="${hostname}"
         --entrypoint /bin/bash
