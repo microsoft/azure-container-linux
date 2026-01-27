@@ -84,9 +84,9 @@ if [[ -n "${PACKAGE_SOURCE_MODE:-}" ]]; then
     if [[ -n "${RPM_STAGING_DIR:-}" ]]; then
         echo "export RPM_STAGING_DIR='${RPM_STAGING_DIR}'" >> /home/sdk/.bashrc
     fi
-    if [[ -n "${SYSEXT_COMPRESSION:-}" ]]; then
-        echo "export SYSEXT_COMPRESSION='${SYSEXT_COMPRESSION}'" >> /home/sdk/.bashrc
-    fi
+fi
+if [[ -n "${SYSEXT_COMPRESSION:-}" ]]; then
+    echo "export SYSEXT_COMPRESSION='${SYSEXT_COMPRESSION}'" >> /home/sdk/.bashrc
 fi
 
 if [ $# -gt 0 ] ; then

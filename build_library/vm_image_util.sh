@@ -582,12 +582,18 @@ install_oem_sysext() {
     # important - it sets the name of a rootfs directory, which is
     # used to determine the package target in
     # coreos/base/profile.bashrc
+    # SYSEXT_COMPRESSION can be set to override default compression (zstd).
+    local compression_opt=""
+    if [[ -n "${SYSEXT_COMPRESSION:-}" ]]; then
+        compression_opt="--compression=${SYSEXT_COMPRESSION}"
+    fi
     local build_sysext_flags=(
         --board="${BOARD}"
         --squashfs_base="${VM_SRC_SYSEXT_IMG}"
         --image_builddir="${built_sysext_dir}"
         --metapkgs="${metapkg}"
         --install_root_basename="${VM_IMG_TYPE}-oem-sysext-rootfs"
+        ${compression_opt}
     )
     local overlay_path mangle_fs
     overlay_path=$(portageq get_repo_path / coreos-overlay)

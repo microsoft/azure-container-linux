@@ -776,13 +776,6 @@ build_image() {
     export PACKAGE_SOURCE_MODE=RPM
     export RPM_STAGING_DIR="${STAGING_DIR}"
 
-    # Use gzip compression for sysexts when NOT using unofficial kernel or on Azure Linux 3
-    # (ACL kernel doesn't support squashfs-zstd yet, Once unofficial kernel is accepted upstream we can standardize to zstd)
-    if [[ "$DOWNLOAD_UNOFFICIAL_KERNEL" != "true" ]] || is_azure_linux_3; then
-        export SYSEXT_COMPRESSION=gzip
-        info "Using gzip compression for sysexts (official kernel compatibility)"
-    fi
-
     # Source SDK common functions to get version info
     source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
     local sdk_version=$(get_sdk_version_from_versionfile)
@@ -1585,6 +1578,13 @@ main() {
 
     check_prerequisites
     print_summary
+
+    # Use gzip compression for sysexts when NOT using unofficial kernel or on Azure Linux 3
+    # (ACL kernel doesn't support squashfs-zstd yet, Once unofficial kernel is accepted upstream we can standardize to zstd)
+    if [[ "$DOWNLOAD_UNOFFICIAL_KERNEL" != "true" ]] || is_azure_linux_3; then
+        export SYSEXT_COMPRESSION=gzip
+        info "Using gzip compression for sysexts (official kernel compatibility)"
+    fi
 
     # Step 0: Update SDK container if requested (before download/build)
     if [[ "$BUILD_SDK_CONTAINER" == "true" ]]; then
