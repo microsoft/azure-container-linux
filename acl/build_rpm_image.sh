@@ -80,7 +80,7 @@ GROUP="${GROUP:-production}"
 BUILD_SDK_CONTAINER=false
 BUILD_RPMS=false
 DOWNLOAD_RPMS=false
-DOWNLOAD_UNOFFICIAL_KERNEL=false
+USE_UNOFFICIAL_KERNEL=false
 UNOFFICIAL_KERNEL_BUILD_ID="1028516"
 CLEAN_STAGING=false
 FORCE_REBUILD=false
@@ -238,12 +238,12 @@ parse_args() {
                 shift
                 ;;
             --download-unofficial-kernel)
-                DOWNLOAD_UNOFFICIAL_KERNEL=true
+                USE_UNOFFICIAL_KERNEL=true
                 shift
                 ;;
             --unofficial-kernel-build-id=*)
                 UNOFFICIAL_KERNEL_BUILD_ID="${1#*=}"
-                DOWNLOAD_UNOFFICIAL_KERNEL=true
+                USE_UNOFFICIAL_KERNEL=true
                 shift
                 ;;
             --clean)
@@ -1340,8 +1340,8 @@ print_summary() {
         echo
     fi
 
-    if [[ "$DOWNLOAD_UNOFFICIAL_KERNEL" == "true" ]]; then
-        echo "  2.6. Download unofficial kernel from Azure DevOps"
+    if [[ "$USE_UNOFFICIAL_KERNEL" == "true" ]]; then
+        echo "  2.6. Use unofficial kernel from Azure DevOps"
         echo "     Build ID: ${UNOFFICIAL_KERNEL_BUILD_ID}"
         echo "     Output: ${STAGING_DIR}"
         echo
@@ -1581,7 +1581,7 @@ main() {
 
     # Use gzip compression for sysexts when NOT using unofficial kernel or on Azure Linux 3
     # (ACL kernel doesn't support squashfs-zstd yet, Once unofficial kernel is accepted upstream we can standardize to zstd)
-    if [[ "$DOWNLOAD_UNOFFICIAL_KERNEL" != "true" ]] || is_azure_linux_3; then
+    if [[ "$USE_UNOFFICIAL_KERNEL" != "true" ]] || is_azure_linux_3; then
         export SYSEXT_COMPRESSION=gzip
         info "Using gzip compression for sysexts (official kernel compatibility)"
     fi
@@ -1601,9 +1601,20 @@ main() {
         download_rpms
     fi
 
-    # Step 1.5: Download unofficial kernel from Azure DevOps (if requested)
-    if [[ "$DOWNLOAD_UNOFFICIAL_KERNEL" == "true" ]]; then
+    # Step 1.5: Use unofficial kernel from Azure DevOps (if requested or previously downloaded)
+    if [[ "$USE_UNOFFICIAL_KERNEL" == "true" ]]; then
+        # Flag was passed - download unofficial kernel
         download_unofficial_kernel
+    elif ls "${STAGING_DIR}"/kernel-[0-9]*.rpm &>/dev/null 2>&1; then
+        # Kernel RPMs found in staging - use unofficial kernel settings
+        USE_UNOFFICIAL_KERNEL=true
+        info "Detected kernel RPMs in staging directory, using unofficial kernel settings"
+    fi
+
+    # Automatically disable secure boot when using unofficial (unsigned) kernel
+    if [[ "$USE_UNOFFICIAL_KERNEL" == "true" ]] && [[ "$SECURE_BOOT_ENABLED" == "true" ]]; then
+        warn "Disabling secure boot (unofficial kernel is unsigned)"
+        SECURE_BOOT_ENABLED=false
     fi
 
     # Step 2: Build custom RPM packages (if requested)
