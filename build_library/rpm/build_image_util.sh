@@ -208,13 +208,6 @@ finish_image_rpm() {
         sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/etc-overlay.sh" "${ETC_OVERLAY_MOD}/etc-overlay.sh"
         sudo chmod +x "${ETC_OVERLAY_MOD}/etc-overlay.sh"
 
-        # TODO: only for QEMU testing, remove or refactor later
-        # Ignition config drive loader - loads ignition config from CDROM labeled "ignition"
-        # This runs before ignition services and copies config to /usr/lib/ignition/user.ign
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/ignition-config-drive.sh" "${ETC_OVERLAY_MOD}/ignition-config-drive.sh"
-        sudo chmod +x "${ETC_OVERLAY_MOD}/ignition-config-drive.sh"
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/ignition-config-drive.service" "${ETC_OVERLAY_MOD}/ignition-config-drive.service"
-
         # TODO: remove post SELinux enablement
         # Dummy setfiles for SELinux-disabled systems - Ignition calls it even with SELINUX=disabled
         sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/setfiles" "${ETC_OVERLAY_MOD}/setfiles"
@@ -345,7 +338,40 @@ SYSUSERS_TIMESYNC
 g docker - -
 SYSUSERS_DOCKER
 
+    # systemd-journal group - for reading journal logs (GID 190 from Flatcar)
+    # core user needs to be a member for journalctl access
+    sudo tee "${root_fs_dir}/usr/lib/sysusers.d/systemd-journal.conf" > /dev/null <<'SYSUSERS_JOURNAL'
+# systemd journal group - allows reading system logs
+g systemd-journal 190 -
+SYSUSERS_JOURNAL
+
+    # wheel and sudo groups - for administrative access
+    sudo tee "${root_fs_dir}/usr/lib/sysusers.d/admin-groups.conf" > /dev/null <<'SYSUSERS_ADMIN'
+# Administrative groups
+g wheel 10 -
+g sudo 150 -
+SYSUSERS_ADMIN
+
+    # core user - primary user for Flatcar/ACL (UID/GID 500)
+    # This is the default non-root user for SSH access and container operations
+    sudo tee "${root_fs_dir}/usr/lib/sysusers.d/core.conf" > /dev/null <<'SYSUSERS_CORE'
+# Core user - primary administrative user
+g core 500 -
+u core 500:500 "CoreOS Admin" /home/core /bin/bash
+m core wheel
+m core sudo
+m core docker
+m core systemd-journal
+SYSUSERS_CORE
+
+    # NOTE: /home/core directory creation happens in initramfs via etc-overlay.sh
+    # The finish_image() function deletes everything except /boot, /usr, /oem at build time,
+    # so any directories we create here would be removed. The etc-overlay.sh script 
+    # (part of the 99etc-overlay dracut module) creates /home/core with proper permissions
+    # BEFORE ignition-files.service runs, which is when ignition writes SSH keys.
+
     info "RPM mode: Created sysusers.d configs for system users"
+    info "RPM mode: /home/core will be created at boot by etc-overlay.sh (dracut module)"
 }
 
 finish_image_kernel_config_rpm() {
@@ -400,6 +426,39 @@ finish_image_tmpfiles_rpm() {
       if [[ -f "${root_fs_dir}/etc/passwd" ]]; then
         info "RPM mode: Updating root's shell in /etc/passwd to use bash-login wrapper"
         sudo sed -i 's|^root:\([^:]*:[^:]*:[^:]*:[^:]*:[^:]*\):.*|root:\1:/usr/local/bin/bash-login|' "${root_fs_dir}/etc/passwd"
+        
+        # Add core user if not already present (UID/GID 500, required for ignition)
+        if ! grep -q "^core:" "${root_fs_dir}/etc/passwd"; then
+          info "RPM mode: Adding core user to /etc/passwd"
+          echo "core:x:500:500:CoreOS Admin:/home/core:/bin/bash" | sudo tee -a "${root_fs_dir}/etc/passwd" > /dev/null
+        fi
+      fi
+
+      # Add core group to /etc/group if not present
+      if [[ -f "${root_fs_dir}/etc/group" ]]; then
+        if ! grep -q "^core:" "${root_fs_dir}/etc/group"; then
+          info "RPM mode: Adding core group to /etc/group"
+          echo "core:x:500:" | sudo tee -a "${root_fs_dir}/etc/group" > /dev/null
+        fi
+        # Add core to wheel, sudo, docker groups
+        for grp in wheel sudo docker; do
+          if grep -q "^${grp}:" "${root_fs_dir}/etc/group"; then
+            # Add core to the group if not already a member
+            if ! grep "^${grp}:" "${root_fs_dir}/etc/group" | grep -q "core"; then
+              sudo sed -i "s/^${grp}:\([^:]*:[^:]*:\)\(.*\)/${grp}:\1\2,core/" "${root_fs_dir}/etc/group"
+              # Clean up any leading comma if group was empty
+              sudo sed -i "s/^${grp}:\([^:]*:[^:]*:\),/${grp}:\1/" "${root_fs_dir}/etc/group"
+            fi
+          fi
+        done
+      fi
+
+      # Add core user to /etc/shadow if not present (locked password - SSH key only)
+      if [[ -f "${root_fs_dir}/etc/shadow" ]]; then
+        if ! grep -q "^core:" "${root_fs_dir}/etc/shadow"; then
+          info "RPM mode: Adding core user to /etc/shadow"
+          echo "core:*:19000:0:99999:7:::" | sudo tee -a "${root_fs_dir}/etc/shadow" > /dev/null
+        fi
       fi
 
       # Set empty root password for passwordless console login
@@ -513,6 +572,33 @@ SUDOERS_EOF
       info "RPM mode: Enabling systemd-resolved.service"
       sudo ln -sf ../systemd-resolved.service "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/systemd-resolved.service"
 
+      # Fix ntpdate-wrapper - Azure Linux has ntpdate at /usr/bin but wrapper script expects /usr/sbin
+      if [[ -f "${root_fs_dir}/usr/libexec/ntpdate-wrapper" ]]; then
+        info "RPM mode: Patching ntpdate-wrapper to use /usr/bin/ntpdate"
+        sudo sed -i 's|/usr/sbin/ntpdate|/usr/bin/ntpdate|g' "${root_fs_dir}/usr/libexec/ntpdate-wrapper"
+      fi
+
+      # Mask kdump.service - requires crashkernel= kernel parameter which we don't set
+      info "RPM mode: Masking kdump.service (no crash kernel memory reserved)"
+      sudo ln -sf /dev/null "${root_fs_dir}/usr/lib/systemd/system/kdump.service"
+
+      # Dummy setenforce for SELinux-disabled systems (goes to /usr/sbin, not initramfs)
+      if [[ ! -x "${root_fs_dir}/usr/sbin/setenforce" ]]; then
+        info "RPM mode: Installing dummy setenforce to /usr/sbin"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/setenforce" "${root_fs_dir}/usr/sbin/setenforce"
+        sudo chmod +x "${root_fs_dir}/usr/sbin/setenforce"
+      fi
+
+      # Placeholder audit-rules.service - Azure Linux doesn't provide this but kola tests expect it as a common dependency
+      if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service" ]]; then
+        info "RPM mode: Installing placeholder audit-rules.service"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/audit-rules.service" "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service"
+      fi
+
+      # Create /var/lib/logrotate directory for logrotate state file
+      info "RPM mode: Creating /var/lib/logrotate directory"
+      sudo mkdir -p "${root_fs_dir}/var/lib/logrotate"
+
       # Create /etc/resolv.conf symlink to point to systemd-resolved
       info "RPM mode: Configuring /etc/resolv.conf for systemd-resolved"
       sudo rm -f "${root_fs_dir}/etc/resolv.conf"
@@ -551,6 +637,20 @@ WantedBy=multi-user.target
 SYSEXT_SVC
       sudo mkdir -p "${root_fs_dir}/etc/systemd/system/multi-user.target.wants"
       sudo ln -sf /usr/lib/systemd/system/sysext-services.service "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/sysext-services.service"
+
+#       # Enable serial-getty on ttyS0 with AUTOLOGIN
+#       # This bypasses PAM login and drops directly to root shell
+#       info "RPM mode: Creating autologin serial-getty@ttyS0"
+#       sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/serial-getty@ttyS0.service.d"
+#       sudo tee "${root_fs_dir}/usr/lib/systemd/system/serial-getty@ttyS0.service.d/autologin.conf" > /dev/null <<'AUTOLOGIN_CONF'
+# [Service]
+# ExecStart=
+# ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud %I 115200,38400,9600 $TERM
+# AUTOLOGIN_CONF
+
+#       # Enable serial-getty on ttyS0
+#       sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants"
+#       sudo ln -sf ../serial-getty@.service "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
 
       # Create /etc/profile.d directory for additional scripts
       info "RPM mode: Creating profile.d directory"

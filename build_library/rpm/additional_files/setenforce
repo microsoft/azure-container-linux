@@ -1,0 +1,4 @@
+#!/bin/sh
+# Dummy setenforce - SELinux is disabled, nothing to do
+# This script satisfies any setenforce calls when SELinux is not enabled
+exit 0

@@ -38,19 +38,11 @@ After=initrd-setup-etc-overlay.service
 Wants=initrd-setup-etc-overlay.service
 EOF
 
-    # Install ignition config drive loader (loads ignition config from CDROM before ignition runs)
-    inst_script "$moddir/ignition-config-drive.sh" "/usr/sbin/ignition-config-drive"
-    inst_simple "$moddir/ignition-config-drive.service" \
-        "$systemdsystemunitdir/ignition-config-drive.service"
-
-    # Enable it in ignition-complete.target (runs before ignition-fetch-offline)
-    ln -sf "../ignition-config-drive.service" \
-        "$initdir/$systemdsystemunitdir/ignition-complete.target.wants/ignition-config-drive.service"
-
     # Install dummy setfiles for SELinux-disabled systems
     # Ignition calls setfiles even with SELINUX=disabled, this no-op prevents errors
     inst_script "$moddir/setfiles" "/usr/sbin/setfiles"
 
-    # Install mount command if not already present
-    inst_multiple -o mount umount mkdir cp blkid sleep
+    # Install commands needed by etc-overlay.sh
+    # mount/umount for overlay, mkdir/chmod/chown for /home/core setup
+    inst_multiple -o mount umount mkdir cp blkid sleep chmod chown ls
 }

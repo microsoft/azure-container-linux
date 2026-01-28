@@ -48,12 +48,19 @@ function set_vars() {
   local arch="${1}"
   local parallel="${2}"
 
+  # Determine image name prefix based on PACKAGE_SOURCE_MODE
+  # RPM mode uses "acl_production", PORTAGE mode uses "flatcar_production"
+  local img_prefix="flatcar_production"
+  if [[ "${PACKAGE_SOURCE_MODE:-PORTAGE}" == "RPM" ]]; then
+    img_prefix="acl_production"
+  fi
+
   # Read by the mantle container.
   # The local directory ("pwd") will be mounted to /work/ in the container.
   cat > sdk_container/.env <<EOF
-export QEMU_IMAGE_NAME=/work/__build__/images/images/${arch@Q}-usr/latest/flatcar_production_image.bin
-export QEMU_UEFI_FIRMWARE=/work/__build__/images/images/${arch@Q}-usr/latest/flatcar_production_qemu_uefi_efi_code.qcow2
-export QEMU_UEFI_OVMF_VARS=/work/__build__/images/images/${arch@Q}-usr/latest/flatcar_production_qemu_uefi_efi_vars.qcow2
+export QEMU_IMAGE_NAME=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_image.bin
+export QEMU_UEFI_FIRMWARE=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_efi_code.qcow2
+export QEMU_UEFI_OVMF_VARS=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_efi_vars.qcow2
 export QEMU_UPDATE_PAYLOAD=/work/__build__/images/images/${arch@Q}-usr/latest/flatcar_test_update.gz
 export PARALLEL_TESTS=${parallel@Q}
 EOF

@@ -149,7 +149,7 @@ This step:
 
 **Build output:** Custom RPMs are added to `__build__/rpm-staging/`
 
-### Phase 2.6: Download Unofficial Kernel (Optional)
+### Phase 2.6: Download Unofficial Kernel
 
 For testing with unofficial/unsigned kernel builds from Azure DevOps CI:
 
@@ -228,13 +228,12 @@ The script automatically configures libvirt (default network, URI) on Azure Linu
 
 # Run test script on VM (this script is included and used for a basic smoke test for now)
 ./acl/build_rpm_image.sh --start-vm \
-  --run-script=./run-container-test.sh
+  --run-script=./acl/tests/run-container-test.sh
 
 # Run multiple test scripts
 ./acl/build_rpm_image.sh --start-vm \
-  --run-script=./tests/01-boot.sh \
-  --run-script=./tests/02-network.sh \
-  --run-script=./tests/03-services.sh
+  --run-script=./acl/tests/run-secureboot-test.sh \
+  --run-script=./acl/tests/run-container-test.sh
 ```
 
 **SSH Access (Default):**
@@ -304,6 +303,26 @@ virsh destroy acl
 virsh undefine --nvram acl
 ```
 
+### Phase 6: Run Flatcar E2E Tests (Optional)
+Run the full Flatcar E2E test suite against the built VM image:
+
+```bash
+# Run Flatcar E2E tests
+./acl/build_rpm_image.sh --run-kola-tests
+```
+
+The prerequisites for running Kola tests is to build customized `mantle` container. You need to checkout the `mantle` repository next to the `acl-scripts` repository:
+
+```bash
+git clone https://mariner-org@dev.azure.com/mariner-org/ACL/_git/mantle
+```
+
+Then build the `mantle` container with ACL support:
+
+```bash
+docker build -t mantle .
+```
+
 ## Common Workflows
 
 ### Development Iteration
@@ -343,6 +362,7 @@ Efficient workflow for iterative development:
   ```bash
   ./acl/build_rpm_image.sh --build-sdk-container
   ```
+
 - **Issue**: VM startup fails with `tpm-emulator: could not send INIT` (Azure Linux 3)
   **Cause**: swtpm on some Azure Linux 3 builds crashes due to SECCOMP blocking the `clone3` syscall.
   **Solution**: Create a wrapper script that disables SECCOMP:

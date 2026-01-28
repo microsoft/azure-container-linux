@@ -19,5 +19,6 @@ ci-cleanup.sh
 
 # build cache / artefacts directories
 __build__/
+__TESTS__/
 sdk_container/.cache
 sdk_container/.config

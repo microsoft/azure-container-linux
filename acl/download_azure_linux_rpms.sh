@@ -227,28 +227,6 @@ echo "Package inventory:"
 ls -1 "${STAGING_DIR}"/*.rpm 2>/dev/null | xargs -n1 basename | sort || echo "  (none)"
 echo
 
-# Create repository metadata for local cache
-echo "=== Creating repository metadata ==="
-if command -v createrepo_c &>/dev/null; then
-    echo "Running createrepo_c to generate repository metadata..."
-    createrepo_c "${STAGING_DIR}" >/dev/null 2>&1
-    if [[ -f "${STAGING_DIR}/repodata/repomd.xml" ]]; then
-        echo "✓ Repository metadata created successfully"
-        echo "  This directory can now be used as a local dnf repository cache"
-    else
-        echo "⚠ Warning: createrepo_c completed but metadata not found"
-        exit 1
-    fi
-else
-    echo "⚠ Warning: createrepo_c not found - repository metadata not created"
-    echo "  To use this as a local dnf repository cache, install createrepo_c:"
-    echo "    - Fedora/RHEL: sudo dnf install createrepo_c"
-    echo "    - Debian/Ubuntu: sudo apt install createrepo-c"
-    echo "  Then run: createrepo_c ${STAGING_DIR}"
-    exit 1
-fi
-echo
-
 echo "All required RPM packages are ready in: ${STAGING_DIR}"
 echo
 echo "To use these RPMs in a build, set:"

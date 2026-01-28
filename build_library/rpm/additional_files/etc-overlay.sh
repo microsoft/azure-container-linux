@@ -77,8 +77,45 @@ if [ -f /proc/mounts ]; then
     while read -r dev mnt fstype opts rest; do
         if [ "$mnt" = "${SYSROOT}/etc" ] && [ "$fstype" = "overlay" ]; then
             echo "etc-overlay: Verified /etc overlay is active"
-            exit 0
         fi
     done < /proc/mounts
-    echo "etc-overlay: WARNING - overlay mount not found in /proc/mounts"
 fi
+
+# Create /home/core directory structure BEFORE ignition runs
+# Ignition needs this to exist so it can write SSH authorized_keys
+# The core user has UID/GID 500 (defined in /etc/passwd from the image)
+echo "etc-overlay: Creating /home/core directory structure for ignition"
+
+# Create /home directory if it doesn't exist
+if [ ! -d "${SYSROOT}/home" ]; then
+    echo "etc-overlay: Creating ${SYSROOT}/home"
+    mkdir -p "${SYSROOT}/home"
+    chmod 755 "${SYSROOT}/home"
+fi
+
+# Create /home/core owned by core user (UID/GID 500)
+if [ ! -d "${SYSROOT}/home/core" ]; then
+    echo "etc-overlay: Creating ${SYSROOT}/home/core"
+    mkdir -p "${SYSROOT}/home/core"
+    chown 500:500 "${SYSROOT}/home/core"
+    chmod 700 "${SYSROOT}/home/core"
+fi
+
+# Create .ssh directory structure that ignition expects
+if [ ! -d "${SYSROOT}/home/core/.ssh" ]; then
+    echo "etc-overlay: Creating ${SYSROOT}/home/core/.ssh"
+    mkdir -p "${SYSROOT}/home/core/.ssh"
+    chown 500:500 "${SYSROOT}/home/core/.ssh"
+    chmod 700 "${SYSROOT}/home/core/.ssh"
+fi
+
+# Create authorized_keys.d directory (ignition writes to authorized_keys.d/ignition)
+if [ ! -d "${SYSROOT}/home/core/.ssh/authorized_keys.d" ]; then
+    echo "etc-overlay: Creating ${SYSROOT}/home/core/.ssh/authorized_keys.d"
+    mkdir -p "${SYSROOT}/home/core/.ssh/authorized_keys.d"
+    chown 500:500 "${SYSROOT}/home/core/.ssh/authorized_keys.d"
+    chmod 700 "${SYSROOT}/home/core/.ssh/authorized_keys.d"
+fi
+
+echo "etc-overlay: /home/core directory structure created successfully"
+ls -la "${SYSROOT}/home/core/" 2>/dev/null || echo "etc-overlay: Could not list ${SYSROOT}/home/core"

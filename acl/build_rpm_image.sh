@@ -30,6 +30,7 @@
 #                                        --rebuild --build-vm-image --start-vm --run-script ./run-container-test.sh)
 #   --run-script=PATH                    Run script on VM after boot (can specify multiple times)
 #                                        Can be a file path or inline command. Implies --start-vm
+#   --run-kola-tests                     Run kola tests using run_local_tests.sh after building
 #   --ssh-key=PATH                       SSH private key for VM access
 #   --ssh-timeout=SECS                   Timeout waiting for SSH (default: 120)
 #   --ssh-user=USER                      SSH user for VM scripts (default: core)
@@ -107,7 +108,8 @@ VM_CONSOLE_USER="${VM_CONSOLE_USER:-root}"  # Console login user
 VM_CONSOLE_PASSWORD="${VM_CONSOLE_PASSWORD:-}"  # Console login password (empty for no password)
 VM_BOOT_TIMEOUT="${VM_BOOT_TIMEOUT:-180}"  # Seconds to wait for VM boot
 PARITY=""  # Path to os-diff directory for parity data collection and reporting
-SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-true}"  # Enable secure boot (disable for unsigned kernels)
+SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-false}"  # Enable secure boot (disable for unsigned kernels)
+RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh
 
 # Set envi var-s required for RPM mode
 export PACKAGE_SOURCE_MODE=RPM
@@ -399,6 +401,10 @@ parse_args() {
                 SECURE_BOOT_ENABLED=false
                 shift
                 ;;
+            --run-kola-tests)
+                RUN_KOLA_TESTS=true
+                shift
+                ;;
             --help|-h)
                 show_help
                 ;;
@@ -479,19 +485,8 @@ check_prerequisites() {
         exit 1
     fi
 
-    # Check for genisoimage/mkisofs if VM operations are planned
+    # Check swtpm on Azure Linux 3 if VM operations are planned
     if [[ "$START_VM" == "true" ]] || [[ "$BUILD_VM_IMAGE" == "true" ]]; then
-        if ! command -v genisoimage &>/dev/null && ! command -v mkisofs &>/dev/null; then
-            warn "Neither genisoimage nor mkisofs found - required for ignition ISO creation"
-            if is_azure_linux_3; then
-                warn "Install with: sudo tdnf install -y cdrkit"
-            else
-                warn "Install with: sudo apt-get install -y genisoimage"
-            fi
-            warnings=$((warnings + 1))
-        fi
-        
-        # Check swtpm on Azure Linux 3
         check_swtpm_azure_linux
     fi
 
@@ -681,7 +676,7 @@ create_repo() {
     
     if ! command -v createrepo_c &>/dev/null; then
         error "createrepo_c not found - required to create repository metadata"
-        error "  Install with: sudo dnf install createrepo_c"
+        error "  Install with: sudo dnf install createrepo_c or sudo apt install createrepo-c"
         exit 1
     fi
 
@@ -696,6 +691,17 @@ create_repo() {
         error "Repository metadata not found after createrepo_c"
         exit 1
     fi
+}
+
+# Clean up old Docker containers matching a filter pattern
+cleanup_containers() {
+    local filter="${1:-name=flatcar-sdk-}"
+
+    info "Cleaning up old containers..."
+    docker ps -a --filter "${filter}" --format "{{.ID}} {{.Names}}" | while read -r id name; do
+        info "  Removing container: $name ($id)"
+        docker rm -f "$id" 2>/dev/null || true
+    done
 }
 
 # Update/rebuild the SDK container with RPM tools
@@ -725,11 +731,7 @@ update_sdk_container() {
     ./update_sdk_container_image "${rpm_sdk_version}"
 
     # Clean up old SDK containers
-    info "Cleaning up old SDK containers..."
-    docker ps -a --filter "name=flatcar-sdk-" --format "{{.ID}} {{.Names}}" | while read -r id name; do
-        info "  Removing container: $name ($id)"
-        docker rm -f "$id" 2>/dev/null || true
-    done
+    cleanup_containers "name=flatcar-sdk-"
 
     # Get updated SDK version
     local sdk_version=$(get_sdk_version_from_versionfile)
@@ -864,10 +866,10 @@ suggest_troubleshooting() {
     echo
 }
 
-# Generate Ignition config ISO for VM user provisioning
-# Creates a CDROM ISO with label "ignition" containing the config at /ignition/config.ign
-generate_ignition_iso() {
-    local iso_path="$1"
+# Generate Ignition config file for VM user provisioning
+# Writes the JSON config to the specified path for use with fw_cfg file parameter
+generate_ignition_config() {
+    local config_path="$1"
     local ssh_keys=()
     local password_hash=""
 
@@ -924,12 +926,8 @@ generate_ignition_iso() {
         ssh_keys_json+="]"
     fi
 
-    # Create temp directory for ISO contents
-    local iso_tmp=$(mktemp -d)
-    mkdir -p "${iso_tmp}/ignition"
-
-    # Generate Ignition config (spec 3.3.0)
-    cat > "${iso_tmp}/ignition/config.ign" <<EOF
+    # Generate Ignition config (spec 3.3.0) - write to file
+    cat > "${config_path}" <<EOF
 {
   "ignition": {
     "version": "3.3.0"
@@ -958,25 +956,10 @@ generate_ignition_iso() {
   }
 }
 EOF
+    # Make world-readable so QEMU can access it
+    chmod 644 "${config_path}"
 
-    # Create ISO with label "ignition"
-    local iso_tmp_file=$(mktemp)
-    if command -v genisoimage &>/dev/null; then
-        genisoimage -o "$iso_tmp_file" -V "ignition" -r -J "${iso_tmp}" 2>/dev/null
-    elif command -v mkisofs &>/dev/null; then
-        mkisofs -o "$iso_tmp_file" -V "ignition" -r -J "${iso_tmp}" 2>/dev/null
-    else
-        error "Neither genisoimage nor mkisofs found - cannot create ignition ISO"
-        rm -rf "${iso_tmp}" "$iso_tmp_file"
-        return 1
-    fi
-    rm -rf "${iso_tmp}"
-
-    # Move to final location with sudo for libvirt paths
-    sudo mv "$iso_tmp_file" "$iso_path"
-    sudo chmod 644 "$iso_path"
-
-    info "Generated Ignition ISO: $iso_path"
+    info "Generated Ignition config: $config_path"
     debug "SSH keys configured: ${#ssh_keys[@]}"
     debug "Password configured: $(if [[ -n "$password_hash" ]]; then echo 'yes'; else echo 'no'; fi)"
 }
@@ -1427,9 +1410,9 @@ start_vm_qemu() {
     local vm_vars_path="${abs_disk_path}.vars"
     cp "$ovmf_vars_template" "$vm_vars_path"
     
-    # Generate Ignition config ISO for user provisioning (colocated with disk image)
-    local ignition_iso="${abs_disk_path%.qcow2}-ignition.iso"
-    generate_ignition_iso "$ignition_iso"
+    # Generate Ignition config file in /tmp (accessible to QEMU without AppArmor issues)
+    local ignition_config="/tmp/${VM_NAME}-ignition.ign"
+    generate_ignition_config "$ignition_config"
     
     # Create VM XML definition
     if [[ "${SECURE_BOOT_ENABLED}" != "true" ]]; then
@@ -1471,12 +1454,6 @@ ${smm_feature}
       <source file='${abs_disk_path}'/>
       <target dev='sda' bus='sata'/>
     </disk>
-    <disk type='file' device='cdrom'>
-      <driver name='qemu' type='raw'/>
-      <source file='${ignition_iso}'/>
-      <target dev='sdb' bus='sata'/>
-      <readonly/>
-    </disk>
     <interface type='network'>
       <source network='default'/>
       <model type='e1000'/>
@@ -1488,6 +1465,11 @@ ${smm_feature}
       <backend type='emulator' version='2.0'/>
     </tpm>
   </devices>
+  <seclabel type='none'/>
+  <qemu:commandline>
+    <qemu:arg value='-fw_cfg'/>
+    <qemu:arg value='name=opt/org.flatcar-linux/config,file=${ignition_config}'/>
+  </qemu:commandline>
 </domain>
 EOF
 
@@ -1937,6 +1919,20 @@ main() {
         echo "  virsh undefine --nvram ${VM_NAME} || true"
         echo "  virt-install --name ${VM_NAME} --memory 2048 --vcpus 2 --os-variant generic --import --disk ${vm_image_path} --network default --machine q35 --boot uefi --noautoconsole"
         echo "  virsh console ${VM_NAME}"
+    fi
+
+    # Run kola tests if requested
+    if [[ "$RUN_KOLA_TESTS" == "true" ]]; then
+        section "Running Kola Tests"
+        cleanup_containers "name=flatcar-tests-"
+        info "Running kola tests via run_local_tests.sh..."
+        export PACKAGE_SOURCE_MODE=RPM
+        if "${SCRIPT_DIR}/run_local_tests.sh"; then
+            info "Kola tests completed successfully!"
+        else
+            error "Kola tests failed"
+            exit 1
+        fi
     fi
 }
 

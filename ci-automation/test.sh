@@ -163,11 +163,18 @@ function _test_run_impl() {
         local tapfile_escaped
         printf -v tapfile_escaped '%q' "${tapfile}"
 
+        # Determine pull policy based on image reference
+        # Local images (no registry prefix or localhost/) should use --pull never
+        local pull_policy="always"
+        if [[ ! "${mantle_ref}" == *"/"* ]] || [[ "${mantle_ref}" == "localhost/"* ]]; then
+            pull_policy="never"
+        fi
+
         # Ignore retcode since tests are flaky. We'll re-run failed tests and
         #  determine success based on test results (tapfile).
         set +e
         touch sdk_container/.env
-        docker run --pull always --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
+        docker run --pull "${pull_policy}" --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
           -w /work -v "$PWD":/work "${mantle_ref}" \
          bash -c "git config --global --add safe.directory /work && \
                   source sdk_container/.env && \
@@ -176,7 +183,7 @@ function _test_run_impl() {
         rm -f "${work_dir}/first_run"
 
         # Note: git safe.directory is not set in this run as it does not use git
-        docker run --pull always --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
+        docker run --pull "${pull_policy}" --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
           -w /work -v "$PWD":/work "${mantle_ref}" \
             ci-automation/test_update_reruns.sh \
                 "${arch}" "${vernum}" "${image}" "${retry}" \
