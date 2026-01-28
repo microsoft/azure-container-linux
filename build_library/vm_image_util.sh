@@ -604,6 +604,19 @@ install_oem_sysext() {
         )
     fi
 
+    # For RPM mode, set environment variables to pass to build_sysext
+    if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+        local build_sysext_env=(
+            "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE}"
+            "RPM_STAGING_DIR=${RPM_STAGING_DIR}"
+        )
+        info "RPM mode: Set environment variables:"
+        # Print environment variables for debugging
+        for var in "${build_sysext_env[@]}"; do
+            info "  ${var}"
+        done
+    fi
+
     mkdir -p "${built_sysext_dir}"
     sudo "${build_sysext_env[@]}" "${SCRIPT_ROOT}/build_sysext" "${build_sysext_flags[@]}" "${oem_sysext}"
 

@@ -243,7 +243,8 @@ for package; do
       --jobs=${NUM_JOBS} \
       "${package}"
   elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
-    install_package_rpm "$package"
+    info "RPM mode: Installing package '${package}' via RPM"
+    install_packages_to_image "${BUILD_DIR}/${FLAGS_install_root_basename}" "$package"
   fi
 done
 

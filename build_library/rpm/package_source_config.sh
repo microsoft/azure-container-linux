@@ -12,6 +12,9 @@ source "${SCRIPT_DIR}/package_catalog.sh" || exit 1
 #   RPM     - Use Azure Linux RPMs where available, Portage for Flatcar-specific
 PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
 
+# Whether to fallback to Portage for unknown packages in RPM mode
+RPM_FALLBACK_TO_PORTAGE="${RPM_FALLBACK_TO_PORTAGE:-false}"
+
 # RPM installation method (native, docker, or predownload)
 # Will be set by init_rpm_environment() but default to empty for PORTAGE mode
 RPM_INSTALL_METHOD="${RPM_INSTALL_METHOD:-}"

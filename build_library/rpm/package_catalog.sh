@@ -216,17 +216,24 @@ declare -gA PACKAGE_CATALOG=(
     ["app-admin/toolbox"]="SKIP"
 
     # Flatcar-specific packages
-    ["sys-apps/ignition"]="ignition"
     ["app-admin/ignition"]="ignition"
+    ["coreos-base/afterburn"]="afterburn-dracut" # pulls afterburn as well
     ["coreos-base/flatcar-base"]="azurelinux-release"
+    ["sys-apps/ignition"]="ignition"
 
+    # Dependencies of oem-azure for Azure image building
+    ["app-emulation/wa-linux-agent"]="WALinuxAgent"
+    ["app-emulation/hv-daemons"]="hyperv-daemons"
+    ["net-misc/chrony"]="chrony"
+    ["dev-python/urllib3"]="python3-urllib3"
+    ["sys-fs/inotify-tools"]="inotify-tools"
+    
     # Flatcar-only packages (skipped in RPM mode)
     ["app-admin/etcd-wrapper"]="SKIP"
     ["app-admin/flannel-wrapper"]="SKIP"
     ["app-admin/locksmith"]="SKIP"
     ["app-admin/mayday"]="SKIP"
     ["app-admin/sdnotify-proxy"]="SKIP"
-    ["coreos-base/afterburn"]="afterburn-dracut" # pulls afterburn as well
     ["coreos-base/coreos"]="SKIP"
     ["coreos-base/coreos-au-key"]="SKIP"
     ["coreos-base/coreos-cloudinit"]="SKIP"

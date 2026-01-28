@@ -8,36 +8,37 @@
 #   ./build_rpm_image.sh [options]
 #
 # Options:
-#   --board=BOARD       Target board (default: amd64-usr)
-#   --group=GROUP       Image group: developer|production|prod (default: production)
-#   --img-name=NAME     Base image name prefix (default: acl_production)
-#                       Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
-#   --build-sdk-container   Update/rebuild SDK container with RPM tools (can run standalone)
-#   --build-rpms        Build custom RPM packages using Azure Linux toolkit (runs acl/build.sh)
-#   --download-rpms     Download Azure Linux RPMs to staging directory
-#   --download-unofficial-kernel  Download unofficial kernel RPMs from Azure DevOps build
-#   --unofficial-kernel-build-id=ID  Specify Azure DevOps build ID for kernel (default: 1028516)
-#   --clean             Clean staging directory before download
-#   --rebuild           Force rebuild even if image exists
-#   --rebuild-and-test    Rebuild image and run container tests (equivalent to
-#                       --rebuild --build-vm-image --start-vm --run-script ./run-container-test.sh)
-#   --build-vm-image    Build VM images after creating base image
-#   --start-vm          Start the VM after building (implies --build-vm-image)
-#   --vm-name=NAME      Name for the VM (default: acl)
-#   --run-script=PATH   Run script on VM after boot (can specify multiple times)
-#                       Can be a file path or inline command. Implies --start-vm.
-#   --use-serial        Use serial console for script execution (default, no SSH/ignition needed)
-#   --use-ssh           Use SSH for script execution (requires working ignition/SSH keys)
-#   --console-user=USER Serial console login user (default: root)
-#   --console-password=PASS  Serial console login password (empty for passwordless)
-#   --boot-timeout=SECS Timeout waiting for VM boot (default: 180)
-#   --ssh-user=USER     SSH user for VM scripts (default: core)
-#   --ssh-key=PATH      SSH private key for VM access
-#   --ssh-timeout=SECS  Timeout waiting for SSH (default: 120)
-#   --parity[=DIR]      Run parity data collection and comparison report
-#                       Requires os-diff repo (default DIR: ../os-diff)
-#   --output=DIR        Output directory for images
-#   --help              Show this help message
+#   --board=BOARD                        Target board (default: amd64-usr)
+#   --boot-timeout=SECS                  Timeout waiting for VM boot (default: 180)
+#   --build-rpms                         Build custom RPM packages using Azure Linux toolkit (runs acl/build.sh)
+#   --build-sdk-container                Update/rebuild SDK container with RPM tools (can run standalone)
+#   --build-vm-image                     Build VM images after creating base image
+#   --clean                              Clean staging directory before download
+#   --console-password=PASS              Serial console login password (empty for passwordless)
+#   --console-user=USER                  Serial console login user (default: root)
+#   --download-rpms                      Download Azure Linux RPMs to staging directory
+#   --download-unofficial-kernel         Download unofficial kernel RPMs from Azure DevOps build
+#   --group=GROUP                        Image group: developer|production|prod (default: production)
+#   --help                               Show this help message
+#   --img-name=NAME                      Base image name prefix (default: acl_production)
+#                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
+#   --output=DIR                         Output directory for images
+#   --rebuild                            Force rebuild even if image exists
+#   --parity[=DIR]                       Run parity data collection and comparison report.
+#                                        Requires os-diff repo (default DIR: ../os-diff)
+#   --rebuild-and-test                   Rebuild image and run container tests (equivalent to
+#                                        --rebuild --build-vm-image --start-vm --run-script ./run-container-test.sh)
+#   --run-script=PATH                    Run script on VM after boot (can specify multiple times)
+#                                        Can be a file path or inline command. Implies --start-vm
+#   --ssh-key=PATH                       SSH private key for VM access
+#   --ssh-timeout=SECS                   Timeout waiting for SSH (default: 120)
+#   --ssh-user=USER                      SSH user for VM scripts (default: core)
+#   --start-vm                           Start the VM after building (implies --build-vm-image)
+#   --unofficial-kernel-build-id=ID      Specify Azure DevOps build ID for kernel (default: 1028516)
+#   --use-serial                         Use serial console for script execution (default, no SSH/ignition needed)
+#   --use-ssh                            Use SSH for script execution (requires working ignition/SSH keys)
+#   --vm-name=NAME                       Name for the VM (default: acl)
+#   --vm-type=TYPE                       VM type when building VM images: azure|qemu (default: qemu)
 #
 # Examples:
 #   # Build and run a test script on the VM via serial console
@@ -89,6 +90,7 @@ FORCE_REBUILD=false
 BUILD_IMAGE=false
 IMG_NAME="${IMG_NAME:-acl_production}"
 BUILD_VM_IMAGE=false
+VM_TYPE="qemu"
 START_VM=false
 VM_NAME="${VM_NAME:-acl}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-__build__}"
@@ -106,6 +108,10 @@ VM_CONSOLE_PASSWORD="${VM_CONSOLE_PASSWORD:-}"  # Console login password (empty 
 VM_BOOT_TIMEOUT="${VM_BOOT_TIMEOUT:-180}"  # Seconds to wait for VM boot
 PARITY=""  # Path to os-diff directory for parity data collection and reporting
 SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-true}"  # Enable secure boot (disable for unsigned kernels)
+
+# Set envi var-s required for RPM mode
+export PACKAGE_SOURCE_MODE=RPM
+export RPM_STAGING_DIR="${STAGING_DIR}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -274,6 +280,14 @@ parse_args() {
                 BUILD_VM_IMAGE=true
                 shift
                 ;;
+            --vm-type=*)
+                VM_TYPE="${1#*=}"
+                shift
+                ;;
+            --vm-type)
+                VM_TYPE="$2"
+                shift 2
+                ;;
             --start-vm)
                 START_VM=true
                 shift
@@ -404,6 +418,20 @@ parse_args() {
             GROUP="developer"
             ;;
     esac
+
+    # Validate VM type if building VM images
+    if [[ "$BUILD_VM_IMAGE" == "true" ]] || [[ "$START_VM" == "true" ]]; then
+        case "$VM_TYPE" in
+            azure|qemu)
+                # Valid VM type
+                ;;
+            *)
+                error "Invalid VM type: $VM_TYPE"
+                error "Valid options: azure, qemu"
+                exit 1
+                ;;
+        esac
+    fi
 }
 
 # Check prerequisites
@@ -774,10 +802,6 @@ build_image() {
 
     # Run the build inside SDK container
     info "Starting SDK container and build process..."
-
-    # Set environment variables for RPM mode
-    export PACKAGE_SOURCE_MODE=RPM
-    export RPM_STAGING_DIR="${STAGING_DIR}"
 
     # Source SDK common functions to get version info
     source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
@@ -1319,63 +1343,10 @@ run_scripts_via_console() {
     return $failed
 }
 
-# Print summary of what will be done
-print_summary() {
-    section "Azure Container Linux Image Build Summary"
-
-    echo "This script will:"
-    echo
-
-    if [[ "$DOWNLOAD_RPMS" == "true" ]]; then
-        echo "  1. Download Azure Linux RPM packages"
-        echo "     Target: ${STAGING_DIR}"
-        if [[ "$CLEAN_STAGING" == "true" ]]; then
-            echo "     Mode: Clean download (remove existing)"
-        else
-            echo "     Mode: Incremental (skip existing)"
-        fi
-        echo
-    fi
-
-    if [[ "$BUILD_RPMS" == "true" ]]; then
-        echo "  2. Build custom RPM packages"
-        echo "     Output: ${STAGING_DIR}"
-        echo
-    fi
-
-    if [[ "$USE_UNOFFICIAL_KERNEL" == "true" ]]; then
-        echo "  2.6. Use unofficial kernel from Azure DevOps"
-        echo "     Build ID: ${UNOFFICIAL_KERNEL_BUILD_ID}"
-        echo "     Output: ${STAGING_DIR}"
-        echo
-    fi
-
-    if [[ "$BUILD_IMAGE" == "true" ]]; then
-        echo "  3. Build Azure Container Linux image using SDK container"
-        echo "     Board: ${BOARD}"
-        echo "     Group: ${GROUP}"
-        echo "     Mode: RPM (Azure Linux RPMs + Portage)"
-        echo
-    fi
-
-    echo
-}
-
-remove_old_vm() {
-    # clean up existing vm if it exists
-    info "cleaning up existing vm '${VM_NAME}' if present..."
-    virsh destroy "${VM_NAME}" 2>/dev/null || true
-    virsh undefine --nvram "${VM_NAME}" 2>/dev/null || true
-}
-
-# Start a VM with the given image path
-# Sets global: booted_image_path, abs_disk_path
-start_vm() {
+# Starts a QEMU VM using libvirt.
+# Sets global: booted_image_path, abs_disk_path.
+start_vm_qemu() {
     local vm_image_path="$1"
-    
-    section "Starting VM: ${VM_NAME}"
-    
-    remove_old_vm
 
     booted_image_path="${vm_image_path}.booted"
     cp "${vm_image_path}" "${booted_image_path}"
@@ -1531,6 +1502,114 @@ EOF
     info "VM '${VM_NAME}' started successfully!"
 }
 
+# TODO: Starts an Azure VM.
+start_vm_azure() {
+    local vm_image_path="$1"
+    
+    error "Azure VM creation not yet implemented"
+    error "Please use --vm-type=qemu for now"
+    exit 1
+}
+
+# Removes any existing VM of the specified type and name.
+remove_old_vm() {
+    # Clean up existing qemu VM if it exists
+    info "Removing ${VM_TYPE} VM '${VM_NAME}' if present..."
+
+    # Remove VM based on type
+    case "$VM_TYPE" in
+        qemu)
+            virsh destroy "${VM_NAME}" 2>/dev/null || true
+            virsh undefine --nvram "${VM_NAME}" 2>/dev/null || true
+            ;;
+        azure)
+            # TODO: Remove Azure VM
+            error "Azure VM removal not yet implemented"
+            exit 1
+            ;;
+        *)
+            error "Unsupported VM type: $VM_TYPE"
+            exit 1
+            ;;
+    esac
+}
+
+# Builds VM image at vm_image_path based on VM type.
+build_vm_image() {
+    local vm_type="$1"
+    local vm_image_path="$2"
+    local format
+    
+    # Set format string based on VM type
+    case "$vm_type" in
+        qemu)
+            format="qemu_uefi"
+            ;;
+        azure)
+            format="azure"
+            ;;
+        *)
+            error "Unsupported VM type: $VM_TYPE"
+            exit 1
+            ;;
+    esac
+
+    # Source SDK common functions to get version info
+    source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
+    local sdk_version=$(get_sdk_version_from_versionfile)
+    local docker_sdk_vernum=$(vernum_to_docker_image_version "$sdk_version")
+    local sdk_image="${sdk_container_common_registry}/flatcar-sdk-all:${docker_sdk_vernum}"
+
+    # Build args for image_to_vm.sh
+    local build_args=(
+        "--image_compression_formats=none"
+        "--from=../build/images/${BOARD}/latest"
+        "--board=${BOARD}"
+        "--format=${format}"
+        "--image_name=${IMG_NAME}_image.bin"
+    )
+    
+    # Use -C to specify custom SDK image (avoids trying to download non-existent version-specific image)
+    # Use --rm to remove old container and ensure environment variables are set correctly
+    info "Building ${vm_type} VM image using SDK container..."
+    "${SCRIPT_DIR}/run_sdk_container" \
+        --rm \
+        -t \
+        -C "${sdk_image}" \
+        -- \
+        ./image_to_vm.sh "${build_args[@]}"
+    
+    if ! [[ -f "$vm_image_path" ]]; then
+        error "${vm_type} VM image generation failed"
+        exit 1
+    fi
+    info "${vm_type} VM image ready at: ${vm_image_path}"
+}
+
+# Start VM
+start_vm() {
+    local vm_image_path="$1"
+    
+    remove_old_vm
+
+    section "Starting a ${VM_TYPE} VM '${VM_NAME}'"
+
+    # Start VM based on type
+    case "$VM_TYPE" in
+        qemu)
+            start_vm_qemu "$vm_image_path"
+            ;;
+        azure)
+            start_vm_azure "$vm_image_path"
+            ;;
+        *)
+            error "Unsupported VM type: $VM_TYPE"
+            exit 1
+            ;;
+    esac
+}
+
+# Print size summary of built images
 print_size_summary() {
     section "Image Size Summary"
 
@@ -1569,6 +1648,57 @@ print_size_summary() {
     else
         warn "Build directory not found: ${BUILD_IMAGE_DIR}"
     fi
+    echo
+}
+
+# Print summary of what will be done
+print_summary() {
+    section "Azure Container Linux Image Build Summary"
+
+    echo "This script will:"
+    echo
+
+    if [[ "$DOWNLOAD_RPMS" == "true" ]]; then
+        echo "  1. Download Azure Linux RPM packages"
+        echo "     Target: ${STAGING_DIR}"
+        if [[ "$CLEAN_STAGING" == "true" ]]; then
+            echo "     Mode: Clean download (remove existing)"
+        else
+            echo "     Mode: Incremental (skip existing)"
+        fi
+        echo
+    fi
+
+    if [[ "$BUILD_RPMS" == "true" ]]; then
+        echo "  2. Build custom RPM packages"
+        echo "     Output: ${STAGING_DIR}"
+        echo
+    fi
+
+    if [[ "$USE_UNOFFICIAL_KERNEL" == "true" ]]; then
+        echo "  2.6. Use unofficial kernel from Azure DevOps"
+        echo "     Build ID: ${UNOFFICIAL_KERNEL_BUILD_ID}"
+        echo "     Output: ${STAGING_DIR}"
+        echo
+    fi
+
+    if [[ "$BUILD_IMAGE" == "true" ]]; then
+        echo "  3. Build Azure Container Linux image using SDK container"
+        echo "     Board: ${BOARD}"
+        echo "     Group: ${GROUP}"
+        echo "     Mode: RPM (Azure Linux RPMs + Portage)"
+        echo
+    fi
+
+    if [[ "$BUILD_VM_IMAGE" == "true" ]]; then
+        echo "  4. Build Azure Container Linux VM image"
+        echo "     VM Type: ${VM_TYPE}"
+        echo "     Base Image: ${IMG_NAME}_${VM_TYPE}_uefi_image.img"
+        echo "     Start VM after build: ${START_VM}"
+        echo "     VM Name: ${VM_NAME}"
+        echo
+    fi
+
     echo
 }
 
@@ -1631,39 +1761,24 @@ main() {
         print_size_summary
     fi
 
-    # Step 3: Build VM images (if requested)
-    local vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_qemu_uefi_image.img"
+    # Step 3: Build VM image (if requested)
+    local vm_image_path
+    
+    # Set expected VM image path based on VM type
+    case "$VM_TYPE" in
+        qemu)
+            vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_qemu_uefi_image.img"
+            ;;
+        azure)
+            vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_azure_image.vhd"
+            ;;
+    esac
+    
     if [[ "$BUILD_VM_IMAGE" == "true" ]]; then
-        section "Building VM Images"
-        remove_old_vm
-        info "Converting base image to VM formats..."
+        section "Building VM Image at ${vm_image_path}"
+        info "Converting base image to ${VM_TYPE} VM format..."
         
-        # Get SDK image to use
-        source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
-        local sdk_version=$(get_sdk_version_from_versionfile)
-        local docker_sdk_vernum=$(vernum_to_docker_image_version "$sdk_version")
-        local sdk_image="${sdk_container_common_registry}/flatcar-sdk-all:${docker_sdk_vernum}"
-
-        # Build arg-s for image_to_vm.sh
-        local build_args=(
-            "--image_compression_formats=none"
-            "--from=../build/images/${BOARD}/latest"
-            "--board=${BOARD}"
-            "--image_name=${IMG_NAME}_image.bin"
-        )
-        
-        # Use -C to specify custom SDK image (avoids trying to download non-existent version-specific image)
-        # Use --rm to remove old container and ensure environment variables are set correctly
-        ./run_sdk_container \
-            --rm \
-            -C "${sdk_image}" \
-            ./image_to_vm.sh "${build_args[@]}"
-        
-        if ! [[ -f $vm_image_path ]]; then
-            error "Image generation failed"
-            exit 1
-        fi
-        info "VM image ready at: ${vm_image_path}"
+        build_vm_image "$VM_TYPE" "$vm_image_path"
     fi
 
     if [[ "$START_VM" == "true" ]]; then
