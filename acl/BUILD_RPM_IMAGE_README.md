@@ -249,16 +249,48 @@ The script automatically configures libvirt (default network, URI) on Azure Linu
 - Uses `expect` to automate console login
 - Customize: `--console-user=core --console-password=mypass`
 
-**Data Collection for OS Comparison:**
+**Parity Data Collection:**
 
 ```bash
-# Collect OS data from VM for comparison analysis
-./acl/build_rpm_image.sh --start-vm --collect-data=/path/to/os-data-collector
+# Collect OS data from VM for parity  analysis against upstream flatcar
+./acl/build_rpm_image.sh --start-vm --parity
+
+# Or specify custom os-diff directory
+./acl/build_rpm_image.sh --start-vm --parity=/path/to/os-diff
 ```
 
-- Requires the `os-data-collector` binary (from os-diff repo)
-- Output: `__build__/comparison-data/{HOST}-{TIMESTAMP}-comparison-data.json`
+- Requires the [os-diff](https://dev.azure.com/mariner-org/ACL/_git/os-diff) repo cloned as sibling directory (default: `../os-diff`)
+- Runs `os-data-collector` to gather system data and `os-comparison-reporter` for analysis
+- Output:
+  - Data: `__build__/data-collection/{TIMESTAMP}-comparison-data.json`
+  - Report: `__build__/data-collection/{TIMESTAMP}-report.md`
 - For collecting data from external hosts (e.g., Azure nodes), use `acl/collect_vm_data.sh` directly
+
+  **Collecting upstream Flatcar baseline data from Azure:**
+
+  ```bash
+  # 1. Create Azure VM with Flatcar Container Linux image
+  # 2. SSH in and update to target version:
+  sudo flatcar-update --to-version 4459.2.2 --disable-afterwards
+  # 3. Reboot and collect data:
+  ./acl/collect_vm_data.sh --host=<VM_IP> --collector=/path/to/os-diff/os-data-collector --output=upstream-fc-comparison-data.json
+  ```
+
+  **Adding compressed image size to baseline data:**
+
+  ```bash
+  # Download, recompress with bzip2 -9, and get size
+  VERSION=4459.2.2
+  curl -O https://stable.release.flatcar-linux.net/amd64-usr/${VERSION}/flatcar_production_azure_image.vhd.bz2
+  bunzip2 flatcar_production_azure_image.vhd.bz2
+  bzip2 -9 flatcar_production_azure_image.vhd
+  COMPRESSED_SIZE=$(stat -c%s flatcar_production_azure_image.vhd.bz2)
+  # Add to JSON (requires jq)
+  jq --argjson size "$COMPRESSED_SIZE" '.os_info.compressed_image_size = $size' \
+    upstream-fc-comparison-data.json > tmp.json && mv tmp.json upstream-fc-comparison-data.json
+  ```
+
+- For kernel config comparison, use `acl/kconfig_diff.sh` with two comparison-data.json files (requires diffconfig from kernel-headers)
 
 #### Cleanup
 

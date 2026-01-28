@@ -34,6 +34,8 @@
 #   --ssh-user=USER     SSH user for VM scripts (default: core)
 #   --ssh-key=PATH      SSH private key for VM access
 #   --ssh-timeout=SECS  Timeout waiting for SSH (default: 120)
+#   --parity[=DIR]      Run parity data collection and comparison report
+#                       Requires os-diff repo (default DIR: ../os-diff)
 #   --output=DIR        Output directory for images
 #   --help              Show this help message
 #
@@ -102,7 +104,7 @@ USE_SERIAL_CONSOLE="${USE_SERIAL_CONSOLE:-false}"  # Use serial console instead 
 VM_CONSOLE_USER="${VM_CONSOLE_USER:-root}"  # Console login user
 VM_CONSOLE_PASSWORD="${VM_CONSOLE_PASSWORD:-}"  # Console login password (empty for no password)
 VM_BOOT_TIMEOUT="${VM_BOOT_TIMEOUT:-180}"  # Seconds to wait for VM boot
-COLLECT_DATA=""  # Path to os-data-collector binary for data collection
+PARITY=""  # Path to os-diff directory for parity data collection and reporting
 SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-true}"  # Enable secure boot (disable for unsigned kernels)
 
 # Colors for output
@@ -370,13 +372,14 @@ parse_args() {
                 VM_BOOT_TIMEOUT="${1#*=}"
                 shift
                 ;;
-            --collect-data=*)
-                COLLECT_DATA="${1#*=}"
+            --parity=*)
+                PARITY="${1#*=}"
                 shift
                 ;;
-            --collect-data)
-                COLLECT_DATA="$2"
-                shift 2
+            --parity)
+                # Use default sibling os-diff directory
+                PARITY="${SCRIPT_DIR}/../os-diff"
+                shift
                 ;;
             --no-secure-boot)
                 SECURE_BOOT_ENABLED=false
@@ -1733,8 +1736,22 @@ main() {
                 warn "Boot detection timed out"
             fi
             
-            # Run data collection if requested
-            if [[ -n "$COLLECT_DATA" ]]; then
+            # Run parity data collection if requested
+            if [[ -n "$PARITY" ]]; then
+                if [[ ! -d "$PARITY" ]]; then
+                    error "os-diff directory not found: $PARITY"
+                    error "Specify a valid path with --parity=/path/to/os-diff"
+                    exit 1
+                fi
+                local os_diff_dir="$PARITY"
+                local collector_bin="${os_diff_dir}/os-data-collector"
+                [[ ! -x "$collector_bin" ]] && collector_bin="${os_diff_dir}/os-data-collector-static"
+                if [[ ! -x "$collector_bin" ]]; then
+                    error "os-data-collector not found in $os_diff_dir"
+                    error "Build it with: cd $os_diff_dir && make build static"
+                    exit 1
+                fi
+                
                 if ! wait_for_vm_ip "${VM_NAME}" 60; then
                     error "Could not get VM IP for data collection"
                     exit 1
@@ -1743,10 +1760,46 @@ main() {
                     error "SSH not available for data collection"
                     exit 1
                 fi
+                
                 local collect_output_dir="${SCRIPT_DIR}/__build__/data-collection"
                 mkdir -p "$collect_output_dir"
+                local timestamp
+                timestamp=$(date +%Y%m%d-%H%M%S)
+                local collected_file="${collect_output_dir}/${timestamp}-comparison-data.json"
+                
+                # Compress VM image with bzip2 -9 to get compressed size
+                info "Compressing image with bzip2 -9 for size measurement..."
+                rm -f "${vm_image_path}.bz2"
+                bzip2 -9 -k "$vm_image_path"
+                local compressed_size
+                compressed_size=$(stat -c%s "${vm_image_path}.bz2")
+                info "Compressed image size: $(numfmt --to=iec-i --suffix=B $compressed_size) ($compressed_size bytes)"
+                
                 info "Running data collection..."
-                "${SCRIPT_DIR}/acl/collect_vm_data.sh" --host="$VM_IP" --collector="$COLLECT_DATA" --user="$VM_SSH_USER" --output="$collect_output_dir"
+                "${SCRIPT_DIR}/acl/collect_vm_data.sh" --host="$VM_IP" --collector="$collector_bin" --user="$VM_SSH_USER" --output="$collected_file" >/dev/null 2>&1
+                
+                # Inject compressed_image_size into the collected JSON
+                info "Adding compressed_image_size to collected data..."
+                local tmp_file
+                tmp_file=$(mktemp)
+                jq --argjson size "$compressed_size" '.os_info.compressed_image_size = $size' "$collected_file" > "$tmp_file" && mv "$tmp_file" "$collected_file"
+                
+                # Run comparison report
+                local upstream_data="${SCRIPT_DIR}/acl/upstream-fc-comparison-data.json"
+                local reporter="${os_diff_dir}/os-comparison-reporter"
+                [[ ! -x "$reporter" ]] && reporter="${os_diff_dir}/os-comparison-reporter-static"
+                if [[ ! -x "$reporter" ]]; then
+                    error "os-comparison-reporter not found in $os_diff_dir"
+                    exit 1
+                fi
+                if [[ ! -f "$upstream_data" ]]; then
+                    error "Upstream comparison data not found: $upstream_data"
+                    exit 1
+                fi
+                local report_file="${collect_output_dir}/${timestamp}-report.md"
+                info "Running comparison report..."
+                "$reporter" -s -o "$report_file" "$upstream_data" "$collected_file"
+                info "Report generated: $report_file"
             elif [[ "$USE_SERIAL_CONSOLE" == "true" ]]; then
                 connect_vm_console "${VM_NAME}"
             else
