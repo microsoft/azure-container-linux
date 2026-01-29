@@ -490,11 +490,54 @@ check_prerequisites() {
         check_swtpm_azure_linux
     fi
 
-    # Check libvirt network only when starting a VM
-    if [[ "$START_VM" == "true" ]]; then
+    # Check libvirt/virsh when starting a VM or running kola tests
+    if [[ "$START_VM" == "true" ]] || [[ "$RUN_KOLA_TESTS" == "true" ]]; then
+        if ! command -v virsh &>/dev/null; then
+            error "virsh not found - required for VM operations and kola tests"
+            if is_azure_linux_3; then
+                error "Install with: sudo tdnf install -y libvirt libvirt-client qemu-kvm"
+            else
+                error "Install with: sudo apt-get install -y libvirt-clients libvirt-daemon-system qemu-kvm"
+            fi
+            exit 1
+        fi
+        info "✓ virsh found"
+
         if ! ensure_libvirt_network; then
             warnings=$((warnings + 1))
         fi
+    fi
+
+    # Check expect when starting a VM (needed for serial console automation)
+    if [[ "$START_VM" == "true" ]]; then
+        if ! command -v expect &>/dev/null; then
+            error "expect not found - required for VM serial console automation"
+            if is_azure_linux_3; then
+                error "Install with: sudo tdnf install -y expect"
+            else
+                error "Install with: sudo apt-get install -y expect"
+            fi
+            exit 1
+        fi
+        info "✓ expect found"
+    fi
+
+    # Check SSH key when running kola tests or using SSH for scripts
+    if [[ "$RUN_KOLA_TESTS" == "true" ]] || [[ "$USE_SERIAL_CONSOLE" == "false" ]]; then
+        local ssh_key_path="${VM_SSH_KEY:-$HOME/.ssh/id_rsa}"
+        if [[ ! -f "$ssh_key_path" ]]; then
+            error "SSH private key not found at: $ssh_key_path"
+            error "SSH key is required for kola tests and SSH-based VM access"
+            error "Generate one with: ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa"
+            exit 1
+        fi
+        # Check corresponding public key exists
+        if [[ ! -f "${ssh_key_path}.pub" ]]; then
+            error "SSH public key not found at: ${ssh_key_path}.pub"
+            error "The public key is needed for VM provisioning"
+            exit 1
+        fi
+        info "✓ SSH key found at $ssh_key_path"
     fi
 
     if [[ $warnings -gt 0 ]]; then

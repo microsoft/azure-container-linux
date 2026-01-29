@@ -312,11 +312,15 @@ Run the full Flatcar E2E test suite against the built VM image:
 ./acl/build_rpm_image.sh --run-kola-tests
 ```
 
+At the moment, the full run takes about 4 hours. However, failed test cases are subsequently retried several times, leading to much longer runtime overall. The interrim results are stored in `__TESTS__/qemu-uefi/results-run-*/`. To reduce the retries, modified the `run_local_tests.sh` script in the root of the repo and set `MAX_RETRIES` variable.
+
 To produce results MD summary with grouping of failures, you can use `./acl/parse_tap_results.py`:
 
 ```bash
 ./acl/parse_tap_results.py __TESTS__/qemu-uefi/results-run-*.tap
 ```
+
+Additional results are also produced at the root of the repo: `results-qemu_uefi*`.
 
 The prerequisites for running Kola tests is to build customized `mantle` container. You need to checkout the `mantle` repository next to the `acl-scripts` repository:
 

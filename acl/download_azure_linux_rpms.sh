@@ -24,7 +24,6 @@ done
 ESSENTIAL_PACKAGES=(
     "filesystem"
     "grub2"
-    "grub2-pc"
     "grub2-efi"
     "grub2-efi-binary"
     "shim"

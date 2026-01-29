@@ -1,44 +1,59 @@
 grub_install_rpm() {
+    case "${FLAGS_target}" in
+        x86_64-efi|arm64-efi)
+            info "RPM mode: Using Azure Linux pre-built EFI binaries"
+            
+            # In RPM mode, install grub packages to BOARD_ROOT (SDK chroot) using dnf
+            # These are build-time tools and EFI binaries, not runtime packages for the image
+            info "RPM mode: Installing grub2 and shim to BOARD_ROOT using dnf"
 
-    # In RPM mode, install grub packages to BOARD_ROOT (SDK chroot) using dnf
-    # These are build-time tools and EFI binaries, not runtime packages for the image
-    info "RPM mode: Installing grub2 and shim to BOARD_ROOT using dnf"
+            # Source rpm_install functions
+            . "${BUILD_LIBRARY_DIR}/rpm/rpm_install.sh" || die "Failed to source rpm_install.sh"
 
-    # Source rpm_install functions
-    . "${BUILD_LIBRARY_DIR}/rpm/rpm_install.sh" || die "Failed to source rpm_install.sh"
+            # Setup repositories
+            rpm_staging=$(find_rpm_staging_dir)
+            grub_local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
 
-    # Setup repositories
-    rpm_staging=$(find_rpm_staging_dir)
-    grub_local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
+            # Install grub packages to BOARD_ROOT without dependencies
+            # We only need the grub binaries and modules, not runtime dependencies
+            # Use rpm directly from the local package cache
+            info "RPM mode: Installing grub2 and shim to BOARD_ROOT using rpm --nodeps"
 
-    # Install grub packages to BOARD_ROOT without dependencies
-    # We only need the grub binaries and modules, not runtime dependencies
-    # Use rpm directly from the local package cache
-    info "RPM mode: Installing grub2 and shim to BOARD_ROOT using rpm --nodeps"
+            if [[ ! -d "${grub_local_cache}" ]]; then
+                die "RPM cache directory not found: ${grub_local_cache}"
+            fi
 
-    if [[ ! -d "${grub_local_cache}" ]]; then
-        die "RPM cache directory not found: ${grub_local_cache}"
-    fi
+            # Find and install grub RPMs without dependencies
+            grub_rpms=()
+            for pkg in grub2 grub2-efi grub2-efi-binary shim; do
+                rpm_file=$(find "${grub_local_cache}" -name "${pkg}-[0-9]*.rpm" | head -1)
+                if [[ -z "${rpm_file}" ]]; then
+                    die "RPM file not found for package: ${pkg} in ${grub_local_cache}"
+                fi
+                grub_rpms+=("${rpm_file}")
+            done
 
-    # Find and install grub RPMs without dependencies
-    # TODO: only install -efi for efi, -pc for bios
-    grub_rpms=()
-    for pkg in grub2 grub2-pc grub2-efi grub2-efi-binary shim; do
-        rpm_file=$(find "${grub_local_cache}" -name "${pkg}-[0-9]*.rpm" | head -1)
-        if [[ -z "${rpm_file}" ]]; then
-            die "RPM file not found for package: ${pkg} in ${grub_local_cache}"
-        fi
-        grub_rpms+=("${rpm_file}")
-    done
+            info "Installing ${#grub_rpms[@]} grub RPMs to BOARD_ROOT (without dependencies)"
+            sudo rpm --root="${BOARD_ROOT}" --install -vh --force --nodeps "${grub_rpms[@]}"
 
-    info "Installing ${#grub_rpms[@]} grub RPMs to BOARD_ROOT (without dependencies)"
-    sudo rpm --root="${BOARD_ROOT}" --install -vh --force --nodeps "${grub_rpms[@]}"
+            if [[ $? -ne 0 ]]; then
+                die "Failed to install grub packages to BOARD_ROOT"
+            fi
 
-    if [[ $? -ne 0 ]]; then
-        die "Failed to install grub packages to BOARD_ROOT"
-    fi
+            info "Successfully installed grub packages to BOARD_ROOT"
+            ;;
+        i386-pc)
+            # RPM mode: Skip BIOS boot - Azure Linux VMs use UEFI only
+            # The grub2-pc RPM has modules but no pre-built core.img
+            # grub-bios-setup requires core.img which would need grub-mkimage
+            info "RPM mode: Skipping BIOS boot installation (UEFI only)"
+            ;;
+        x86_64-xen)
+            # RPM mode: Skip Xen bootloader (not typically used with Azure Linux)
+            info "RPM mode: Skipping Xen bootloader installation"
+            ;;
+    esac
 
-    info "Successfully installed grub packages to BOARD_ROOT"
 }
 
 grub_provision_rpm() {
@@ -142,5 +157,4 @@ grub_provision_rpm() {
             info "RPM mode: Skipping Xen bootloader installation"
             ;;
     esac
-
 }

@@ -455,7 +455,7 @@ finish_image_tmpfiles_rpm() {
 
       # Add core user to /etc/shadow if not present (locked password - SSH key only)
       if [[ -f "${root_fs_dir}/etc/shadow" ]]; then
-        if ! grep -q "^core:" "${root_fs_dir}/etc/shadow"; then
+        if ! sudo grep -q "^core:" "${root_fs_dir}/etc/shadow"; then
           info "RPM mode: Adding core user to /etc/shadow"
           echo "core:*:19000:0:99999:7:::" | sudo tee -a "${root_fs_dir}/etc/shadow" > /dev/null
         fi
@@ -528,7 +528,7 @@ SSHD_CONF
 Include /etc/ssh/sshd_config.d/*.conf
 SSHD_CONFIG_EOF
         sudo chmod 644 "${sshd_config}"
-      elif ! grep -q "^Include.*/etc/ssh/sshd_config.d" "${sshd_config}"; then
+      elif ! sudo grep -q "^Include.*/etc/ssh/sshd_config.d" "${sshd_config}"; then
         info "RPM mode: Adding Include directive to existing sshd_config"
         sudo sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' "${sshd_config}"
       else
