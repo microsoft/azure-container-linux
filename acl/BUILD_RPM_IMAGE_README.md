@@ -304,11 +304,18 @@ virsh undefine --nvram acl
 ```
 
 ### Phase 6: Run Flatcar E2E Tests (Optional)
+
 Run the full Flatcar E2E test suite against the built VM image:
 
 ```bash
 # Run Flatcar E2E tests
 ./acl/build_rpm_image.sh --run-kola-tests
+```
+
+To produce results MD summary with grouping of failures, you can use `./acl/parse_tap_results.py`:
+
+```bash
+./acl/parse_tap_results.py __TESTS__/qemu-uefi/results-run-*.tap
 ```
 
 The prerequisites for running Kola tests is to build customized `mantle` container. You need to checkout the `mantle` repository next to the `acl-scripts` repository:
