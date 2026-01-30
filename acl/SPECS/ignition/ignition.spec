@@ -23,7 +23,7 @@ Version:                2.24.0
 %global dracutlibdir %{_prefix}/lib/dracut
 
 Name:           ignition
-Release:        1%{?dist}
+Release:        2%{?dist}
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
 Summary:        First boot installer and configuration tool
@@ -280,12 +280,9 @@ GOEXPERIMENT= GOARCH=amd64 GOOS=windows %gocrossbuild -o ./ignition-validate-%{_
 
 %install
 # dracut modules
-install -d -p %{buildroot}/%{dracutlibdir}/modules.d
-cp -r dracut/* %{buildroot}/%{dracutlibdir}/modules.d/
+install -d -p %{buildroot}/%{dracutlibdir}/modules.d/30ignition
+#cp -r dracut/* %{buildroot}/%{dracutlibdir}/modules.d/
 install -m 0644 -D -t %{buildroot}/%{_unitdir} systemd/ignition-delete-config.service
-install -m 0755 -d %{buildroot}/%{_libexecdir}
-ln -sf ../lib/dracut/modules.d/30ignition/ignition %{buildroot}/%{_libexecdir}/ignition-apply
-ln -sf ../lib/dracut/modules.d/30ignition/ignition %{buildroot}/%{_libexecdir}/ignition-rmcfg
 
 # grub
 install -d -p %{buildroot}%{_prefix}/lib/bootupd/grub2-static/configs.d
@@ -294,6 +291,10 @@ install -p -m 0644 grub2/05_ignition.cfg  %{buildroot}%{_prefix}/lib/bootupd/gru
 # ignition
 install -d -p %{buildroot}%{_bindir}
 install -p -m 0755 ./ignition-validate %{buildroot}%{_bindir}
+install -p -m 0755 ignition %{buildroot}%{_bindir}/ignition
+install -m 0755 -d %{buildroot}/%{_libexecdir}
+ln -sf ../bin/ignition %{buildroot}/%{_libexecdir}/ignition-apply
+ln -sf ../bin/ignition %{buildroot}/%{_libexecdir}/ignition-rmcfg
 
 %if 0%{?with_cross}
 install -d -p %{buildroot}%{_datadir}/ignition
@@ -302,7 +303,7 @@ install -p -m 0644 ./ignition-validate-* %{buildroot}%{_datadir}/ignition
 
 # The ignition binary is only for dracut, and is dangerous to run from
 # the command line.  Install directly into the dracut module dir.
-install -p -m 0755 ./ignition %{buildroot}/%{dracutlibdir}/modules.d/30ignition
+#install -p -m 0755 ./ignition %{buildroot}/%{dracutlibdir}/modules.d/30ignition
 
 %if %{with check}
 %check
@@ -314,7 +315,8 @@ VERSION=%{version} GOARCH=%{goarch} ./test
 %files
 %license %{golicenses}
 %doc %{godocs}
-%{dracutlibdir}/modules.d/30ignition/*
+%{_bindir}/ignition
+#%{dracutlibdir}/modules.d/30ignition/*
 %{_unitdir}/ignition-delete-config.service
 %{_libexecdir}/ignition-apply
 %{_libexecdir}/ignition-rmcfg
@@ -334,6 +336,9 @@ VERSION=%{version} GOARCH=%{goarch} ./test
 %{_prefix}/lib/bootupd/grub2-static/configs.d/05_ignition.cfg
 
 %changelog
+* Wed Jan 28 2026 Jiri Appl <jiria@microsoft.com> - 2.24.0-2
+- Flatcar alignment
+
 * Fri Jan 16 2026 Sumit Jena <v-sumitjena@microsoft.com> - 2.25.1-2
 - Initial Azure Linux import from Fedora 43 (license: MIT)
 - License verified

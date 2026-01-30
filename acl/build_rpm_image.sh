@@ -270,7 +270,8 @@ parse_args() {
                 BUILD_IMAGE=true
                 BUILD_VM_IMAGE=true
                 START_VM=true
-                RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
+                # Disabled while we are running on the buddy built kernel
+                # RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
                 shift
                 ;;
@@ -1012,18 +1013,16 @@ get_vm_ip() {
     local vm_name="$1"
     local ip=""
 
-    # Try to get IP from libvirt's DHCP leases
+    # Try to get IP from virsh domifaddr (most reliable, queries VM directly)
     ip=$(virsh domifaddr "$vm_name" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d'/' -f1 | head -1)
 
-    if [[ -z "$ip" ]]; then
-        # Fallback: try to get from arp based on MAC address
-        local mac=$(virsh domiflist "$vm_name" 2>/dev/null | awk '/network|bridge/ {print $5}' | head -1)
-        if [[ -n "$mac" ]]; then
-            ip=$(arp -an 2>/dev/null | grep -i "$mac" | awk '{print $2}' | tr -d '()')
-        fi
+    # Validate the IP is not empty and looks like an IP
+    if [[ -n "$ip" ]] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "$ip"
+        return 0
     fi
 
-    echo "$ip"
+    echo ""
 }
 
 # Wait for SSH to become available
@@ -1189,6 +1188,16 @@ expect {
         expect eof
         exit 0
     }
+    -re {(emergency|Emergency mode|Give root password|Press Enter for maintenance|Entering emergency mode|You are in emergency mode)} {
+        # Emergency shell detected - switch to interactive mode
+        puts "\n═══════════════════════════════════════════════════════════════════════════════"
+        puts "⚠ EMERGENCY SHELL DETECTED - Switching to interactive console"
+        puts "  Press Ctrl+] to disconnect"
+        puts "═══════════════════════════════════════════════════════════════════════════════"
+        # Enter interactive mode - pass control to user
+        interact
+        exit 2
+    }
     timeout {
         puts "\n═══════════════════════════════════════════════════════════════════════════════"
         puts "✗ Timeout waiting for login prompt"
@@ -1207,13 +1216,17 @@ EXPECT_EOF
     chmod +x "$expect_script"
 
     # Run expect script - output goes directly to terminal
-    if "$expect_script" "$timeout" "$vm_name"; then
-        rm -f "$expect_script"
-        return 0
-    else
-        rm -f "$expect_script"
-        return 1
-    fi
+    local exit_code
+    "$expect_script" "$timeout" "$vm_name"
+    exit_code=$?
+    rm -f "$expect_script"
+    
+    case $exit_code in
+        0) return 0 ;;                    # Normal boot completed
+        2) warn "Emergency shell was detected - user exited interactive console"
+           return 2 ;;                    # Emergency shell detected
+        *) return 1 ;;                    # Timeout or other error
+    esac
 }
 
 # Execute a command via serial console using expect

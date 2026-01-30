@@ -184,36 +184,307 @@ finish_image_rpm() {
             fi
         done
 
-        # Create custom dracut module for /etc overlay setup (like Flatcar's bootengine).
-        # Key insight: Must use a systemd service in initrd (not a dracut hook) so the mount
-        # survives switch-root. Dracut hooks run outside systemd's mount tracking.
-        DRACUT_MOD_DIR="${root_fs_dir}/usr/lib/dracut/modules.d"
-        ETC_OVERLAY_MOD="${DRACUT_MOD_DIR}/99etc-overlay"
-        info "RPM mode: Creating dracut module for /etc overlay (systemd service approach)"
-        sudo mkdir -p "${ETC_OVERLAY_MOD}"
+        # Remove bootengine's verity-generator - we use systemd's systemd-veritysetup-generator instead
+        if [[ -d "${root_fs_dir}/usr/lib/dracut/modules.d/10verity-generator" ]]; then
+            info "RPM mode: Removing bootengine 10verity-generator (using systemd-veritysetup-generator)"
+            sudo rm -rf "${root_fs_dir}/usr/lib/dracut/modules.d/10verity-generator"
+        fi
 
-        # Module setup script (module-setup.sh)
-        # Based on Flatcar's 99setup-root approach which uses a systemd service
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/module-setup.sh" "${ETC_OVERLAY_MOD}/module-setup.sh"
-        sudo chmod +x "${ETC_OVERLAY_MOD}/module-setup.sh"
+        # Remove bootengine's usr-generator - systemd-fstab-generator handles mount.usr= automatically
+        # Our grub.cfg passes mount.usr=/dev/mapper/usr which systemd handles natively
+        if [[ -d "${root_fs_dir}/usr/lib/dracut/modules.d/10usr-generator" ]]; then
+            info "RPM mode: Removing bootengine 10usr-generator (using systemd-fstab-generator)"
+            sudo rm -rf "${root_fs_dir}/usr/lib/dracut/modules.d/10usr-generator"
+        fi
 
-        # The systemd service that sets up /etc overlay in initrd
-        # Running as a systemd service (not hook) ensures the mount survives
-        # switch-root
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/initrd-setup-etc-overlay.service" "${ETC_OVERLAY_MOD}/initrd-setup-etc-overlay.service"
+        # Remove Flatcar-specific and unsupported sections from ignition module-setup.sh
+        local ignition_module_setup="${root_fs_dir}/usr/lib/dracut/modules.d/30ignition/module-setup.sh"
+        if [[ -f "${ignition_module_setup}" ]]; then
+            info "RPM mode: Removing Flatcar-specific sections from ignition module-setup.sh"
+            # Remove cloud_aws_ebs_nvme_id (AWS-specific, doesn't exist in Azure Linux)
+            sudo sed -i '/# Flatcar: add cloud_aws_ebs_nvme_id/,/\/usr\/lib\/udev\/cloud_aws_ebs_nvme_id"/d' "${ignition_module_setup}"
+            # Remove clevis binding section (clevis not available in Azure Linux)
+            sudo sed -i '/# Needed for clevis binding/,/tpm2_create$/d' "${ignition_module_setup}"
+            # Remove s390x z/VM section (not supported)
+            sudo sed -i "/# Required by s390x's z\/VM installation/,/inst_multiple -o chccwdev vmur$/d" "${ignition_module_setup}"
+            # Remove clevis symlink entries from the executable wrapper loop
+            sudo sed -i '/\/usr\/bin\/clevis\*,\\$/d' "${ignition_module_setup}"
+            sudo sed -i '/\/usr\/libexec\/clevis\*\\$/d' "${ignition_module_setup}"
+            # Fix trailing comma on systemd-reply-password (now last entry after removing clevis)
+            sudo sed -i 's|/usr/lib/systemd/systemd-reply-password,\\|/usr/lib/systemd/systemd-reply-password\\|' "${ignition_module_setup}"
+            # Replace /usr/bin/xfs_db and xfs_repair with /usr/sbin versions (Azure Linux path)
+            sudo sed -i 's|/usr/bin/xfs_db,\\|/usr/sbin/xfs_db,\\|' "${ignition_module_setup}"
+            sudo sed -i 's|/usr/bin/xfs_repair,\\|/usr/sbin/xfs_repair,\\|' "${ignition_module_setup}"
+            # NOTE: Keep the /sysusr/usr wrapper paths! systemd-fstab-generator mounts 
+            # the verity /usr to /sysusr/usr, so wrappers pointing there are correct.
+        fi
 
-        # The actual /etc overlay setup script that runs in initramfs
-        # This is like Flatcar's initrd-setup-root but just handles /etc overlay
-        # NOTE: Must avoid grep/mountpoint commands that may not be in initramfs
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/etc-overlay.sh" "${ETC_OVERLAY_MOD}/etc-overlay.sh"
-        sudo chmod +x "${ETC_OVERLAY_MOD}/etc-overlay.sh"
+        # Remove cgpt from 30disk-uuid module (cgpt not available in Azure Linux)
+        local disk_uuid_script="${root_fs_dir}/usr/lib/dracut/modules.d/30disk-uuid/disk-uuid.sh"
+        local disk_uuid_module_setup="${root_fs_dir}/usr/lib/dracut/modules.d/30disk-uuid/module-setup.sh"
+        if [[ -f "${disk_uuid_script}" ]]; then
+            info "RPM mode: Removing cgpt call from disk-uuid.sh"
+            sudo sed -i '/\/usr\/bin\/cgpt repair/d' "${disk_uuid_script}"
+        fi
+        if [[ -f "${disk_uuid_module_setup}" ]]; then
+            info "RPM mode: Removing cgpt from 30disk-uuid/module-setup.sh"
+            sudo sed -i '/cgpt$/d' "${disk_uuid_module_setup}"
+        fi
+
+        # Patch ignition-setup.sh for systemd-based initramfs
+        # In upstream Flatcar, initramfs /usr is a tmpfs that can be remounted rw.
+        # In our systemd-native setup, /usr may already be mounted from verity device.
+        # The "mount -o remount,rw" would fail because:
+        # 1. /usr is not mounted (just initramfs tmpfs) - remount fails
+        # 2. /usr is verity-protected - can't be made writable
+        # Solution: Create /usr/lib/ignition without remounting - it's on initramfs tmpfs
+        local ignition_setup_script="${root_fs_dir}/usr/lib/dracut/modules.d/30ignition/ignition-setup.sh"
+        if [[ -f "${ignition_setup_script}" ]]; then
+            info "RPM mode: Patching ignition-setup.sh - remove remount (initramfs /usr is already writable)"
+            # Remove the remount command - initramfs /usr is tmpfs and already writable
+            # The mkdir will work on the initramfs tmpfs /usr
+            sudo sed -i '/mount -o remount,rw \/usr/d' "${ignition_setup_script}"
+        fi
+
+        # Remove bootengine's sysusr-usr-revdeps.conf which creates cyclic dependencies
+        # Bootengine expects sysusr-usr.mount for its custom boot flow, and systemd-fstab-generator
+        # creates exactly this unit! So the dependencies are correct.
+        # Only remove sysusr-usr-revdeps.conf which creates extra cryptsetup dependencies we don't need.
+        local sysusr_revdeps="${root_fs_dir}/usr/lib/dracut/modules.d/30ignition/sysusr-usr-revdeps.conf"
+        if [[ -f "${sysusr_revdeps}" ]]; then
+            info "RPM mode: Removing sysusr-usr-revdeps.conf (cryptsetup dep not needed)"
+            sudo rm -f "${sysusr_revdeps}"
+        fi
+        # Also remove the inst_simple lines from module-setup.sh that install it (spans 2 lines)
+        if [[ -f "${ignition_module_setup}" ]]; then
+            # Remove both lines: "inst_simple ... sysusr-usr-revdeps.conf \" and the continuation line
+            sudo sed -i '/inst_simple.*sysusr-usr-revdeps\.conf/,/sysusr-usr\.conf"/d' "${ignition_module_setup}"
+        fi
+
+        # NOTE: Keep sysusr-usr.mount dependencies! systemd-fstab-generator creates this unit
+        # to mount /dev/mapper/usr at /sysusr/usr. Services need to wait for it.
+
+        # Fix cyclic dependency: ignition-setup.service → sysusr-usr.mount → local-fs-pre.target → ignition-setup.service
+        # The ignition-generator creates services with "Requires/Before=local-fs-pre.target" but
+        # sysusr-usr.mount (created by systemd-fstab-generator) has ordering with local-fs-pre.target.
+        # Solution: Remove the local-fs-pre.target dependency from ignition services.
+        # They only need sysusr-usr.mount (for /usr access), not local-fs-pre.target.
+        local ignition_generator="${root_fs_dir}/usr/lib/dracut/modules.d/30ignition/ignition-generator"
+        if [[ -f "${ignition_generator}" ]]; then
+            info "RPM mode: Patching ignition-generator to remove local-fs-pre.target cycle"
+            # Remove the Requires=local-fs-pre.target and Before=local-fs-pre.target lines
+            # from both ignition-setup-pre.service and ignition-setup.service generation
+            sudo sed -i '/Requires=local-fs-pre.target/d' "${ignition_generator}"
+            sudo sed -i '/Before=local-fs-pre.target/d' "${ignition_generator}"
+        fi
+
+        # Also patch static ignition service files that have local-fs-pre.target dependencies
+        local ignition_mod_dir="${root_fs_dir}/usr/lib/dracut/modules.d/30ignition"
+        for service_file in "${ignition_mod_dir}"/ignition-*.service; do
+            if [[ -f "${service_file}" ]] && grep -q "local-fs-pre.target" "${service_file}"; then
+                info "RPM mode: Patching $(basename "${service_file}") to remove local-fs-pre.target"
+                sudo sed -i '/Requires=local-fs-pre.target/d' "${service_file}"
+                sudo sed -i '/Before=local-fs-pre.target/d' "${service_file}"
+            fi
+        done
+
+        # Patch network-cleanup.service to stop before initrd-cleanup while /usr/bin/ip is accessible
+        # The service runs in initrd and uses /usr/bin/ip in ExecStop. Without this fix, the stop
+        # happens after switch-root when the initrd binaries are gone, causing exit code 203/EXEC.
+        # We add `-` prefix to ExecStop to make failures non-fatal (binary may be gone during switch-root)
+        local network_cleanup_svc="${root_fs_dir}/usr/lib/dracut/modules.d/03flatcar-network/network-cleanup.service"
+        if [[ -f "${network_cleanup_svc}" ]]; then
+            info "RPM mode: Patching network-cleanup.service for initrd stop handling"
+            # Add ConditionPathExists to only run in initrd
+            sudo sed -i '/ConditionKernelCommandLine=!netroot/a # Only run in initrd\nConditionPathExists=/etc/initrd-release' "${network_cleanup_svc}"
+            # Add initrd-cleanup.service and initrd-switch-root.service to Before= line
+            # This ensures ExecStop runs before the switch-root happens and before cleanup
+            sudo sed -i 's/Before=systemd-networkd.service initrd-switch-root.target/Before=systemd-networkd.service initrd-switch-root.target initrd-switch-root.service initrd-cleanup.service/' "${network_cleanup_svc}"
+            # Add initrd-cleanup.service and initrd-switch-root.service to Conflicts= line
+            # Conflicts triggers stop when these units start
+            sudo sed -i 's/Conflicts=initrd-switch-root.target/Conflicts=initrd-switch-root.target initrd-switch-root.service initrd-cleanup.service/' "${network_cleanup_svc}"
+            # Add StopWhenUnneeded=true so service stops as soon as nothing needs it
+            sudo sed -i '/RemainAfterExit=true/a StopWhenUnneeded=true' "${network_cleanup_svc}"
+            # Make ExecStop commands optional with - prefix (won't fail if binary missing during switch-root)
+            sudo sed -i 's|ExecStop=/usr/bin/ip|ExecStop=-/usr/bin/ip|g' "${network_cleanup_svc}"
+            
+            # Also install network-cleanup.service on the real root filesystem
+            # This is needed because PartOf=systemd-networkd.service causes systemd to try
+            # stopping the service after switch-root. With the service file on real root,
+            # the stop will succeed using the real /usr/bin/ip.
+            info "RPM mode: Installing network-cleanup.service on real root for post-switch-root stop"
+            sudo cp "${network_cleanup_svc}" "${root_fs_dir}/usr/lib/systemd/system/network-cleanup.service"
+        fi
+
+        # Create a separate dracut module for sysroot-oem.mount
+        # This allows initrd-setup-root-after-ignition to access /sysroot/oem for OEM sysext
+        local oem_module_dir="${root_fs_dir}/usr/lib/dracut/modules.d/35sysroot-oem"
+        info "RPM mode: Creating 35sysroot-oem dracut module for OEM partition"
+        sudo mkdir -p "${oem_module_dir}"
+        
+        # Create module-setup.sh for the OEM module
+        cat <<'OEMMOD_EOF' | sudo tee "${oem_module_dir}/module-setup.sh" > /dev/null
+#!/bin/bash
+
+check() {
+    return 0
+}
+
+depends() {
+    echo systemd
+    return 0
+}
+
+install() {
+    inst_simple "$moddir/sysroot-oem.mount" "$systemdsystemunitdir/sysroot-oem.mount"
+    inst_simple "$moddir/sysroot-oem-mkdir.service" "$systemdsystemunitdir/sysroot-oem-mkdir.service"
+    
+    # Create dependency directories and links
+    mkdir -p "${initdir}/$systemdsystemunitdir/sysroot-oem.mount.requires"
+    ln -sf ../sysroot-oem-mkdir.service "${initdir}/$systemdsystemunitdir/sysroot-oem.mount.requires/sysroot-oem-mkdir.service"
+    
+    mkdir -p "${initdir}/$systemdsystemunitdir/ignition-files.service.wants"
+    ln -sf ../sysroot-oem.mount "${initdir}/$systemdsystemunitdir/ignition-files.service.wants/sysroot-oem.mount"
+}
+OEMMOD_EOF
+        sudo chmod +x "${oem_module_dir}/module-setup.sh"
+
+        # Create sysroot-oem.mount unit
+        cat <<'EOF' | sudo tee "${oem_module_dir}/sysroot-oem.mount" > /dev/null
+[Unit]
+Description=OEM Partition (/sysroot/oem)
+DefaultDependencies=false
+ConditionPathExists=/dev/disk/by-label/OEM
+After=systemd-udev-settle.service sysroot.mount
+Before=ignition-files.service initrd-setup-root-after-ignition.service
+Requires=sysroot.mount
+
+[Mount]
+What=/dev/disk/by-label/OEM
+Where=/sysroot/oem
+Type=btrfs
+Options=rw,subvol=/
+EOF
+
+        # Create mkdir service for mount point
+        cat <<'EOF' | sudo tee "${oem_module_dir}/sysroot-oem-mkdir.service" > /dev/null
+[Unit]
+Description=Create /sysroot/oem mount point
+DefaultDependencies=false
+ConditionPathExists=/dev/disk/by-label/OEM
+After=sysroot.mount
+Before=sysroot-oem.mount
+Requires=sysroot.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/mkdir -p /sysroot/oem
+EOF
+
+        # NOTE: /etc overlay is handled by bootengine's 99setup-root/initrd-setup-root
+        # We need to create the required files BEFORE dracut runs so they get included in initramfs
+
+        # Create flatcar-tmpfiles stub script required by bootengine's initrd-setup-root
+        # Must be created before dracut so it gets included in initramfs
+        info "RPM mode: Creating flatcar-tmpfiles stub for bootengine compatibility"
+        sudo mkdir -p "${root_fs_dir}/usr/sbin"
+        cat <<'EOF' | sudo tee "${root_fs_dir}/usr/sbin/flatcar-tmpfiles" > /dev/null
+#!/bin/bash
+# Stub for flatcar-tmpfiles - Azure Linux handles user/group creation differently
+# This script is called by bootengine's initrd-setup-root to initialize shadow database
+# In Azure Linux, the shadow database is pre-populated by RPM packages
+SYSROOT="${1:-/sysroot}"
+# Ensure essential directories exist
+mkdir -p "${SYSROOT}/etc" "${SYSROOT}/var/log" "${SYSROOT}/var/tmp" "${SYSROOT}/run"
+# Ensure basic shadow files exist (if not already present)
+for f in passwd group shadow gshadow; do
+    if [[ ! -f "${SYSROOT}/etc/${f}" ]] && [[ -f "${SYSROOT}/usr/share/flatcar/etc/${f}" ]]; then
+        cp "${SYSROOT}/usr/share/flatcar/etc/${f}" "${SYSROOT}/etc/${f}"
+    fi
+done
+exit 0
+EOF
+        sudo chmod +x "${root_fs_dir}/usr/sbin/flatcar-tmpfiles"
+
+        # Create tmpfiles.d configs required by bootengine's initrd-setup-root
+        # These are minimal configs - Azure Linux already provides most paths via its own tmpfiles
+        # We only include entries not already in Azure Linux's standard tmpfiles configs
+        info "RPM mode: Creating tmpfiles.d configs for bootengine compatibility"
+        local tmpfiles_dir="${root_fs_dir}/usr/lib/tmpfiles.d"
+        sudo mkdir -p "${tmpfiles_dir}"
+
+        # baselayout.conf - only entries not in Azure Linux's var.conf/tmp.conf
+        cat <<'EOF' | sudo tee "${tmpfiles_dir}/baselayout.conf" > /dev/null
+# Bootengine compatibility - journal directory for early boot
+d /var/log/journal 0755 root root -
+d /run/lock 0755 root root -
+EOF
+
+        # baselayout-usr.conf - /usr/local structure (may not exist in Azure Linux)
+        cat <<'EOF' | sudo tee "${tmpfiles_dir}/baselayout-usr.conf" > /dev/null
+# /usr/local directory structure
+d /usr/local 0755 root root -
+d /usr/local/bin 0755 root root -
+d /usr/local/sbin 0755 root root -
+d /usr/local/lib 0755 root root -
+EOF
+
+        # baselayout-home.conf - only core user home (not /home itself)
+        cat <<'EOF' | sudo tee "${tmpfiles_dir}/baselayout-home.conf" > /dev/null
+# Core user home directory
+d /home/core 0700 core core -
+EOF
+
+        # base_image_var.conf - only entries not in Azure Linux's var.conf
+        cat <<'EOF' | sudo tee "${tmpfiles_dir}/base_image_var.conf" > /dev/null
+# Additional /var structure for bootengine
+d /var/lib/systemd/coredump 0755 root root -
+EOF
+
+        # Create SELinux config for Ignition - it checks this even when SELinux is disabled
+        # Without this file, Ignition fails with "failed to open /etc/selinux/config"
+        info "RPM mode: Creating SELinux config (disabled) for Ignition compatibility"
+        sudo mkdir -p "${root_fs_dir}/etc/selinux"
+        cat <<'EOF' | sudo tee "${root_fs_dir}/etc/selinux/config" > /dev/null
+# SELinux configuration for Azure Linux Container Linux
+# SELinux is disabled - this file exists for Ignition compatibility
+SELINUX=disabled
+SELINUXTYPE=targeted
+EOF
 
         # TODO: remove post SELinux enablement
         # Dummy setfiles for SELinux-disabled systems - Ignition calls it even with SELINUX=disabled
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/setfiles" "${ETC_OVERLAY_MOD}/setfiles"
-        sudo chmod +x "${ETC_OVERLAY_MOD}/setfiles"
+        # Install directly to /usr/sbin since bootengine may call it
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/setfiles" "${root_fs_dir}/usr/sbin/setfiles-stub"
+        sudo chmod +x "${root_fs_dir}/usr/sbin/setfiles-stub"
+        # Only create symlink if real setfiles doesn't exist
+        if [[ ! -f "${root_fs_dir}/usr/sbin/setfiles" ]]; then
+            sudo ln -sf setfiles-stub "${root_fs_dir}/usr/sbin/setfiles"
+        fi
 
-        info "RPM mode: Created dracut module ${ETC_OVERLAY_MOD} with systemd service for /etc overlay"
+        # Create systemd drop-ins for verity device timing
+        # These ensure udev has finished device enumeration before verity setup runs
+        local systemd_dropin_dir="${root_fs_dir}/usr/lib/systemd/system"
+        
+        # Drop-in for dev-mapper-usr.device - disable job timeout
+        info "RPM mode: Creating drop-in for dev-mapper-usr.device (no job timeout)"
+        sudo mkdir -p "${systemd_dropin_dir}/dev-mapper-usr.device.d"
+        cat <<'EOF' | sudo tee "${systemd_dropin_dir}/dev-mapper-usr.device.d/no-job-timeout.conf" > /dev/null
+[Unit]
+# Disable job timeout to allow verity setup to wait for slow device enumeration
+JobRunningTimeoutSec=infinity
+EOF
+
+        # Drop-in for systemd-veritysetup@usr.service - wait for udev settle
+        info "RPM mode: Creating drop-in for systemd-veritysetup@usr.service (wait for udev)"
+        sudo mkdir -p "${systemd_dropin_dir}/systemd-veritysetup@usr.service.d"
+        cat <<'EOF' | sudo tee "${systemd_dropin_dir}/systemd-veritysetup@usr.service.d/wait-for-udev.conf" > /dev/null
+[Unit]
+# Wait for udev to finish device enumeration before attempting verity setup
+After=systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+EOF
 
         # Create dracut config to work around issues in chroot environment
         # We rely on standard systemd-udevd module to include libudev.so
@@ -377,150 +648,150 @@ SYSUSERS_CORE
 finish_image_kernel_config_rpm() {
     local root_fs_dir="$1"
 
-      # In RPM mode, kernel config is at /boot/config-* (Azure Linux layout)
-      local config_file
-      config_file=$(ls "${root_fs_dir}"/boot/config-* 2>/dev/null | head -1)
-      if [[ -n "${config_file}" ]]; then
+    # In RPM mode, kernel config is at /boot/config-* (Azure Linux layout)
+    local config_file
+    config_file=$(ls "${root_fs_dir}"/boot/config-* 2>/dev/null | head -1)
+    if [[ -n "${config_file}" ]]; then
         cp "${config_file}" "${BUILD_DIR}/${image_kconfig}"
-      else
+    else
         info "RPM mode: No kernel config found in /boot/, skipping"
-      fi
+    fi
 }
 
 finish_image_tmpfiles_rpm() {
-  local root_fs_dir="$1"
-  local ETC_FULL_PATH="${root_fs_dir}/usr/share/flatcar/etc"
+    local root_fs_dir="$1"
+    local ETC_FULL_PATH="${root_fs_dir}/usr/share/flatcar/etc"
   
-    # RPM mode: flatcar-tmpfiles may not exist, skip or use fallback
-    if [[ -x "${root_fs_dir}/usr/sbin/flatcar-tmpfiles" ]]; then
-      sudo "${root_fs_dir}"/usr/sbin/flatcar-tmpfiles "${root_fs_dir}"
-    else
-      info "RPM mode: flatcar-tmpfiles not available, relocating /etc configs to ${ETC_FULL_PATH}"
+    sudo "${root_fs_dir}"/usr/sbin/flatcar-tmpfiles "${root_fs_dir}"
+    
+    # ALWAYS run these steps - they set up the /etc overlay and autologin
+    # Previously this was in an 'else' block and was skipped when flatcar-tmpfiles existed
+    info "RPM mode: Setting up /etc overlay configs in ${ETC_FULL_PATH}"
 
-      # In Flatcar, /etc is a tmpfs that gets populated from /usr/share/flatcar/etc at boot.
-      # RPMs install configs to /etc, but we need them in /usr/share/flatcar/etc for persistence
-      # Move essential configs from /etc to /usr/share/flatcar/etc
-      sudo mkdir -p "${ETC_FULL_PATH}"
+    # In Flatcar, /etc is a tmpfs that gets populated from /usr/share/flatcar/etc at boot.
+    # RPMs install configs to /etc, but we need them in /usr/share/flatcar/etc for persistence
+    # Move essential configs from /etc to /usr/share/flatcar/etc
+    sudo mkdir -p "${ETC_FULL_PATH}"
 
-      # Move PAM configs (from shadow-utils RPM) - CRITICAL for login
-      if [[ -d "${root_fs_dir}/etc/pam.d" ]]; then
+    # Move PAM configs (from shadow-utils RPM) - CRITICAL for login
+    if [[ -d "${root_fs_dir}/etc/pam.d" ]]; then
         info "RPM mode: Moving /etc/pam.d to ${ETC_FULL_PATH}/pam.d"
         sudo mv "${root_fs_dir}/etc/pam.d" "${ETC_FULL_PATH}/"
         ls "${ETC_FULL_PATH}/pam.d"
-      fi
+    fi
 
-      # Move security configs (from pam RPM)
-      if [[ -d "${root_fs_dir}/etc/security" ]]; then
+    # Move security configs (from pam RPM)
+    if [[ -d "${root_fs_dir}/etc/security" ]]; then
         info "RPM mode: Moving /etc/security to ${ETC_FULL_PATH}/security"
         sudo mv "${root_fs_dir}/etc/security" "${ETC_FULL_PATH}/"
-      fi
+    fi
 
-      # Move SSH configs if present
-      if [[ -d "${root_fs_dir}/etc/ssh" ]]; then
+    # Move SSH configs if present
+    if [[ -d "${root_fs_dir}/etc/ssh" ]]; then
         info "RPM mode: Moving /etc/ssh to ${ETC_FULL_PATH}/ssh"
         sudo mv "${root_fs_dir}/etc/ssh" "${ETC_FULL_PATH}/"
-      fi
+    fi
 
-      # Update root's shell in /etc/passwd BEFORE copying to /usr/share/flatcar/etc
-      # This fixes the shadow-utils login stdout issue
-      if [[ -f "${root_fs_dir}/etc/passwd" ]]; then
+    # Update root's shell in /etc/passwd BEFORE copying to /usr/share/flatcar/etc
+    # This fixes the shadow-utils login stdout issue
+    if [[ -f "${root_fs_dir}/etc/passwd" ]]; then
         info "RPM mode: Updating root's shell in /etc/passwd to use bash-login wrapper"
         sudo sed -i 's|^root:\([^:]*:[^:]*:[^:]*:[^:]*:[^:]*\):.*|root:\1:/usr/local/bin/bash-login|' "${root_fs_dir}/etc/passwd"
         
         # Add core user if not already present (UID/GID 500, required for ignition)
         if ! grep -q "^core:" "${root_fs_dir}/etc/passwd"; then
-          info "RPM mode: Adding core user to /etc/passwd"
-          echo "core:x:500:500:CoreOS Admin:/home/core:/bin/bash" | sudo tee -a "${root_fs_dir}/etc/passwd" > /dev/null
+            info "RPM mode: Adding core user to /etc/passwd"
+            echo "core:x:500:500:CoreOS Admin:/home/core:/bin/bash" | sudo tee -a "${root_fs_dir}/etc/passwd" > /dev/null
         fi
-      fi
+    fi
 
-      # Add core group to /etc/group if not present
-      if [[ -f "${root_fs_dir}/etc/group" ]]; then
+    # Add core group to /etc/group if not present
+    if [[ -f "${root_fs_dir}/etc/group" ]]; then
         if ! grep -q "^core:" "${root_fs_dir}/etc/group"; then
-          info "RPM mode: Adding core group to /etc/group"
-          echo "core:x:500:" | sudo tee -a "${root_fs_dir}/etc/group" > /dev/null
+            info "RPM mode: Adding core group to /etc/group"
+            echo "core:x:500:" | sudo tee -a "${root_fs_dir}/etc/group" > /dev/null
         fi
         # Add core to wheel, sudo, docker groups
         for grp in wheel sudo docker; do
-          if grep -q "^${grp}:" "${root_fs_dir}/etc/group"; then
-            # Add core to the group if not already a member
-            if ! grep "^${grp}:" "${root_fs_dir}/etc/group" | grep -q "core"; then
-              sudo sed -i "s/^${grp}:\([^:]*:[^:]*:\)\(.*\)/${grp}:\1\2,core/" "${root_fs_dir}/etc/group"
-              # Clean up any leading comma if group was empty
-              sudo sed -i "s/^${grp}:\([^:]*:[^:]*:\),/${grp}:\1/" "${root_fs_dir}/etc/group"
+            if grep -q "^${grp}:" "${root_fs_dir}/etc/group"; then
+                # Add core to the group if not already a member
+                if ! grep "^${grp}:" "${root_fs_dir}/etc/group" | grep -q "core"; then
+                    sudo sed -i "s/^${grp}:\([^:]*:[^:]*:\)\(.*\)/${grp}:\1\2,core/" "${root_fs_dir}/etc/group"
+                    # Clean up any leading comma if group was empty
+                    sudo sed -i "s/^${grp}:\([^:]*:[^:]*:\),/${grp}:\1/" "${root_fs_dir}/etc/group"
+                fi
             fi
-          fi
         done
-      fi
+    fi
 
-      # Add core user to /etc/shadow if not present (locked password - SSH key only)
-      if [[ -f "${root_fs_dir}/etc/shadow" ]]; then
+    # Add core user to /etc/shadow if not present (locked password - SSH key only)
+    if [[ -f "${root_fs_dir}/etc/shadow" ]]; then
         if ! sudo grep -q "^core:" "${root_fs_dir}/etc/shadow"; then
-          info "RPM mode: Adding core user to /etc/shadow"
-          echo "core:*:19000:0:99999:7:::" | sudo tee -a "${root_fs_dir}/etc/shadow" > /dev/null
+            info "RPM mode: Adding core user to /etc/shadow"
+            echo "core:*:19000:0:99999:7:::" | sudo tee -a "${root_fs_dir}/etc/shadow" > /dev/null
         fi
-      fi
+    fi
 
-      # Set empty root password for passwordless console login
-      # Users can set a password after logging in with 'passwd'
-      # This is standard for cloud VMs where SSH key auth is primary
-      if [[ -f "${root_fs_dir}/etc/shadow" ]]; then
+    # Set empty root password for passwordless console login
+    # Users can set a password after logging in with 'passwd'
+    # This is standard for cloud VMs where SSH key auth is primary
+    if [[ -f "${root_fs_dir}/etc/shadow" ]]; then
         info "RPM mode: Setting empty root password for console login"
         sudo sed -i 's|^root:[^:]*:|root::|' "${root_fs_dir}/etc/shadow"
-      fi
+    fi
 
-      # Move individual essential config files (except profile - we create our own)
-      for cfg in passwd group shadow gshadow login.defs nsswitch.conf shells environment; do
+    # Move individual essential config files (except profile - we create our own)
+    for cfg in passwd group shadow gshadow login.defs nsswitch.conf shells environment; do
         if [[ -f "${root_fs_dir}/etc/${cfg}" ]]; then
-          sudo cp -a "${root_fs_dir}/etc/${cfg}" "${ETC_FULL_PATH}/"
+            sudo cp -a "${root_fs_dir}/etc/${cfg}" "${ETC_FULL_PATH}/"
         fi
-      done
+    done
 
-      # Move profile.d if exists
-      if [[ -d "${root_fs_dir}/etc/profile.d" ]]; then
+    # Move profile.d if exists
+    if [[ -d "${root_fs_dir}/etc/profile.d" ]]; then
         sudo cp -a "${root_fs_dir}/etc/profile.d" "${ETC_FULL_PATH}/"
-      fi
+    fi
 
-      # Move default directory (useradd defaults)
-      if [[ -d "${root_fs_dir}/etc/default" ]]; then
+    # Move default directory (useradd defaults)
+    if [[ -d "${root_fs_dir}/etc/default" ]]; then
         sudo cp -a "${root_fs_dir}/etc/default" "${ETC_FULL_PATH}/"
-      fi
+    fi
 
-      # Move skel directory if exists
-      if [[ -d "${root_fs_dir}/etc/skel" ]]; then
+    # Move skel directory if exists
+    if [[ -d "${root_fs_dir}/etc/skel" ]]; then
         sudo cp -a "${root_fs_dir}/etc/skel" "${ETC_FULL_PATH}/"
-      fi
+    fi
 
-      # TODO: remove post SELinux enablement
-      # Create SELinux config (required by Ignition even if SELinux is disabled)
-      # Ignition requires SELINUXTYPE even when disabled, and looks for file_contexts
-      # We create an empty file_contexts so relabeling is a no-op
-      info "RPM mode: Creating SELinux config (disabled) with empty policy"
-      sudo mkdir -p "${ETC_FULL_PATH}/selinux/targeted/contexts/files"
-      sudo tee "${ETC_FULL_PATH}/selinux/config" > /dev/null <<'SELINUX_EOF'
+    # TODO: remove post SELinux enablement
+    # Create SELinux config (required by Ignition even if SELinux is disabled)
+    # Ignition requires SELINUXTYPE even when disabled, and looks for file_contexts
+    # We create an empty file_contexts so relabeling is a no-op
+    info "RPM mode: Creating SELinux config (disabled) with empty policy"
+    sudo mkdir -p "${ETC_FULL_PATH}/selinux/targeted/contexts/files"
+    sudo tee "${ETC_FULL_PATH}/selinux/config" > /dev/null <<'SELINUX_EOF'
 # This file controls the state of SELinux on the system.
 # SELINUX=disabled - No SELinux policy is loaded.
 SELINUX=disabled
 SELINUXTYPE=targeted
 SELINUX_EOF
-      # Create empty file_contexts so Ignition's relabeling is a no-op
-      sudo touch "${ETC_FULL_PATH}/selinux/targeted/contexts/files/file_contexts"
+    # Create empty file_contexts so Ignition's relabeling is a no-op
+    sudo touch "${ETC_FULL_PATH}/selinux/targeted/contexts/files/file_contexts"
 
-      # Configure sshd to look for authorized_keys in the ignition location
-      # Ignition places SSH keys in ~/.ssh/authorized_keys.d/ignition
-      # NOTE: /etc/ssh was moved to /usr/share/flatcar/etc/ssh above, so we modify it there
-      info "RPM mode: Configuring sshd AuthorizedKeysFile for Ignition"
-      local ssh_config_dir="${ETC_FULL_PATH}/ssh"
-      sudo mkdir -p "${ssh_config_dir}/sshd_config.d"
-      sudo tee "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf" > /dev/null <<'SSHD_CONF'
+    # Configure sshd to look for authorized_keys in the ignition location
+    # Ignition places SSH keys in ~/.ssh/authorized_keys.d/ignition
+    # NOTE: /etc/ssh was moved to /usr/share/flatcar/etc/ssh above, so we modify it there
+    info "RPM mode: Configuring sshd AuthorizedKeysFile for Ignition"
+    local ssh_config_dir="${ETC_FULL_PATH}/ssh"
+    sudo mkdir -p "${ssh_config_dir}/sshd_config.d"
+    sudo tee "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf" > /dev/null <<'SSHD_CONF'
 # Support both traditional authorized_keys and Ignition's authorized_keys.d/ignition
 AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys.d/ignition
 SSHD_CONF
-      sudo chmod 644 "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf"
+    sudo chmod 644 "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf"
 
-      # Ensure sshd_config includes the .d directory
-      local sshd_config="${ssh_config_dir}/sshd_config"
-      if [[ ! -f "${sshd_config}" ]]; then
+    # Ensure sshd_config includes the .d directory
+    local sshd_config="${ssh_config_dir}/sshd_config"
+    if [[ ! -f "${sshd_config}" ]]; then
         # sshd_config doesn't exist - create a minimal one with Include
         info "RPM mode: Creating sshd_config with Include directive"
         sudo tee "${sshd_config}" > /dev/null <<'SSHD_CONFIG_EOF'
@@ -528,171 +799,209 @@ SSHD_CONF
 Include /etc/ssh/sshd_config.d/*.conf
 SSHD_CONFIG_EOF
         sudo chmod 644 "${sshd_config}"
-      elif ! sudo grep -q "^Include.*/etc/ssh/sshd_config.d" "${sshd_config}"; then
+    elif ! sudo grep -q "^Include.*/etc/ssh/sshd_config.d" "${sshd_config}"; then
         info "RPM mode: Adding Include directive to existing sshd_config"
         sudo sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' "${sshd_config}"
-      else
+    else
         info "RPM mode: sshd_config already has Include directive"
-      fi
+    fi
 
-      # Configure sudo for wheel group (passwordless)
-      info "RPM mode: Configuring passwordless sudo for wheel group"
-      sudo mkdir -p "${ETC_FULL_PATH}/sudoers.d"
-      sudo tee "${ETC_FULL_PATH}/sudoers.d/wheel-nopasswd" > /dev/null <<'SUDOERS_EOF'
+    # Configure sudo for wheel group (passwordless)
+    info "RPM mode: Configuring passwordless sudo for wheel group"
+    sudo mkdir -p "${ETC_FULL_PATH}/sudoers.d"
+    sudo tee "${ETC_FULL_PATH}/sudoers.d/wheel-nopasswd" > /dev/null <<'SUDOERS_EOF'
 %wheel ALL=(ALL:ALL) NOPASSWD: ALL
 SUDOERS_EOF
-      sudo chmod 440 "${ETC_FULL_PATH}/sudoers.d/wheel-nopasswd"
+    sudo chmod 440 "${ETC_FULL_PATH}/sudoers.d/wheel-nopasswd"
 
-      info "RPM mode: Creating tmpfiles.d entries to populate /etc at boot"
-      # Create tmpfiles.d entries to populate /etc at boot time
-      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/copy-files-etc.conf" "${root_fs_dir}/usr/lib/tmpfiles.d/copy-files-etc.conf"
-      info "RPM mode: Created /usr/lib/tmpfiles.d/copy-files-etc.conf"
+    info "RPM mode: Creating tmpfiles.d entries to populate /etc at boot"
+    # Create tmpfiles.d entries to populate /etc at boot time
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/copy-files-etc.conf" "${root_fs_dir}/usr/lib/tmpfiles.d/copy-files-etc.conf"
+    info "RPM mode: Created /usr/lib/tmpfiles.d/copy-files-etc.conf"
 
-      # Create an early-boot service to populate /etc from /usr/share/flatcar/etc
-      # This runs VERY early, before any login services, to ensure PAM configs are available
-      info "RPM mode: Creating etc-overlay-populate.service for early /etc population"
-      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/etc-overlay-populate.service" "${root_fs_dir}/usr/lib/systemd/system/etc-overlay-populate.service"
-      # Enable the service in sysinit.target (very early)
-      sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants"
-      sudo ln -sf ../etc-overlay-populate.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/etc-overlay-populate.service"
-      info "RPM mode: Enabled etc-overlay-populate.service in sysinit.target"
+    # Create an early-boot service to populate /etc from /usr/share/flatcar/etc
+    # This runs VERY early, before any login services, to ensure PAM configs are available
+    info "RPM mode: Creating etc-overlay-populate.service for early /etc population"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/etc-overlay-populate.service" "${root_fs_dir}/usr/lib/systemd/system/etc-overlay-populate.service"
+    # Enable the service in sysinit.target (very early)
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants"
+    sudo ln -sf ../etc-overlay-populate.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/etc-overlay-populate.service"
+    info "RPM mode: Enabled etc-overlay-populate.service in sysinit.target"
 
-      # Create systemd-networkd configuration for DHCP
-      info "RPM mode: Creating systemd-networkd configuration for DHCP"
-      sudo mkdir -p "${root_fs_dir}/etc/systemd/network"
-      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/99-dhcp-all.network" "${root_fs_dir}/etc/systemd/network/99-dhcp-all.network"
-      sudo chmod 644 "${root_fs_dir}/etc/systemd/network/99-dhcp-all.network"
+    # Create systemd-networkd configuration for DHCP
+    info "RPM mode: Creating systemd-networkd configuration for DHCP"
+    sudo mkdir -p "${root_fs_dir}/etc/systemd/network"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/99-dhcp-all.network" "${root_fs_dir}/etc/systemd/network/99-dhcp-all.network"
+    sudo chmod 644 "${root_fs_dir}/etc/systemd/network/99-dhcp-all.network"
 
-      # Enable systemd-networkd service
-      info "RPM mode: Enabling systemd-networkd.service"
-      sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants"
-      sudo ln -sf ../systemd-networkd.service "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/systemd-networkd.service"
+    # Enable systemd-networkd service
+    info "RPM mode: Enabling systemd-networkd.service"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants"
+    sudo ln -sf ../systemd-networkd.service "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/systemd-networkd.service"
 
-      # Enable systemd-resolved service (for DNS)
-      info "RPM mode: Enabling systemd-resolved.service"
-      sudo ln -sf ../systemd-resolved.service "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/systemd-resolved.service"
+    # Enable systemd-resolved service (for DNS)
+    info "RPM mode: Enabling systemd-resolved.service"
+    sudo ln -sf ../systemd-resolved.service "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/systemd-resolved.service"
 
-      # Fix ntpdate-wrapper - Azure Linux has ntpdate at /usr/bin but wrapper script expects /usr/sbin
-      if [[ -f "${root_fs_dir}/usr/libexec/ntpdate-wrapper" ]]; then
+    # Fix ntpdate-wrapper - Azure Linux has ntpdate at /usr/bin but wrapper script expects /usr/sbin
+    if [[ -f "${root_fs_dir}/usr/libexec/ntpdate-wrapper" ]]; then
         info "RPM mode: Patching ntpdate-wrapper to use /usr/bin/ntpdate"
         sudo sed -i 's|/usr/sbin/ntpdate|/usr/bin/ntpdate|g' "${root_fs_dir}/usr/libexec/ntpdate-wrapper"
-      fi
+    fi
 
-      # Mask kdump.service - requires crashkernel= kernel parameter which we don't set
-      info "RPM mode: Masking kdump.service (no crash kernel memory reserved)"
-      sudo ln -sf /dev/null "${root_fs_dir}/usr/lib/systemd/system/kdump.service"
+    # Add drop-in for ntpdate.service to ensure DNS is ready before running
+    # The service has After=nss-lookup.target but DNS servers may not be configured yet
+    # We add retries to handle the race between DHCP configuring DNS and ntpdate running
+    if [[ -f "${root_fs_dir}/usr/lib/systemd/system/ntpdate.service" ]]; then
+        info "RPM mode: Adding ntpdate.service drop-in for DNS retry handling"
+        sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/ntpdate.service.d"
+        cat <<'EOF' | sudo tee "${root_fs_dir}/usr/lib/systemd/system/ntpdate.service.d/10-wait-for-dns.conf" > /dev/null
+[Unit]
+# Ensure DNS resolution is available before trying to resolve NTP server names
+After=systemd-resolved.service
+Wants=systemd-resolved.service
 
-      # Dummy setenforce for SELinux-disabled systems (goes to /usr/sbin, not initramfs)
-      if [[ ! -x "${root_fs_dir}/usr/sbin/setenforce" ]]; then
+[Service]
+# Retry on failure - DNS may not be configured immediately after resolved starts
+# DHCP needs time to provide DNS servers to systemd-resolved
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=5
+EOF
+    fi
+
+    # Mask kdump.service - requires crashkernel= kernel parameter which we don't set
+    info "RPM mode: Masking kdump.service (no crash kernel memory reserved)"
+    sudo ln -sf /dev/null "${root_fs_dir}/usr/lib/systemd/system/kdump.service"
+
+    # Mask iSCSI services and sockets - not needed for ACL and cause boot failures
+    # These were pulled in as Azure Linux RPM dependencies
+    info "RPM mode: Masking iSCSI services and sockets"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/iscsi-init.service"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/iscsid.service"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/iscsiuio.service"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/iscsi.service"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/iscsid.socket"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/iscsiuio.socket"
+
+    # Mask nftables.service - missing /etc/sysconfig/nftables.conf config file
+    info "RPM mode: Masking nftables.service"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/nftables.service"
+
+    # Dummy setenforce for SELinux-disabled systems (goes to /usr/sbin, not initramfs)
+    if [[ ! -x "${root_fs_dir}/usr/sbin/setenforce" ]]; then
         info "RPM mode: Installing dummy setenforce to /usr/sbin"
         sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/setenforce" "${root_fs_dir}/usr/sbin/setenforce"
         sudo chmod +x "${root_fs_dir}/usr/sbin/setenforce"
-      fi
+    fi
 
-      # Placeholder audit-rules.service - Azure Linux doesn't provide this but kola tests expect it as a common dependency
-      if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service" ]]; then
+    # Placeholder audit-rules.service - Azure Linux doesn't provide this but kola tests expect it as a common dependency
+    if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service" ]]; then
         info "RPM mode: Installing placeholder audit-rules.service"
         sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/audit-rules.service" "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service"
-      fi
+    fi
 
-      # Create /var/lib/logrotate directory for logrotate state file
-      info "RPM mode: Creating /var/lib/logrotate directory"
-      sudo mkdir -p "${root_fs_dir}/var/lib/logrotate"
+    # Create /var/lib/logrotate directory for logrotate state file
+    info "RPM mode: Creating /var/lib/logrotate directory"
+    sudo mkdir -p "${root_fs_dir}/var/lib/logrotate"
 
-      # Create /etc/resolv.conf symlink to point to systemd-resolved
-      info "RPM mode: Configuring /etc/resolv.conf for systemd-resolved"
-      sudo rm -f "${root_fs_dir}/etc/resolv.conf"
-      sudo ln -sf /run/systemd/resolve/stub-resolv.conf "${root_fs_dir}/etc/resolv.conf"
+    # Create /etc/resolv.conf symlink to point to systemd-resolved
+    info "RPM mode: Configuring /etc/resolv.conf for systemd-resolved"
+    sudo rm -f "${root_fs_dir}/etc/resolv.conf"
+    sudo ln -sf /run/systemd/resolve/stub-resolv.conf "${root_fs_dir}/etc/resolv.conf"
 
-      # Create /etc/fstab with /boot and /oem mount points
-      info "RPM mode: Creating /etc/fstab with /boot and /oem mount points"
-      sudo tee "${root_fs_dir}/etc/fstab" > /dev/null <<'FSTAB_EOF'
+    # Create /etc/fstab with /boot and /oem mount points
+    info "RPM mode: Creating /etc/fstab with /boot and /oem mount points"
+    sudo tee "${root_fs_dir}/etc/fstab" > /dev/null <<'FSTAB_EOF'
 # /etc/fstab: static file system information
 # <device>      <mount point>   <type>  <options>       <dump>  <pass>
 LABEL=EFI-SYSTEM /boot          vfat    umask=077       0       2
 LABEL=OEM        /oem           btrfs   defaults        0       2
 FSTAB_EOF
-      sudo chmod 644 "${root_fs_dir}/etc/fstab"
+    sudo chmod 644 "${root_fs_dir}/etc/fstab"
 
-      # Enable containerd and docker after sysext merge
-      # The sysext (containerd-flatcar, docker-flatcar) provides the actual service files
-      # We need to trigger daemon-reload and start them after sysext completes
-      info "RPM mode: Creating sysext-services.service to start containerd/docker after sysext"
-      sudo tee "${root_fs_dir}/usr/lib/systemd/system/sysext-services.service" > /dev/null <<'SYSEXT_SVC'
+    # ensure-sysext.service - reload systemd and restart targets after sysext merge
+    # This allows any services provided by sysexts to be discovered and started
+    # Based on Flatcar's ensure-sysext.service from flatcar/init
+    info "RPM mode: Creating ensure-sysext.service to reload units after sysext merge"
+    sudo tee "${root_fs_dir}/usr/lib/systemd/system/ensure-sysext.service" > /dev/null <<'ENSURE_SYSEXT'
 [Unit]
-Description=Start services provided by sysext after merge
+Description=Ensure sysext services are started after merge
+BindsTo=systemd-sysext.service
 After=systemd-sysext.service
-Wants=systemd-sysext.service
-ConditionPathExists=/usr/lib/systemd/system/containerd.service
+DefaultDependencies=no
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/systemctl daemon-reload
-ExecStart=/usr/bin/systemctl start containerd.service
-ExecStart=/usr/bin/systemctl start docker.service
+ExecStart=/usr/bin/systemctl restart --no-block sockets.target timers.target multi-user.target
 
 [Install]
-WantedBy=multi-user.target
-SYSEXT_SVC
-      sudo mkdir -p "${root_fs_dir}/etc/systemd/system/multi-user.target.wants"
-      sudo ln -sf /usr/lib/systemd/system/sysext-services.service "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/sysext-services.service"
+WantedBy=sysinit.target
+ENSURE_SYSEXT
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants"
+    sudo ln -sf ../ensure-sysext.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/ensure-sysext.service"
 
-#       # Enable serial-getty on ttyS0 with AUTOLOGIN
-#       # This bypasses PAM login and drops directly to root shell
-#       info "RPM mode: Creating autologin serial-getty@ttyS0"
-#       sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/serial-getty@ttyS0.service.d"
-#       sudo tee "${root_fs_dir}/usr/lib/systemd/system/serial-getty@ttyS0.service.d/autologin.conf" > /dev/null <<'AUTOLOGIN_CONF'
-# [Service]
-# ExecStart=
-# ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud %I 115200,38400,9600 $TERM
-# AUTOLOGIN_CONF
+    # Install autologin generator - conditionally enables autologin if flatcar.autologin is on cmdline
+    # This is more secure than always-on autologin
+    info "RPM mode: Installing flatcar-autologin-generator (requires flatcar.autologin on cmdline)"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system-generators"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/flatcar-autologin-generator" \
+        "${root_fs_dir}/usr/lib/systemd/system-generators/flatcar-autologin-generator"
+    sudo chmod +x "${root_fs_dir}/usr/lib/systemd/system-generators/flatcar-autologin-generator"
 
-#       # Enable serial-getty on ttyS0
-#       sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants"
-#       sudo ln -sf ../serial-getty@.service "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
+    # Enable serial-getty on ttyS0 (autologin is controlled by generator based on cmdline)
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants"
+    sudo ln -sf ../serial-getty@.service "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
 
-      # Create /etc/profile.d directory for additional scripts
-      info "RPM mode: Creating profile.d directory"
-      sudo mkdir -p "${ETC_FULL_PATH}/profile.d"
+    # Remove ImportCredential= from getty services (credentials directory doesn't exist)
+    info "RPM mode: Removing ImportCredential from getty services"
+    sudo sed -i '/ImportCredential=/d' "${root_fs_dir}/usr/lib/systemd/system/getty@.service" 2>/dev/null || true
+    sudo sed -i '/ImportCredential=/d' "${root_fs_dir}/usr/lib/systemd/system/serial-getty@.service" 2>/dev/null || true
 
-      # Create a complete /etc/profile
-      info "RPM mode: Creating /etc/profile"
-      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/profile" "${ETC_FULL_PATH}/profile"
-      # Create fallback /etc/shells
-      info "RPM mode: Creating fallback /etc/shells"
-      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/shells" "${ETC_FULL_PATH}/shells"
+    # Create /etc/profile.d directory for additional scripts
+    info "RPM mode: Creating profile.d directory"
+    sudo mkdir -p "${ETC_FULL_PATH}/profile.d"
 
-      # Create bash-login wrapper to fix shadow-utils login stdout issue
-      # shadow-utils' login sets stdout to a pipe instead of TTY, causing shell to exit immediately
-      info "RPM mode: Creating bash-login wrapper to fix login stdout issue"
-      sudo mkdir -p "${root_fs_dir}/usr/local/bin"
-      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/bash-login" "${root_fs_dir}/usr/local/bin/bash-login"
-      sudo chmod +x "${root_fs_dir}/usr/local/bin/bash-login"
+    # Create a complete /etc/profile
+    info "RPM mode: Creating /etc/profile"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/profile" "${ETC_FULL_PATH}/profile"
+    # Create fallback /etc/shells
+    info "RPM mode: Creating fallback /etc/shells"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/shells" "${ETC_FULL_PATH}/shells"
 
-      # Note: root's shell was already updated in /etc/passwd earlier (before copying to /usr/share/flatcar/etc)
-      # Verify it's correct in both places
-      info "RPM mode: Verifying root's shell is set to bash-login"
-      if [[ -f "${root_fs_dir}/etc/passwd" ]]; then
+    # Create bash-login wrapper to fix shadow-utils login stdout issue
+    # shadow-utils' login sets stdout to a pipe instead of TTY, causing shell to exit immediately
+    info "RPM mode: Creating bash-login wrapper to fix login stdout issue"
+    sudo mkdir -p "${root_fs_dir}/usr/local/bin"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/bash-login" "${root_fs_dir}/usr/local/bin/bash-login"
+    sudo chmod +x "${root_fs_dir}/usr/local/bin/bash-login"
+
+    # Note: root's shell was already updated in /etc/passwd earlier (before copying to /usr/share/flatcar/etc)
+    # Verify it's correct in both places
+    info "RPM mode: Verifying root's shell is set to bash-login"
+    if [[ -f "${root_fs_dir}/etc/passwd" ]]; then
         grep "^root:" "${root_fs_dir}/etc/passwd" || true
-      fi
-
-      # Create /root with proper .bashrc and .bash_profile
-      info "RPM mode: Creating /root home directory with shell configs"
-      sudo mkdir -p "${root_fs_dir}/root"
-      sudo chmod 700 "${root_fs_dir}/root"
-
-      # Create .bash_profile for login shells
-      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/.bash_profile" "${root_fs_dir}/root/.bash_profile"
-
-      # Create .bashrc for interactive shells
-      sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/.bashrc" "${root_fs_dir}/root/.bashrc"
     fi
+
+    # Create /root with proper .bashrc and .bash_profile
+    info "RPM mode: Creating /root home directory with shell configs"
+    sudo mkdir -p "${root_fs_dir}/root"
+    sudo chmod 700 "${root_fs_dir}/root"
+
+    # Create .bash_profile for login shells
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/.bash_profile" "${root_fs_dir}/root/.bash_profile"
+
+    # Create .bashrc for interactive shells
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/.bashrc" "${root_fs_dir}/root/.bashrc"
 }
 
 finish_image_backup_etc_rpm() {
     local root_fs_dir="$1"
     local ETC_FULL_PATH="${root_fs_dir}/usr/share/flatcar/etc"
+    local FLATCAR_SHARE="${root_fs_dir}/usr/share/flatcar"
 
     info "RPM mode: Skipping ${ETC_FULL_PATH} recreation (already set up with PAM configs)"
     # In RPM mode, we already moved configs to /usr/share/flatcar/etc earlier
@@ -701,4 +1010,15 @@ finish_image_backup_etc_rpm() {
     if [[ -d "${root_fs_dir}/etc" ]]; then
       sudo cp -an "${root_fs_dir}/etc/." "${ETC_FULL_PATH}/" 2>/dev/null || true
     fi
+
+    # Create etc-no-whiteouts file required by bootengine's initrd-setup-root
+    # This file lists /etc paths that should not be treated as overlay whiteouts
+    # (character devices with major:minor 0:0 that represent deletions)
+    # For now, create an empty file - Azure Linux doesn't have pre-existing whiteouts
+    info "RPM mode: Creating etc-no-whiteouts for bootengine compatibility"
+    sudo mkdir -p "${FLATCAR_SHARE}"
+    sudo touch "${FLATCAR_SHARE}/etc-no-whiteouts"
+
+    # NOTE: flatcar-tmpfiles is created earlier in finish_image_rpm() before dracut runs
+    # so it gets included in the initramfs
 }

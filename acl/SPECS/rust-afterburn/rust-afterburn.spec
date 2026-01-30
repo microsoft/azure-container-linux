@@ -7,7 +7,7 @@
 
 Name:           rust-%{crate}
 Version:        5.10.0
-Release:        3%{?dist}
+Release:        5%{?dist}
 Summary:        Simple cloud provider agent
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
@@ -16,6 +16,8 @@ URL:            https://crates.io/crates/%{crate}
 Source0:        https://github.com/coreos/%{crate}/archive/refs/tags/v%{version}.tar.gz#/%{name}-%{version}.tar.gz
 # not used on Fedora
 Source1:        %{crate}-%{version}-azlcustomvendor.tar.gz
+Source2: coreos-metadata.service
+Source3: coreos-metadata-sshkeys@.service
 Patch0:         0001-Revert-remove-cl-legacy-feature.patch
 Patch1:         0002-util-cmdline-Handle-the-cmdline-flags-as-list-of-sup.patch
 Patch2:         0003-Cargo-reduce-binary-size-for-release-profile.patch
@@ -103,23 +105,24 @@ cargo build --release --offline
 mkdir -p %{buildroot}%{dracutmodulesdir}
 cp -a dracut/* %{buildroot}%{dracutmodulesdir}
 
+# Create coreos-metadata symlink for compatibility (afterburn was formerly coreos-metadata)
+ln -s afterburn %{buildroot}%{_bindir}/coreos-metadata
+
+# Install coreos-metadata compatibility service files
+install -D -m 0644 %{SOURCE2} %{buildroot}%{_unitdir}/coreos-metadata.service
+install -D -m 0644 %{SOURCE3} %{buildroot}%{_unitdir}/coreos-metadata-sshkeys@.service
+
 %post        -n %{crate}
-%systemd_post afterburn.service
-%systemd_post afterburn-checkin.service
-%systemd_post afterburn-firstboot-checkin.service
-%systemd_post afterburn-sshkeys@.service
+%systemd_post coreos-metadata.service
+%systemd_post coreos-metadata-sshkeys@.service
 
 %preun       -n %{crate}
-%systemd_preun afterburn.service
-%systemd_preun afterburn-checkin.service
-%systemd_preun afterburn-firstboot-checkin.service
-%systemd_preun afterburn-sshkeys@.service
+%systemd_preun coreos-metadata.service
+%systemd_preun coreos-metadata-sshkeys@.service
 
 %postun      -n %{crate}
-%systemd_postun afterburn.service
-%systemd_postun afterburn-checkin.service
-%systemd_postun afterburn-firstboot-checkin.service
-%systemd_postun afterburn-sshkeys@.service
+%systemd_postun coreos-metadata.service
+%systemd_postun coreos-metadata-sshkeys@.service
 
 %if %{with check}
 %check
@@ -136,7 +139,10 @@ make test
 %endif
 %doc README.md
 %doc code-of-conduct.md
+%{_bindir}/coreos-metadata
 %{_bindir}/afterburn
+%{_unitdir}/coreos-metadata.service
+%{_unitdir}/coreos-metadata-sshkeys@.service
 %{_unitdir}/afterburn.service
 %{_unitdir}/afterburn-checkin.service
 %{_unitdir}/afterburn-firstboot-checkin.service
@@ -147,6 +153,12 @@ make test
 %{dracutmodulesdir}/30afterburn/
 
 %changelog
+* Thu Jan 29 2026 Jiri Appl <jiria@microsoft.com> - 5.10.0-5
+- Condition the coreos metadata sshkeys to not run on qemu
+
+* Thu Jan 29 2026 Jiri Appl <jiria@microsoft.com> - 5.10.0-4
+- Flatcar alignment
+
 * Thu Jan 22 2026 Sumit Jena <v-sumitjena@microsoft.com> - 5.10.0-3
 - Initial Azure Linux import from Fedora 43 (license: MIT)
 - License verified

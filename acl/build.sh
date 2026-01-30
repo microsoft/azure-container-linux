@@ -44,7 +44,7 @@ function build_specs() {
     pushd "${BUILD_DIR}/azurelinux/toolkit"
     sudo make build-packages \
         -j"$(nproc)" \
-        SPEC_LIST="ignition rust-afterburn" \
+        SPEC_LIST="ignition rust-afterburn bootengine" \
         SPECS_DIR="${SPECS_DIR}" \
         QUICK_REBUILD_PACKAGES=y \
         PRECACHE=n \
@@ -93,6 +93,7 @@ publish_package_build_artifacts() {
         PACKAGE_PUBLISH_DIR="$ARTIFACT_PUBLISH_DIR"
         mkdir -p "$PACKAGE_PUBLISH_DIR"
         sudo find "$OUT_DIR/RPMS/x86_64/" -name "*.rpm" -exec cp {} "$PACKAGE_PUBLISH_DIR" \;
+        sudo find "$OUT_DIR/RPMS/noarch/" -name "*.rpm" -exec cp {} "$PACKAGE_PUBLISH_DIR" \;
     fi
     popd
 }
