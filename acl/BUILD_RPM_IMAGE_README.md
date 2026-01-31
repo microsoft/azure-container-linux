@@ -4,6 +4,8 @@ This document describes the RPM-based image build system for Flatcar, which
 enables building Azure Container Linux images using packages from Azure Linux
 3.0 repositories.
 
+Currently targetting `stable-4459.2.2` of Flatcar Linux upstream. Upstream build is available here: [images](https://bincache.flatcar-linux.net/images/amd64/4459.2.2/), [test results](https://bincache.flatcar-linux.net/testing/4459.2.2/amd64/qemu/).
+
 ## Overview
 
 The build system supports package source modes:
