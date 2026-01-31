@@ -4,5 +4,5 @@ accountableOwners:
   service: 289cc86b-04ae-4afd-96a1-92251967e9f5
 routing:
   defaultAreaPath:
-    org: microsoft
+    org: mariner-org
     path: ACL\Build
