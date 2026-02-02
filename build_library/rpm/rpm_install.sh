@@ -209,8 +209,8 @@ rpm_install_to_image() {
     rpm_mount_pseudofs "${root_fs_dir}"
 
     # Install all packages using dnf
-    info "Running: dnf install --installroot=${root_fs_dir} --releasever=3.0 -y --nogpgcheck ${packages[*]}"
-    sudo /usr/bin/dnf-3 install --installroot="${root_fs_dir}" --releasever=3.0 -y --nogpgcheck "${packages[@]}" 2>&1 | sudo tee /tmp/rpm-install.log
+    info "Running: dnf install --installroot=${root_fs_dir} --nodocs --releasever=3.0 -y --nogpgcheck ${packages[*]}"
+    sudo /usr/bin/dnf-3 install --installroot="${root_fs_dir}" --nodocs --releasever=3.0 -y --nogpgcheck "${packages[@]}" 2>&1 | sudo tee /tmp/rpm-install.log
     local dnf_exit_code=${PIPESTATUS[0]}
 
     # Check for errors in output
@@ -230,6 +230,17 @@ rpm_install_to_image() {
 
     # Unmount pseudo-filesystems
     rpm_umount_pseudofs "${root_fs_dir}"
+  
+    # Remove documentation and locale directories that Portage mode excludes via INSTALL_MASK (see make.defaults)
+    info "RPM mode: Removing documentation and locale directories (INSTALL_MASK parity)"
+    sudo rm -rf "${root_fs_dir}/usr/share/doc"
+    sudo rm -rf "${root_fs_dir}/usr/share/man"
+    sudo rm -rf "${root_fs_dir}/usr/share/info"
+    sudo rm -rf "${root_fs_dir}/usr/share/gtk-doc"
+    sudo rm -rf "${root_fs_dir}/usr/share/bash-completion"
+    sudo rm -rf "${root_fs_dir}/usr/share/zsh"
+    sudo rm -rf "${root_fs_dir}/usr/share/terminfo"
+    sudo rm -rf "${root_fs_dir}/usr/share/locale"
 
     info "Successfully installed ${#packages[@]} RPM packages"
     return 0
