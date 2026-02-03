@@ -176,9 +176,20 @@ def main():
     # List skipped tests
     if skipped:
         print("## Skipped Tests\n")
+        print("<details>")
+        print(f"<summary>Show {len(skipped)} skipped test(s)</summary>\n")
         for test_name in sorted(skipped):
             print(f"- `{test_name}`")
-        print()
+        print("</details>\n")
+    
+    # List passing tests
+    if passing:
+        print("## Passing Tests\n")
+        print("<details>")
+        print(f"<summary>Show {len(passing)} passing test(s)</summary>\n")
+        for test_name in sorted(passing):
+            print(f"- `{test_name}`")
+        print("</details>\n")
     
     if not failing:
         print("## 🎉 All tests passed!")

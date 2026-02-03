@@ -65,7 +65,7 @@ export QEMU_UPDATE_PAYLOAD=/work/__build__/images/images/${arch@Q}-usr/latest/fl
 export PARALLEL_TESTS=${parallel@Q}
 EOF
 
-  export MAX_RETRIES=5
+  export MAX_RETRIES=${MAX_RUNS:-1}
   export SKIP_COPY_TO_BINCACHE=1
 }
 #--
