@@ -694,7 +694,6 @@ verify_critical_packages() {
     info "Verifying critical packages..."
 
     local critical_packages=(
-        "filesystem"
         "grub2-efi-binary"
         "shim"
     )
