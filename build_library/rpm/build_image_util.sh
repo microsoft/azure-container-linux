@@ -47,11 +47,34 @@ emerge_to_image() {
 }
 
 # List packages installed from RPM database
+# Returns non-zero if no packages found (to fail fast during build)
 image_packages_portage() {
     local root_fs_dir="$1"
-    if [[ -d "${root_fs_dir}/var/lib/rpm" ]]; then
-        rpm_query_packages "${root_fs_dir}" "%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}" 2>/dev/null || true
+    
+    local dbpath="${root_fs_dir}/var/lib/rpm"
+    local pkg_count=0
+    
+    if [[ -d "${dbpath}" ]]; then
+        pkg_count=$(rpm_query_packages "${root_fs_dir}" | wc -l)
+        info "RPM database at ${dbpath}: ${pkg_count} packages"
+        rpm_query_packages "${root_fs_dir}"
+    elif [[ -n "${BUILD_DIR:-}" && -f "${BUILD_DIR}/.rpm_packages_installed.txt" ]]; then
+        # Fallback: use the backup file created during installation
+        pkg_count=$(wc -l < "${BUILD_DIR}/.rpm_packages_installed.txt" 2>/dev/null || echo 0)
+        info "Using backup file ${BUILD_DIR}/.rpm_packages_installed.txt: ${pkg_count} packages"
+        cat "${BUILD_DIR}/.rpm_packages_installed.txt"
+    else
+        error "RPM database not found and no backup available for ${root_fs_dir}"
+        return 1
     fi
+    
+    # Fail fast if no packages found
+    if [[ ${pkg_count} -eq 0 ]]; then
+        error "ERROR: RPM package list is empty for ${root_fs_dir}"
+        return 1
+    fi
+    
+    return 0
 }
 
 # For RPM/DNF mode, RPM handles dependencies automatically
@@ -82,46 +105,42 @@ start_image_rpm() {
     info "RPM mode: Installing filesystem RPM instead of baselayout"
     # Install filesystem RPM to provide basic directory structure
     # This replaces baselayout and creates /usr/lib, /etc, /bin -> usr/bin symlinks, etc.
-    local filesystem_rpm=""
-    if [[ -n "${RPM_STAGING_DIR:-}" ]] && [[ -d "${RPM_STAGING_DIR}" ]]; then
-      filesystem_rpm=$(find "${RPM_STAGING_DIR}" -maxdepth 1 -name "filesystem-*.rpm" | head -1)
-    fi
+    # Use DNF to install so it's properly recorded in the RPM database
+    
+    # Initialize RPM database first
+    info "Initializing RPM database in ${root_fs_dir}"
+    sudo mkdir -p "${root_fs_dir}/var/lib/rpm"
+    sudo rpm --root="${root_fs_dir}" --initdb
+    
+    # Install filesystem using DNF
+    info "Installing filesystem package via DNF"
+    local rpm_staging
+    rpm_staging=$(find_rpm_staging_dir 2>/dev/null || echo "")
+    local local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
+    
+    # Setup repositories
+    rpm_setup_repos "${root_fs_dir}" "3.0" "${local_cache}"
+    
+    # Install filesystem package via DNF
+    sudo /usr/bin/dnf-3 install \
+        --installroot="${root_fs_dir}" \
+        --releasever=3.0 \
+        -y --nogpgcheck \
+        filesystem 2>&1 | grep -v "^$" || {
+            error "Failed to install filesystem package"
+            return 1
+        }
 
-    if [[ -n "$filesystem_rpm" ]]; then
-      info "Installing filesystem RPM: $(basename $filesystem_rpm)"
-      # Initialize RPM database
-      sudo rpm --root="${root_fs_dir}" --initdb
-      # Install filesystem without scripts (Lua scripts need interpreter)
-      sudo rpm --root="${root_fs_dir}" \
-        --install \
-        --nodeps \
-        --noscripts \
-        "$filesystem_rpm"
+    # Create additional directories that may be needed
+    # Create /proc and /sys directories
+    sudo mkdir -p "${root_fs_dir}/proc" "${root_fs_dir}/sys"
+    sudo chmod 555 "${root_fs_dir}/proc" "${root_fs_dir}/sys"
 
-      # Manually create symlinks that filesystem's %post Lua script would create
-      # These are from the %post scriptlet in filesystem.spec
-      sudo mkdir -p "${root_fs_dir}/usr/lib/debug/usr"
-      [[ -e "${root_fs_dir}/usr/lib/debug/lib64" ]] || sudo ln -sf lib "${root_fs_dir}/usr/lib/debug/lib64"
-      [[ -e "${root_fs_dir}/usr/lib/debug/usr/bin" ]] || sudo ln -sf ../bin "${root_fs_dir}/usr/lib/debug/usr/bin"
-      [[ -e "${root_fs_dir}/usr/lib/debug/usr/sbin" ]] || sudo ln -sf ../sbin "${root_fs_dir}/usr/lib/debug/usr/sbin"
-      [[ -e "${root_fs_dir}/usr/lib/debug/usr/lib" ]] || sudo ln -sf ../lib "${root_fs_dir}/usr/lib/debug/usr/lib"
-      [[ -e "${root_fs_dir}/usr/lib/debug/usr/lib64" ]] || sudo ln -sf ../lib "${root_fs_dir}/usr/lib/debug/usr/lib64"
-      [[ -e "${root_fs_dir}/usr/lib/debug/usr/.dwz" ]] || sudo ln -sf ../.dwz "${root_fs_dir}/usr/lib/debug/usr/.dwz"
+    # Ensure /root home directory exists with proper permissions
+    sudo mkdir -p "${root_fs_dir}/root"
+    sudo chmod 700 "${root_fs_dir}/root"
 
-      # Create /proc and /sys directories (from %pretrans)
-      sudo mkdir -p "${root_fs_dir}/proc" "${root_fs_dir}/sys"
-      sudo chmod 555 "${root_fs_dir}/proc" "${root_fs_dir}/sys"
-
-      # Ensure /root home directory exists with proper permissions
-      sudo mkdir -p "${root_fs_dir}/root"
-      sudo chmod 700 "${root_fs_dir}/root"
-
-      info "filesystem RPM installed successfully"
-    else
-      warn "filesystem RPM not found in ${RPM_STAGING_DIR:-not set}, creating minimal directories"
-      error "aborting"
-      exit 1
-    fi
+    info "filesystem package installed successfully via DNF"
 }
 
 finish_image_rpm() {
@@ -497,19 +516,22 @@ EOF
         sudo chmod +x "${root_fs_dir}/tmp/run-dracut.sh"
 
         # Run dracut via the wrapper script with verbose logging
-        info "RPM mode: Running dracut with verbose output..."
+        # Output goes to log file only to reduce noise in build output
+        info "RPM mode: Running dracut (log: ${BUILD_DIR}/dracut-verbose.log)..."
         INITRAMFS_A_PATH="${BOOT_FC_PATH}/initramfs-a.img"
         # For chroot, use path relative to chroot environment
         INITRAMFS_CHROOT_PATH="/boot/flatcar/initramfs-a.img"
+        local dracut_log="${root_fs_dir}/tmp/dracut-verbose.log"
         sudo chroot "${root_fs_dir}" /tmp/run-dracut.sh \
           --force \
           --no-hostonly \
           --no-early-microcode \
           --verbose \
           --kver "${kernel_version}" \
-            "${INITRAMFS_CHROOT_PATH}" 2>&1 | tee "${root_fs_dir}/tmp/dracut-verbose.log" || {
-            error "RPM mode: dracut failed. Log saved to ${root_fs_dir}/tmp/dracut-verbose.log"
-            cat "${root_fs_dir}/tmp/dracut-verbose.log"
+            "${INITRAMFS_CHROOT_PATH}" > "${dracut_log}" 2>&1 || {
+            error "RPM mode: dracut failed. Log saved to ${dracut_log}"
+            error "Last 50 lines of dracut log:"
+            tail -50 "${dracut_log}" | while read line; do error "  $line"; done
             # Clean up before failing
             sudo rm -f "${root_fs_dir}/tmp/run-dracut.sh"
             sudo umount "${root_fs_dir}/sys" 2>/dev/null || true
@@ -1021,4 +1043,121 @@ finish_image_backup_etc_rpm() {
 
     # NOTE: flatcar-tmpfiles is created earlier in finish_image_rpm() before dracut runs
     # so it gets included in the initramfs
+}
+
+# Escape a string for JSON - handles quotes, backslashes, and control characters
+json_escape() {
+    local str="$1"
+    # Remove control characters (except newline which we'll handle)
+    str=$(echo "$str" | tr -d '\000-\011\013-\037')
+    # Escape backslashes first, then quotes, then convert newlines
+    str=$(echo "$str" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' ')
+    echo "$str"
+}
+
+# Normalize RPM license strings to Portage license file names
+# RPM uses SPDX expressions like "GPL-2.0-or-later AND MIT" or "GPLv2+ or LGPLv2+"
+# This function extracts individual license names and maps them to Portage equivalents
+normalize_rpm_license() {
+    local lic="$1"
+    
+    # Replace SPDX operators with spaces (use word boundaries via spaces)
+    # Handle: " AND ", " OR ", " WITH ", " and ", " or ", " with "
+    local normalized
+    normalized=$(echo " $lic " | \
+        sed -e 's/ AND / /g' \
+            -e 's/ OR / /g' \
+            -e 's/ WITH / /g' \
+            -e 's/ and / /g' \
+            -e 's/ or / /g' \
+            -e 's/ with / /g' \
+            -e 's/[(),]/ /g' \
+            -e 's/  */ /g' \
+            -e 's/^ *//' \
+            -e 's/ *$//')
+    
+    # Map common RPM/SPDX license names to Portage license file names
+    local result=""
+    for l in $normalized; do
+        local mapped="$l"
+        case "$l" in
+            # Skip version numbers, fragments, and empty strings
+            [0-9]*|""|2-Clause|3-Clause) continue ;;
+            # SPDX to Portage mappings - GPL family
+            GPL-2.0-only|GPL-2.0) mapped="GPL-2" ;;
+            GPL-2.0-or-later|GPL-2.0+) mapped="GPL-2+" ;;
+            GPL-3.0-only|GPL-3.0) mapped="GPL-3" ;;
+            GPL-3.0-or-later|GPL-3.0+) mapped="GPL-3+" ;;
+            GPLv2) mapped="GPL-2" ;;
+            GPLv2+) mapped="GPL-2+" ;;
+            GPLv3) mapped="GPL-3" ;;
+            GPLv3+) mapped="GPL-3+" ;;
+            GPL+) mapped="GPL-2+" ;;
+            GPL2) mapped="GPL-2" ;;
+            # LGPL family
+            LGPL-2.0-only|LGPL-2.0) mapped="LGPL-2" ;;
+            LGPL-2.0-or-later|LGPL-2.0+) mapped="LGPL-2+" ;;
+            LGPL-2.1-only|LGPL-2.1) mapped="LGPL-2.1" ;;
+            LGPL-2.1-or-later|LGPL-2.1+) mapped="LGPL-2.1+" ;;
+            LGPL-3.0-only|LGPL-3.0) mapped="LGPL-3" ;;
+            LGPL-3.0-or-later|LGPL-3.0+) mapped="LGPL-3+" ;;
+            LGPLv2) mapped="LGPL-2" ;;
+            LGPLv2+) mapped="LGPL-2+" ;;
+            LGPLv2.1) mapped="LGPL-2.1" ;;
+            LGPLv2.1+) mapped="LGPL-2.1+" ;;
+            LGPLv3) mapped="LGPL-3" ;;
+            LGPLv3+) mapped="LGPL-3+" ;;
+            # Apache
+            Apache-2.0|Apache-2.0\)) mapped="Apache-2.0" ;;
+            ASL|ASL2.0) mapped="Apache-2.0" ;;
+            # BSD family
+            BSD) mapped="BSD" ;;
+            BSD-2-Clause) mapped="BSD-2" ;;
+            BSD-3-Clause|BSD-3) mapped="BSD" ;;
+            BSD-4-Clause) mapped="BSD-4" ;;
+            # MIT and similar
+            MIT|MIT\)|MIT-CMU) mapped="MIT" ;;
+            X11|XFree86) mapped="MIT" ;;
+            # Mozilla
+            MPL-2.0|MPL-2.0\)|MPLv2.0) mapped="MPL-2.0" ;;
+            # Other common licenses
+            ISC) mapped="ISC" ;;
+            Zlib|Zlib\)|zlib) mapped="ZLIB" ;;
+            PSF|PSF-2.0) mapped="PSF-2" ;;
+            Artistic|Artistic\)|Artistic-1.0) mapped="Artistic" ;;
+            Artistic-2.0) mapped="Artistic-2" ;;
+            CC0|CC0-1.0) mapped="CC0-1.0" ;;
+            CC-BY-3.0) mapped="CC-BY-3.0" ;;
+            CC-BY-4.0|CC-BY) mapped="CC-BY-SA-3.0" ;;
+            GFDL-1.3-or-later) mapped="FDL-1.3+" ;;
+            BSL-1.0|BSL-1.0\)) mapped="Boost-1.0" ;;
+            Unlicense|Unlicense\)) mapped="public-domain" ;;
+            OpenSSL|OpenSSL\)) mapped="openssl" ;;
+            OpenLDAP) mapped="OPENLDAP" ;;
+            curl) mapped="curl" ;;
+            Vim) mapped="vim" ;;
+            Inner-Net) mapped="inner-net" ;;
+            # Public domain variations
+            Public|Domain|public|domain) mapped="public-domain" ;;
+            LicenseRef-Fedora-Public-Domain) mapped="public-domain" ;;
+            # Exceptions and modifiers - skip these
+            LLVM-exception) continue ;;
+            exceptions|modification|permitted|advertising|no|Redistributable|Redistributable,) continue ;;
+            # Handle parenthesized versions that sneak through
+            \(GPL+|\(GPLv2|\(GPLv2+|\(MIT|\(Apache-2.0|\(LGPLv3+|\(MPL-2.0|\(Unlicense|\(ASL) continue ;;
+            GPLv2+\)|LGPLv2+\)|LGPLv3+\)) continue ;;
+            GPLv2,) mapped="GPL-2" ;;
+            # Licenses that have different names in portage-stable
+            AFL) mapped="AFL-2.1" ;;
+            Beerware) mapped="BEER-WARE" ;;
+            # Licenses that don't have portage equivalents - suppress warnings
+            # TTWL, HSRL, Rdisc, UCD are obscure licenses from specific packages
+            # Unknown means the package has no specified license
+            TTWL|HSRL|Rdisc|UCD|Unknown) continue ;;
+        esac
+        if [[ -n "$mapped" ]]; then
+            result="$result $mapped"
+        fi
+    done
+    echo "$result"
 }

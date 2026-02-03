@@ -378,34 +378,43 @@ write_licenses() {
         [[ -z $pkg_sep ]] && echo
         pkg_sep="true"
 
-        # Build a list of the required licenses vs the one-of licenses
-        # For example:
-        #   GPL-3+ LGPL-3+ || ( GPL-3+ libgcc libstdc++ ) FDL-1.3+
-        #   required: GPL-3+ LGPL-3+ FDL-1.3+
-        #   one-of: GPL-3+ libgcc libstdc++
-        local req_lics=($(sed 's/|| ([^)]*)//' <<< $lic_str))
-        local opt_lics=($(sed 's/.*|| (\([^)]*\)).*/\1/' <<< $lic_str))
+        local lics homepage description src_uri
+        if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+            # Build a list of the required licenses vs the one-of licenses
+            # For example:
+            #   GPL-3+ LGPL-3+ || ( GPL-3+ libgcc libstdc++ ) FDL-1.3+
+            #   required: GPL-3+ LGPL-3+ FDL-1.3+
+            #   one-of: GPL-3+ libgcc libstdc++
+            local req_lics=($(sed 's/|| ([^)]*)//' <<< $lic_str))
+            local opt_lics=($(sed 's/.*|| (\([^)]*\)).*/\1/' <<< $lic_str))
 
-        # Pick one of the one-of licenses, preferring a GPL license. Otherwise,
-        # pick the first.
-        local opt_lic=""
-        local lic
-        for lic in ${opt_lics[*]}; do
-            if [[ $lic =~ "GPL" ]]; then
-                opt_lic=$lic;
-                break
-            fi;
-        done
-        if [[ -z $opt_lic ]]; then
-            opt_lic=${opt_lics[0]}
+            # Pick one of the one-of licenses, preferring a GPL license. Otherwise,
+            # pick the first.
+            local opt_lic=""
+            local lic
+            for lic in ${opt_lics[*]}; do
+                if [[ $lic =~ "GPL" ]]; then
+                    opt_lic=$lic;
+                    break
+                fi;
+            done
+            if [[ -z $opt_lic ]]; then
+                opt_lic=${opt_lics[0]}
+            fi
+
+            # Remove duplicate licenses
+            lics=$(tr ' ' '\n' <<< "${req_lics[*]} ${opt_lic}" | sort --unique | tr '\n' ' ')
+            homepage="$(get_metadata "$1" "${pkg}" HOMEPAGE)"
+            description="$(get_metadata "$1" "${pkg}" DESCRIPTION)"
+            src_uri="$(get_metadata "$1" "${pkg}" SRC_URI)"
+        else
+            # RPM mode: normalize SPDX license expressions to Portage names
+            lics=$(normalize_rpm_license "$lic_str" | tr ' ' '\n' | sort --unique | tr '\n' ' ')
+            homepage="$(json_escape "$(get_metadata "$1" "${pkg}" HOMEPAGE)")"
+            description="$(json_escape "$(get_metadata "$1" "${pkg}" DESCRIPTION)")"
+            src_uri="$(json_escape "$(get_metadata "$1" "${pkg}" SRC_URI)")"
         fi
 
-        # Remove duplicate licenses
-        local lics=$(tr ' ' '\n' <<< "${req_lics[*]} ${opt_lic}" | sort --unique | tr '\n' ' ')
-
-        local homepage="$(get_metadata "$1" "${pkg}" HOMEPAGE)"
-        local description="$(get_metadata "$1" "${pkg}" DESCRIPTION)"
-        local src_uri="$(get_metadata "$1" "${pkg}" SRC_URI)"
         # Filter out directories, cut type marker, cut timestamp, quote "\", and convert line breaks to "\n"
         # Filter any unicode characters "rev" doesn't handle (currently some ca-certificates files) and
         # replace them with a "?" so that the files can still be opened thanks to shell file name expansion
@@ -457,12 +466,26 @@ EOF
     # Copy all needed licenses to a "common" subdirectory and compress them
     local license_list # define before assignment because it would mask any error
     license_list="$(jq -r '.[] | "\(.licenses | .[])"' "${json_input}" | sort | uniq)"
+    
+    # In RPM mode, normalize license names to Portage equivalents
+    if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+        local normalized_list=""
+        for raw_lic in ${license_list}; do
+            local normalized
+            normalized=$(normalize_rpm_license "$raw_lic")
+            normalized_list="$normalized_list $normalized"
+        done
+        license_list=$(echo "$normalized_list" | tr ' ' '\n' | sort | uniq | grep -v '^$')
+    fi
+    
     local license_dirs=(
         "/mnt/host/source/src/third_party/coreos-overlay/licenses/"
         "/mnt/host/source/src/third_party/portage-stable/licenses/"
         "none"
     )
     for license_file in ${license_list}; do
+        # Skip empty entries
+        [[ -z "$license_file" ]] && continue
         for license_dir in ${license_dirs[*]}; do
             if [ "${license_dir}" = "none" ]; then
                 warn "The license file \"${license_file}\" was not found"

@@ -22,7 +22,6 @@ for arg in "$@"; do
 done
 
 ESSENTIAL_PACKAGES=(
-    "filesystem"
     "grub2"
     "grub2-efi"
     "grub2-efi-binary"

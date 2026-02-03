@@ -309,7 +309,7 @@ install_rpm_with_audit() {
     info "  Will install from RPM: ${#rpm_pkgs[@]} packages"
     info "  Will install from Portage: ${#portage_pkgs[@]} packages"
     info "  Skipped: ${skip_count} packages"
-
+    
     # Step 3: Install RPM packages (base layer)
     if [[ ${#rpm_pkgs[@]} -gt 0 ]]; then
         info "Step 3a: Installing RPM packages..."
@@ -321,6 +321,26 @@ install_rpm_with_audit() {
             error "Attempted to install: ${unique_rpm_pkgs[*]}"
             return 1
         }
+        
+        # Backup the installed RPM package list for later use by write_packages
+        # This is needed because the RPM database may be in a different location
+        # or inaccessible when write_packages runs
+        # Skip for sysext builds (they don't need the backup and it causes permission issues)
+        if [[ -n "${BUILD_DIR:-}" && ! "${BUILD_DIR}" =~ sysext-build ]]; then
+            local backup_file="${BUILD_DIR}/.rpm_packages_installed.txt"
+            info "Backing up RPM package list to ${backup_file}"
+            # Use sudo to remove any existing file (may be owned by root from previous run)
+            sudo rm -f "${backup_file}" 2>/dev/null || true
+            # Query packages - use default format (no second argument to avoid format issues)
+            rpm_query_packages "${root_fs_dir}" | sudo tee "${backup_file}" > /dev/null 2>/dev/null || true
+            # Make it readable and writable by the current user for cleanup
+            sudo chown "$(id -u):$(id -g)" "${backup_file}" 2>/dev/null || true
+            sudo chmod 644 "${backup_file}" 2>/dev/null || true
+            local backup_count=$(wc -l < "${backup_file}" 2>/dev/null || echo 0)
+            info "  Backed up ${backup_count} packages to ${backup_file}"
+        fi
+    else
+        info "Step 3a: No RPM packages to install (all routed to Portage or skipped)"
     fi
 
     # Step 4: Install Portage packages with --nodeps
@@ -337,6 +357,8 @@ install_rpm_with_audit() {
         for pkg in "${unique_portage_pkgs[@]}"; do
             info "DEBUG:   - '$pkg'"
         done
+
+        die "Portage package installation is currently disabled for debugging."
 
         emerge_to_image_explicit "${root_fs_dir}" "${unique_portage_pkgs[@]}" || {
             error "Failed to install Portage packages"

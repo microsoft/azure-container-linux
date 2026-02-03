@@ -199,18 +199,16 @@ rpm_install_to_image() {
         rpm_init_database "${root_fs_dir}" || return 1
     fi
 
-    # Setup repositories (use RPM_LOCAL_CACHE if set for local package cache)
-    local rpm_staging
-    rpm_staging=$(find_rpm_staging_dir)
-    local local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
-    rpm_setup_repos "${root_fs_dir}" "3.0" "${local_cache}"
-
     # Mount pseudo-filesystems for scriptlets
     rpm_mount_pseudofs "${root_fs_dir}"
 
     # Install all packages using dnf
     info "Running: dnf install --installroot=${root_fs_dir} --nodocs --releasever=3.0 -y --nogpgcheck ${packages[*]}"
-    sudo /usr/bin/dnf-3 install --installroot="${root_fs_dir}" --nodocs --releasever=3.0 -y --nogpgcheck "${packages[@]}" 2>&1 | sudo tee /tmp/rpm-install.log
+    sudo /usr/bin/dnf-3 install \
+        --installroot="${root_fs_dir}" \
+        --nodocs \
+        --releasever=3.0 \
+        -y --nogpgcheck "${packages[@]}" 2>&1 | sudo tee /tmp/rpm-install.log
     local dnf_exit_code=${PIPESTATUS[0]}
 
     # Check for errors in output
@@ -249,13 +247,14 @@ rpm_install_to_image() {
 # Query installed RPM packages
 rpm_query_packages() {
     local root_fs_dir="$1"
-    local format="${2:-%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}}"
+    local dbpath="${root_fs_dir}/var/lib/rpm"
 
-    if [[ ! -d "${root_fs_dir}/var/lib/rpm" ]]; then
+    if [[ ! -d "${dbpath}" ]]; then
         return 0
     fi
 
-    sudo rpm --root="${root_fs_dir}" -qa --qf "${format}\n" | sort
+    # Use --dbpath only and simple -qa (default format is NVRA which is what we want)
+    sudo rpm --dbpath="${dbpath}" -qa 2>/dev/null | sort
 }
 
 # Get RPM package metadata
@@ -263,6 +262,7 @@ rpm_get_metadata() {
     local root_fs_dir="$1"
     local package="$2"
     local key="$3"
+    local dbpath="${root_fs_dir}/var/lib/rpm"
 
     local format=""
     case "$key" in
@@ -273,10 +273,23 @@ rpm_get_metadata() {
         ARCH) format="%{ARCH}" ;;
         SUMMARY) format="%{SUMMARY}" ;;
         DESCRIPTION) format="%{DESCRIPTION}" ;;
+        CONTENTS) 
+            # For RPM, list files in the package
+            sudo rpm --dbpath="${dbpath}" -ql "${package}" 2>/dev/null | sed 's/^/obj /' 
+            return
+            ;;
+        SRC_URI)
+            # RPM doesn't have SRC_URI, return URL instead
+            format="%{URL}"
+            ;;
         *) format="%{${key}}" ;;
     esac
 
-    sudo rpm --root="${root_fs_dir}" -q "${package}" --qf "${format}\n" 2>/dev/null
+    # Use --dbpath only (not --root which doesn't work correctly)
+    local result
+    result=$(sudo rpm --dbpath="${dbpath}" -q "${package}" --qf "${format}" 2>/dev/null)
+    # Sanitize output - remove control characters that break JSON
+    echo "$result" | tr -d '\000-\011\013-\037'
 }
 
 # Check if package is available in repository
