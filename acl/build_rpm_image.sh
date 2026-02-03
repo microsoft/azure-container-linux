@@ -58,6 +58,9 @@
 #   ./build_rpm_image.sh --console-user=core --run-script="whoami"
 #
 # Environment Variables:
+#   ACL_SDK_IMAGE           Override SDK container image (e.g., acldevel.azurecr.io/sdk:4459.0.0-rpm)
+#                           Bypasses auto-detection from version.txt when set
+#   NO_TTY                  Set to "true" to disable TTY allocation (for CI pipelines)
 #   RPM_REPO_URL            Azure Linux repository URL
 #   RPM_ARCH                Target architecture (default: x86_64)
 #   BUILD_ID                Build identifier for versioning
@@ -128,6 +131,34 @@ warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 debug()   { [[ "${DEBUG:-false}" == "true" ]] && echo -e "${BLUE}[DEBUG]${NC} $*" || true; }
 section() { echo -e "\n${GREEN}=========================================${NC}"; echo -e "${GREEN}$*${NC}"; echo -e "${GREEN}=========================================${NC}\n"; }
+
+# Get SDK container image to use for builds
+# If ACL_SDK_IMAGE is set, use it directly (allows CI to specify pre-built SDK)
+# Otherwise, auto-detect from version.txt
+get_sdk_image() {
+    if [[ -n "${ACL_SDK_IMAGE:-}" ]]; then
+        echo "${ACL_SDK_IMAGE}"
+        return
+    fi
+
+    # Auto-detect from version.txt
+    source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
+    local sdk_version
+    sdk_version=$(get_sdk_version_from_versionfile)
+    local docker_sdk_vernum
+    docker_sdk_vernum=$(vernum_to_docker_image_version "$sdk_version")
+    echo "${sdk_container_common_registry}/flatcar-sdk-all:${docker_sdk_vernum}"
+}
+
+# Get TTY flag for run_sdk_container
+# Returns "-t" for local dev (TTY available), empty for CI pipelines
+get_tty_flag() {
+    if [[ "${NO_TTY:-false}" == "true" ]]; then
+        echo ""
+    else
+        echo "-t"
+    fi
+}
 
 # Detect if running on Azure Linux 3
 is_azure_linux_3() {
@@ -767,7 +798,7 @@ update_sdk_container() {
 
     # Ensure base SDK container exists
     info "Ensuring base SDK container is available..."
-    ./run_sdk_container -t hostname
+    ./run_sdk_container $(get_tty_flag) hostname
 
     # Update SDK container with RPM tools
     info "Installing RPM/dnf tools in SDK container..."
@@ -848,18 +879,15 @@ build_image() {
     # Run the build inside SDK container
     info "Starting SDK container and build process..."
 
-    # Source SDK common functions to get version info
-    source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
-    local sdk_version=$(get_sdk_version_from_versionfile)
-    local docker_sdk_vernum=$(vernum_to_docker_image_version "$sdk_version")
-    local sdk_image="${sdk_container_common_registry}/flatcar-sdk-all:${docker_sdk_vernum}"
+    local sdk_image
+    sdk_image=$(get_sdk_image)
 
     info "Using SDK image: ${sdk_image}"
     # Use -C to specify the custom image (skips registry download)
     # Use --rm to remove old container and ensure environment variables are set correctly
     "${SCRIPT_DIR}/run_sdk_container" \
         --rm \
-        -t \
+        $(get_tty_flag) \
         -C "${sdk_image}" \
         -- \
         ./build_image "${build_args[@]}"
@@ -1591,11 +1619,8 @@ build_vm_image() {
             ;;
     esac
 
-    # Source SDK common functions to get version info
-    source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
-    local sdk_version=$(get_sdk_version_from_versionfile)
-    local docker_sdk_vernum=$(vernum_to_docker_image_version "$sdk_version")
-    local sdk_image="${sdk_container_common_registry}/flatcar-sdk-all:${docker_sdk_vernum}"
+    local sdk_image
+    sdk_image=$(get_sdk_image)
 
     # Build args for image_to_vm.sh
     local build_args=(
@@ -1611,7 +1636,7 @@ build_vm_image() {
     info "Building ${vm_type} VM image using SDK container..."
     "${SCRIPT_DIR}/run_sdk_container" \
         --rm \
-        -t \
+        $(get_tty_flag) \
         -C "${sdk_image}" \
         -- \
         ./image_to_vm.sh "${build_args[@]}"
