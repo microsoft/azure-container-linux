@@ -77,6 +77,7 @@ fi
 set -x
 
 kola run \
+    ${distro_flag:-} \
     --board="${CIA_ARCH}-usr" \
     --parallel="${QEMU_PARALLEL}" \
     --platform=qemu \

@@ -47,6 +47,7 @@ run_kola_tests() {
     # Align timeout with ore azure gc --duration parameter
     timeout --signal=SIGQUIT 6h \
       kola run \
+      ${distro_flag:-} \
       --board="${board}" \
       --basename="${basename}" \
       --parallel="${AZURE_PARALLEL}" \

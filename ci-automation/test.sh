@@ -170,12 +170,17 @@ function _test_run_impl() {
             pull_policy="never"
         fi
 
+        local distro_flag=""
+        [[ "${PACKAGE_SOURCE_MODE:-}" == "RPM" ]] && distro_flag="--distro=acl"
+
         # Ignore retcode since tests are flaky. We'll re-run failed tests and
         #  determine success based on test results (tapfile).
         set +e
         touch sdk_container/.env
         docker run --pull "${pull_policy}" --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
-          -w /work -v "$PWD":/work "${mantle_ref}" \
+          -w /work -v "$PWD":/work \
+          -e distro_flag="${distro_flag}" \
+          "${mantle_ref}" \
          bash -c "git config --global --add safe.directory /work && \
                   source sdk_container/.env && \
                   ci-automation/vendor-testing/${image_escaped}.sh ${common_test_args_escaped[*]} ${tapfile_escaped} ${tests_escaped[*]}"
