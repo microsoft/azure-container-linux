@@ -1,6 +1,5 @@
 [Match]
-Kind=!*
-Type=ether
+Name=eth0
 
 [Network]
 DHCP=yes

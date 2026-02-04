@@ -303,8 +303,8 @@ finish_image_rpm() {
             # Add initrd-cleanup.service and initrd-switch-root.service to Conflicts= line
             # Conflicts triggers stop when these units start
             sudo sed -i 's/Conflicts=initrd-switch-root.target/Conflicts=initrd-switch-root.target initrd-switch-root.service initrd-cleanup.service/' "${network_cleanup_svc}"
-            # Add StopWhenUnneeded=true so service stops as soon as nothing needs it
-            sudo sed -i '/RemainAfterExit=true/a StopWhenUnneeded=true' "${network_cleanup_svc}"
+            # Add StopWhenUnneeded=true to end of [Unit] section so service stops as soon as nothing needs it
+            sudo sed -i '/^ConditionPathExists=\/etc\/initrd-release$/a StopWhenUnneeded=true' "${network_cleanup_svc}"
             # Make ExecStop commands optional with - prefix (won't fail if binary missing during switch-root)
             sudo sed -i 's|ExecStop=/usr/bin/ip|ExecStop=-/usr/bin/ip|g' "${network_cleanup_svc}"
             
@@ -440,6 +440,12 @@ EOF
         cat <<'EOF' | sudo tee "${tmpfiles_dir}/base_image_var.conf" > /dev/null
 # Additional /var structure for bootengine
 d /var/lib/systemd/coredump 0755 root root -
+EOF
+
+        # chrony.conf - time synchronization daemon directories
+        cat <<'EOF' | sudo tee "${tmpfiles_dir}/chrony.conf" > /dev/null
+# Chrony time synchronization daemon directories
+d /var/lib/chrony 0755 root root -
 EOF
 
         # Create SELinux config for Ignition - it checks this even when SELinux is disabled
@@ -830,6 +836,11 @@ SUDOERS_EOF
     sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants"
     sudo ln -sf ../etc-overlay-populate.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/etc-overlay-populate.service"
     info "RPM mode: Enabled etc-overlay-populate.service in sysinit.target"
+
+    # Install update-ssh-keys replacement script
+    info "RPM mode: Installing update-ssh-keys replacement script"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/update-ssh-keys" "${root_fs_dir}/usr/bin/update-ssh-keys"
+    sudo chmod +x "${root_fs_dir}/usr/bin/update-ssh-keys"
 
     # Create systemd-networkd configuration for DHCP
     info "RPM mode: Creating systemd-networkd configuration for DHCP"

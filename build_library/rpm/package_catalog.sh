@@ -217,7 +217,7 @@ declare -gA PACKAGE_CATALOG=(
 
     # Flatcar-specific packages
     ["app-admin/ignition"]="ignition"
-    ["coreos-base/afterburn"]="afterburn-dracut" # pulls afterburn as well
+    ["coreos-base/afterburn"]="afterburn"
     ["coreos-base/flatcar-base"]="azurelinux-release"
     ["sys-apps/ignition"]="ignition"
 
@@ -225,7 +225,7 @@ declare -gA PACKAGE_CATALOG=(
     ["app-emulation/wa-linux-agent"]="WALinuxAgent"
     ["app-emulation/hv-daemons"]="hyperv-daemons"
     ["net-misc/chrony"]="chrony"
-    ["dev-python/urllib3"]="python3-urllib3"
+    ["dev-python/urllib3"]="python3-urllib3 python-setuptools"
     ["sys-fs/inotify-tools"]="inotify-tools"
     
     # Flatcar-only packages (skipped in RPM mode)

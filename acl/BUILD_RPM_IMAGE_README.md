@@ -29,12 +29,16 @@ This RPM approach provides:
 - **expect**: For serial console automation (VM testing)
 - **curl**: For downloading RPMs
 - **createrepo_c**: For creating local RPM repository metadata
+- **Azure CLI**: Only for Azure VM testing
 
 Install on Debian/Ubuntu:
 
 ```bash
 sudo apt-get install docker-ce qemu-kvm libvirt-daemon-system libvirt-clients \
   bridge-utils expect curl createrepo-c golang-1.23 rpm genisoimage ovmf
+
+# For Azure VM testing, also install Azure CLI:
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 ```
 
 **Note**: `golang-1.23` is explicitly pinned because the default `golang` metapackage installs Go 1.22. The `rpm` package provides `rpmkeys` needed by the build system. The `genisoimage` package is needed for Ignition ISO creation. The `ovmf` package provides UEFI firmware for VM testing.
@@ -77,6 +81,18 @@ The build script uses Ignition to provision SSH keys into the VM. Generate an SS
 ```
 
 The script will automatically use keys from `~/.ssh/id_*.pub` when starting the VM.
+
+### Azure Authentication (Required for Azure VM Testing)
+
+For testing on an Azure VM, you must be authenticated to Azure CLI:
+
+```bash
+# Login to Azure (interactive)
+az login
+
+# Or login with service principal
+az login --service-principal -u <app-id> -p <password> --tenant <tenant>
+```
 
 ### System Requirements
 
@@ -202,18 +218,44 @@ Build the Flatcar production image using hybrid package sources.
 
 ### Phase 4: Build VM Image (Optional)
 
-Convert the production image to a VM-ready format.
+Convert the production image to a VM-ready format. The script supports building two different types of images:
+
+- QEMU image (default)
+- Azure VHD
 
 ```bash
-# Build VM image after main build
+# Build a QEMU VM image after main image build
+./acl/build_rpm_image.sh --build-vm-image --vm-typ=qemu
+
+# To support backward compatibility, when --vm-type is NOT specified, the tool will build a QEMU image, by default
 ./acl/build_rpm_image.sh --build-vm-image
+
+# Build an Azure VHD image
+./acl/build_rpm_image.sh --build-vm-image --vm-typ=azure
 ```
 
-**VM image output:** `__build__/images/images/amd64-usr/latest/acl_production_qemu_uefi_image.img`
+#### VM Image Output
+
+- QEMU:
+
+```bash
+__build__/images/images/amd64-usr/latest/acl_production_qemu_uefi_image.img
+```
+
+- Azure:
+
+```bash
+__build__/images/images/amd64-usr/latest/acl_production_azure_image.vhd
+```
 
 ### Phase 5: Start VM and Run Tests
 
-#### Using build_rpm_image.sh (Integrated Testing)
+The `acl/build_rpm_image.sh` script can be used to start an ACL VM and run integrated tests on it. The script supports starting a VM of two different types:
+
+- QEMU image (default)
+- Azure VHD
+
+1. **Start a QEMU VM**
 
 The script automatically configures libvirt (default network, URI) on Azure Linux 3. On Ubuntu, libvirt's networking works out-of-the-box.
 
@@ -238,22 +280,54 @@ The script automatically configures libvirt (default network, URI) on Azure Linu
   --run-script=./acl/tests/run-container-test.sh
 ```
 
-**SSH Access (Default):**
+Subsequent runs will clean up the VM automatically. To manually clean up the VM:
+
+```bash
+# Stop VM
+virsh destroy acl
+
+# Remove VM
+virsh undefine --nvram acl
+```
+
+1. **Start an Azure VM**
+
+For Azure VM testing, ensure that you have Azure CLI downloaded and are authenticated into Azure. The script automatically validates and if necessary, creates the required Azure infrastructure. Resources are created inside default Azure subscription and region. To override, use `--az-sub-id` and `--az-region` as outlined below.
+
+By default, before starting a new Azure VM, all the pre-existing resource groups and VMs created by the current user earlier are scheduled for deletion. If you want to keep your older VMs, override this behavior with `--no-cleanup`.
+
+```bash
+# Basic Azure VM testing
+./acl/build_rpm_image.sh --start-vm --vm-type=azure
+
+# Override Azure subscription, region, and storage account for uploading the Azure VHD
+./acl/build_rpm_image.sh --start-vm --vm-type=azure \
+  --az-sub-id=<custom-subscription-id> \
+  --az-region=<custom-region> \
+  --az-storage-account=<custom-storage-account-name>
+
+# Start a new Azure VM while preserving pre-existing VMs
+./acl/build_rpm_image.sh --start-vm --vm-type=azure --no-cleanup
+```
+
+#### Access the VM
+
+1. **SSH Access (Default):**
 
 - The script generates an Ignition ISO with your SSH public keys from `~/.ssh/id_*.pub`
 - SSH user: `core` (default) - customize with `--ssh-user=USER`
 - Ignition runs on first boot only
 
-**Serial Console Access (Alternative):**
+1. **Serial Console Access (Alternative):**
 
 - Use `--use-serial` flag for console-based script execution
 - Uses `expect` to automate console login
 - Customize: `--console-user=core --console-password=mypass`
 
-**Parity Data Collection:**
+#### Collect Parity Data
 
 ```bash
-# Collect OS data from VM for parity  analysis against upstream flatcar
+# Collect OS data from VM for parity analysis against upstream flatcar
 ./acl/build_rpm_image.sh --start-vm --parity
 
 # Or specify custom os-diff directory
@@ -293,21 +367,9 @@ The script automatically configures libvirt (default network, URI) on Azure Linu
 
 - For kernel config comparison, use `acl/kconfig_diff.sh` with two comparison-data.json files (requires diffconfig from kernel-headers)
 
-#### Cleanup
-
-Subsequent runs will clean up the VM automatically. To manually clean up the VM:
-
-```bash
-# Stop VM
-virsh destroy acl
-
-# Remove VM
-virsh undefine --nvram acl
-```
-
 ### Phase 6: Run Flatcar E2E Tests (Optional)
 
-Run the full Flatcar E2E test suite against the built VM image:
+Run the full Flatcar E2E test suite against the built QEMU VM image:
 
 ```bash
 # Run Flatcar E2E tests
