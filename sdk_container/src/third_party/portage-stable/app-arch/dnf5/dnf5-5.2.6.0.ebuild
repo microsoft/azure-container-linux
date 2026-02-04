@@ -14,7 +14,7 @@ SRC_URI="https://github.com/rpm-software-management/dnf5/archive/${PV}/${P}.tar.
 LICENSE="GPL-2 LGPL-2.1"
 SLOT="0"
 KEYWORDS="amd64 arm64"
-IUSE="comps modulemd python test zchunk"
+IUSE="+comps modulemd python test zchunk"
 REQUIRED_USE="python? ( ${PYTHON_REQUIRED_USE} )"
 
 RESTRICT="!test? ( test )"

@@ -16,13 +16,6 @@ RUN chown sdk:sdk /mnt/host/source
 # Use the actual source location since /var/lib/portage/repos/coreos-overlay doesn't exist yet
 RUN sudo bash -c 'cd /mnt/host/source/src/third_party/coreos-overlay/coreos-devel/sdk-depends && for ebuild in *.ebuild; do ebuild "$ebuild" manifest; done'
 
-# Explicitly set USE flags for RPM/DNF5 dependencies in /etc/portage before update_chroot runs
-# This ensures the flags are active when sdk-depends installs packages
-RUN sudo mkdir -p /etc/portage/package.use && \
-    echo 'app-arch/rpm python caps acl sqlite zstd' | sudo tee /etc/portage/package.use/rpm-dnf && \
-    echo 'app-arch/dnf5 comps -modulemd -python -test -zchunk' | sudo tee -a /etc/portage/package.use/rpm-dnf && \
-    echo 'dev-libs/libsolv comps rpm' | sudo tee -a /etc/portage/package.use/rpm-dnf
-
 RUN /home/sdk/sdk_entry.sh ./update_chroot --toolchain_boards="amd64-usr arm64-usr"
 
 # Force rebuild of packages that need new USE flags

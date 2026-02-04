@@ -12,7 +12,7 @@ SRC_URI="https://github.com/openSUSE/libsolv/archive/${PV}/${P}.tar.gz"
 LICENSE="BSD"
 SLOT="0/1"
 KEYWORDS="amd64 arm64"
-IUSE="comps rpm"
+IUSE="+comps +rpm"
 
 RDEPEND="
 	sys-libs/zlib

@@ -197,11 +197,3 @@ dev-lang/rust -system-llvm
 # disable mpfr in gawk, this ends up being pulled into initrd, making
 # it grow by another 2mb
 sys-apps/gawk -mpfr
-
-# RPM and DNF5 tools for hybrid Azure Linux + Flatcar builds
-app-arch/rpm python caps acl sqlite zstd
-app-arch/dnf5 comps -modulemd -python -test -zchunk
-dev-libs/libsolv rpm
-dev-libs/glib introspection
-dev-python/pygobject -cairo
-dev-libs/libcomps python
