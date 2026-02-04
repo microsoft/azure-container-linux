@@ -818,19 +818,6 @@ EOF
     finish_image_backup_etc_rpm "${root_fs_dir}"  
   fi
 
-  # IMPORTANT: For first-boot detection with bootengine's /etc overlay:
-  # - The upperdir (/etc) needs the COREOS_BLANK_MACHINE_ID placeholder for initrd-setup-root to detect and remove
-  # - The lowerdir (/usr/share/flatcar/etc) must NOT have machine-id, so after overlay mount no machine-id is visible
-  # bootengine flow:
-  # 1. initrd-setup-root finds placeholder in /sysroot/etc/machine-id (upperdir) and removes it
-  # 2. initrd-setup-root mounts overlay with lowerdir=/usr/share/flatcar/etc
-  # 3. If lowerdir has machine-id, it becomes visible after overlay mount - breaking first-boot detection!
-  # Solution: Remove machine-id from lowerdir so systemd sees no /etc/machine-id after overlay mount
-  if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
-    info "Removing machine-id from /usr/share/flatcar/etc (overlay lowerdir) for first-boot detection"
-    sudo rm -f "${root_fs_dir}/usr/share/flatcar/etc/machine-id"
-  fi
-
   # Remove the rootfs state as it should be recreated through the
   # tmpfiles and may not be present on updating machines. This
   # makes sure our tests cover the case of missing files in the
@@ -865,18 +852,6 @@ EOF
           ;;
       esac
     done
-
-    # Re-create /etc/machine-id with COREOS_BLANK_MACHINE_ID after deletion.
-    # bootengine's initrd-setup-root checks /sysroot/etc/machine-id BEFORE
-    # mounting the overlay, so it must exist in the upperdir (rootfs).
-    # When it finds this placeholder value, it removes the file, allowing
-    # systemd to detect first boot (ConditionFirstBoot=yes passes).
-    if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
-      local COREOS_BLANK_MACHINE_ID="42000000000000000000000000000042"
-      info "RPM mode: Creating /etc/machine-id with blank placeholder for first-boot detection"
-      sudo mkdir -p "${root_fs_dir}/etc"
-      echo "${COREOS_BLANK_MACHINE_ID}" | sudo tee "${root_fs_dir}/etc/machine-id" > /dev/null
-    fi
   else
     # For the developer container we still need to remove the resolv.conf symlink to /run
     # because the resolved-managed file is not present there

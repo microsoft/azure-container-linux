@@ -1035,6 +1035,17 @@ finish_image_backup_etc_rpm() {
 
     # NOTE: flatcar-tmpfiles is created earlier in finish_image_rpm() before dracut runs
     # so it gets included in the initramfs
+  
+    # IMPORTANT: For first-boot detection with bootengine's /etc overlay:
+    # - The rootfs upperdir (/etc) should NOT contain machine-id - it will be deleted with the rest of /etc
+    # - The lowerdir (/usr/share/flatcar/etc) must NOT have machine-id either
+    # After overlay mount, no /etc/machine-id exists, so systemd triggers first-boot logic.
+    # bootengine's initrd-setup-root handles both cases:
+    # 1. If machine-id exists with COREOS_BLANK_MACHINE_ID placeholder -> removes it
+    # 2. If machine-id doesn't exist -> that's fine, no action needed
+    # Either way, after overlay mount systemd sees no /etc/machine-id and first boot is detected.
+    info "Removing machine-id from /usr/share/flatcar/etc (overlay lowerdir) for first-boot detection"
+    sudo rm -f "${root_fs_dir}/usr/share/flatcar/etc/machine-id"
 }
 
 # Escape a string for JSON - handles quotes, backslashes, and control characters
