@@ -1915,7 +1915,8 @@ create_gallery_image_version() {
         --os-vhd-storage-account "$storage_account_resource_id" \
         --target-regions "$AZ_REGION" \
         --replica-count 1 \
-        --storage-account-type Standard_LRS
+        --storage-account-type Standard_LRS \
+        --replication-mode Shallow
     
     info "✓ Gallery image version created: $image_version"
 }
@@ -1970,6 +1971,8 @@ create_vm_azure() {
     # Add security features based on SECURE_BOOT_ENABLED variable
     if [[ "$SECURE_BOOT_ENABLED" == "true" ]]; then
         vm_create_args+=(--enable-secure-boot true)
+    else
+        vm_create_args+=(--enable-secure-boot false)
     fi
     az vm create "${vm_create_args[@]}"
     
