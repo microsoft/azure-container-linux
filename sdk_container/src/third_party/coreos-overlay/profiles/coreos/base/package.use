@@ -198,9 +198,9 @@ dev-lang/rust -system-llvm
 # it grow by another 2mb
 sys-apps/gawk -mpfr
 
-# RPM and DNF tools for hybrid Azure Linux + Flatcar builds
+# RPM and DNF5 tools for hybrid Azure Linux + Flatcar builds
 app-arch/rpm python caps acl sqlite zstd
-dev-libs/libdnf python
+app-arch/dnf5 comps -modulemd -python -test -zchunk
 dev-libs/libsolv rpm
 dev-libs/glib introspection
 dev-python/pygobject -cairo

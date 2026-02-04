@@ -103,7 +103,7 @@ The build system requires the Flatcar SDK container, which includes all build to
 
 - First time setup
 - After updating SDK dependencies
-- When RPM/dnf tools need updates
+- When RPM/dnf5 tools need updates
 - If SDK container is corrupted
 - To be confirmed: Also needed after changing a commit.
 
@@ -127,7 +127,7 @@ Download required RPM packages from Azure Linux repositories:
 - Creates local repository metadata with `createrepo_c`
 
 Note that only a subset of packages is downloaded, as majority of packages is
-downloaded during the image build using `dnf`.
+downloaded during the image build using `dnf5`.
 
 **Staging directory:** `__build__/rpm-staging/`
 

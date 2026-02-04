@@ -12,45 +12,38 @@ RUN echo 'export FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -
 
 RUN chown sdk:sdk /mnt/host/source
 
-# Regenerate manifest for sdk-depends to pick up the new r57 revision with RPM/DNF
+# Regenerate manifest for sdk-depends to pick up the new r57 revision with RPM/DNF5
 # Use the actual source location since /var/lib/portage/repos/coreos-overlay doesn't exist yet
 RUN sudo bash -c 'cd /mnt/host/source/src/third_party/coreos-overlay/coreos-devel/sdk-depends && for ebuild in *.ebuild; do ebuild "$ebuild" manifest; done'
 
-# Explicitly set USE flags for RPM/DNF dependencies in /etc/portage before update_chroot runs
+# Explicitly set USE flags for RPM/DNF5 dependencies in /etc/portage before update_chroot runs
 # This ensures the flags are active when sdk-depends installs packages
 RUN sudo mkdir -p /etc/portage/package.use && \
     echo 'app-arch/rpm python caps acl sqlite zstd' | sudo tee /etc/portage/package.use/rpm-dnf && \
-    echo 'dev-libs/libdnf python' | sudo tee -a /etc/portage/package.use/rpm-dnf && \
-    echo 'dev-libs/libsolv rpm' | sudo tee -a /etc/portage/package.use/rpm-dnf && \
-    echo 'dev-libs/glib introspection' | sudo tee -a /etc/portage/package.use/rpm-dnf && \
-    echo 'dev-python/pygobject -cairo' | sudo tee -a /etc/portage/package.use/rpm-dnf && \
-    echo 'dev-libs/libcomps python' | sudo tee -a /etc/portage/package.use/rpm-dnf
-
-# Unmask introspection USE flag
-RUN sudo mkdir -p /etc/portage/profile && \
-    echo '-introspection' | sudo tee /etc/portage/profile/use.mask
+    echo 'app-arch/dnf5 comps -modulemd -python -test -zchunk' | sudo tee -a /etc/portage/package.use/rpm-dnf && \
+    echo 'dev-libs/libsolv comps rpm' | sudo tee -a /etc/portage/package.use/rpm-dnf
 
 RUN /home/sdk/sdk_entry.sh ./update_chroot --toolchain_boards="amd64-usr arm64-usr"
 
-# Force rebuild of packages that need new USE flags (especially libcomps with python)
+# Force rebuild of packages that need new USE flags
 # The base SDK may have these installed without the correct USE flags
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n --changed-use --deep dev-libs/libcomps dev-libs/libdnf dev-libs/libsolv app-arch/rpm sys-apps/dnf'
+RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n --changed-use --deep dev-cpp/toml11 dev-libs/libcomps dev-libs/libsolv app-arch/rpm app-arch/dnf5'
 
 RUN /home/sdk/sdk_entry.sh ./setup_board --board="arm64-usr" --regen_configs
 RUN /home/sdk/sdk_entry.sh ./setup_board --board="amd64-usr" --regen_configs
 
-# RPM and DNF tools are now installed automatically via sdk-depends
+# RPM and DNF5 tools are now installed automatically via sdk-depends
 # (see sdk_container/src/third_party/coreos-overlay/coreos-devel/sdk-depends/sdk-depends-0.0.1-r57.ebuild)
-# Verify DNF installation and dependencies
-RUN echo "=== Checking for DNF installation ===" && \
-    find /usr -name 'dnf*' -type f 2>/dev/null | grep -E '(bin|sbin)' || echo "No dnf files found"
-RUN test -x /usr/bin/dnf-3 || (echo "ERROR: dnf-3 not found at /usr/bin/dnf-3" && exit 1)
-RUN echo "Found DNF at: /usr/bin/dnf-3"
-RUN echo "=== Checking for libcomps Python module ===" && \
-    python3 -c "import libcomps; print('libcomps module loaded successfully')" || \
-    (echo "ERROR: libcomps Python module not found - check if dev-libs/libcomps was installed with USE=python" && exit 1)
-RUN echo "=== Testing DNF ===" && \
-    /usr/bin/dnf-3 --version || (echo "ERROR: dnf-3 failed to run" && exit 1)
+# Verify DNF5 installation
+RUN echo "=== Checking for DNF5 installation ===" && \
+    find /usr -name 'dnf5*' -type f 2>/dev/null | grep -E '(bin|sbin)' || echo "No dnf5 files found"
+RUN test -x /usr/bin/dnf5 || (echo "ERROR: dnf5 not found at /usr/bin/dnf5" && exit 1)
+RUN echo "Found DNF5 at: /usr/bin/dnf5"
+RUN echo "=== Testing DNF5 ===" && \
+    /usr/bin/dnf5 --version || (echo "ERROR: dnf5 failed to run" && exit 1)
+
+# Remove problematic compatibility alias that references missing builddep plugin
+RUN sudo rm -f /usr/share/dnf5/aliases.d/compatibility-plugins.conf
 
 # Restore original .bashrc to remove sandbox disablement
 RUN mv /home/sdk/.bashrc.bak /home/sdk/.bashrc

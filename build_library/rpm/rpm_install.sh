@@ -183,7 +183,8 @@ rpm_umount_pseudofs() {
     fi
 }
 
-# Install RPM packages to image using dnf
+# Install RPM packages to image using dnf5
+# This is the core installation function - use rpm_install_packages() for the full workflow
 rpm_install_to_image() {
     local root_fs_dir="$1"; shift
     local packages=("$@")
@@ -192,23 +193,26 @@ rpm_install_to_image() {
         return 0
     fi
 
-    info "Installing ${#packages[@]} RPM packages using dnf: ${packages[*]}"
+    info "Installing ${#packages[@]} RPM packages using dnf5: ${packages[*]}"
 
-    # Initialize RPM database if needed
-    if [[ ! -d "${root_fs_dir}/var/lib/rpm" ]]; then
-        rpm_init_database "${root_fs_dir}" || return 1
-    fi
+    # Build dnf5 command arguments (always use --nodocs to minimize image size)
+    # Note: Do NOT use --use-host-config - we want dnf5 to use the repos
+    # configured in the installroot (set up by rpm_setup_repos), not the host
+    # TODO: if we use RPM for setting up Azure Linux repos, we might want to revisit this.
+    local dnf_args=(
+        --installroot="${root_fs_dir}"
+        --releasever=3.0
+        --nodocs
+        -y
+        --nogpgcheck
+    )
 
     # Mount pseudo-filesystems for scriptlets
     rpm_mount_pseudofs "${root_fs_dir}"
 
-    # Install all packages using dnf
-    info "Running: dnf install --installroot=${root_fs_dir} --nodocs --releasever=3.0 -y --nogpgcheck ${packages[*]}"
-    sudo /usr/bin/dnf-3 install \
-        --installroot="${root_fs_dir}" \
-        --nodocs \
-        --releasever=3.0 \
-        -y --nogpgcheck "${packages[@]}" 2>&1 | sudo tee /tmp/rpm-install.log
+    # Install all packages using dnf5
+    info "Running: dnf5 install ${dnf_args[*]} ${packages[*]}"
+    sudo /usr/bin/dnf5 install "${dnf_args[@]}" "${packages[@]}" 2>&1 | sudo tee /tmp/rpm-install.log
     local dnf_exit_code=${PIPESTATUS[0]}
 
     # Check for errors in output
@@ -242,6 +246,33 @@ rpm_install_to_image() {
 
     info "Successfully installed ${#packages[@]} RPM packages"
     return 0
+}
+
+# High-level function to install RPM packages with full setup
+# This handles: database init, repository setup, and package installation
+# 
+# Usage: rpm_install_packages <root_fs_dir> <packages...>
+#
+rpm_install_packages() {
+    local root_fs_dir="$1"; shift
+    local packages=("$@")
+    
+    if [[ ${#packages[@]} -eq 0 ]]; then
+        warn "rpm_install_packages: No packages specified"
+        return 0
+    fi
+
+    # Initialize RPM database if needed
+    rpm_init_database "${root_fs_dir}" || return 1
+
+    # Setup repositories
+    local rpm_staging
+    rpm_staging=$(find_rpm_staging_dir 2>/dev/null || echo "")
+    local local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
+    rpm_setup_repos "${root_fs_dir}" "3.0" "${local_cache}"
+
+    # Install packages
+    rpm_install_to_image "${root_fs_dir}" "${packages[@]}"
 }
 
 # Query installed RPM packages
@@ -315,11 +346,13 @@ rpm_repoquery() {
 }
 
 # Export functions
+export -f find_rpm_staging_dir
 export -f rpm_init_database
 export -f rpm_setup_repos
 export -f rpm_mount_pseudofs
 export -f rpm_umount_pseudofs
 export -f rpm_install_to_image
+export -f rpm_install_packages
 export -f rpm_query_packages
 export -f rpm_get_metadata
 export -f rpm_repoquery

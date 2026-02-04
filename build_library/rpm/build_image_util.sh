@@ -105,31 +105,12 @@ start_image_rpm() {
     info "RPM mode: Installing filesystem RPM instead of baselayout"
     # Install filesystem RPM to provide basic directory structure
     # This replaces baselayout and creates /usr/lib, /etc, /bin -> usr/bin symlinks, etc.
-    # Use DNF to install so it's properly recorded in the RPM database
     
-    # Initialize RPM database first
-    info "Initializing RPM database in ${root_fs_dir}"
-    sudo mkdir -p "${root_fs_dir}/var/lib/rpm"
-    sudo rpm --root="${root_fs_dir}" --initdb
-    
-    # Install filesystem using DNF
-    info "Installing filesystem package via DNF"
-    local rpm_staging
-    rpm_staging=$(find_rpm_staging_dir 2>/dev/null || echo "")
-    local local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
-    
-    # Setup repositories
-    rpm_setup_repos "${root_fs_dir}" "3.0" "${local_cache}"
-    
-    # Install filesystem package via DNF
-    sudo /usr/bin/dnf-3 install \
-        --installroot="${root_fs_dir}" \
-        --releasever=3.0 \
-        -y --nogpgcheck \
-        filesystem 2>&1 | grep -v "^$" || {
-            error "Failed to install filesystem package"
-            return 1
-        }
+    # Use the unified rpm_install_packages function
+    rpm_install_packages "${root_fs_dir}" filesystem || {
+        error "Failed to install filesystem package"
+        return 1
+    }
 
     # Create additional directories that may be needed
     # Create /proc and /sys directories
@@ -140,7 +121,7 @@ start_image_rpm() {
     sudo mkdir -p "${root_fs_dir}/root"
     sudo chmod 700 "${root_fs_dir}/root"
 
-    info "filesystem package installed successfully via DNF"
+    info "filesystem package installed successfully"
 }
 
 finish_image_rpm() {

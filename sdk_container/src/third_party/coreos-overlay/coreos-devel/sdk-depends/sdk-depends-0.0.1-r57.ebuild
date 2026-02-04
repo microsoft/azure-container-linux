@@ -66,7 +66,7 @@ DEPEND="${DEPEND}
 # RPM and DNF tools for hybrid Azure Linux + Flatcar builds
 DEPEND="${DEPEND}
 	app-arch/rpm
-	sys-apps/dnf
+	>=app-arch/dnf5-5.2.6.0
 "
 
 # These packages are pulled indirectly during the multi-stage SDK

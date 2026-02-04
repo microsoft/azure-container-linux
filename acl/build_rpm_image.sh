@@ -782,7 +782,7 @@ cleanup_containers() {
 update_sdk_container() {
     section "Updating SDK Container"
 
-    info "Rebuilding SDK container with RPM/dnf tools..."
+    info "Rebuilding SDK container with RPM/dnf5 tools..."
 
     # Source SDK common functions to get version info
     source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
@@ -801,7 +801,7 @@ update_sdk_container() {
     ./run_sdk_container $(get_tty_flag) hostname
 
     # Update SDK container with RPM tools
-    info "Installing RPM/dnf tools in SDK container..."
+    info "Installing RPM/dnf5 tools in SDK container..."
     ./update_sdk_container_image "${rpm_sdk_version}"
 
     # Clean up old SDK containers
