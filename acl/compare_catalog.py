@@ -39,6 +39,9 @@ PACKAGE_FILES = {
     'docker': 'rootfs-included-sysexts/docker-flatcar_packages.txt',
 }
 
+# File listing packages explicitly requested via dnf install
+EXPLICIT_PACKAGES_FILE = '.rpm-packages-explicit'
+
 COMPONENT_NAMES = {
     'base': 'Base Image',
     'oem-azure': 'OEM Azure',
@@ -68,13 +71,16 @@ def parse_package_catalog(catalog_path: Path) -> dict:
     
     for match in re.finditer(pattern, content):
         portage_pkg = match.group(1)
-        rpm_name = match.group(2)
+        rpm_value = match.group(2)
         
-        if rpm_name == 'SKIP':
+        if rpm_value == 'SKIP':
             catalog['skip'].add(portage_pkg)
         else:
-            catalog['mappings'][portage_pkg] = rpm_name
-            catalog['rpm_to_portage'][rpm_name].append(portage_pkg)
+            # Handle space-separated RPM names (e.g., "systemd systemd-journal-remote")
+            rpm_names = rpm_value.split()
+            catalog['mappings'][portage_pkg] = rpm_names
+            for rpm_name in rpm_names:
+                catalog['rpm_to_portage'][rpm_name].append(portage_pkg)
     
     return catalog
 
@@ -106,9 +112,14 @@ def load_all_installed_packages(build_dir: Path) -> dict:
         components[component] = packages
         all_packages.update(packages)
     
+    # Load explicitly installed packages (those dnf was told to install)
+    explicit_file = build_dir / EXPLICIT_PACKAGES_FILE
+    explicit_packages = parse_package_file(explicit_file)
+    
     return {
         'by_component': components,
         'all': all_packages,
+        'explicit': explicit_packages,
     }
 
 
@@ -162,13 +173,19 @@ def compare_catalog_to_installed(catalog: dict, installed: dict) -> dict:
         installed_names.add(base_name)
         name_to_full[base_name].append(full_name)
     
-    # Expected RPM names from catalog
-    expected_rpms = set(catalog['mappings'].values())
+    # Get explicitly installed package names
+    explicit_names = set(installed.get('explicit', set()))
+    
+    # Expected RPM names from catalog (flatten the lists)
+    expected_rpms = set()
+    for rpm_names in catalog['mappings'].values():
+        expected_rpms.update(rpm_names)
     
     results = {
-        'covered': {},        # RPM name -> {portage_pkgs, installed_versions}
-        'missing': {},        # RPM name -> portage_pkgs that expect it
-        'uncataloged': {},    # base_name -> full installed names
+        'covered_explicit': {},   # RPM name -> {portage_pkgs, installed_versions} (explicitly installed)
+        'covered_deps': {},       # RPM name -> {portage_pkgs, installed_versions} (pulled as dependency)
+        'missing': {},            # RPM name -> portage_pkgs that expect it
+        'uncataloged': {},        # base_name -> full installed names
         'skip_entries': list(sorted(catalog['skip'])),
         'stats': {},
     }
@@ -176,10 +193,14 @@ def compare_catalog_to_installed(catalog: dict, installed: dict) -> dict:
     # Check which catalog entries have installed packages
     for rpm_name, portage_pkgs in catalog['rpm_to_portage'].items():
         if rpm_name in installed_names:
-            results['covered'][rpm_name] = {
+            entry = {
                 'portage_packages': portage_pkgs,
                 'installed_versions': name_to_full[rpm_name],
             }
+            if rpm_name in explicit_names:
+                results['covered_explicit'][rpm_name] = entry
+            else:
+                results['covered_deps'][rpm_name] = entry
         else:
             results['missing'][rpm_name] = portage_pkgs
     
@@ -189,16 +210,20 @@ def compare_catalog_to_installed(catalog: dict, installed: dict) -> dict:
             results['uncataloged'][base_name] = name_to_full[base_name]
     
     # Calculate statistics
+    covered_total = len(results['covered_explicit']) + len(results['covered_deps'])
     results['stats'] = {
         'total_catalog_entries': len(catalog['mappings']),
         'total_skip_entries': len(catalog['skip']),
         'total_unique_rpms_in_catalog': len(expected_rpms),
         'total_installed_packages': len(installed['all']),
         'total_unique_installed_names': len(installed_names),
-        'covered_count': len(results['covered']),
+        'total_explicit_packages': len(explicit_names),
+        'covered_explicit_count': len(results['covered_explicit']),
+        'covered_deps_count': len(results['covered_deps']),
+        'covered_count': covered_total,
         'missing_count': len(results['missing']),
         'uncataloged_count': len(results['uncataloged']),
-        'coverage_percent': round(len(results['covered']) / len(expected_rpms) * 100, 1) if expected_rpms else 0,
+        'coverage_percent': round(covered_total / len(expected_rpms) * 100, 1) if expected_rpms else 0,
     }
     
     return results
@@ -222,8 +247,11 @@ def format_text(results: dict, catalog: dict, installed: dict) -> str:
     lines.append(f"  Unique RPM names in catalog:     {stats['total_unique_rpms_in_catalog']}")
     lines.append(f"  Total installed packages:        {stats['total_installed_packages']}")
     lines.append(f"  Unique installed base names:     {stats['total_unique_installed_names']}")
+    lines.append(f"  Explicitly installed packages:   {stats['total_explicit_packages']}")
     lines.append("")
     lines.append(f"  Catalog RPMs installed:          {stats['covered_count']} ({stats['coverage_percent']}%)")
+    lines.append(f"    - Explicitly installed:        {stats['covered_explicit_count']}")
+    lines.append(f"    - Pulled as dependencies:      {stats['covered_deps_count']}")
     lines.append(f"  Catalog RPMs missing:            {stats['missing_count']}")
     lines.append(f"  Installed but uncataloged:       {stats['uncataloged_count']}")
     lines.append("")
@@ -253,16 +281,29 @@ def format_text(results: dict, catalog: dict, installed: dict) -> str:
                 lines.append(f"    -> {full}")
         lines.append("")
     
-    # Covered (working mappings)
-    lines.append("COVERED (catalog entries with installed packages)")
-    lines.append("-" * 60)
-    for rpm_name in sorted(results['covered'].keys()):
-        data = results['covered'][rpm_name]
-        versions = ', '.join(data['installed_versions'][:2])
-        if len(data['installed_versions']) > 2:
-            versions += f" (+{len(data['installed_versions'])-2} more)"
-        lines.append(f"  {rpm_name}: {versions}")
-    lines.append("")
+    # Covered - Explicitly installed
+    if results['covered_explicit']:
+        lines.append("COVERED - EXPLICIT (catalog entries explicitly installed)")
+        lines.append("-" * 60)
+        for rpm_name in sorted(results['covered_explicit'].keys()):
+            data = results['covered_explicit'][rpm_name]
+            versions = ', '.join(data['installed_versions'][:2])
+            if len(data['installed_versions']) > 2:
+                versions += f" (+{len(data['installed_versions'])-2} more)"
+            lines.append(f"  {rpm_name}: {versions}")
+        lines.append("")
+    
+    # Covered - Dependencies
+    if results['covered_deps']:
+        lines.append("COVERED - DEPENDENCIES (catalog entries pulled as deps)")
+        lines.append("-" * 60)
+        for rpm_name in sorted(results['covered_deps'].keys()):
+            data = results['covered_deps'][rpm_name]
+            versions = ', '.join(data['installed_versions'][:2])
+            if len(data['installed_versions']) > 2:
+                versions += f" (+{len(data['installed_versions'])-2} more)"
+            lines.append(f"  {rpm_name}: {versions}")
+        lines.append("")
     
     # SKIP entries
     if results['skip_entries']:
@@ -292,13 +333,15 @@ def format_markdown(results: dict, catalog: dict, installed: dict) -> str:
     lines.append(f"| Unique RPM names in catalog | {stats['total_unique_rpms_in_catalog']} |")
     lines.append(f"| Total installed packages | {stats['total_installed_packages']} |")
     lines.append(f"| Unique installed base names | {stats['total_unique_installed_names']} |")
+    lines.append(f"| Explicitly installed packages | {stats['total_explicit_packages']} |")
     lines.append(f"| **Catalog coverage** | **{stats['coverage_percent']}%** |")
     lines.append("")
     
     # Status breakdown
     lines.append("### Status Breakdown")
     lines.append("")
-    lines.append(f"- ✅ **Covered**: {stats['covered_count']} catalog RPMs have matching installed packages")
+    lines.append(f"- ✅ **Covered (explicit)**: {stats['covered_explicit_count']} catalog RPMs explicitly installed")
+    lines.append(f"- 📦 **Covered (deps)**: {stats['covered_deps_count']} catalog RPMs pulled as dependencies")
     lines.append(f"- ❌ **Missing**: {stats['missing_count']} catalog RPMs not found in installed packages")
     lines.append(f"- ⚠️ **Uncataloged**: {stats['uncataloged_count']} installed packages not in catalog")
     lines.append("")
@@ -344,16 +387,32 @@ def format_markdown(results: dict, catalog: dict, installed: dict) -> str:
         lines.append("```")
         lines.append("")
     
-    # Covered (collapsed)
-    lines.append("## ✅ Covered Packages")
+    # Covered - Explicit (collapsed)
+    lines.append("## ✅ Covered Packages (Explicit)")
     lines.append("")
     lines.append("<details>")
-    lines.append("<summary>Click to expand ({} packages)</summary>".format(stats['covered_count']))
+    lines.append("<summary>Click to expand ({} packages)</summary>".format(stats['covered_explicit_count']))
     lines.append("")
     lines.append("| RPM Name | Installed Version |")
     lines.append("|----------|-------------------|")
-    for rpm_name in sorted(results['covered'].keys()):
-        data = results['covered'][rpm_name]
+    for rpm_name in sorted(results['covered_explicit'].keys()):
+        data = results['covered_explicit'][rpm_name]
+        version = data['installed_versions'][0] if data['installed_versions'] else '-'
+        lines.append(f"| `{rpm_name}` | `{version}` |")
+    lines.append("")
+    lines.append("</details>")
+    lines.append("")
+    
+    # Covered - Dependencies (collapsed)
+    lines.append("## 📦 Covered Packages (Dependencies)")
+    lines.append("")
+    lines.append("<details>")
+    lines.append("<summary>Click to expand ({} packages)</summary>".format(stats['covered_deps_count']))
+    lines.append("")
+    lines.append("| RPM Name | Installed Version |")
+    lines.append("|----------|-------------------|")
+    for rpm_name in sorted(results['covered_deps'].keys()):
+        data = results['covered_deps'][rpm_name]
         version = data['installed_versions'][0] if data['installed_versions'] else '-'
         lines.append(f"| `{rpm_name}` | `{version}` |")
     lines.append("")
@@ -383,7 +442,8 @@ def format_json(results: dict, catalog: dict, installed: dict) -> str:
         'summary': results['stats'],
         'missing': {k: v for k, v in results['missing'].items()},
         'uncataloged': {k: v for k, v in results['uncataloged'].items()},
-        'covered': {k: v for k, v in results['covered'].items()},
+        'covered_explicit': {k: v for k, v in results['covered_explicit'].items()},
+        'covered_deps': {k: v for k, v in results['covered_deps'].items()},
         'skip_entries': results['skip_entries'],
     }
     return json.dumps(output, indent=2, default=list)

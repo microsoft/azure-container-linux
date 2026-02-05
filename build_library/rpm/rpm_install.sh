@@ -245,6 +245,11 @@ rpm_install_to_image() {
     sudo rm -rf "${root_fs_dir}/usr/share/locale"
 
     info "Successfully installed ${#packages[@]} RPM packages"
+
+    # Append explicitly installed packages to build log
+    local pkg_log="${BUILD_DIR}/.rpm-packages-explicit"
+    printf '%s\n' "${packages[@]}" | sudo tee -a "${pkg_log}" > /dev/null
+
     return 0
 }
 
