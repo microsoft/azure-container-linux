@@ -1,6 +1,9 @@
 bpf.execsnoop
 cl.ignition.instantiated.enable-unit
 cl.ignition.kargs
+cl.ignition.luks
+cl.ignition.oem.indirect
+cl.ignition.oem.indirect.new
 cl.ignition.partition_on_boot_disk
 cl.ignition.symlink
 cl.ignition.translation

@@ -121,6 +121,15 @@ start_image_rpm() {
     sudo mkdir -p "${root_fs_dir}/root"
     sudo chmod 700 "${root_fs_dir}/root"
 
+    # Create /oem mount point and /usr/share/oem -> ../../oem symlink for backward compatibility
+    # The OEM partition is mounted at /oem, but legacy configs reference /usr/share/oem
+    # Use relative symlink (../../oem) so it works correctly when accessed via /sysroot in initrd
+    # See: https://github.com/flatcar/bootengine/pull/58
+    info "RPM mode: Creating /oem mount point and /usr/share/oem symlink"
+    sudo mkdir -p "${root_fs_dir}/oem"
+    sudo mkdir -p "${root_fs_dir}/usr/share"
+    sudo ln -sfT ../../oem "${root_fs_dir}/usr/share/oem"
+
     info "filesystem package installed successfully"
 }
 
