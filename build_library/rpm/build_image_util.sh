@@ -876,13 +876,15 @@ SUDOERS_EOF
     # The service has After=nss-lookup.target but DNS servers may not be configured yet
     # We add retries to handle the race between DHCP configuring DNS and ntpdate running
     if [[ -f "${root_fs_dir}/usr/lib/systemd/system/ntpdate.service" ]]; then
-        info "RPM mode: Adding ntpdate.service drop-in for DNS retry handling"
+        info "RPM mode: Adding ntpdate.service drop-in for DNS retry handling and timesyncd conflict"
         sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/ntpdate.service.d"
-        cat <<'EOF' | sudo tee "${root_fs_dir}/usr/lib/systemd/system/ntpdate.service.d/10-wait-for-dns.conf" > /dev/null
+        cat <<'EOF' | sudo tee "${root_fs_dir}/usr/lib/systemd/system/ntpdate.service.d/10-flatcar.conf" > /dev/null
 [Unit]
 # Ensure DNS resolution is available before trying to resolve NTP server names
 After=systemd-resolved.service
 Wants=systemd-resolved.service
+# Conflict with systemd-timesyncd - only one NTP client should run
+Conflicts=systemd-timesyncd.service
 
 [Service]
 # Retry on failure - DNS may not be configured immediately after resolved starts
@@ -893,6 +895,14 @@ StartLimitInterval=60
 StartLimitBurst=5
 EOF
     fi
+
+    # Disable ntpdate.service - systemd-timesyncd is preferred for time sync
+    # Use a preset file to disable ntpdate and remove existing symlinks
+    info "RPM mode: Disabling ntpdate.service via preset (using systemd-timesyncd instead)"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system-preset"
+    echo "disable ntpdate.service" | sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-ntp.preset" > /dev/null
+    sudo rm -f "${root_fs_dir}/usr/share/flatcar/etc/systemd/system/multi-user.target.wants/ntpdate.service"
+    sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/ntpdate.service"
 
     # Mask kdump.service - requires crashkernel= kernel parameter which we don't set
     info "RPM mode: Masking kdump.service (no crash kernel memory reserved)"
