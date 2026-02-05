@@ -225,13 +225,13 @@ Convert the production image to a VM-ready format. The script supports building 
 
 ```bash
 # Build a QEMU VM image after main image build
-./acl/build_rpm_image.sh --build-vm-image --vm-typ=qemu
+./acl/build_rpm_image.sh --build-vm-image --vm-type=qemu
 
 # To support backward compatibility, when --vm-type is NOT specified, the tool will build a QEMU image, by default
 ./acl/build_rpm_image.sh --build-vm-image
 
 # Build an Azure VHD image
-./acl/build_rpm_image.sh --build-vm-image --vm-typ=azure
+./acl/build_rpm_image.sh --build-vm-image --vm-type=azure
 ```
 
 #### VM Image Output
