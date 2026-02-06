@@ -16,7 +16,7 @@ declare -gA PACKAGE_CATALOG=(
     ["sys-kernel/dracut"]="dracut"
 
     # Base system packages
-    ["sys-apps/systemd"]="systemd"
+    ["sys-apps/systemd"]="systemd systemd-journal-remote libselinux-utils"
     ["sys-libs/systemd-libs"]="systemd-libs"
     ["sys-apps/systemd-networkd"]="systemd-networkd"
     ["net-misc/systemd-networkd"]="systemd-networkd"
@@ -430,7 +430,7 @@ declare -gA PACKAGE_CATALOG=(
     ["dev-util/pkgconf"]="pkgconf"
 
     # DNS libraries
-    ["net-dns/bind"]="bind"
+    ["net-dns/bind"]="bind bind-utils"
     ["net-dns/c-ares"]="c-ares"
     ["net-dns/libidn2"]="libidn2"
 
@@ -485,7 +485,7 @@ declare -gA PACKAGE_CATALOG=(
     ["sys-cluster/ipvsadm"]="ipvsadm"
 
     # Filesystems
-    ["sys-fs/cryptsetup"]="cryptsetup"
+    ["sys-fs/cryptsetup"]="cryptsetup veritysetup"
     ["sys-libs/cryptsetup-libs"]="cryptsetup-libs"
     ["sys-fs/device-mapper"]="device-mapper"
     ["sys-fs/device-mapper-libs"]="device-mapper-libs"
@@ -493,7 +493,7 @@ declare -gA PACKAGE_CATALOG=(
     ["sys-fs/lsscsi"]="lsscsi"
     ["sys-fs/lvm2"]="lvm2"
     ["sys-fs/mdadm"]="mdadm"
-    ["sys-fs/veritysetup"]="veritysetup"
+    ["sys-fs/veritysetup"]="veritysetup" # Actually pulled in by sys-fs/cryptsetup
 
     # System libraries
     ["sys-libs/cracklib"]="cracklib"
