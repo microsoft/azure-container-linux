@@ -1008,6 +1008,8 @@ build_image() {
 
     # Build arguments for build_image
     local build_args=(
+        "--image_compression_formats=none"
+        "--nogenerate_update"
         "--board=${BOARD}"
         "--group=${GROUP}"
         "--disk_layout=${DISK_LAYOUT}"
