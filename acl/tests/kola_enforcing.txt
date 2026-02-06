@@ -27,6 +27,7 @@ cl.ignition.v2_1.swap
 cl.ignition.v2_1.vfat
 cl.network.iptables
 cl.network.nftables
+cl.verity
 coreos.auth.verify
 coreos.ignition.groups
 coreos.ignition.resource.remote
@@ -39,3 +40,4 @@ sysext.disable-containerd
 sysext.disable-docker
 sysext.simple
 systemd.sysusers.gshadow
+systemd.journal.user
