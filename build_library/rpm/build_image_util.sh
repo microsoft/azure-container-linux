@@ -130,6 +130,13 @@ start_image_rpm() {
     sudo mkdir -p "${root_fs_dir}/usr/share"
     sudo ln -sfT ../../oem "${root_fs_dir}/usr/share/oem"
 
+    # Create sysusers.d configs and run systemd-sysusers to create users/groups
+    # BEFORE any RPM packages are installed, since RPM %pre scriptlets may need them
+    start_image_uids_rpm "${root_fs_dir}"
+
+    # Create tmpfiles.d configs for directories needed by services
+    start_image_tmpfiles_rpm "${root_fs_dir}"
+
     info "filesystem package installed successfully"
 }
 
@@ -238,6 +245,17 @@ finish_image_rpm() {
         if [[ -f "${disk_uuid_module_setup}" ]]; then
             info "RPM mode: Removing cgpt from 30disk-uuid/module-setup.sh"
             sudo sed -i '/cgpt$/d' "${disk_uuid_module_setup}"
+        fi
+
+        # Patch disk-uuid.service to order before systemd-veritysetup@usr.service
+        # Bootengine's disk-uuid.service has "Before=verity-setup.service" for Flatcar's custom verity,
+        # but ACL uses systemd's standard systemd-veritysetup-generator which creates
+        # systemd-veritysetup@usr.service. Without this ordering, disk-uuid's sgdisk call
+        # can cause udev activity that races with/terminates the verity setup process.
+        local disk_uuid_service="${root_fs_dir}/usr/lib/dracut/modules.d/30disk-uuid/disk-uuid.service"
+        if [[ -f "${disk_uuid_service}" ]]; then
+            info "RPM mode: Adding Before=systemd-veritysetup@usr.service to disk-uuid.service"
+            sudo sed -i 's/Before=ignition-setup.service ignition-disks.service verity-setup.service/Before=ignition-setup.service ignition-disks.service verity-setup.service systemd-veritysetup@usr.service/' "${disk_uuid_service}"
         fi
 
         # Patch ignition-setup.sh for systemd-based initramfs
@@ -544,25 +562,35 @@ EOF
     fi
 }
 
-# Skip the Portage check, as AzL RPMs use dynamic UID allocation
-finish_image_uids_rpm() {
+# Create sysusers.d configs for all system users/groups needed by ACL
+# Called early from start_image_rpm() so users exist before RPM %pre scriptlets run
+start_image_uids_rpm() {
   local root_fs_dir="$1"
 
     # RPM mode: Create sysusers.d configs for system users that Azure Linux expects
     # but doesn't provide via sysusers.d (normally created by RPM scriptlets)
     info "RPM mode: Creating sysusers.d configs for essential system users"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/sysusers.d"
 
     # D-Bus messagebus user - required for dbus.service
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/dbus.conf" > /dev/null <<'SYSUSERS_DBUS'
 # D-Bus system message bus user
 u messagebus 81 "System Message Bus" /run/dbus
 SYSUSERS_DBUS
-
-    # polkitd user - used by polkit if installed
+    
+    # polkitd user - Azure Linux polkit.spec uses UID 27
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/polkit.conf" > /dev/null <<'SYSUSERS_POLKIT'
 # PolicyKit daemon user
-u polkitd 27 "PolicyKit Daemon Owner" /
+g polkitd 27 -
+u polkitd 27:27 "PolicyKit Daemon Owner" /etc/polkit-1 /bin/false
 SYSUSERS_POLKIT
+    
+    # tss user/group - Azure Linux tpm2-tss uses UID/GID 59 (matches Gentoo)
+    sudo tee "${root_fs_dir}/usr/lib/sysusers.d/tss.conf" > /dev/null <<'SYSUSERS_TSS'
+# TCG Software Stack (TPM2) user
+g tss 59 -
+u tss 59:59 "TCG Software Stack" /var/lib/tpm /bin/false
+SYSUSERS_TSS
 
     # sshd user - required for OpenSSH privilege separation
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/sshd.conf" > /dev/null <<'SYSUSERS_SSHD'
@@ -570,13 +598,7 @@ SYSUSERS_POLKIT
 g sshd 74 -
 u sshd 74:74 "Privilege-separated SSH" /usr/share/empty.sshd
 SYSUSERS_SSHD
-
-    # sshd privilege separation directory
-    sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/sshd.conf" > /dev/null <<'TMPFILES_SSHD'
-# SSH privilege separation directory
-d /var/lib/sshd 0755 root root - -
-TMPFILES_SSHD
-
+    
     # systemd-coredump user - for coredump handling
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/systemd-coredump.conf" > /dev/null <<'SYSUSERS_COREDUMP'
 # systemd coredump user
@@ -626,21 +648,38 @@ SYSUSERS_ADMIN
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/core.conf" > /dev/null <<'SYSUSERS_CORE'
 # Core user - primary administrative user
 g core 500 -
-u core 500:500 "CoreOS Admin" /home/core /bin/bash
+u core 500:500 "ACL Admin" /home/core /bin/bash
 m core wheel
 m core sudo
 m core docker
 m core systemd-journal
 SYSUSERS_CORE
 
+    # Run systemd-sysusers to create users in /etc/passwd and /etc/group
+    info "RPM mode: Running systemd-sysusers to create users"
+    sudo systemd-sysusers --root="${root_fs_dir}"
+
+    info "RPM mode: Created sysusers.d configs for system users"
+
     # NOTE: /home/core directory creation happens in initramfs via etc-overlay.sh
     # The finish_image() function deletes everything except /boot, /usr, /oem at build time,
     # so any directories we create here would be removed. The etc-overlay.sh script 
     # (part of the 99etc-overlay dracut module) creates /home/core with proper permissions
     # BEFORE ignition-files.service runs, which is when ignition writes SSH keys.
+}
 
-    info "RPM mode: Created sysusers.d configs for system users"
-    info "RPM mode: /home/core will be created at boot by etc-overlay.sh (dracut module)"
+# Create tmpfiles.d configs for directories needed by services
+start_image_tmpfiles_rpm() {
+  local root_fs_dir="$1"
+
+    info "RPM mode: Creating tmpfiles.d configs"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/tmpfiles.d"
+
+    # sshd privilege separation directory
+    sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/sshd.conf" > /dev/null <<'TMPFILES_SSHD'
+# SSH privilege separation directory
+d /var/lib/sshd 0755 root root - -
+TMPFILES_SSHD
 }
 
 finish_image_kernel_config_rpm() {
@@ -699,7 +738,7 @@ finish_image_tmpfiles_rpm() {
         # Add core user if not already present (UID/GID 500, required for ignition)
         if ! grep -q "^core:" "${root_fs_dir}/etc/passwd"; then
             info "RPM mode: Adding core user to /etc/passwd"
-            echo "core:x:500:500:CoreOS Admin:/home/core:/bin/bash" | sudo tee -a "${root_fs_dir}/etc/passwd" > /dev/null
+            echo "core:x:500:500:ACL Admin:/home/core:/bin/bash" | sudo tee -a "${root_fs_dir}/etc/passwd" > /dev/null
         fi
     fi
 

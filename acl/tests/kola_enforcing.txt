@@ -1,3 +1,5 @@
+acl.ignition.v1.users
+acl.ignition.v2.users
 bpf.execsnoop
 cl.ignition.instantiated.enable-unit
 cl.ignition.kargs
@@ -12,8 +14,14 @@ cl.ignition.partition_on_boot_disk
 cl.ignition.symlink
 cl.ignition.translation
 cl.ignition.v1.btrfsroot
+cl.ignition.v1.ext4root
 cl.ignition.v1.groups
+cl.ignition.v1.once
 cl.ignition.v1.sethostname
+cl.ignition.v1.xfsroot
+cl.ignition.v2.btrfsroot
+cl.ignition.v2.ext4root
+cl.ignition.v2.xfsroot
 cl.ignition.v2_1.ext4checkexisting
 cl.ignition.v2_1.swap
 cl.ignition.v2_1.vfat

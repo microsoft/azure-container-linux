@@ -652,9 +652,9 @@ finish_image() {
     if [ "${found}" != "" ]; then
       die "Found dynamic ID allocation instead of hardcoded ID in /usr/lib/sysusers.d/*.conf (third column must not use '-', 'X:-', '-:X', or '/path')"
     fi
-  elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
-    finish_image_uids_rpm "${root_fs_dir}"
   fi
+  # RPM mode: sysusers.d configs and systemd-sysusers were already run in start_image_uids_rpm()
+
   # Run systemd-sysusers once to create users in /etc/passwd so that
   # we can move them to /usr (relying on nss-altfiles to provide them
   # at runtime, but we could use systemd's userdb, too).
