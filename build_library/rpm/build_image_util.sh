@@ -325,71 +325,47 @@ finish_image_rpm() {
             sudo cp "${network_cleanup_svc}" "${root_fs_dir}/usr/lib/systemd/system/network-cleanup.service"
         fi
 
-        # Create a separate dracut module for sysroot-oem.mount
-        # This allows initrd-setup-root-after-ignition to access /sysroot/oem for OEM sysext
-        local oem_module_dir="${root_fs_dir}/usr/lib/dracut/modules.d/35sysroot-oem"
-        info "RPM mode: Creating 35sysroot-oem dracut module for OEM partition"
-        sudo mkdir -p "${oem_module_dir}"
-        
-        # Create module-setup.sh for the OEM module
-        cat <<'OEMMOD_EOF' | sudo tee "${oem_module_dir}/module-setup.sh" > /dev/null
+        # Create sysroot-oem.mount unit matching Flatcar's diskless-generator behavior.
+        # This unit is created but NOT added to initrd-root-fs.target.requires, so it
+        # won't be automatically started. Instead, ignition-files.service has:
+        #   ExecStartPre=-systemctl start sysroot-oem.mount
+        # which starts it when needed (the - prefix means failure is ignored).
+        #
+        # Note: cl.ignition.oem.regular test is excluded from ACL because it uses
+        # the old /usr/share/oem path which requires Ignition patch 0020's umount
+        # path translation that we don't have. cl.ignition.oem.regular.new uses
+        # the new /oem path and works correctly.
+        info "RPM mode: Creating sysroot-oem.mount for OEM partition handling"
+        local sysroot_oem_dracut_module="${root_fs_dir}/usr/lib/dracut/modules.d/35sysroot-oem"
+        sudo mkdir -p "${sysroot_oem_dracut_module}"
+        cat <<'EOF' | sudo tee "${sysroot_oem_dracut_module}/sysroot-oem.mount" > /dev/null
+# Matches Flatcar's diskless-generator behavior
+# (Ignition's OEM mounting can also (de)activate the unit)
+[Mount]
+What=/dev/disk/by-label/OEM
+Where=/sysroot/oem
+Type=auto
+Options=nodev
+EOF
+
+        # Create module-setup.sh to install sysroot-oem.mount into initramfs
+        cat <<'SETUP_EOF' | sudo tee "${sysroot_oem_dracut_module}/module-setup.sh" > /dev/null
 #!/bin/bash
+# dracut module for sysroot-oem mount unit
 
 check() {
     return 0
 }
 
 depends() {
-    echo systemd
     return 0
 }
 
 install() {
-    inst_simple "$moddir/sysroot-oem.mount" "$systemdsystemunitdir/sysroot-oem.mount"
-    inst_simple "$moddir/sysroot-oem-mkdir.service" "$systemdsystemunitdir/sysroot-oem-mkdir.service"
-    
-    # Create dependency directories and links
-    mkdir -p "${initdir}/$systemdsystemunitdir/sysroot-oem.mount.requires"
-    ln -sf ../sysroot-oem-mkdir.service "${initdir}/$systemdsystemunitdir/sysroot-oem.mount.requires/sysroot-oem-mkdir.service"
-    
-    mkdir -p "${initdir}/$systemdsystemunitdir/ignition-files.service.wants"
-    ln -sf ../sysroot-oem.mount "${initdir}/$systemdsystemunitdir/ignition-files.service.wants/sysroot-oem.mount"
+    inst_simple "${moddir}/sysroot-oem.mount" "${systemdsystemunitdir}/sysroot-oem.mount"
 }
-OEMMOD_EOF
-        sudo chmod +x "${oem_module_dir}/module-setup.sh"
-
-        # Create sysroot-oem.mount unit
-        cat <<'EOF' | sudo tee "${oem_module_dir}/sysroot-oem.mount" > /dev/null
-[Unit]
-Description=OEM Partition (/sysroot/oem)
-DefaultDependencies=false
-ConditionPathExists=/dev/disk/by-label/OEM
-After=systemd-udev-settle.service sysroot.mount
-Before=ignition-files.service initrd-setup-root-after-ignition.service
-Requires=sysroot.mount
-
-[Mount]
-What=/dev/disk/by-label/OEM
-Where=/sysroot/oem
-Type=btrfs
-Options=rw,subvol=/
-EOF
-
-        # Create mkdir service for mount point
-        cat <<'EOF' | sudo tee "${oem_module_dir}/sysroot-oem-mkdir.service" > /dev/null
-[Unit]
-Description=Create /sysroot/oem mount point
-DefaultDependencies=false
-ConditionPathExists=/dev/disk/by-label/OEM
-After=sysroot.mount
-Before=sysroot-oem.mount
-Requires=sysroot.mount
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/bin/mkdir -p /sysroot/oem
-EOF
+SETUP_EOF
+        sudo chmod +x "${sysroot_oem_dracut_module}/module-setup.sh"
 
         # NOTE: /etc overlay is handled by bootengine's 99setup-root/initrd-setup-root
         # We need to create the required files BEFORE dracut runs so they get included in initramfs
