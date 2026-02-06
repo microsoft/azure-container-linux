@@ -6,6 +6,8 @@ cl.ignition.oem.indirect
 cl.ignition.oem.indirect.new
 cl.ignition.oem.regular
 cl.ignition.oem.regular.new
+cl.ignition.oem.reuse
+cl.ignition.oem.wipe
 cl.ignition.partition_on_boot_disk
 cl.ignition.symlink
 cl.ignition.translation
