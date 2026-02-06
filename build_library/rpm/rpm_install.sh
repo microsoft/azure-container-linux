@@ -183,6 +183,44 @@ rpm_umount_pseudofs() {
     fi
 }
 
+# Denylist to force remove RPM packages.
+# Uses --nodeps to avoid removing packages that depend on these (e.g., git depends on perl)
+# MAY BREAK DEPENDENT PACKAGES - use with caution
+remove_denylist_rpm_packages() {
+    local root_fs_dir="$1"
+    local dbpath_fs="${root_fs_dir}/var/lib/rpm"
+    local dbpath_root="/var/lib/rpm"
+    local denylist_globs=("perl*")
+
+    info "RPM mode: Removing denylisted rpm packages"
+    if [[ ! -d "${dbpath_fs}" ]]; then
+        warn "RPM mode: No RPM database found at ${dbpath_fs}"
+        return 0
+    fi
+
+    local denylist_packages
+    denylist_packages=$(sudo rpm --dbpath="${dbpath_fs}" -qa "${denylist_globs[@]}" 2>/dev/null | sort -u)
+    local count_before
+    count_before=$(printf '%s\n' "${denylist_packages}" | sed '/^$/d' | wc -l)
+
+    if [[ ${count_before} -eq 0 ]]; then
+        info "RPM mode: No denylisted packages found to remove"
+        return 0
+    fi
+
+    info "RPM mode: Found ${count_before} denylisted packages to remove"
+
+    sudo rpm --root="${root_fs_dir}" --dbpath="${dbpath_root}" -e --nodeps ${denylist_packages} || {
+        warn "RPM mode: Some denylisted packages could not be removed (may already be removed)"
+    }
+
+    local remaining
+    remaining=$(sudo rpm --dbpath="${dbpath_fs}" -qa "${denylist_globs[@]}" 2>/dev/null | sort -u | wc -l)
+
+    info "RPM mode: Removed $((count_before - remaining)) denylisted packages (${remaining} remaining)"
+    info "RPM mode: Package cleanup complete"
+}
+
 # Install RPM packages to image using dnf5
 # This is the core installation function - use rpm_install_packages() for the full workflow
 rpm_install_to_image() {
@@ -232,7 +270,9 @@ rpm_install_to_image() {
 
     # Unmount pseudo-filesystems
     rpm_umount_pseudofs "${root_fs_dir}"
-  
+
+    remove_denylist_rpm_packages "${root_fs_dir}"
+
     # Remove documentation and locale directories that Portage mode excludes via INSTALL_MASK (see make.defaults)
     info "RPM mode: Removing documentation and locale directories (INSTALL_MASK parity)"
     sudo rm -rf "${root_fs_dir}/usr/share/doc"
@@ -361,3 +401,4 @@ export -f rpm_install_packages
 export -f rpm_query_packages
 export -f rpm_get_metadata
 export -f rpm_repoquery
+export -f remove_denylist_rpm_packages

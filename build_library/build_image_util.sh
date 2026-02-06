@@ -815,7 +815,7 @@ EOF
     sudo cp -a "${root_fs_dir}/etc" "${root_fs_dir}/usr/share/flatcar/etc"
   else
     # Skip this check in RPM mode - we intentionally populate /usr/share/flatcar/etc earlier
-    finish_image_backup_etc_rpm "${root_fs_dir}"  
+    finish_image_backup_etc_rpm "${root_fs_dir}"
   fi
 
   # Remove the rootfs state as it should be recreated through the
