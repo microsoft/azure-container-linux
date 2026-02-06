@@ -11,6 +11,7 @@ cl.ignition.oem.wipe
 cl.ignition.partition_on_boot_disk
 cl.ignition.symlink
 cl.ignition.translation
+cl.ignition.v1.btrfsroot
 cl.ignition.v1.groups
 cl.ignition.v1.sethostname
 cl.ignition.v2_1.ext4checkexisting

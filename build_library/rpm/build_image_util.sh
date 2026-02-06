@@ -404,6 +404,10 @@ EOF
 # Bootengine compatibility - journal directory for early boot
 d /var/log/journal 0755 root root -
 d /run/lock 0755 root root -
+# Mount points required by bootengine
+d /boot 0755 root root -
+d /oem 0755 root root -
+d /media 0755 root root -
 EOF
 
         # baselayout-usr.conf - /usr/local structure (may not exist in Azure Linux)
