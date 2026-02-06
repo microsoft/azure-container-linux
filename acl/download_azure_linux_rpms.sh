@@ -9,17 +9,20 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
-STAGING_DIR="${1:-${SCRIPT_DIR}/__build__/rpm-staging}"
+STAGING_DIR=""
 FORCE_DOWNLOAD=false
 
 # Parse arguments
 for arg in "$@"; do
     if [[ "$arg" == "--force" ]]; then
         FORCE_DOWNLOAD=true
-    elif [[ "$arg" != "${STAGING_DIR}" ]]; then
+    elif [[ "$arg" != --* ]]; then
         STAGING_DIR="$arg"
     fi
 done
+
+# Default staging dir if not specified
+STAGING_DIR="${STAGING_DIR:-${SCRIPT_DIR}/__build__/rpm-staging}"
 
 ESSENTIAL_PACKAGES=(
     "grub2"
@@ -123,78 +126,61 @@ if [[ ${#NEED_TO_DOWNLOAD[@]} -eq 0 ]]; then
     exit 0
 fi
 
-echo "Resolving dependencies..."
+echo "Downloading packages (no dependency resolution)..."
 echo
 
-# Create temporary container to resolve dependencies
-CONTAINER_ID=$(docker create mcr.microsoft.com/azurelinux/base/core:3.0)
 TMP_CACHE="/tmp/rpm-cache-$$"
 mkdir -p "${TMP_CACHE}"
+
+# Get list of all available package URLs from Azure Linux repos
+echo "Fetching package URLs from Azure Linux repositories..."
+ALL_URLS=$(docker run --rm mcr.microsoft.com/azurelinux/base/core:3.0 \
+    bash -c "tdnf reposync --urls 2>/dev/null" 2>/dev/null | grep '\.rpm$' || true)
+
+if [[ -z "$ALL_URLS" ]]; then
+    echo "ERROR: Could not fetch package URLs from Azure Linux repositories"
+    exit 1
+fi
 
 # Track failed packages
 FAILED_PACKAGES=()
 
-# Use tdnf to download packages with dependencies
-echo "Downloading packages with full dependency resolution..."
 TOTAL_MOVED=0
 for base_pkg in "${NEED_TO_DOWNLOAD[@]}"; do
-    echo "  Resolving ${base_pkg}..."
-    # Clean temp cache before each package
-    find "${TMP_CACHE}" -name "*.rpm" -delete 2>/dev/null || true
+    echo "  Downloading ${base_pkg}..."
     
-    # Try to download package and dependencies
-    # First try with install (gets dependencies)
-    if timeout 120 docker run --rm \
-        -v "${TMP_CACHE}":/cache \
-        mcr.microsoft.com/azurelinux/base/core:3.0 \
-        bash -c "mkdir -p /cache && tdnf install -y --downloadonly --downloaddir=/cache --nogpgcheck ${base_pkg}" \
-        >/tmp/tdnf_output_$$.log 2>&1; then
-        install_success=true
-    else
-        install_success=false
+    # Find the latest version URL for this package
+    # Match package name followed by version (e.g., grub2-2.06-26.azl3.x86_64.rpm)
+    # but not subpackages (e.g., grub2-tools-2.06-26.azl3.x86_64.rpm)
+    pkg_url=$(echo "$ALL_URLS" | grep -E "/${base_pkg}-[0-9][^/]*\.rpm$" | sort -V | tail -1)
+    
+    if [[ -z "$pkg_url" ]]; then
+        echo "    ERROR: Could not find package ${base_pkg} in repository"
+        FAILED_PACKAGES+=("$base_pkg")
+        continue
     fi
     
-    # If nothing was downloaded (package already installed), try reinstall to get the base package
-    rpm_count=$(find "${TMP_CACHE}" -name "*.rpm" 2>/dev/null | wc -l)
-    if [[ "$rpm_count" -eq 0 ]]; then
-        if timeout 120 docker run --rm \
-            -v "${TMP_CACHE}":/cache \
-            mcr.microsoft.com/azurelinux/base/core:3.0 \
-            bash -c "mkdir -p /cache && tdnf reinstall -y --downloadonly --downloaddir=/cache --nogpgcheck ${base_pkg}" \
-            >/tmp/tdnf_output_$$.log 2>&1; then
-            install_success=true
+    rpm_name=$(basename "$pkg_url")
+    
+    # Download the package directly
+    if curl -sL -o "${TMP_CACHE}/${rpm_name}" "$pkg_url"; then
+        # Move to staging
+        if [[ ! -f "${STAGING_DIR}/${rpm_name}" ]]; then
+            mv "${TMP_CACHE}/${rpm_name}" "${STAGING_DIR}/"
+            echo "    → Downloaded: ${rpm_name}"
+            TOTAL_MOVED=$((TOTAL_MOVED + 1))
         else
-            install_success=false
+            rm -f "${TMP_CACHE}/${rpm_name}"
+            echo "    → Already exists: ${rpm_name}"
         fi
-    fi
-    
-    # Move downloaded RPMs to staging immediately
-    rpm_count=$(find "${TMP_CACHE}" -name "*.rpm" 2>/dev/null | wc -l)
-    if [[ "$rpm_count" -gt 0 ]]; then
-        for rpm_file in "${TMP_CACHE}"/*.rpm; do
-            if [[ -f "$rpm_file" ]]; then
-                rpm_name=$(basename "$rpm_file")
-                # Only move if not already in staging
-                if [[ ! -f "${STAGING_DIR}/${rpm_name}" ]]; then
-                    mv "$rpm_file" "${STAGING_DIR}/"
-                    echo "    → Moved: ${rpm_name}"
-                    TOTAL_MOVED=$((TOTAL_MOVED + 1))
-                else
-                    rm -f "$rpm_file"
-                fi
-            fi
-        done
     else
-        echo "    ERROR: Could not resolve ${base_pkg}"
+        echo "    ERROR: Could not download ${base_pkg} from ${pkg_url}"
         FAILED_PACKAGES+=("$base_pkg")
     fi
-    
-    rm -f /tmp/tdnf_output_$$.log
 done
 
 # Clean up
 rm -rf "${TMP_CACHE}"
-docker rm "${CONTAINER_ID}" >/dev/null 2>&1
 
 # Check for failures
 if [[ ${#FAILED_PACKAGES[@]} -gt 0 ]]; then
@@ -214,9 +200,9 @@ DOWNLOADED=$(ls -1 "${STAGING_DIR}"/*.rpm 2>/dev/null | wc -l)
 
 echo
 echo "=== Download Summary ==="
-echo "Newly moved:      ${TOTAL_MOVED} RPMs"
+echo "Downloaded:       ${TOTAL_MOVED} RPMs"
 echo "Already had:      ${#ALREADY_HAVE[@]} packages"
-echo "Total available:  ${DOWNLOADED} RPMs (including dependencies)"
+echo "Total available:  ${DOWNLOADED} RPMs"
 echo "Location:         ${STAGING_DIR}"
 echo
 
