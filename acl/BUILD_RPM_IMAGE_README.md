@@ -277,7 +277,8 @@ The script automatically configures libvirt (default network, URI) on Azure Linu
 # Run multiple test scripts
 ./acl/build_rpm_image.sh --start-vm \
   --run-script=./acl/tests/run-secureboot-test.sh \
-  --run-script=./acl/tests/run-container-test.sh
+  --run-script=./acl/tests/run-container-test.sh \
+  --run-script=./acl/tests/run-systemd-health-test.sh
 ```
 
 Subsequent runs will clean up the VM automatically. To manually clean up the VM:

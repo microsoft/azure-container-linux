@@ -578,11 +578,11 @@ start_image_uids_rpm() {
 u messagebus 81 "System Message Bus" /run/dbus
 SYSUSERS_DBUS
     
-    # polkitd user - Azure Linux polkit.spec uses UID 27
+    # polkitd user - Fedora setup uses UID 114
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/polkit.conf" > /dev/null <<'SYSUSERS_POLKIT'
 # PolicyKit daemon user
-g polkitd 27 -
-u polkitd 27:27 "PolicyKit Daemon Owner" /etc/polkit-1 /bin/false
+g polkitd 114 -
+u polkitd 114:114 "PolicyKit Daemon Owner" /etc/polkit-1 /bin/false
 SYSUSERS_POLKIT
     
     # tss user/group - Azure Linux tpm2-tss uses UID/GID 59 (matches Gentoo)

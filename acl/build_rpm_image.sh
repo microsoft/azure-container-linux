@@ -360,6 +360,7 @@ parse_args() {
                 # Disabled while we are running on the buddy built kernel
                 # RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
+                RUN_SCRIPTS+=("./acl/tests/run-systemd-health-test.sh")
                 shift
                 ;;
             --build-image)
