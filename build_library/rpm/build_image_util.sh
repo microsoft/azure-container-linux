@@ -449,10 +449,13 @@ EOF
 d /var/lib/systemd/coredump 0755 root root -
 EOF
 
-        # chrony.conf - time synchronization daemon directories
+        # chrony.conf - time synchronization daemon directories and copy chrony.keys
         cat <<'EOF' | sudo tee "${tmpfiles_dir}/chrony.conf" > /dev/null
 # Chrony time synchronization daemon directories
 d /var/lib/chrony 0755 root root -
+# Copy chrony.keys from /usr (read-only) to /etc (writable) at boot
+# Set ownership to root:chrony with 0640 permissions per Azure Linux spec
+C+ /etc/chrony.keys 0640 root chrony - /usr/lib/chrony/chrony.keys
 EOF
 
         # Create SELinux config for Ignition - it checks this even when SELinux is disabled
@@ -622,6 +625,13 @@ SYSUSERS_RESOLVE
 # systemd time synchronization user
 u systemd-timesync - "systemd Time Synchronization" /
 SYSUSERS_TIMESYNC
+
+    # chrony user - for chrony, required for oem-azure sysext
+    sudo tee "${root_fs_dir}/usr/lib/sysusers.d/chrony.conf" > /dev/null <<'SYSUSERS_CHRONY'
+# chrony time daemon user
+g chrony - -
+u chrony - "chrony time daemon" /var/lib/chrony /sbin/nologin
+SYSUSERS_CHRONY
 
     # docker group - for docker socket permissions
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/docker.conf" > /dev/null <<'SYSUSERS_DOCKER'

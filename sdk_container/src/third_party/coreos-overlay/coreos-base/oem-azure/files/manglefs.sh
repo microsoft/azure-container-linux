@@ -69,6 +69,11 @@ if [[ -f "${rootfs}/etc/sysconfig/chronyd" ]]; then
     mv "${rootfs}/etc/sysconfig/chronyd" "${rootfs}/usr/lib/chrony/chronyd"
 fi
 
+# Move NTP keys file out of /etc to /usr/lib to preserve it in sysext
+if [[ -f "${rootfs}/etc/chrony.keys" ]]; then
+    mv "${rootfs}/etc/chrony.keys" "${rootfs}/usr/lib/chrony/chrony.keys"
+fi
+
 # Patch chrony service file for chronyd to point to new environment file and config
 if [[ -f "${rootfs}/usr/lib/systemd/system/chronyd.service" ]]; then
     # Update EnvironmentFile path
