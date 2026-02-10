@@ -131,7 +131,7 @@ Download required RPM packages from Azure Linux repositories:
 # Download all required RPMs (recommended - handles repo creation)
 ./acl/build_rpm_image.sh --download-rpms
 
-# Force re-download (clean staging first)
+# Force re-download by cleaning staging and build RPM directories first
 ./acl/build_rpm_image.sh --clean --download-rpms
 ```
 
@@ -156,6 +156,9 @@ Build custom RPM packages using the Azure Linux toolkit:
 ```bash
 # Build custom RPMs and add them to staging
 ./acl/build_rpm_image.sh --build-rpms
+
+# Clean staging and build RPM directories before rebuilding custom RPMs
+./acl/build_rpm_image.sh --clean --build-rpms
 ```
 
 This step:

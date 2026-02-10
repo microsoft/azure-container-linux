@@ -16,7 +16,7 @@
 #   --build-rpms                         Build custom RPM packages using Azure Linux toolkit (runs acl/build.sh)
 #   --build-sdk-container                Update/rebuild SDK container with RPM tools (can run standalone)
 #   --build-vm-image                     Build VM images after creating base image
-#   --clean                              Clean staging directory before download
+#   --clean                              Clean staging and build RPM directories before download
 #   --console-password=PASS              Serial console login password (empty for passwordless)
 #   --console-user=USER                  Serial console login user (default: root)
 #   --download-rpms                      Download Azure Linux RPMs to staging directory
@@ -94,7 +94,7 @@ BUILD_RPMS=false
 DOWNLOAD_RPMS=false
 USE_UNOFFICIAL_KERNEL=false
 UNOFFICIAL_KERNEL_BUILD_ID="1037837"
-CLEAN_STAGING=false
+CLEAN_DIRS=false
 FORCE_REBUILD=false
 BUILD_IMAGE=false
 IMG_NAME="${IMG_NAME:-acl_production}"
@@ -344,7 +344,7 @@ parse_args() {
                 shift
                 ;;
             --clean)
-                CLEAN_STAGING=true
+                CLEAN_DIRS=true
                 shift
                 ;;
             --rebuild)
@@ -727,11 +727,6 @@ check_azure_prereqs() {
 download_rpms() {
     section "Downloading Azure Linux RPMs"
 
-    if [[ "$CLEAN_STAGING" == "true" ]]; then
-        warn "Cleaning staging directory: ${STAGING_DIR}"
-        rm -rf "${STAGING_DIR}"
-    fi
-
     mkdir -p "${STAGING_DIR}"
 
     info "Using download_azure_linux_rpms.sh"
@@ -1073,7 +1068,7 @@ suggest_troubleshooting() {
     echo "  1. Check the build log for specific errors"
     echo "  2. Verify RPM staging directory has all required packages:"
     echo "     ls ${STAGING_DIR}/*.rpm | wc -l"
-    echo "  3. Try rebuilding with clean staging:"
+    echo "  3. Try cleaning staging and build RPM directories before rebuilding:"
     echo "     $0 --clean"
     echo "  4. Check for missing critical packages:"
     echo "     ls ${STAGING_DIR}/{filesystem,glibc,bash,readline,ncurses}*.rpm"
@@ -2232,7 +2227,7 @@ print_summary() {
     if [[ "$DOWNLOAD_RPMS" == "true" ]]; then
         echo "  1. Download Azure Linux RPM packages"
         echo "     Target: ${STAGING_DIR}"
-        if [[ "$CLEAN_STAGING" == "true" ]]; then
+        if [[ "$CLEAN_DIRS" == "true" ]]; then
             echo "     Mode: Clean download (remove existing)"
         else
             echo "     Mode: Incremental (skip existing)"
@@ -2243,6 +2238,9 @@ print_summary() {
     if [[ "$BUILD_RPMS" == "true" ]]; then
         echo "  2. Build custom RPM packages"
         echo "     Output: ${STAGING_DIR}"
+        if [[ "$CLEAN_DIRS" == "true" ]]; then
+            echo "     Mode: Clean build (remove existing)"
+        fi
         echo
     fi
 
@@ -2338,6 +2336,34 @@ collect_parity_data() {
     info "Report generated: $report_file"
 }
 
+# Cleans RPM directories before operations.
+cleanup_rpm_directories() {
+    if [[ "$CLEAN_DIRS" == "true" ]]; then
+        section "Cleaning RPM Directories"
+        
+        # Clean staging directory
+        if [[ -d "${STAGING_DIR}" ]]; then
+            warn "Removing: ${STAGING_DIR}"
+            rm -rf "${STAGING_DIR}"
+        fi
+        
+        # Clean build directories
+        local build_dir="${SCRIPT_DIR}/__build__/rpms_build_dir"
+        if [[ -d "$build_dir" ]]; then
+            warn "Removing: $build_dir"
+            sudo rm -rf "$build_dir"
+        fi
+        
+        local out_dir="${SCRIPT_DIR}/__build__/rpms_out_dir"
+        if [[ -d "$out_dir" ]]; then
+            warn "Removing: $out_dir"
+            sudo rm -rf "$out_dir"
+        fi
+        
+        info "✓ Cleanup complete"
+    fi
+}
+
 # Main entry point
 main() {
     parse_args "$@"
@@ -2364,6 +2390,9 @@ main() {
         info "Found the following SDK containers:"
         docker ps -a --filter "name=flatcar-sdk-" --format "{{.ID}} {{.Names}}"
     fi
+
+    # Step 0.5: Clean RPM directories (if requested)
+    cleanup_rpm_directories
 
     # Step 1: Download RPMs (if requested)
     if [[ "$DOWNLOAD_RPMS" == "true" ]]; then
