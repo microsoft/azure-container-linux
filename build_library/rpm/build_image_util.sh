@@ -880,11 +880,16 @@ SUDOERS_EOF
     sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/update-ssh-keys" "${root_fs_dir}/usr/bin/update-ssh-keys"
     sudo chmod +x "${root_fs_dir}/usr/bin/update-ssh-keys"
 
-    # Create systemd-networkd configuration for DHCP
-    info "RPM mode: Creating systemd-networkd configuration for DHCP"
-    sudo mkdir -p "${root_fs_dir}/etc/systemd/network"
-    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/99-dhcp-all.network" "${root_fs_dir}/etc/systemd/network/99-dhcp-all.network"
-    sudo chmod 644 "${root_fs_dir}/etc/systemd/network/99-dhcp-all.network"
+    # Install default networkd config to /usr/lib/systemd/network (Flatcar convention)
+    info "RPM mode: Installing zz-default.network to /usr/lib/systemd/network"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/network"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/zz-default.network" "${root_fs_dir}/usr/lib/systemd/network/zz-default.network"
+    sudo chmod 644 "${root_fs_dir}/usr/lib/systemd/network/zz-default.network"
+
+    # Install Azure SR-IOV network config to mark VF interfaces as unmanaged
+    info "RPM mode: Installing yy-azure-sriov.network to /usr/lib/systemd/network"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/yy-azure-sriov.network" "${root_fs_dir}/usr/lib/systemd/network/yy-azure-sriov.network"
+    sudo chmod 644 "${root_fs_dir}/usr/lib/systemd/network/yy-azure-sriov.network"
 
     # Enable systemd-networkd service
     info "RPM mode: Enabling systemd-networkd.service"

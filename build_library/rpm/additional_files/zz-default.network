@@ -1,0 +1,17 @@
+[Network]
+DHCP=yes
+KeepConfiguration=dhcp-on-stop
+IPv6AcceptRA=true
+
+[Match]
+Name=*
+Type=!loopback bridge tunnel vxlan wireguard
+Driver=!veth tun dummy
+Kind=!tun bridge gre veth wireguard
+
+[DHCP]
+UseMTU=true
+UseDomains=true
+
+[DHCPv4]
+RoutesToDNS=false
