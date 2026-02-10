@@ -895,6 +895,54 @@ StartLimitBurst=5
 EOF
     fi
 
+    # TODO: reevaluate the approach, tracked by https://dev.azure.com/mariner-org/mariner/_workitems/edit/17500
+    # Add drop-in for nfs-mountd.service to ensure rpcbind is ready before starting
+    # Without this ordering, rpc.mountd blocks trying to register with portmapper,
+    # exceeds the 45s TimeoutStartSec, and gets killed - failing nfs-server.service too
+    if [[ -f "${root_fs_dir}/usr/lib/systemd/system/nfs-mountd.service" ]]; then
+        info "RPM mode: Adding nfs-mountd.service drop-in for rpcbind dependency"
+        sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/nfs-mountd.service.d"
+        cat <<'EOF' | sudo tee "${root_fs_dir}/usr/lib/systemd/system/nfs-mountd.service.d/10-rpcbind-dependency.conf" > /dev/null
+[Unit]
+# rpc.mountd needs rpcbind to register its RPC program number.
+# Ordering after rpcbind.service (not just .socket) avoids a 60-second
+# libtirpc timeout caused by socket-activation handoff races: mountd's
+# first RPC registration call can stall when rpcbind.service hasn't
+# finished starting yet, exceeding the 45s TimeoutStartSec.
+Wants=rpcbind.service
+After=rpcbind.service
+EOF
+    fi
+
+    # Fix rpc-statd.service - the Azure Linux unit uses Type=forking with a legacy
+    # PIDFile=/var/run/rpc.statd.pid path.  Switch to foreground mode to avoid both
+    # the PIDFile tracking issue and forking-detection races.
+    if [[ -f "${root_fs_dir}/usr/lib/systemd/system/rpc-statd.service" ]]; then
+        info "RPM mode: Adding rpc-statd.service drop-in for foreground mode"
+        sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/rpc-statd.service.d"
+        cat <<'EOF' | sudo tee "${root_fs_dir}/usr/lib/systemd/system/rpc-statd.service.d/10-foreground.conf" > /dev/null
+[Service]
+Type=simple
+ExecStart=
+ExecStart=/usr/sbin/rpc.statd --no-notify -F
+PIDFile=
+EOF
+    fi
+
+    # Create /var/lib/nfs directories needed by rpc-statd and NFS server via tmpfiles
+    # The nfs-utils RPM only creates v4recovery; sm and sm.bak are missing from the package
+    # /var is stateful so we use tmpfiles.d to create these at boot, not mkdir at build time
+    info "RPM mode: Adding tmpfiles.d config for NFS state directories"
+    cat <<'EOF' | sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/nfs-utils.conf" > /dev/null
+# NFS state directories required by rpc-statd and NFS server
+d /var/lib/nfs 0755 root root -
+d /var/lib/nfs/sm 0755 root root -
+d /var/lib/nfs/sm.bak 0755 root root -
+d /var/lib/nfs/v4recovery 0755 root root -
+d /var/lib/nfs/v4root 0755 root root -
+d /var/lib/nfs/rpc_pipefs 0755 root root -
+EOF
+
     # Disable ntpdate.service - systemd-timesyncd is preferred for time sync
     # Use a preset file to disable ntpdate and remove existing symlinks
     info "RPM mode: Disabling ntpdate.service via preset (using systemd-timesyncd instead)"

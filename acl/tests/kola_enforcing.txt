@@ -36,6 +36,8 @@ coreos.ignition.sethostname
 coreos.tls.fetch-urls
 docker.containerd-restart
 docker.enable-service.sysext
+linux.nfs.v3
+linux.nfs.v4
 linux.ntp
 sysext.disable-containerd
 sysext.disable-docker
