@@ -423,6 +423,7 @@ EOF
 d /var/log/journal 0755 root root -
 d /run/lock 0755 root root -
 # Mount points required by bootengine
+d /var/log/audit 0755 root root -
 d /boot 0755 root root -
 d /oem 0755 root root -
 d /media 0755 root root -
@@ -457,27 +458,6 @@ d /var/lib/chrony 0755 root root -
 # Set ownership to root:chrony with 0640 permissions per Azure Linux spec
 C+ /etc/chrony.keys 0640 root chrony - /usr/lib/chrony/chrony.keys
 EOF
-
-        # Create SELinux config for Ignition - it checks this even when SELinux is disabled
-        # Without this file, Ignition fails with "failed to open /etc/selinux/config"
-        info "RPM mode: Creating SELinux config (disabled) for Ignition compatibility"
-        sudo mkdir -p "${root_fs_dir}/etc/selinux"
-        cat <<'EOF' | sudo tee "${root_fs_dir}/etc/selinux/config" > /dev/null
-# SELinux configuration for Azure Linux Container Linux
-# SELinux is disabled - this file exists for Ignition compatibility
-SELINUX=disabled
-SELINUXTYPE=targeted
-EOF
-
-        # TODO: remove post SELinux enablement
-        # Dummy setfiles for SELinux-disabled systems - Ignition calls it even with SELINUX=disabled
-        # Install directly to /usr/sbin since bootengine may call it
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/setfiles" "${root_fs_dir}/usr/sbin/setfiles-stub"
-        sudo chmod +x "${root_fs_dir}/usr/sbin/setfiles-stub"
-        # Only create symlink if real setfiles doesn't exist
-        if [[ ! -f "${root_fs_dir}/usr/sbin/setfiles" ]]; then
-            sudo ln -sf setfiles-stub "${root_fs_dir}/usr/sbin/setfiles"
-        fi
 
         # Create systemd drop-ins for verity device timing
         # These ensure udev has finished device enumeration before verity setup runs
@@ -809,21 +789,6 @@ finish_image_tmpfiles_rpm() {
         sudo cp -a "${root_fs_dir}/etc/skel" "${ETC_FULL_PATH}/"
     fi
 
-    # TODO: remove post SELinux enablement
-    # Create SELinux config (required by Ignition even if SELinux is disabled)
-    # Ignition requires SELINUXTYPE even when disabled, and looks for file_contexts
-    # We create an empty file_contexts so relabeling is a no-op
-    info "RPM mode: Creating SELinux config (disabled) with empty policy"
-    sudo mkdir -p "${ETC_FULL_PATH}/selinux/targeted/contexts/files"
-    sudo tee "${ETC_FULL_PATH}/selinux/config" > /dev/null <<'SELINUX_EOF'
-# This file controls the state of SELinux on the system.
-# SELINUX=disabled - No SELinux policy is loaded.
-SELINUX=disabled
-SELINUXTYPE=targeted
-SELINUX_EOF
-    # Create empty file_contexts so Ignition's relabeling is a no-op
-    sudo touch "${ETC_FULL_PATH}/selinux/targeted/contexts/files/file_contexts"
-
     # Configure sshd to look for authorized_keys in the ignition location
     # Ignition places SSH keys in ~/.ssh/authorized_keys.d/ignition
     # NOTE: /etc/ssh was moved to /usr/share/flatcar/etc/ssh above, so we modify it there
@@ -955,13 +920,6 @@ EOF
     # Mask nftables.service - missing /etc/sysconfig/nftables.conf config file
     info "RPM mode: Masking nftables.service"
     sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/nftables.service"
-
-    # Dummy setenforce for SELinux-disabled systems (goes to /usr/sbin, not initramfs)
-    if [[ ! -x "${root_fs_dir}/usr/sbin/setenforce" ]]; then
-        info "RPM mode: Installing dummy setenforce to /usr/sbin"
-        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/setenforce" "${root_fs_dir}/usr/sbin/setenforce"
-        sudo chmod +x "${root_fs_dir}/usr/sbin/setenforce"
-    fi
 
     # Placeholder audit-rules.service - Azure Linux doesn't provide this but kola tests expect it as a common dependency
     if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service" ]]; then

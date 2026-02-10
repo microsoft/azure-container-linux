@@ -16,7 +16,8 @@ declare -gA PACKAGE_CATALOG=(
     ["sys-kernel/dracut"]="dracut"
 
     # Base system packages
-    ["sys-apps/systemd"]="systemd systemd-journal-remote libselinux-utils"
+    # Note: for now, we're using systemd to pull in packages that aren't sent through the catalog.
+    ["sys-apps/systemd"]="systemd systemd-journal-remote libselinux-utils selinux-policy policycoreutils"
     ["sys-libs/systemd-libs"]="systemd-libs"
     ["sys-apps/systemd-networkd"]="systemd-networkd"
     ["net-misc/systemd-networkd"]="systemd-networkd"
@@ -289,7 +290,7 @@ declare -gA PACKAGE_CATALOG=(
     ["virtual/udev"]="SKIP"
 
     # SELinux policy packages (skip in RPM mode)
-    ["sec-policy/selinux-base"]="SKIP"
+    ["sec-policy/selinux-base"]="SKIP" # Not sent through catalog, listed for systemd
     ["sec-policy/selinux-base-policy"]="SKIP"
     ["sec-policy/selinux-container"]="SKIP"
     ["sec-policy/selinux-dbus"]="SKIP"
@@ -470,7 +471,7 @@ declare -gA PACKAGE_CATALOG=(
     ["sys-apps/keyutils"]="keyutils"
     ["sys-apps/lshw"]="lshw"
     ["sys-apps/net-tools"]="net-tools"
-    ["sys-apps/policycoreutils"]="policycoreutils"
+    ["sys-apps/policycoreutils"]="policycoreutils" # not sent through catalog, list under systemd
 
     # System authentication
     ["sys-auth/polkit"]="polkit"
