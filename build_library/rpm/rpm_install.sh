@@ -190,7 +190,7 @@ remove_denylist_rpm_packages() {
     local root_fs_dir="$1"
     local dbpath_fs="${root_fs_dir}/var/lib/rpm"
     local dbpath_root="/var/lib/rpm"
-    local denylist_globs=("perl*")
+    local denylist_globs=("perl*" "ncurses-term" "texinfo")
 
     info "RPM mode: Removing denylisted rpm packages"
     if [[ ! -d "${dbpath_fs}" ]]; then
@@ -281,7 +281,6 @@ rpm_install_to_image() {
     sudo rm -rf "${root_fs_dir}/usr/share/gtk-doc"
     sudo rm -rf "${root_fs_dir}/usr/share/bash-completion"
     sudo rm -rf "${root_fs_dir}/usr/share/zsh"
-    sudo rm -rf "${root_fs_dir}/usr/share/terminfo"
     sudo rm -rf "${root_fs_dir}/usr/share/locale"
 
     info "Successfully installed ${#packages[@]} RPM packages"
