@@ -1,6 +1,6 @@
 {
   "timestamp": "2026-01-28T18:04:29Z",
-  "hostname": "nbojanic-flatcar-azure",
+  "hostname": "flatcar",
   "os_info": {
     "pretty_name": "Flatcar Container Linux by Kinvolk 4459.2.2 (Oklo)",
     "version_id": "4459.2.2",
@@ -35937,5 +35937,11 @@
     "azure_packages": 0,
     "container_packages": 0,
     "kernel_packages": 0
+  },
+  "boot_time": {
+    "kernel_seconds": 2.799549,
+    "initrd_seconds": 11.500496,
+    "userspace_seconds": 20.296406,
+    "total_seconds": 34.596451
   }
 }
