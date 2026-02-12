@@ -989,6 +989,12 @@ EOF
     # Remove etcd config file (native etcd.service config, not used with etcd-wrapper)
     sudo rm -f "${root_fs_dir}/etc/etcd/etcd-default-conf.yml"
 
+    # Disable etcd-member.service by default via preset.
+    # It should only start when explicitly enabled via CLC/Ignition (etcd: section).
+    # Without this, systemd-firstboot preset-all enables it because no preset matches,
+    # causing crashes on systems without Docker (e.g. sysext.disable-containerd test).
+    echo "disable etcd-member.service" | sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-etcd-member.preset" > /dev/null
+
     # Install etcd-wrapper - runs etcd in a Docker container with sdnotify-proxy.
     # These files come from the Flatcar etcd-wrapper package in sdk_container.
     local etcd_wrapper_src="${BUILD_LIBRARY_DIR}/../sdk_container/src/third_party/coreos-overlay/app-admin/etcd-wrapper/files"
