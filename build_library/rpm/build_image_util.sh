@@ -969,6 +969,68 @@ EOF
     info "RPM mode: Masking nftables.service"
     sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/nftables.service"
 
+    # Remove etcd server and etcdutl binaries - we only need etcdctl from the etcd RPM.
+    # The etcd server runs inside a Docker container via etcd-wrapper, not natively.
+    if [[ -f "${root_fs_dir}/usr/bin/etcd" ]]; then
+        info "RPM mode: Removing /usr/bin/etcd (etcd server runs in Docker via etcd-wrapper)"
+        sudo rm -f "${root_fs_dir}/usr/bin/etcd"
+    fi
+    if [[ -f "${root_fs_dir}/usr/bin/etcdutl" ]]; then
+        info "RPM mode: Removing /usr/bin/etcdutl (not needed)"
+        sudo rm -f "${root_fs_dir}/usr/bin/etcdutl"
+    fi
+    # Also remove the native etcd.service - etcd-member.service (Docker-based) is used instead
+    if [[ -f "${root_fs_dir}/usr/lib/systemd/system/etcd.service" ]]; then
+        info "RPM mode: Removing native etcd.service (using etcd-member.service instead)"
+        sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/etcd.service"
+    fi
+    # Remove the etcd preset file (refers to the native etcd.service we just removed)
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system-preset/50-etcd.preset"
+    # Remove etcd config file (native etcd.service config, not used with etcd-wrapper)
+    sudo rm -f "${root_fs_dir}/etc/etcd/etcd-default-conf.yml"
+
+    # Install etcd-wrapper - runs etcd in a Docker container with sdnotify-proxy.
+    # These files come from the Flatcar etcd-wrapper package in sdk_container.
+    local etcd_wrapper_src="${BUILD_LIBRARY_DIR}/../sdk_container/src/third_party/coreos-overlay/app-admin/etcd-wrapper/files"
+    local etcd_version="3.5.16"
+    if [[ ! -d "${etcd_wrapper_src}" ]]; then
+        die "etcd-wrapper source not found at ${etcd_wrapper_src}"
+    fi
+    info "RPM mode: Installing etcd-wrapper from sdk_container sources"
+    # etcd-wrapper script -> /usr/lib/flatcar/etcd-wrapper
+    sudo mkdir -p "${root_fs_dir}/usr/lib/flatcar"
+    sudo cp "${etcd_wrapper_src}/etcd-wrapper" "${root_fs_dir}/usr/lib/flatcar/etcd-wrapper"
+    sudo chmod 0755 "${root_fs_dir}/usr/lib/flatcar/etcd-wrapper"
+    # CLC transpiler generates ExecStart=/usr/lib/coreos/etcd-wrapper
+    # Create compat symlink so /usr/lib/coreos -> flatcar resolves
+    sudo ln -sfT flatcar "${root_fs_dir}/usr/lib/coreos"
+    # etcd-member.service -> /usr/lib/systemd/system/ (substitute image tag)
+    sudo sed "s|@ETCD_IMAGE_TAG@|v${etcd_version}|g" \
+        "${etcd_wrapper_src}/etcd-member.service" \
+        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/etcd-member.service" > /dev/null
+    # etcd-wrapper.conf -> /usr/lib/tmpfiles.d/ (creates /var/lib/etcd 0700 etcd:etcd)
+    sudo cp "${etcd_wrapper_src}/etcd-wrapper.conf" "${root_fs_dir}/usr/lib/tmpfiles.d/etcd-wrapper.conf"
+    # sysusers.d config to create the etcd user/group (needed by etcd-wrapper)
+    # The etcd RPM doesn't create this user, but etcd-wrapper needs it for:
+    #   - chown etcd:etcd on the data directory
+    #   - id -u/-g to map the user into the Docker container
+    cat <<'SYSUSERS_EOF' | sudo tee "${root_fs_dir}/usr/lib/sysusers.d/etcd.conf" > /dev/null
+u etcd - "etcd user" /var/lib/etcd
+SYSUSERS_EOF
+
+    # CA certificates compatibility for etcd-wrapper Docker mount.
+    # etcd-wrapper bind-mounts /usr/share/ca-certificates:/usr/share/ca-certificates:ro
+    # into the Docker container. On ACL this directory doesn't exist, and Docker
+    # tries to mkdir it on the read-only /usr partition, causing the container to
+    # fail with "mkdir /usr/share/ca-certificates: read-only file system".
+    # Fix: create the directory in the image with a symlink to the ACL CA bundle.
+    # (The other mount, ETCD_SSL_DIR=/etc/ssl/certs, already works because ACL
+    # has /etc/ssl/certs -> /etc/pki/tls/certs symlink.)
+    info "RPM mode: Creating /usr/share/ca-certificates for etcd-wrapper Docker mount"
+    sudo mkdir -p "${root_fs_dir}/usr/share/ca-certificates"
+    sudo ln -sf /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+        "${root_fs_dir}/usr/share/ca-certificates/ca-certificates.crt"
+
     # Placeholder audit-rules.service - Azure Linux doesn't provide this but kola tests expect it as a common dependency
     if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service" ]]; then
         info "RPM mode: Installing placeholder audit-rules.service"

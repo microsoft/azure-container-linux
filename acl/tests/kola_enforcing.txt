@@ -36,6 +36,15 @@ coreos.ignition.sethostname
 coreos.tls.fetch-urls
 docker.containerd-restart
 docker.enable-service.sysext
+kubeadm.v1.32.4.calico.base
+kubeadm.v1.32.4.cilium.base
+kubeadm.v1.32.4.flannel.base
+kubeadm.v1.33.0.calico.base
+kubeadm.v1.33.0.cilium.base
+kubeadm.v1.33.0.flannel.base
+kubeadm.v1.34.1.calico.base
+kubeadm.v1.34.1.cilium.base
+kubeadm.v1.34.1.flannel.base
 linux.nfs.v3
 linux.nfs.v4
 linux.ntp
