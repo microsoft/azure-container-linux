@@ -429,13 +429,12 @@ d /oem 0755 root root -
 d /media 0755 root root -
 EOF
 
-        # baselayout-usr.conf - /usr/local structure (may not exist in Azure Linux)
+        # baselayout-usr.conf - required by bootengine's initrd-setup-root which
+        # explicitly runs: systemd-tmpfiles --create baselayout-usr.conf
+        # Empty because /usr/local dirs are created at build time and /usr is read-only,
+        # so tmpfiles would only trigger SELinux relabel warnings.
         cat <<'EOF' | sudo tee "${tmpfiles_dir}/baselayout-usr.conf" > /dev/null
-# /usr/local directory structure
-d /usr/local 0755 root root -
-d /usr/local/bin 0755 root root -
-d /usr/local/sbin 0755 root root -
-d /usr/local/lib 0755 root root -
+# Intentionally empty - /usr/local dirs exist at build time; /usr is read-only
 EOF
 
         # baselayout-home.conf - only core user home (not /home itself)
@@ -719,12 +718,7 @@ finish_image_tmpfiles_rpm() {
         sudo mv "${root_fs_dir}/etc/ssh" "${ETC_FULL_PATH}/"
     fi
 
-    # Update root's shell in /etc/passwd BEFORE copying to /usr/share/flatcar/etc
-    # This fixes the shadow-utils login stdout issue
     if [[ -f "${root_fs_dir}/etc/passwd" ]]; then
-        info "RPM mode: Updating root's shell in /etc/passwd to use bash-login wrapper"
-        sudo sed -i 's|^root:\([^:]*:[^:]*:[^:]*:[^:]*:[^:]*\):.*|root:\1:/usr/local/bin/bash-login|' "${root_fs_dir}/etc/passwd"
-        
         # Add core user if not already present (UID/GID 500, required for ignition)
         if ! grep -q "^core:" "${root_fs_dir}/etc/passwd"; then
             info "RPM mode: Adding core user to /etc/passwd"
@@ -845,17 +839,6 @@ SUDOERS_EOF
     sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/update-ssh-keys" "${root_fs_dir}/usr/bin/update-ssh-keys"
     sudo chmod +x "${root_fs_dir}/usr/bin/update-ssh-keys"
 
-    # Install default networkd config to /usr/lib/systemd/network (Flatcar convention)
-    info "RPM mode: Installing zz-default.network to /usr/lib/systemd/network"
-    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/network"
-    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/zz-default.network" "${root_fs_dir}/usr/lib/systemd/network/zz-default.network"
-    sudo chmod 644 "${root_fs_dir}/usr/lib/systemd/network/zz-default.network"
-
-    # Install Azure SR-IOV network config to mark VF interfaces as unmanaged
-    info "RPM mode: Installing yy-azure-sriov.network to /usr/lib/systemd/network"
-    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/yy-azure-sriov.network" "${root_fs_dir}/usr/lib/systemd/network/yy-azure-sriov.network"
-    sudo chmod 644 "${root_fs_dir}/usr/lib/systemd/network/yy-azure-sriov.network"
-
     # Enable systemd-networkd service
     info "RPM mode: Enabling systemd-networkd.service"
     sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants"
@@ -915,10 +898,10 @@ EOF
     fi
 
     # Fix rpc-statd.service - the Azure Linux unit uses Type=forking with a legacy
-    # PIDFile=/var/run/rpc.statd.pid path.  Switch to foreground mode to avoid both
-    # the PIDFile tracking issue and forking-detection races.
+    # PIDFile=/var/run/rpc.statd.pid path.  Switch to foreground mode and fix the path.
     if [[ -f "${root_fs_dir}/usr/lib/systemd/system/rpc-statd.service" ]]; then
-        info "RPM mode: Adding rpc-statd.service drop-in for foreground mode"
+        info "RPM mode: Fixing rpc-statd.service (foreground mode + /var/run → /run)"
+        sudo sed -i 's|/var/run/|/run/|g' "${root_fs_dir}/usr/lib/systemd/system/rpc-statd.service"
         sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/rpc-statd.service.d"
         cat <<'EOF' | sudo tee "${root_fs_dir}/usr/lib/systemd/system/rpc-statd.service.d/10-foreground.conf" > /dev/null
 [Service]
@@ -927,6 +910,12 @@ ExecStart=
 ExecStart=/usr/sbin/rpc.statd --no-notify -F
 PIDFile=
 EOF
+    fi
+
+    # Fix rpcbind.socket - uses legacy /var/run/ path
+    if [[ -f "${root_fs_dir}/usr/lib/systemd/system/rpcbind.socket" ]]; then
+        info "RPM mode: Fixing rpcbind.socket (/var/run → /run)"
+        sudo sed -i 's|/var/run/|/run/|g' "${root_fs_dir}/usr/lib/systemd/system/rpcbind.socket"
     fi
 
     # Create /var/lib/nfs directories needed by rpc-statd and NFS server via tmpfiles
@@ -950,6 +939,78 @@ EOF
     echo "disable ntpdate.service" | sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-ntp.preset" > /dev/null
     sudo rm -f "${root_fs_dir}/usr/share/flatcar/etc/systemd/system/multi-user.target.wants/ntpdate.service"
     sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/ntpdate.service"
+
+    # Remove extend-filesystems - uses cgpt (not available in Azure Linux) and
+    # the coreos-resize GPT partition type which ACL does not use
+    info "RPM mode: Removing extend-filesystems (requires cgpt, not available)"
+    sudo rm -f "${root_fs_dir}/usr/lib/flatcar/extend-filesystems"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/extend-filesystems.service"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/extend-filesystems.service"
+
+    # Remove /etc/issue and /usr/lib/issue from azurelinux-release RPM.
+    # azurelinux-release installs /usr/lib/issue (static text) and /etc/issue → ../lib/issue (symlink).
+    # systemd also ships /usr/share/factory/etc/issue which tmpfiles copies to /etc/issue at boot.
+    # We want issuegen.conf tmpfiles to create /etc/issue → ../run/issue at boot instead.
+    # Remove all sources to prevent them from taking precedence over issuegen.conf's L entry.
+    info "RPM mode: Removing azurelinux-release/systemd issue files (issuegen.conf will create symlink at boot)"
+    sudo rm -f "${root_fs_dir}/etc/issue" "${root_fs_dir}/etc/issue.net"
+    sudo rm -f "${root_fs_dir}/usr/lib/issue" "${root_fs_dir}/usr/lib/issue.net"
+    sudo rm -f "${root_fs_dir}/usr/share/factory/etc/issue" "${root_fs_dir}/usr/share/factory/etc/issue.net"
+
+    # Remove flatcar-setup-environment.service - requires /oem/bin/flatcar-setup-environment
+    # which is an OEM-specific script that ACL does not provide. Also strip references
+    # from any dependent units (system-config.target, user-cloudinit, user-config*, etc.)
+    info "RPM mode: Removing flatcar-setup-environment.service (no OEM script)"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/flatcar-setup-environment.service"
+    # Strip Requires= and After= references from units that depend on it
+    for unit_file in \
+        "${root_fs_dir}/usr/lib/systemd/system/system-config.target" \
+        "${root_fs_dir}/usr/lib/systemd/system/user-cloudinit@.service" \
+        "${root_fs_dir}/usr/lib/systemd/system/user-cloudinit-proc-cmdline.service" \
+        "${root_fs_dir}/usr/lib/systemd/system/user-configdrive.service" \
+        "${root_fs_dir}/usr/lib/systemd/system/user-configvirtfs.service" \
+        "${root_fs_dir}/usr/lib/systemd/system/user-config-ovfenv.service"; do
+        if [[ -f "${unit_file}" ]]; then
+            sudo sed -i '/flatcar-setup-environment\.service/d' "${unit_file}"
+        fi
+    done
+
+    # Enable systemd-repart + systemd-growfs for rootfs auto-grow
+    # The ROOT partition uses the DPS (Discoverable Partitions Spec) root type GUID,
+    # resolved at build time by disk_util from the "dps-root" placeholder in disk_layout.json
+    # (x86-64: 4F68BCE3-..., aarch64: B921B045-...).
+    # systemd-repart grows the partition to fill available disk space,
+    # then systemd-growfs-root grows the ext4 filesystem to match.
+    info "RPM mode: Enabling systemd-repart and systemd-growfs for rootfs auto-grow"
+
+    # Create repart.d config to grow the ROOT partition
+    sudo mkdir -p "${root_fs_dir}/usr/lib/repart.d"
+    sudo tee "${root_fs_dir}/usr/lib/repart.d/10-root.conf" > /dev/null <<'REPART_EOF'
+[Partition]
+Type=root
+Label=ROOT
+GrowFileSystem=no
+REPART_EOF
+
+    # Enable systemd-repart.service (grows partition at boot)
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants"
+    sudo ln -sf ../systemd-repart.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/systemd-repart.service"
+
+    # Drop-in for systemd-repart.service: make partition growth best-effort.
+    # Use "-" prefix on ExecStart so any failure is non-fatal.  This handles:
+    #   - RAID/LVM roots where repart can't resolve / to a single GPT disk (exit 76)
+    #   - No GPT partition table found (exit 77)
+    #   - Not enough free space to grow the partition (exit 1, e.g. RAID0 tests)
+    # Root partition growth is opportunistic — if there's space, grow; if not, boot anyway.
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/systemd-repart.service.d"
+    cat <<'EOF' | sudo tee "${root_fs_dir}/usr/lib/systemd/system/systemd-repart.service.d/10-best-effort.conf" > /dev/null
+[Service]
+ExecStart=
+ExecStart=-/usr/bin/systemd-repart --dry-run=no
+EOF
+
+    # Enable systemd-growfs-root.service (grows filesystem after partition resize)
+    sudo ln -sf ../systemd-growfs-root.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/systemd-growfs-root.service"
 
     # Mask kdump.service - requires crashkernel= kernel parameter which we don't set
     info "RPM mode: Masking kdump.service (no crash kernel memory reserved)"
@@ -1063,37 +1124,6 @@ LABEL=OEM        /oem           auto    nodev           0       2
 FSTAB_EOF
     sudo chmod 644 "${root_fs_dir}/etc/fstab"
 
-    # ensure-sysext.service - reload systemd and restart targets after sysext merge
-    # This allows any services provided by sysexts to be discovered and started
-    # Based on Flatcar's ensure-sysext.service from flatcar/init
-    info "RPM mode: Creating ensure-sysext.service to reload units after sysext merge"
-    sudo tee "${root_fs_dir}/usr/lib/systemd/system/ensure-sysext.service" > /dev/null <<'ENSURE_SYSEXT'
-[Unit]
-Description=Ensure sysext services are started after merge
-BindsTo=systemd-sysext.service
-After=systemd-sysext.service
-DefaultDependencies=no
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/bin/systemctl daemon-reload
-ExecStart=/usr/bin/systemctl restart --no-block sockets.target timers.target multi-user.target
-
-[Install]
-WantedBy=sysinit.target
-ENSURE_SYSEXT
-    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants"
-    sudo ln -sf ../ensure-sysext.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/ensure-sysext.service"
-
-    # Install autologin generator - conditionally enables autologin if flatcar.autologin is on cmdline
-    # This is more secure than always-on autologin
-    info "RPM mode: Installing flatcar-autologin-generator (requires flatcar.autologin on cmdline)"
-    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system-generators"
-    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/flatcar-autologin-generator" \
-        "${root_fs_dir}/usr/lib/systemd/system-generators/flatcar-autologin-generator"
-    sudo chmod +x "${root_fs_dir}/usr/lib/systemd/system-generators/flatcar-autologin-generator"
-
     # Enable serial-getty on ttyS0 (autologin is controlled by generator based on cmdline)
     sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants"
     sudo ln -sf ../serial-getty@.service "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
@@ -1107,37 +1137,9 @@ ENSURE_SYSEXT
     info "RPM mode: Creating profile.d directory"
     sudo mkdir -p "${ETC_FULL_PATH}/profile.d"
 
-    # Create a complete /etc/profile
-    info "RPM mode: Creating /etc/profile"
-    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/profile" "${ETC_FULL_PATH}/profile"
-    # Create fallback /etc/shells
-    info "RPM mode: Creating fallback /etc/shells"
-    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/shells" "${ETC_FULL_PATH}/shells"
-
-    # Create bash-login wrapper to fix shadow-utils login stdout issue
-    # shadow-utils' login sets stdout to a pipe instead of TTY, causing shell to exit immediately
-    info "RPM mode: Creating bash-login wrapper to fix login stdout issue"
-    sudo mkdir -p "${root_fs_dir}/usr/local/bin"
-    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/bash-login" "${root_fs_dir}/usr/local/bin/bash-login"
-    sudo chmod +x "${root_fs_dir}/usr/local/bin/bash-login"
-
-    # Note: root's shell was already updated in /etc/passwd earlier (before copying to /usr/share/flatcar/etc)
-    # Verify it's correct in both places
-    info "RPM mode: Verifying root's shell is set to bash-login"
-    if [[ -f "${root_fs_dir}/etc/passwd" ]]; then
-        grep "^root:" "${root_fs_dir}/etc/passwd" || true
-    fi
-
-    # Create /root with proper .bashrc and .bash_profile
-    info "RPM mode: Creating /root home directory with shell configs"
+    # Ensure /root home directory exists with proper permissions
     sudo mkdir -p "${root_fs_dir}/root"
     sudo chmod 700 "${root_fs_dir}/root"
-
-    # Create .bash_profile for login shells
-    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/.bash_profile" "${root_fs_dir}/root/.bash_profile"
-
-    # Create .bashrc for interactive shells
-    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/.bashrc" "${root_fs_dir}/root/.bashrc"
 }
 
 finish_image_backup_etc_rpm() {

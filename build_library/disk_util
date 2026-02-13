@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -24,6 +25,34 @@ class PartitionNotFound(Exception):
   pass
 class InvalidLayout(Exception):
   pass
+
+# Discoverable Partitions Specification (DPS) type GUIDs, keyed by
+# platform.machine() values.  disk_layout.json can use the symbolic name
+# "dps-root" and the correct architecture-specific GUID will be substituted
+# at load time.
+DPS_ROOT_GUIDS = {
+    'x86_64':  '4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709',
+    'aarch64': 'B921B045-1DF0-41C3-AF44-4C6F280D3FAE',
+}
+
+def _resolve_dps_types(config):
+  """Replace symbolic DPS partition type names with architecture-specific GUIDs.
+
+  Currently supported placeholders:
+    dps-root  →  DPS root partition GUID for the build host architecture
+  """
+  arch = platform.machine()
+  for layout in config.get('layouts', {}).values():
+    for part in layout.values():
+      if not isinstance(part, dict):
+        continue
+      ptype = part.get('type', '')
+      if ptype == 'dps-root':
+        guid = DPS_ROOT_GUIDS.get(arch)
+        if guid is None:
+          raise InvalidLayout(
+              'No DPS root GUID defined for architecture %r' % arch)
+        part['type'] = guid
 
 
 def LoadPartitionConfig(options):
@@ -51,6 +80,8 @@ def LoadPartitionConfig(options):
     raise ConfigNotFound('Partition config %s was not found!' % filename)
   with open(filename) as f:
     config = json.load(f)
+
+  _resolve_dps_types(config)
 
   unknown_keys = set(config.keys()) - valid_keys
   if unknown_keys:
