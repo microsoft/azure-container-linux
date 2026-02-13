@@ -1,6 +1,9 @@
+acl.basic
 acl.ignition.v1.users
 acl.ignition.v2.users
 bpf.execsnoop
+cl.cloudinit.basic
+cl.cloudinit.multipart-mime
 cl.cloudinit.script
 cl.disk.raid0.data
 cl.disk.raid0.root
@@ -8,6 +11,7 @@ cl.disk.raid1.data
 cl.disk.raid1.root
 cl.etcd-member.etcdctlv3
 cl.etcd-member.v2-backup-restore
+cl.filesystem
 cl.ignition.instantiated.enable-unit
 cl.ignition.kargs
 cl.ignition.luks
@@ -34,6 +38,7 @@ cl.ignition.v2_1.swap
 cl.ignition.v2_1.vfat
 cl.network.initramfs.second-boot
 cl.network.iptables
+cl.network.listeners
 cl.network.nftables
 cl.network.wireguard
 cl.osreset.ignition-rerun
@@ -69,5 +74,6 @@ linux.ntp
 sysext.disable-containerd
 sysext.disable-docker
 sysext.simple
+systemd.journal.remote
 systemd.journal.user
 systemd.sysusers.gshadow

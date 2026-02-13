@@ -400,7 +400,7 @@ declare -gA PACKAGE_CATALOG=(
     ["dev-lang/duktape"]="duktape"
 
     # Development libraries - core
-    ["dev-libs/dbus-glib"]="dbus-glib"
+    ["dev-libs/dbus-glib"]="dbus-glib glib-devel"
     ["dev-libs/ding-libs"]="SKIP"  # Not available in Azure Linux
     ["dev-libs/elfutils"]="elfutils"
     ["dev-libs/elfutils-libelf"]="elfutils-libelf"

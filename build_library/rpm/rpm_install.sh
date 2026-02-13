@@ -283,6 +283,10 @@ rpm_install_to_image() {
     sudo rm -rf "${root_fs_dir}/usr/share/zsh"
     sudo rm -rf "${root_fs_dir}/usr/share/locale"
 
+    # Remove debug info
+    info "RPM mode: Removing debug info files"
+    sudo rm -rf "${root_fs_dir}/usr/lib/debug"
+
     info "Successfully installed ${#packages[@]} RPM packages"
 
     # Append explicitly installed packages to build log

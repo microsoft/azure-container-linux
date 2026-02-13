@@ -421,6 +421,7 @@ EOF
         cat <<'EOF' | sudo tee "${tmpfiles_dir}/baselayout.conf" > /dev/null
 # Bootengine compatibility - journal directory for early boot
 d /var/log/journal 0755 root root -
+d /var/log/journal/remote 0755 root root -
 d /run/lock 0755 root root -
 # Mount points required by bootengine
 d /var/log/audit 0755 root root -
@@ -448,6 +449,11 @@ EOF
 # Additional /var structure for bootengine
 d /var/lib/systemd/coredump 0755 root root -
 EOF
+
+        # Remove baselayout-ldso.conf — it creates a symlink /etc/ld.so.conf -> ../usr/lib/ld.so.conf
+        # but Azure Linux's glibc RPM installs /etc/ld.so.conf as a regular file (with different
+        # content and layout). The symlink target doesn't exist, producing a dead link.
+        sudo rm -f "${tmpfiles_dir}/baselayout-ldso.conf"
 
         # chrony.conf - time synchronization daemon directories and copy chrony.keys
         cat <<'EOF' | sudo tee "${tmpfiles_dir}/chrony.conf" > /dev/null
@@ -937,8 +943,54 @@ EOF
     info "RPM mode: Disabling ntpdate.service via preset (using systemd-timesyncd instead)"
     sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system-preset"
     echo "disable ntpdate.service" | sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-ntp.preset" > /dev/null
+
+    # Disable rsyncd.service - should not run by default (security: listens on port 873)
+    info "RPM mode: Disabling rsyncd.service via preset"
+    echo "disable rsyncd.service" | sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-rsyncd.preset" > /dev/null
     sudo rm -f "${root_fs_dir}/usr/share/flatcar/etc/systemd/system/multi-user.target.wants/ntpdate.service"
     sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/ntpdate.service"
+
+    # Switch sshd to socket activation (matching Flatcar behavior)
+    # The Azure Linux openssh RPM only ships sshd.service (traditional daemon).
+    # Socket activation means systemd listens on port 22 and spawns sshd per-connection,
+    # which is more efficient and matches what Flatcar's cl.network.listeners test expects.
+    info "RPM mode: Setting up sshd socket activation"
+    # Create sshd.socket - systemd will listen on port 22
+    sudo tee "${root_fs_dir}/usr/lib/systemd/system/sshd.socket" > /dev/null <<'SSHD_SOCKET'
+[Unit]
+Description=OpenSSH Server Socket
+Conflicts=sshd.service
+
+[Socket]
+ListenStream=22
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
+SSHD_SOCKET
+    # Create sshd@.service - per-connection sshd instance (template)
+    sudo tee "${root_fs_dir}/usr/lib/systemd/system/sshd@.service" > /dev/null <<'SSHD_AT_SERVICE'
+[Unit]
+Description=OpenSSH per-connection server daemon
+
+[Service]
+ExecStart=-/usr/sbin/sshd -i -e
+StandardInput=socket
+StandardError=journal
+SSHD_AT_SERVICE
+    # Add drop-in to ensure host keys are generated before accepting connections
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sshd@.service.d"
+    sudo tee "${root_fs_dir}/usr/lib/systemd/system/sshd@.service.d/sshd-keygen.conf" > /dev/null <<'SSHD_KEYGEN_DROPIN'
+[Unit]
+Wants=sshd-keygen.service
+After=sshd-keygen.service
+SSHD_KEYGEN_DROPIN
+    # Disable traditional sshd.service, enable sshd.socket instead
+    printf "disable sshd.service\nenable sshd.socket\n" | \
+      sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-sshd.preset" > /dev/null
+    # Remove any existing sshd.service enable symlinks from the RPM
+    sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/sshd.service"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/sshd.service"
 
     # Remove extend-filesystems - uses cgpt (not available in Azure Linux) and
     # the coreos-resize GPT partition type which ACL does not use
@@ -974,6 +1026,15 @@ EOF
             sudo sed -i '/flatcar-setup-environment\.service/d' "${unit_file}"
         fi
     done
+
+    # Remove dead links
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/ignition-delete-config.service"
+
+    # Remove the /var/log/README symlink rule from legacy.conf — the target
+    # (/usr/share/doc/systemd/README.logs) doesn't exist because Azure Linux
+    # builds systemd with create-log-dirs disabled. A build-time rm is not
+    # enough because systemd-tmpfiles recreates the symlink at every boot.
+    sudo sed -i '\|/var/log/README|d' "${root_fs_dir}/usr/lib/tmpfiles.d/legacy.conf"
 
     # Enable systemd-repart + systemd-growfs for rootfs auto-grow
     # The ROOT partition uses the DPS (Discoverable Partitions Spec) root type GUID,
@@ -1071,6 +1132,9 @@ EOF
     # CLC transpiler generates ExecStart=/usr/lib/coreos/etcd-wrapper
     # Create compat symlink so /usr/lib/coreos -> flatcar resolves
     sudo ln -sfT flatcar "${root_fs_dir}/usr/lib/coreos"
+    # Additional coreos -> flatcar compat symlinks expected by tests and tooling
+    sudo ln -sfT flatcar "${root_fs_dir}/etc/coreos"
+    sudo ln -sfT flatcar "${root_fs_dir}/usr/share/coreos"
     # etcd-member.service -> /usr/lib/systemd/system/ (substitute image tag)
     sudo sed "s|@ETCD_IMAGE_TAG@|v${etcd_version}|g" \
         "${etcd_wrapper_src}/etcd-member.service" \
