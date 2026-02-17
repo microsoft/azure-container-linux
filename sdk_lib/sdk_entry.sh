@@ -78,12 +78,13 @@ grep -q 'export MODULE_SIGNING_KEY_DIR' /home/sdk/.bashrc || {
 # Preserve HYBRID mode environment variables for RPM builds
 if [[ -n "${PACKAGE_SOURCE_MODE:-}" ]]; then
     # Remove any existing entries first
-    sed -i -e '/export PACKAGE_SOURCE_MODE=/d' -e '/export RPM_STAGING_DIR=/d' -e '/export SYSEXT_COMPRESSION=/d' /home/sdk/.bashrc 2>/dev/null || true
+    sed -i -e '/export PACKAGE_SOURCE_MODE=/d' -e '/export RPM_STAGING_DIR=/d' -e '/export SYSEXT_COMPRESSION=/d' -e '/export BOOTLOADER_MODE=/d' /home/sdk/.bashrc 2>/dev/null || true
     # Add current values
     echo "export PACKAGE_SOURCE_MODE='${PACKAGE_SOURCE_MODE}'" >> /home/sdk/.bashrc
     if [[ -n "${RPM_STAGING_DIR:-}" ]]; then
         echo "export RPM_STAGING_DIR='${RPM_STAGING_DIR}'" >> /home/sdk/.bashrc
     fi
+    echo "export BOOTLOADER_MODE='${BOOTLOADER_MODE:-grub}'" >> /home/sdk/.bashrc
 fi
 if [[ -n "${SYSEXT_COMPRESSION:-}" ]]; then
     echo "export SYSEXT_COMPRESSION='${SYSEXT_COMPRESSION}'" >> /home/sdk/.bashrc

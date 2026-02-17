@@ -879,9 +879,17 @@ EOF
     # For amd64 the rdev error message is used.
     # For arm64 an area between the EFI headers and the kernel text is used.
     # Our modified GRUB extracts the hash and adds it to the cmdline.
-    printf %s "$(cat ${BUILD_DIR}/${image_name%.bin}_verity.txt)" | \
-        sudo dd of="${root_fs_dir}/boot/flatcar/vmlinuz-a" conv=notrunc \
-        seek=${verity_offset} count=64 bs=1 status=none
+    #
+    # This mechanism is only used by the Portage/Gentoo kernel + modified
+    # GRUB.  RPM builds pass the verity hash via the kernel command line
+    # (either through grub.cfg or the UKI cmdline), and on Azure Linux
+    # kernels (CONFIG_EFI_STUB=y) offset 0x40 is the PE signature —
+    # writing the hash there would destroy the PE header.
+    if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+      printf %s "$(cat ${BUILD_DIR}/${image_name%.bin}_verity.txt)" | \
+          sudo dd of="${root_fs_dir}/boot/flatcar/vmlinuz-a" conv=notrunc \
+          seek=${verity_offset} count=64 bs=1 status=none
+    fi
   fi
 
   # Sign the kernel after /usr is in a consistent state and verity is
@@ -916,33 +924,52 @@ EOF
     if [[ ${BOARD} == "arm64-usr" ]]; then
       target_list="arm64-efi"
     fi
-    local grub_args=()
+    local bootloader_args=()
     if [[ ${disable_read_write} -eq ${FLAGS_TRUE} ]]; then
-      grub_args+=(--verity)
+      bootloader_args+=(--verity)
       if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
         # Pass verity hash file path if it exists (for RPM mode)
         local verity_hash_file="${BUILD_DIR}/${image_name%.bin}_verity.txt"
         if [[ -f "${verity_hash_file}" ]]; then
-          grub_args+=(--verity_hash="${verity_hash_file}")
+          bootloader_args+=(--verity_hash="${verity_hash_file}")
         fi
       fi
     else
-      grub_args+=(--noverity)
+      bootloader_args+=(--noverity)
     fi
-    if [[ -n "${image_grub}" && -n "${image_shim}" ]]; then
-      grub_args+=(
-        --copy_efi_grub="${BUILD_DIR}/${image_grub}"
-        --copy_shim="${BUILD_DIR}/${image_shim}"
-      )
+
+    # BOOTLOADER_MODE selects the bootloader for RPM builds:
+    #   "grub" (default) – GRUB + shim (upstream path)
+    #   "uki"            – systemd-boot + Unified Kernel Image
+    # Portage builds always use GRUB.
+    local bootloader_mode="${BOOTLOADER_MODE:-grub}"
+
+    if [[ "${PACKAGE_SOURCE_MODE}" != "RPM" || "${bootloader_mode}" == "grub" ]]; then
+      local grub_args=("${bootloader_args[@]}")
+      if [[ -n "${image_grub}" && -n "${image_shim}" ]]; then
+        grub_args+=(
+          --copy_efi_grub="${BUILD_DIR}/${image_grub}"
+          --copy_shim="${BUILD_DIR}/${image_shim}"
+        )
+      fi
+      for target in ${target_list}; do
+        info "Installing GRUB for target ${target}..."
+        ${BUILD_LIBRARY_DIR}/grub_install.sh \
+            --board="${BOARD}" \
+            --target="${target}" \
+            --disk_image="${disk_img}" \
+            "${grub_args[@]}"
+      done
+    else
+      for target in ${target_list}; do
+        info "Installing UKI for target ${target}..."
+        ${BUILD_LIBRARY_DIR}/rpm/uki_install.sh \
+            --board="${BOARD}" \
+            --target="${target}" \
+            --disk_image="${disk_img}" \
+            "${bootloader_args[@]}"
+      done
     fi
-    for target in ${target_list}; do
-      info "Installing GRUB for target ${target}..."
-      ${BUILD_LIBRARY_DIR}/grub_install.sh \
-          --board="${BOARD}" \
-          --target="${target}" \
-          --disk_image="${disk_img}" \
-          "${grub_args[@]}"
-    done
   fi
 
   if [[ -n "${pcr_policy}" ]]; then

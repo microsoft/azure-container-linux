@@ -29,6 +29,9 @@ ESSENTIAL_PACKAGES=(
     "grub2-efi"
     "grub2-efi-binary"
     "shim"
+    "systemd-boot"
+    "systemd-ukify"
+    "python3-pefile"
 )
 
 echo "=== Downloading Azure Linux RPMs ==="

@@ -122,6 +122,8 @@ RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
 # Set envi var-s required for RPM mode
 export PACKAGE_SOURCE_MODE=RPM
 export RPM_STAGING_DIR="${STAGING_DIR}"
+# Bootloader mode: 'grub' (default) or 'uki' (systemd-boot + UKI)
+export BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
 
 # Var-s for Azure VM testing:
 # - Subscription ID
