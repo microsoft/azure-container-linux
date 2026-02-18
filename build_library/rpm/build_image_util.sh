@@ -1173,6 +1173,36 @@ SYSUSERS_EOF
     sudo ln -sf /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
         "${root_fs_dir}/usr/share/ca-certificates/ca-certificates.crt"
 
+    # Install flannel-wrapper - runs flanneld in a Docker container (like etcd-wrapper).
+    # These files come from the Flatcar flannel-wrapper package in sdk_container.
+    local flannel_wrapper_src="${BUILD_LIBRARY_DIR}/../sdk_container/src/third_party/coreos-overlay/app-admin/flannel-wrapper/files"
+    local flannel_version="0.14.0"
+    if [[ ! -d "${flannel_wrapper_src}" ]]; then
+        die "flannel-wrapper source not found at ${flannel_wrapper_src}"
+    fi
+    info "RPM mode: Installing flannel-wrapper from sdk_container sources"
+    # flannel-wrapper script -> /usr/lib/flatcar/flannel-wrapper
+    # (resolves via /usr/lib/coreos -> flatcar symlink created above)
+    sudo cp "${flannel_wrapper_src}/flannel-wrapper" "${root_fs_dir}/usr/lib/flatcar/flannel-wrapper"
+    sudo chmod 0755 "${root_fs_dir}/usr/lib/flatcar/flannel-wrapper"
+    # flanneld.service -> /usr/lib/systemd/system/ (substitute image tag)
+    sudo sed "s|@FLANNEL_IMAGE_TAG@|v${flannel_version}|g" \
+        "${flannel_wrapper_src}/flanneld.service" \
+        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/flanneld.service" > /dev/null
+    # flannel-docker-opts.service -> /usr/lib/systemd/system/ (substitute image tag)
+    sudo sed "s|@FLANNEL_IMAGE_TAG@|v${flannel_version}|g" \
+        "${flannel_wrapper_src}/flannel-docker-opts.service" \
+        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/flannel-docker-opts.service" > /dev/null
+    # networkd configs for flannel interfaces
+    sudo cp "${flannel_wrapper_src}/50-flannel.network" "${root_fs_dir}/usr/lib/systemd/network/50-flannel.network"
+    sudo cp "${flannel_wrapper_src}/50-flannel.link" "${root_fs_dir}/usr/lib/systemd/network/50-flannel.link"
+
+    # Disable flanneld.service and flannel-docker-opts.service by default via preset.
+    # They should only start when explicitly enabled via CLC/Ignition (flannel section).
+    # Without this, systemd-firstboot preset-all enables them because no preset matches.
+    echo "disable flanneld.service" | sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-flannel.preset" > /dev/null
+    echo "disable flannel-docker-opts.service" | sudo tee -a "${root_fs_dir}/usr/lib/systemd/system-preset/50-flannel.preset" > /dev/null
+
     # Placeholder audit-rules.service - Azure Linux doesn't provide this but kola tests expect it as a common dependency
     if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service" ]]; then
         info "RPM mode: Installing placeholder audit-rules.service"

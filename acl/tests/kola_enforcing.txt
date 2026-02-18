@@ -1,4 +1,7 @@
 acl.basic
+acl.etcd-member.discovery
+acl.flannel.udp
+acl.flannel.vxlan
 acl.ignition.v1.users
 acl.ignition.v2.users
 bpf.execsnoop
@@ -57,9 +60,11 @@ coreos.ignition.sethostname
 coreos.ignition.systemd.enable-service
 coreos.selinux.boolean
 coreos.tls.fetch-urls
+docker.base
 docker.btrfs-storage
 docker.containerd-restart
 docker.enable-service.sysext
+docker.userns
 kubeadm.v1.32.4.calico.base
 kubeadm.v1.32.4.cilium.base
 kubeadm.v1.32.4.flannel.base
