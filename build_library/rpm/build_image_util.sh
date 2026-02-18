@@ -690,6 +690,17 @@ finish_image_kernel_config_rpm() {
     fi
 }
 
+finish_image_selinux_rpm() {
+    local root_fs_dir="$1"
+
+    # Use the targeted policy file_contexts to label the filesystem
+    local file_contexts="${root_fs_dir}/etc/selinux/targeted/contexts/files/file_contexts"
+    info "RPM mode: Labeling filesystem with targeted SELinux policy"
+    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}"
+    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/etc"
+    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/usr"
+}
+
 finish_image_tmpfiles_rpm() {
     local root_fs_dir="$1"
     local ETC_FULL_PATH="${root_fs_dir}/usr/share/flatcar/etc"

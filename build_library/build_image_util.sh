@@ -801,6 +801,11 @@ EOF
     sudo setfiles -Dv -r "${root_fs_dir}" "${root_fs_dir}"/etc/selinux/mcs/contexts/files/file_contexts "${root_fs_dir}"/etc
   fi
 
+  # For RPM/ACL mode, use the targeted policy file_contexts
+  if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    finish_image_selinux_rpm "${root_fs_dir}"
+  fi
+
   # Backup the /etc contents to /usr/share/flatcar/etc to serve as
   # source for creating missing files. Make sure that the preexisting
   # /usr/share/flatcar/etc does not have any meaningful (non-empty)
