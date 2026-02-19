@@ -5,6 +5,7 @@ acl.flannel.vxlan
 acl.ignition.v1.users
 acl.ignition.v2.users
 bpf.execsnoop
+bpf.local-gadget
 cl.cloudinit.basic
 cl.cloudinit.multipart-mime
 cl.cloudinit.script
