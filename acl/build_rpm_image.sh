@@ -147,6 +147,10 @@ VM_RG_PREFIX="$(whoami)-acl-test-vm-rg"
 # - By default, set to false and clean up pre-existing VM RGs for the user
 NO_CLEANUP="${NO_CLEANUP:-false}"
 
+# Pipeline build identifier — used to scope Azure resource cleanup and
+# ensure unique blob/gallery-image-version names across concurrent runs.
+BUILD_ID="${BUILD_ID:-}"
+
 # Global variable to store the actual VM resource group name
 # - For QEMU VMs: empty string (not used)
 # - For Azure VMs: set by start_vm_azure() to actual RG name
@@ -1878,6 +1882,12 @@ upload_vhd_to_storage() {
 
 # Returns next available image version.
 get_next_image_version() {
+    # Use BUILD_ID for deterministic, unique versions in CI
+    if [[ -n "${BUILD_ID}" ]]; then
+        echo "1.0.${BUILD_ID}"
+        return
+    fi
+
     # Get latest version and increment
     local latest_version
     latest_version=$(az sig image-version list \
@@ -1932,7 +1942,7 @@ create_vm_azure() {
         az group create \
             --name "$vm_rg_name" \
             --location "$AZ_REGION" \
-            --tags "createdBy=$(whoami)" "purpose=VM-testing" "creationTime=$(date +%s)"
+            --tags "createdBy=$(whoami)" "purpose=VM-testing" "creationTime=$(date +%s)" ${BUILD_ID:+"buildId=${BUILD_ID}"}
     fi
     
     # Compose image ID inside the gallery
@@ -1948,7 +1958,7 @@ create_vm_azure() {
         --allocation-method Static \
         --sku Standard \
         --ip-tags FirstPartyUsage=/NonProd \
-        --tags "createdBy=$(whoami)" "purpose=VM-testing"
+        --tags "createdBy=$(whoami)" "purpose=VM-testing" ${BUILD_ID:+"buildId=${BUILD_ID}"}
     
     info "Creating an Azure VM ${VM_NAME} in RG ${vm_rg_name}..."
     
@@ -1965,7 +1975,7 @@ create_vm_azure() {
         --image "$image_id"
         --location "$AZ_REGION"
         --public-ip-address "$public_ip_name"
-        --tags "createdBy=$(whoami)" "purpose=VM-testing"
+        --tags "createdBy=$(whoami)" "purpose=VM-testing" ${BUILD_ID:+"buildId=${BUILD_ID}"}
     )
     
     # Add security features based on SECURE_BOOT_ENABLED variable
@@ -2020,7 +2030,7 @@ start_vm_azure() {
     check_azure_infra
     
     # Step 2: Upload VHD to storage
-    local blob_name="$(date +%y%m%d.%H%M%S)-${IMG_NAME}.vhd"
+    local blob_name="$(date +%y%m%d.%H%M%S)-${BUILD_ID:+${BUILD_ID}-}${IMG_NAME}.vhd"
     upload_vhd_to_storage "$vm_image_path" "$blob_name"
     
     # Step 3: Create gallery image version
@@ -2068,13 +2078,16 @@ remove_vm_azure() {
     
     info "Scheduling deletion of VM resources for user: $(whoami)"
     
-    # Get all resource groups that match the user-specific tag
-    local user_tag="createdBy=$(whoami)"
+    # Get resource groups scoped to this user (and build, if BUILD_ID is set)
     local matching_rgs
-    matching_rgs=$(az group list --tag "$user_tag" --query "[].name" -o tsv)
+    if [[ -n "${BUILD_ID}" ]]; then
+        matching_rgs=$(az group list --query "[?tags.createdBy=='$(whoami)' && tags.buildId=='${BUILD_ID}'].name" -o tsv)
+    else
+        matching_rgs=$(az group list --tag "createdBy=$(whoami)" --query "[].name" -o tsv)
+    fi
     
     if [[ -z "$matching_rgs" ]]; then
-        info "No resource groups found with tag: $user_tag"
+        info "No resource groups found for cleanup"
         return 0
     fi
 
