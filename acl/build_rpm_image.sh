@@ -127,13 +127,13 @@ export BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
 
 # Var-s for Azure VM testing:
 # - Subscription ID
-AZ_SUB_ID="b99b2264-54e6-408e-812b-2ec280c0ce7a"
+AZ_SUB_ID="${AZ_SUB_ID_OVERRIDE:-b99b2264-54e6-408e-812b-2ec280c0ce7a}"
 # - Region
-AZ_REGION="eastus2"
+AZ_REGION="${AZ_REGION_OVERRIDE:-eastus2}"
 # - Storage RG
 AZ_STORAGE_RG="acl-test-storage-rg"
 # - Storage account
-AZ_STORAGE_ACC="aclteststorageacc"
+AZ_STORAGE_ACC="${AZ_STORAGE_ACC_OVERRIDE:-aclteststorageacc}"
 # - Storage container
 AZ_STORAGE_CONTAINER="acl-test-vm-img"
 # - Gallery RG
