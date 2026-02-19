@@ -2153,9 +2153,28 @@ build_vm_image() {
     # Use -C to specify custom SDK image (avoids trying to download non-existent version-specific image)
     # Use --rm to remove old container and ensure environment variables are set correctly
     info "Building ${vm_type} VM image using SDK container..."
+
+    # In CI test-only mode the git checkout may be newer than the artifacts.
+    # Copy the artifact's version.txt into the standard manifest location
+    # so that run_sdk_container (and everything it calls, e.g. build_sysext)
+    # picks up the versions that match the artifact.  Pass -U so
+    # run_sdk_container reads both OS and SDK versions from the file and
+    # does not overwrite it with a git-derived version.
+    # Only do this in pipeline runs (NO_TTY=true) to avoid accidentally
+    # pulling a stale version.txt into local dev builds.
+    local version_args=()
+    local from_dir="${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest"
+    if [[ "${NO_TTY:-false}" == "true" ]] && [[ -f "${from_dir}/version.txt" ]]; then
+        info "Installing artifact version.txt into manifest location (CI mode)"
+        cp "${from_dir}/version.txt" \
+           "${SCRIPT_DIR}/sdk_container/.repo/manifests/version.txt"
+        version_args=( -U )
+    fi
+
     "${SCRIPT_DIR}/run_sdk_container" \
         --rm \
         $(get_tty_flag) \
+        "${version_args[@]}" \
         -C "${sdk_image}" \
         -- \
         ./image_to_vm.sh "${build_args[@]}"
