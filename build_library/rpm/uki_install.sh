@@ -53,11 +53,11 @@ uki_install_rpm() {
     fi
     info "UKI/RPM: Using SDK-provided ukify from $(command -v ukify)"
 
-    # Source rpm_install functions for find_rpm_staging_dir
+    # Source rpm_install functions for rpm_get_staging_dir
     . "${BUILD_LIBRARY_DIR}/rpm/rpm_install.sh" || die "Failed to source rpm_install.sh"
 
     # Locate the RPM cache directory
-    rpm_staging=$(find_rpm_staging_dir)
+    rpm_staging=$(rpm_get_staging_dir)
     local uki_local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
 
     if [[ ! -d "${uki_local_cache}" ]]; then

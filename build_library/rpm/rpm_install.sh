@@ -19,7 +19,7 @@
 # =============================================================================
 # Helper function to find RPM staging directory
 # =============================================================================
-find_rpm_staging_dir() {
+rpm_get_staging_dir() {
     local rpm_staging=""
     for candidate in \
         "${RPM_STAGING_DIR}" \
@@ -222,8 +222,7 @@ remove_denylist_rpm_packages() {
 }
 
 # Install RPM packages to image using dnf5
-# This is the core installation function - use rpm_install_packages() for the full workflow
-rpm_install_to_image() {
+rpm_install_package() {
     local root_fs_dir="$1"; shift
     local packages=("$@")
 
@@ -291,36 +290,23 @@ rpm_install_to_image() {
 
     # Append explicitly installed packages to build log
     local pkg_log="${BUILD_DIR}/.rpm-packages-explicit"
-    printf '%s\n' "${packages[@]}" | sudo tee -a "${pkg_log}" > /dev/null
+    printf '%s\n' "${packages[@]}" | tee -a "${pkg_log}" > /dev/null
 
     return 0
 }
 
-# High-level function to install RPM packages with full setup
-# This handles: database init, repository setup, and package installation
-# 
-# Usage: rpm_install_packages <root_fs_dir> <packages...>
-#
-rpm_install_packages() {
+# This handles: database init, repository setup
+rpm_install_init() {
     local root_fs_dir="$1"; shift
-    local packages=("$@")
     
-    if [[ ${#packages[@]} -eq 0 ]]; then
-        warn "rpm_install_packages: No packages specified"
-        return 0
-    fi
-
     # Initialize RPM database if needed
     rpm_init_database "${root_fs_dir}" || return 1
 
     # Setup repositories
     local rpm_staging
-    rpm_staging=$(find_rpm_staging_dir 2>/dev/null || echo "")
+    rpm_staging=$(rpm_get_staging_dir 2>/dev/null || echo "")
     local local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
     rpm_setup_repos "${root_fs_dir}" "3.0" "${local_cache}"
-
-    # Install packages
-    rpm_install_to_image "${root_fs_dir}" "${packages[@]}"
 }
 
 # Query installed RPM packages
@@ -371,37 +357,187 @@ rpm_get_metadata() {
     echo "$result" | tr -d '\000-\011\013-\037'
 }
 
-# Check if package is available in repository
-rpm_repoquery() {
-    local package="$1"
-    local repo_url="${2:-${RPM_REPO_URL}}"
-    local arch="${3:-${RPM_ARCH}}"
+# Get all dependencies for a package using emerge --pretend
+# Returns list of category/package names that would be installed
+# Usage: get_portage_dependencies "/path/to/root" "coreos-base/coreos"
+get_portage_dependencies() {
+    local root_fs_dir="$1"
+    local package="$2"
 
-    local pkg_mgr=""
-    if command -v tdnf &>/dev/null; then
-        pkg_mgr="tdnf"
-    elif command -v dnf &>/dev/null; then
-        pkg_mgr="dnf"
-    else
-        return 1
+    # Determine the correct config root
+    # For sysext builds, use the board config; for image builds, use BUILD_DIR/configroot
+    local config_root="/build/${BOARD:-amd64-usr}"
+    if [[ -d "${BUILD_DIR}/configroot" ]]; then
+        config_root="${BUILD_DIR}/configroot"
     fi
 
-    ${pkg_mgr} repoquery \
-        --disablerepo='*' \
-        --repofrompath="azl,${repo_url}/${arch}" \
-        --enablerepo=azl \
-        "${package}" 2>/dev/null
+    local emerge_output
+    info "Resolving dependencies for ${package}"
+    emerge_output=$(emerge-amd64-usr --pretend --verbose --tree "${package}" 2>&1) || true
+
+    # Parse [binary N] or [ebuild N] lines
+    # Format: [ebuild  N     ] category/package-version:slot/subslot::repo  USE="..." SIZE
+    # We want to extract just "category/package"
+    local parsed_pkgs
+    parsed_pkgs=$(echo "$emerge_output" | \
+        grep -E '^\[(binary|ebuild)' | \
+        sed -E 's/^\[[^]]+\]\s+//' | \
+        sed -E 's/-[0-9]+(\.[0-9]+)*.*$//' | \
+        sort -u) || true
+
+    if [[ -z "$parsed_pkgs" ]]; then
+        warn "No packages found in emerge output for ${package}. Checking for errors..."
+        # Check for common issues
+        if echo "$emerge_output" | grep -q "USE changes are necessary"; then
+            warn "USE flag changes required - check package.use configuration"
+        fi
+        if echo "$emerge_output" | grep -q "blocked by"; then
+            warn "Package blockers detected"
+        fi
+        info Emerge output:
+        info "$emerge_output"
+        info "End of emerge output."
+
+        die "Failed to resolve dependencies for ${package} - no packages found in emerge output"
+    fi
+
+    echo "$parsed_pkgs"
+}
+
+# Get dependencies for multiple packages
+# Usage: get_all_dependencies "/path/to/root" "pkg1" "pkg2" ...
+get_all_dependencies() {
+    local root_fs_dir="$1"; shift
+    local packages=("$@")
+    local all_deps=()
+
+    for pkg in "${packages[@]}"; do
+        # Check if package is already in RPM catalog with RPM status
+        local pkg_status=$(get_package_status "$pkg")
+
+        if [[ "$pkg_status" == "RPM" ]]; then
+            # Package has RPM mapping - add it directly without resolving Portage deps
+            info "Package $pkg is in RPM catalog - skipping dependency resolution"
+            all_deps+=("$pkg")
+        else
+            # Package not in RPM catalog - resolve Portage dependencies
+            info "Resolving Portage dependencies for $pkg (status: $pkg_status)"
+            local deps
+            deps=$(get_portage_dependencies "${root_fs_dir}" "${pkg}")
+            while IFS= read -r dep; do
+                [[ -n "$dep" ]] && all_deps+=("$dep")
+            done <<< "$deps"
+        fi
+    done
+
+    # Return unique sorted list
+    if [[ ${#all_deps[@]} -gt 0 ]]; then
+        printf '%s\n' "${all_deps[@]}" | sort -u
+    fi
+}
+
+# Full RPM mode installation workflow:
+# 1. Audit all dependencies for requested packages (including SKIP packages)
+# 2. Route each dependency through catalog and filter out SKIP packages
+# 3. Install RPM packages first
+rpm_install_package_using_portage_name() {
+    local root_fs_dir="$1"; shift
+    local packages=("$@")
+
+    info "Requested packages: ${packages[*]}"
+
+    # Step 1: Get complete dependency tree (resolve even SKIP packages to get their deps)
+    info "Step 1: Auditing dependencies..."
+    local all_deps
+    all_deps=$(get_all_dependencies "${root_fs_dir}" "${packages[@]}")
+
+    local dep_count=$(echo "$all_deps" | grep -c . || echo 0)
+    info "Total dependencies found: ${dep_count}"
+
+    # Step 2: Categorize and report
+    info "Step 2: Categorizing packages by source..."
+    local rpm_pkgs=()
+    local portage_pkgs=()
+    local unrecognized_pkgs=()
+    local skip_count=0
+
+    while IFS= read -r dep; do
+        [[ -z "$dep" ]] && continue
+
+        local source=$(get_package_source "$dep")
+        case "$source" in
+            RPM)
+                local rpm_name=$(get_rpm_package_name "$dep")
+                [[ -n "$rpm_name" ]] && rpm_pkgs+=("$rpm_name")
+                ;;
+            PORTAGE)
+                portage_pkgs+=("$dep")
+                ;;
+            SKIP)
+                # Don't install, dependency satisfied elsewhere or not needed
+                info "DEBUG: Skipping package: $dep"
+                skip_count=$((skip_count + 1))
+                ;;
+            *)
+                unrecognized_pkgs+=("$dep")
+        esac
+    done <<< "$all_deps"
+
+    info "Categorization complete:"
+    info "  Will install from RPM: ${#rpm_pkgs[@]} packages"
+    info "  Will install from Portage: ${#portage_pkgs[@]} packages"
+    info "  Skipped: ${skip_count} packages"
+
+    if [[ ${#unrecognized_pkgs[@]} -gt 0 ]]; then
+        error "Unrecognized packages: ${unrecognized_pkgs[*]}"
+        die "Found ${#unrecognized_pkgs[@]} unrecognized package(s), catalog them first."
+    fi
+
+    if [[ ${#portage_pkgs[@]} -gt 0 ]]; then
+        die "Installation of Portage packages is disabled. Extend the package catalog accordingly."
+    fi
+    
+    # Step 3: Install RPM packages (base layer)
+    if [[ ${#rpm_pkgs[@]} -gt 0 ]]; then
+        info "Step 3: Installing RPM packages..."
+        # Remove duplicates
+        local unique_rpm_pkgs=($(printf '%s\n' "${rpm_pkgs[@]}" | sort -u))
+        rpm_install_package "${root_fs_dir}" "${unique_rpm_pkgs[@]}" || {
+            error "Failed to install RPM packages during RPM mode installation"
+            error "Root filesystem: ${root_fs_dir}"
+            error "Attempted to install: ${unique_rpm_pkgs[*]}"
+            return 1
+        }
+        
+        # Backup the installed RPM package list for later use by write_packages
+        # This is needed because the RPM database may be in a different location
+        # or inaccessible when write_packages runs
+        # Skip for sysext builds (they don't need the backup and it causes permission issues)
+        if [[ -n "${BUILD_DIR:-}" && ! "${BUILD_DIR}" =~ sysext-build ]]; then
+            local backup_file="${BUILD_DIR}/.rpm_packages_installed.txt"
+            info "Backing up RPM package list to ${backup_file}"
+            # Use sudo to remove any existing file (may be owned by root from previous run)
+            sudo rm -f "${backup_file}" 2>/dev/null || true
+            # Query packages - use default format (no second argument to avoid format issues)
+            rpm_query_packages "${root_fs_dir}" | sudo tee "${backup_file}" > /dev/null 2>/dev/null || true
+            # Make it readable and writable by the current user for cleanup
+            sudo chown "$(id -u):$(id -g)" "${backup_file}" 2>/dev/null || true
+            sudo chmod 644 "${backup_file}" 2>/dev/null || true
+            local backup_count=$(wc -l < "${backup_file}" 2>/dev/null || echo 0)
+            info "  Backed up ${backup_count} packages to ${backup_file}"
+        fi
+    else
+        info "Step 3: No RPM packages to install (skipped)"
+    fi
+
+    info "=== RPM mode installation complete ==="
+    return 0
 }
 
 # Export functions
-export -f find_rpm_staging_dir
-export -f rpm_init_database
-export -f rpm_setup_repos
-export -f rpm_mount_pseudofs
-export -f rpm_umount_pseudofs
-export -f rpm_install_to_image
-export -f rpm_install_packages
+export -f rpm_install_package_using_portage_name
+export -f rpm_get_staging_dir
+export -f rpm_install_init
+export -f rpm_install_package
 export -f rpm_query_packages
 export -f rpm_get_metadata
-export -f rpm_repoquery
-export -f remove_denylist_rpm_packages

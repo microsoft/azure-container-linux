@@ -583,7 +583,6 @@ start_image() {
   trap "cleanup_mounts '${root_fs_dir}' && delete_prompt" EXIT
 
   # First thing first, install baselayout to create a working filesystem.
-  # Skip in RPM mode - RPM filesystem package provides directory structure
   if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
     emerge_to_image "${root_fs_dir}" --nodeps --oneshot sys-apps/baselayout
   elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then

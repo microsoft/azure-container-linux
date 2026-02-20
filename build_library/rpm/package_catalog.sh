@@ -17,7 +17,7 @@ declare -gA PACKAGE_CATALOG=(
 
     # Base system packages
     # Note: for now, we're using systemd to pull in packages that aren't sent through the catalog.
-    ["sys-apps/systemd"]="systemd systemd-journal-remote libselinux-utils selinux-policy policycoreutils"
+    ["sys-apps/systemd"]="systemd systemd-journal-remote libselinux-utils selinux-policy policycoreutils ca-certificates"
     ["sys-libs/systemd-libs"]="systemd-libs"
     ["sys-apps/systemd-networkd"]="systemd-networkd"
     ["net-misc/systemd-networkd"]="systemd-networkd"
@@ -227,6 +227,8 @@ declare -gA PACKAGE_CATALOG=(
     ["app-emulation/hv-daemons"]="hyperv-daemons"
     ["net-misc/chrony"]="chrony"
     ["dev-python/urllib3"]="python3-urllib3 python-setuptools"
+    ["dev-python/distro"]="python3-distro"
+    ["dev-python/pysocks"]="SKIP"
     ["sys-fs/inotify-tools"]="inotify-tools"
     
     # Flatcar-only packages (skipped in RPM mode)
@@ -245,6 +247,7 @@ declare -gA PACKAGE_CATALOG=(
     ["coreos-base/update_engine"]="SKIP"
     ["coreos-base/oem-azure"]="SKIP"
     ["coreos-base/oem-aws"]="SKIP"
+    ["coreos-base/oem-qemu"]="SKIP"
     ["sys-apps/azure-vm-utils"]="SKIP"
     ["sys-apps/seismograph"]="SKIP"
     ["sys-kernel/bootengine"]="bootengine"
@@ -540,6 +543,7 @@ declare -gA PACKAGE_CATALOG=(
     ["dev-util/bsdiff"]="SKIP"
     ["net-analyzer/openbsd-netcat"]="nmap-ncat" # non-ideal mapping, as this is not the OpenBSD version of netcat, but Azure Linux doesn't have a separate package for it
     ["net-fs/samba"]="SKIP"
+    ["sys-libs/ldb"]="SKIP"
     ["net-misc/bridge-utils"]="SKIP"
     ["net-misc/ethertypes"]="SKIP"
     ["net-misc/whois"]="SKIP"

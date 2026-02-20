@@ -93,23 +93,12 @@ create_prod_image() {
   set_image_profile prod
   
   if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
-    # Traditional Portage mode
     extract_prod_gcc "${root_fs_dir}"
     emerge_to_image "${root_fs_dir}" "${base_pkg}"
   elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
-    # RPM mode - audit all deps and route through catalog
-    # The install_packages_to_image function will:
-    # 1. Audit all dependencies for base_pkg
-    # 2. Route each through the catalog (RPM vs Portage)
-    # 3. Install RPM packages first (including glibc for ldconfig)
-    # 4. Install Portage packages with --nodeps
-    # NOTE: grub packages are installed separately to BOARD_ROOT by grub_install.sh
-    info "Installing base packages in RPM mode (audit + explicit install)"
-    install_packages_to_image "${root_fs_dir}" "${base_pkg}"
-    
-    # Install ca-certificates for SSL/TLS support
-    info "Installing ca-certificates"
-    install_packages_to_image "${root_fs_dir}" "app-misc/ca-certificates"
+    rpm_install_package_using_portage_name "${root_fs_dir}" "${base_pkg}"
+
+    test_image_content "${root_fs_dir}"
   fi
   
   run_ldconfig "${root_fs_dir}"

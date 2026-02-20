@@ -1,7 +1,6 @@
 source "${BUILD_LIBRARY_DIR}/rpm/package_catalog.sh" || exit 1
 source "${BUILD_LIBRARY_DIR}/rpm/package_source_config.sh" || exit 1
 source "${BUILD_LIBRARY_DIR}/rpm/rpm_install.sh" || exit 1
-source "${BUILD_LIBRARY_DIR}/rpm/package_install.sh" || exit 1
 
 run_localedef() {
   local root_fs_dir="$1" loader=()
@@ -16,34 +15,6 @@ run_localedef() {
 
   error "C.utf8 locale not found in RPM mode, investigate."
   exit 1
-}
-
-# Unified package installation wrapper.
-# Routes packages to appropriate source (Portage or RPM) based on configuration.
-emerge_to_image() {
-  local root_fs_dir="$1"; shift
-
-  # Filter out emerge options, only pass actual package names
-  local packages=()
-  local emerge_opts=()
-  for arg in "$@"; do
-    if [[ "$arg" == -* ]]; then
-      emerge_opts+=("$arg")
-    else
-      packages+=("$arg")
-    fi
-  done
-
-  install_packages_to_image "${root_fs_dir}" "${packages[@]}"
-
-  # Make sure profile.env has been generated (for Portage packages)
-  if [[ -d "${root_fs_dir}/etc/portage" ]]; then
-    sudo -E ROOT="${root_fs_dir}" env-update --no-ldconfig 2>/dev/null || true
-  fi
-
-  # Run content validation
-  ROOT="${root_fs_dir}" PORTAGE_CONFIGROOT="${BUILD_DIR}"/configroot \
-      test_image_content "${root_fs_dir}" 2>/dev/null || true
 }
 
 # List packages installed from RPM database
@@ -102,46 +73,29 @@ get_metadata() {
 start_image_rpm() {
   local root_fs_dir="$1"
 
-    info "RPM mode: Installing filesystem RPM instead of baselayout"
+    rpm_install_init "${root_fs_dir}"
+
     # Install filesystem RPM to provide basic directory structure
     # This replaces baselayout and creates /usr/lib, /etc, /bin -> usr/bin symlinks, etc.
-    
-    # Use the unified rpm_install_packages function
-    rpm_install_packages "${root_fs_dir}" filesystem || {
+    rpm_install_package "${root_fs_dir}" filesystem || {
         error "Failed to install filesystem package"
         return 1
     }
 
-    # Create additional directories that may be needed
-    # Create /proc and /sys directories
-    sudo mkdir -p "${root_fs_dir}/proc" "${root_fs_dir}/sys"
-    sudo chmod 555 "${root_fs_dir}/proc" "${root_fs_dir}/sys"
-
-    # Ensure /root home directory exists with proper permissions
-    sudo mkdir -p "${root_fs_dir}/root"
-    sudo chmod 700 "${root_fs_dir}/root"
-
-    # Create /oem mount point and /usr/share/oem -> ../../oem symlink for backward compatibility
-    # The OEM partition is mounted at /oem, but legacy configs reference /usr/share/oem
-    # Use relative symlink (../../oem) so it works correctly when accessed via /sysroot in initrd
-    # See: https://github.com/flatcar/bootengine/pull/58
-    info "RPM mode: Creating /oem mount point and /usr/share/oem symlink"
-    sudo mkdir -p "${root_fs_dir}/oem"
-    sudo mkdir -p "${root_fs_dir}/usr/share"
-    sudo ln -sfT ../../oem "${root_fs_dir}/usr/share/oem"
-
     # Create sysusers.d configs and run systemd-sysusers to create users/groups
     # BEFORE any RPM packages are installed, since RPM %pre scriptlets may need them
     start_image_uids_rpm "${root_fs_dir}"
-
-    # Create tmpfiles.d configs for directories needed by services
-    start_image_tmpfiles_rpm "${root_fs_dir}"
-
-    info "filesystem package installed successfully"
 }
 
 finish_image_rpm() {
   local root_fs_dir="$1"
+    
+    # Create /usr/share/oem -> ../../oem symlink for backward compatibility
+    # The OEM partition is mounted at /oem, but legacy configs reference /usr/share/oem
+    # Use relative symlink (../../oem) so it works correctly when accessed via /sysroot in initrd
+    # See: https://github.com/flatcar/bootengine/pull/58
+    sudo mkdir -p "${root_fs_dir}/usr/share"
+    sudo ln -sfT ../../oem "${root_fs_dir}/usr/share/oem"
 
     # In RPM mode, the kernel is installed by Azure Linux RPM to /boot/vmlinuz-*.
     # Find and copy it to the expected location for grub.cfg
@@ -581,10 +535,11 @@ u tss 59:59 "TCG Software Stack" /var/lib/tpm /bin/false
 SYSUSERS_TSS
 
     # sshd user - required for OpenSSH privilege separation
+    # Alas, 74 which is used by Fedora, is already taken in 3.0 filesystem package, so for now we will dynamically allocate
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/sshd.conf" > /dev/null <<'SYSUSERS_SSHD'
 # SSH privilege separation user
-g sshd 74 -
-u sshd 74:74 "Privilege-separated SSH" /usr/share/empty.sshd
+g sshd - -
+u sshd - "Privilege-separated SSH" /usr/share/empty.sshd
 SYSUSERS_SSHD
     
     # systemd-coredump user - for coredump handling
@@ -663,20 +618,6 @@ SYSUSERS_CORE
     # BEFORE ignition-files.service runs, which is when ignition writes SSH keys.
 }
 
-# Create tmpfiles.d configs for directories needed by services
-start_image_tmpfiles_rpm() {
-  local root_fs_dir="$1"
-
-    info "RPM mode: Creating tmpfiles.d configs"
-    sudo mkdir -p "${root_fs_dir}/usr/lib/tmpfiles.d"
-
-    # sshd privilege separation directory
-    sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/sshd.conf" > /dev/null <<'TMPFILES_SSHD'
-# SSH privilege separation directory
-d /var/lib/sshd 0755 root root - -
-TMPFILES_SSHD
-}
-
 finish_image_kernel_config_rpm() {
     local root_fs_dir="$1"
 
@@ -696,9 +637,9 @@ finish_image_selinux_rpm() {
     # Use the targeted policy file_contexts to label the filesystem
     local file_contexts="${root_fs_dir}/etc/selinux/targeted/contexts/files/file_contexts"
     info "RPM mode: Labeling filesystem with targeted SELinux policy"
-    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}"
-    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/etc"
-    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/usr"
+    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}" >/dev/null
+    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/etc" >/dev/null
+    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/usr" >/dev/null
 }
 
 finish_image_tmpfiles_rpm() {
@@ -706,6 +647,12 @@ finish_image_tmpfiles_rpm() {
     local ETC_FULL_PATH="${root_fs_dir}/usr/share/flatcar/etc"
   
     sudo "${root_fs_dir}"/usr/sbin/flatcar-tmpfiles "${root_fs_dir}"
+
+    # sshd privilege separation directory
+    sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/sshd.conf" > /dev/null <<'TMPFILES_SSHD'
+# SSH privilege separation directory
+d /var/lib/sshd 0755 root root - -
+TMPFILES_SSHD
     
     # ALWAYS run these steps - they set up the /etc overlay and autologin
     # Previously this was in an 'else' block and was skipped when flatcar-tmpfiles existed

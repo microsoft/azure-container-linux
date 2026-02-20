@@ -11,7 +11,7 @@ grub_install_rpm() {
             . "${BUILD_LIBRARY_DIR}/rpm/rpm_install.sh" || die "Failed to source rpm_install.sh"
 
             # Setup repositories
-            rpm_staging=$(find_rpm_staging_dir)
+            rpm_staging=$(rpm_get_staging_dir)
             grub_local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
 
             # Install grub packages to BOARD_ROOT without dependencies
