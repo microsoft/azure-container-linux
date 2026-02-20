@@ -45,7 +45,13 @@ case "${FLAGS_target}" in
 esac
 
 uki_install_rpm() {
-    info "UKI/RPM mode: Installing systemd-boot and systemd-ukify"
+    info "UKI/RPM mode: Installing systemd-boot to BOARD_ROOT"
+
+    # Verify that ukify is available in the SDK
+    if ! command -v ukify &>/dev/null; then
+        die "UKI/RPM: ukify not found in SDK. Ensure the SDK container was built with systemd[boot,ukify]."
+    fi
+    info "UKI/RPM: Using SDK-provided ukify from $(command -v ukify)"
 
     # Source rpm_install functions for find_rpm_staging_dir
     . "${BUILD_LIBRARY_DIR}/rpm/rpm_install.sh" || die "Failed to source rpm_install.sh"
@@ -58,26 +64,18 @@ uki_install_rpm() {
         die "RPM cache directory not found: ${uki_local_cache}"
     fi
 
-    # Find required RPMs in the cache.
-    local -A uki_rpms
-    for pkg in systemd-boot systemd-ukify python3-pefile; do
-        local rpm_file
-        rpm_file=$(find "${uki_local_cache}" -name "${pkg}-[0-9]*.rpm" | head -1)
-        if [[ -z "${rpm_file}" ]]; then
-            die "RPM file not found for package: ${pkg} in ${uki_local_cache}"
-        fi
-        uki_rpms["${pkg}"]="${rpm_file}"
-    done
+    # Find and install systemd-boot RPM to BOARD_ROOT (target image sysroot).
+    local rpm_file
+    rpm_file=$(find "${uki_local_cache}" -name "systemd-boot-[0-9]*.rpm" | head -1)
+    if [[ -z "${rpm_file}" ]]; then
+        die "RPM file not found for package: systemd-boot in ${uki_local_cache}"
+    fi
 
     info "Installing systemd-boot to BOARD_ROOT"
     sudo rpm --root="${BOARD_ROOT}" --install -vh --force --nodeps \
-        "${uki_rpms[systemd-boot]}"
+        "${rpm_file}"
 
-    info "Installing systemd-ukify and python3-pefile to SDK root"
-    sudo rpm --install -vh --force --nodeps \
-        "${uki_rpms[systemd-ukify]}" "${uki_rpms[python3-pefile]}"
-
-    info "UKI/RPM: Successfully installed systemd-boot, systemd-ukify, and python3-pefile"
+    info "UKI/RPM: Successfully installed systemd-boot to BOARD_ROOT"
 }
 
 uki_provision_rpm() {

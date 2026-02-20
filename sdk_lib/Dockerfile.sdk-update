@@ -12,7 +12,7 @@ RUN echo 'export FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -
 
 RUN chown sdk:sdk /mnt/host/source
 
-# Regenerate manifest for sdk-depends to pick up the new r57 revision with RPM/DNF5
+# Regenerate manifest for sdk-depends to pick up the new r58 revision with RPM/DNF5 and UKI tools
 # Use the actual source location since /var/lib/portage/repos/coreos-overlay doesn't exist yet
 RUN sudo bash -c 'cd /mnt/host/source/src/third_party/coreos-overlay/coreos-devel/sdk-depends && for ebuild in *.ebuild; do ebuild "$ebuild" manifest; done'
 
@@ -20,7 +20,7 @@ RUN /home/sdk/sdk_entry.sh ./update_chroot --toolchain_boards="amd64-usr arm64-u
 
 # Force rebuild of packages that need new USE flags
 # The base SDK may have these installed without the correct USE flags
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n --changed-use --deep dev-cpp/toml11 dev-libs/libcomps dev-libs/libsolv app-arch/rpm app-arch/dnf5'
+RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n --changed-use --deep dev-cpp/toml11 dev-libs/libcomps dev-libs/libsolv app-arch/rpm app-arch/dnf5 sys-apps/systemd'
 
 RUN /home/sdk/sdk_entry.sh ./setup_board --board="arm64-usr" --regen_configs
 RUN /home/sdk/sdk_entry.sh ./setup_board --board="amd64-usr" --regen_configs
@@ -37,6 +37,9 @@ RUN echo "=== Testing DNF5 ===" && \
 
 # Remove problematic compatibility alias that references missing builddep plugin
 RUN sudo rm -f /usr/share/dnf5/aliases.d/compatibility-plugins.conf
+
+# Verify ukify is available from systemd[boot,ukify]
+RUN ukify --help >/dev/null 2>&1 || (echo "ERROR: ukify not found or broken" && exit 1)
 
 # Restore original .bashrc to remove sandbox disablement
 RUN mv /home/sdk/.bashrc.bak /home/sdk/.bashrc
