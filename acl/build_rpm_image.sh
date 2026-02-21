@@ -8,6 +8,9 @@
 #   ./build_rpm_image.sh [options]
 #
 # Options:
+#   --acg-image-version-id=ID            Azure Compute Gallery image version resource ID. When set,
+#                                        skip VHD upload and image creation; use this image directly
+#                                        (for start-vm --vm-type=azure)
 #   --az-storage-account=NAME            Azure storage account name to override default (for start-vm --vm-type=azure)
 #   --az-sub-id=ID                       Azure subscription ID to override default (for start-vm --vm-type=azure)
 #   --az-region=REGION                   Azure region to override default (for start-vm --vm-type=azure)
@@ -118,6 +121,7 @@ VM_BOOT_TIMEOUT="${VM_BOOT_TIMEOUT:-180}"  # Seconds to wait for VM boot
 PARITY=""  # Path to os-diff directory for parity data collection and reporting
 SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-false}"  # Enable secure boot (disable for unsigned kernels)
 RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
+ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID (bypasses VHD upload)
 
 # Set envi var-s required for RPM mode
 export PACKAGE_SOURCE_MODE=RPM
@@ -518,6 +522,14 @@ parse_args() {
                 ;;
             --az-storage-account)
                 AZ_STORAGE_ACC="$2"
+                shift 2
+                ;;
+            --acg-image-version-id=*)
+                ACG_IMAGE_VERSION_ID="${1#*=}"
+                shift
+                ;;
+            --acg-image-version-id)
+                ACG_IMAGE_VERSION_ID="$2"
                 shift 2
                 ;;
             --no-cleanup)
@@ -1932,9 +1944,12 @@ create_gallery_image_version() {
 }
 
 # Creates Azure VM.
+# Args: vm_rg_name image_id_or_version
+#   If ACG_IMAGE_VERSION_ID is set, the second arg is the full resource ID.
+#   Otherwise it is a gallery image version string used to compose the ID.
 create_vm_azure() {
     local vm_rg_name="$1"
-    local image_version="$2"
+    local image_version_or_id="$2"
     
     # Create VM RG
     if [[ "$(az group exists -n "$vm_rg_name")" == "false" ]]; then
@@ -1945,8 +1960,14 @@ create_vm_azure() {
             --tags "createdBy=$(whoami)" "purpose=VM-testing" "creationTime=$(date +%s)" ${BUILD_ID:+"buildId=${BUILD_ID}"}
     fi
     
-    # Compose image ID inside the gallery
-    local image_id="/subscriptions/$AZ_SUB_ID/resourceGroups/$AZ_GALLERY_RG/providers/Microsoft.Compute/galleries/$AZ_ACG/images/$AZ_VM_IMAGE_DEF/versions/$image_version"
+    # Determine image ID
+    local image_id
+    if [[ -n "${ACG_IMAGE_VERSION_ID}" ]]; then
+        image_id="${image_version_or_id}"
+    else
+        # Compose image ID inside the gallery
+        image_id="/subscriptions/$AZ_SUB_ID/resourceGroups/$AZ_GALLERY_RG/providers/Microsoft.Compute/galleries/$AZ_ACG/images/$AZ_VM_IMAGE_DEF/versions/$image_version_or_id"
+    fi
     
     # Create public IP first with required IP policy compliance tags
     local public_ip_name="${VM_NAME}PublicIP"
@@ -2026,20 +2047,26 @@ start_vm_azure() {
     info "Setting Azure subscription..."
     az account set --subscription "$AZ_SUB_ID"
     
-    # Step 1: Check/Create Azure infrastructure
-    check_azure_infra
-    
-    # Step 2: Upload VHD to storage
-    local blob_name="$(date +%y%m%d.%H%M%S)-${BUILD_ID:+${BUILD_ID}-}${IMG_NAME}.vhd"
-    upload_vhd_to_storage "$vm_image_path" "$blob_name"
-    
-    # Step 3: Create gallery image version
-    local image_version
-    image_version=$(get_next_image_version)
-    create_gallery_image_version "$image_version" "$blob_name"
-    
-    # Step 4: Create VM RG and VM
-    create_vm_azure "$vm_rg_name" "$image_version"
+    if [[ -n "${ACG_IMAGE_VERSION_ID}" ]]; then
+        # Use pre-existing gallery image version — skip VHD upload and image creation
+        info "Using pre-existing ACG image version: ${ACG_IMAGE_VERSION_ID}"
+        create_vm_azure "$vm_rg_name" "${ACG_IMAGE_VERSION_ID}"
+    else
+        # Step 1: Check/Create Azure infrastructure
+        check_azure_infra
+        
+        # Step 2: Upload VHD to storage
+        local blob_name="$(date +%y%m%d.%H%M%S)-${BUILD_ID:+${BUILD_ID}-}${IMG_NAME}.vhd"
+        upload_vhd_to_storage "$vm_image_path" "$blob_name"
+        
+        # Step 3: Create gallery image version
+        local image_version
+        image_version=$(get_next_image_version)
+        create_gallery_image_version "$image_version" "$blob_name"
+        
+        # Step 4: Create VM RG and VM
+        create_vm_azure "$vm_rg_name" "$image_version"
+    fi
     
     # Step 5: Get VM IP and validate that VM deployment succeeded
     export VM_IP=$(az vm show -d -g "$vm_rg_name" -n "$VM_NAME" --query "publicIps" -o tsv)
@@ -2482,8 +2509,10 @@ main() {
 
     # Step 4: Start VM (if requested)
     if [[ "$START_VM" == "true" ]]; then
-        # Validate that VM image exists
-        if ! [[ -f "$vm_image_path" ]]; then
+        # When using a pre-existing ACG image version, no local VHD is needed
+        if [[ -n "${ACG_IMAGE_VERSION_ID}" ]] && [[ "$VM_TYPE" == "azure" ]]; then
+            info "Using pre-existing ACG image version — skipping local image check"
+        elif ! [[ -f "$vm_image_path" ]]; then
             error "VM image not found at expected path: $vm_image_path"
             error "Build a VM image first with '--build-vm-image'"
             exit 1
