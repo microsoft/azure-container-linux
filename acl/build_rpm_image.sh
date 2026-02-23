@@ -2362,6 +2362,9 @@ collect_parity_data() {
     timestamp=$(date +%Y%m%d-%H%M%S)
     local collected_file="${collect_output_dir}/${timestamp}-comparison-data.json"
     
+    info "Running data collection..."
+    "${SCRIPT_DIR}/acl/collect_vm_data.sh" --host="$VM_IP" --collector="$collector_bin" --user="$VM_SSH_USER" --output="$collected_file" >/dev/null 2>&1
+
     # Compress VM image with bzip2 -9 to get compressed size
     info "Compressing image with bzip2 -9 for size measurement..."
     rm -f "${vm_image_path}.bz2"
@@ -2369,9 +2372,6 @@ collect_parity_data() {
     local compressed_size
     compressed_size=$(stat -c%s "${vm_image_path}.bz2")
     info "Compressed image size: $(numfmt --to=iec-i --suffix=B $compressed_size) ($compressed_size bytes)"
-    
-    info "Running data collection..."
-    "${SCRIPT_DIR}/acl/collect_vm_data.sh" --host="$VM_IP" --collector="$collector_bin" --user="$VM_SSH_USER" --output="$collected_file" >/dev/null 2>&1
     
     # Inject compressed_image_size into the collected JSON
     info "Adding compressed_image_size to collected data..."
