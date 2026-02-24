@@ -734,6 +734,9 @@ TMPFILES_SSHD
 
     # Move profile.d if exists
     if [[ -d "${root_fs_dir}/etc/profile.d" ]]; then
+        # Remove umask.sh installed by Azure Linux bash RPM to
+        # align with upstream Flatcar behavior
+        sudo rm -f "${root_fs_dir}/etc/profile.d/umask.sh"
         sudo cp -a "${root_fs_dir}/etc/profile.d" "${ETC_FULL_PATH}/"
     fi
 
