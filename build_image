@@ -34,7 +34,9 @@ DEFINE_string base_pkg "coreos-base/coreos" \
 DEFINE_string base_dev_pkg "coreos-base/coreos-dev" \
   "The base portage package to base the build off of (only applies to dev containers)"
 DEFINE_string base_sysexts "containerd-flatcar|app-containers/containerd,docker-flatcar|app-containers/docker&app-containers/docker-cli&app-containers/docker-buildx" \
-  "Comma-separated list of name:package[&package[&package]] - build 'package' (a single package or a list of packages separated by '&') into sysext 'name', and include with OS image and update payload. Must be in order of dependencies, base sysexts come first."
+  "Comma-separated list of name|package[&package] - base sysexts always included with OS image. Must be in order of dependencies."
+DEFINE_string gpu_sysexts "nvidia-driver|x11-drivers/nvidia-drivers,nvidia-container-toolkit|nvidia-user-space/nvidia-container-toolkit,nvidia-fabric-manager|nvidia-user-space/nvidia-fabric-manager" \
+  "Comma-separated list of name|package[&package] - GPU sysexts appended to base_sysexts. Pass empty string to disable."
 DEFINE_string output_root "${DEFAULT_BUILD_ROOT}/images" \
   "Directory in which to place image result directories (named by version)"
 DEFINE_string disk_layout "" \
@@ -186,7 +188,12 @@ fi
 
 if [[ "${PROD_IMAGE}" -eq 1 ]]; then
   IMAGE_BUILD_TYPE="prod"
-  create_prod_image ${FLATCAR_PRODUCTION_IMAGE_NAME} ${DISK_LAYOUT} ${FLAGS_group} ${FLAGS_base_pkg} ${FLAGS_base_sysexts}
+  # Combine base and GPU sysext lists
+  all_sysexts="${FLAGS_base_sysexts}"
+  if [[ -n "${FLAGS_gpu_sysexts}" ]]; then
+    all_sysexts="${all_sysexts},${FLAGS_gpu_sysexts}"
+  fi
+  create_prod_image ${FLATCAR_PRODUCTION_IMAGE_NAME} ${DISK_LAYOUT} ${FLAGS_group} ${FLAGS_base_pkg} ${all_sysexts}
   if [[ ${FLAGS_extract_update} -eq ${FLAGS_TRUE} ]]; then
     extract_update "${FLATCAR_PRODUCTION_IMAGE_NAME}" "${DISK_LAYOUT}"
   fi

@@ -14,6 +14,7 @@
 #   --az-storage-account=NAME            Azure storage account name to override default (for start-vm --vm-type=azure)
 #   --az-sub-id=ID                       Azure subscription ID to override default (for start-vm --vm-type=azure)
 #   --az-region=REGION                   Azure region to override default (for start-vm --vm-type=azure)
+#   --az-vm-size=SIZE                    Azure VM size (default: Standard_D2s_v5)
 #   --board=BOARD                        Target board (default: amd64-usr)
 #   --boot-timeout=SECS                  Timeout waiting for VM boot (default: 180)
 #   --build-rpms                         Build custom RPM packages using Azure Linux toolkit (runs acl/build.sh)
@@ -46,6 +47,7 @@
 #   --unofficial-kernel-build-id=ID      Specify Azure DevOps build ID for kernel (default: 1028516)
 #   --use-serial                         Use serial console for script execution (default, no SSH/ignition needed)
 #   --use-ssh                            Use SSH for script execution (requires working ignition/SSH keys)
+#   --gpu                                Include GPU sysexts (NVIDIA driver, container-toolkit, fabric-manager)
 #   --vm-name=NAME                       Name for the VM (default: acl)
 #   --vm-type=TYPE                       VM type when building VM images: azure|qemu (default: qemu)
 #
@@ -122,6 +124,7 @@ PARITY=""  # Path to os-diff directory for parity data collection and reporting
 SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-false}"  # Enable secure boot (disable for unsigned kernels)
 RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID (bypasses VHD upload)
+BUILD_GPU=false  # Include GPU (NVIDIA driver, container-toolkit, fabric-manager) sysexts
 
 # Set envi var-s required for RPM mode
 export PACKAGE_SOURCE_MODE=RPM
@@ -131,13 +134,15 @@ export BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
 
 # Var-s for Azure VM testing:
 # - Subscription ID
-AZ_SUB_ID="${AZ_SUB_ID_OVERRIDE:-b99b2264-54e6-408e-812b-2ec280c0ce7a}"
+AZ_SUB_ID="${AZ_SUB_ID:-b99b2264-54e6-408e-812b-2ec280c0ce7a}"
 # - Region
-AZ_REGION="${AZ_REGION_OVERRIDE:-eastus2}"
+AZ_REGION="${AZ_REGION:-eastus2}"
 # - Storage RG
 AZ_STORAGE_RG="acl-test-storage-rg"
 # - Storage account
-AZ_STORAGE_ACC="${AZ_STORAGE_ACC_OVERRIDE:-aclteststorageacc}"
+AZ_STORAGE_ACC="${AZ_STORAGE_ACC:-aclteststorageacc}"
+# - VM size
+AZ_VM_SIZE="${AZ_VM_SIZE:-Standard_D2s_v5}"
 # - Storage container
 AZ_STORAGE_CONTAINER="acl-test-vm-img"
 # - Gallery RG
@@ -532,8 +537,20 @@ parse_args() {
                 ACG_IMAGE_VERSION_ID="$2"
                 shift 2
                 ;;
+            --az-vm-size=*)
+                AZ_VM_SIZE="${1#*=}"
+                shift
+                ;;
+            --az-vm-size)
+                AZ_VM_SIZE="$2"
+                shift 2
+                ;;
             --no-cleanup)
                 NO_CLEANUP=true
+                shift
+                ;;
+            --gpu)
+                BUILD_GPU=true
                 shift
                 ;;
             --run-kola-tests)
@@ -1029,6 +1046,14 @@ build_image() {
         "--disk_layout=${DISK_LAYOUT}"
         "--image_name=${IMG_NAME}_image.bin"
     )
+
+    # GPU sysexts: disabled by default, enabled with --gpu
+    if [[ "$BUILD_GPU" == "true" ]]; then
+        info "  GPU sysexts:     enabled"
+    else
+        build_args+=("--gpu_sysexts=")
+        info "  GPU sysexts:     disabled (use --gpu to enable)"
+    fi
 
     if [[ "$FORCE_REBUILD" == "true" ]]; then
         build_args+=("--replace")
@@ -1927,6 +1952,19 @@ create_gallery_image_version() {
     local storage_account_resource_id="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/$AZ_STORAGE_RG/providers/Microsoft.Storage/storageAccounts/$AZ_STORAGE_ACC"
     local blob_url="https://$AZ_STORAGE_ACC.blob.core.windows.net/$AZ_STORAGE_CONTAINER/$blob_name"
     
+    # The target regions must include the gallery's own location.
+    local gallery_location
+    gallery_location=$(az sig show -r "$AZ_ACG" -g "$AZ_GALLERY_RG" --query location -o tsv)
+    local target_regions="$AZ_REGION"
+    local replication_mode="Shallow"
+    if [[ "${gallery_location,,}" != "${AZ_REGION,,}" ]]; then
+        # Shallow replication only supports the gallery's home region.
+        # Use Full replication when we need additional target regions.
+        warn "Gallery location '${gallery_location}' differs from target region '${AZ_REGION}'; switching to Full replication mode (this will be slower)"
+        target_regions="$AZ_REGION $gallery_location"
+        replication_mode="Full"
+    fi
+
     # Create image version using Azure CLI
     az sig image-version create \
         --resource-group "$AZ_GALLERY_RG" \
@@ -1935,10 +1973,10 @@ create_gallery_image_version() {
         --gallery-image-version "$image_version" \
         --os-vhd-uri "$blob_url" \
         --os-vhd-storage-account "$storage_account_resource_id" \
-        --target-regions "$AZ_REGION" \
+        --target-regions $target_regions \
         --replica-count 1 \
         --storage-account-type Standard_LRS \
-        --replication-mode Shallow
+        --replication-mode "$replication_mode"
     
     info "✓ Gallery image version created: $image_version"
 }
@@ -1987,7 +2025,7 @@ create_vm_azure() {
     local vm_create_args=(
         --resource-group "$vm_rg_name"
         --name "$VM_NAME"
-        --size "Standard_D2s_v5"
+        --size "$AZ_VM_SIZE"
         --os-disk-size-gb 60
         --admin-username "$VM_SSH_USER"
         --ssh-key-values "@${VM_SSH_KEY}.pub"
@@ -2317,6 +2355,7 @@ print_summary() {
         echo "     Board: ${BOARD}"
         echo "     Group: ${GROUP}"
         echo "     Mode: RPM (Azure Linux RPMs + Portage)"
+        echo "     GPU sysexts: ${BUILD_GPU}"
         echo
     fi
 
