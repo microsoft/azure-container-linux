@@ -31,6 +31,8 @@
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
 #   --output=DIR                         Output directory for images
+#   --tag=KEY=VALUE                      Add a resource tag to Azure VMs/RGs (can specify multiple times)
+#                                        Default tag: createdBy=<current user>
 #   --rebuild                            Force rebuild even if image exists
 #   --parity[=DIR]                       Run parity data collection and comparison report.
 #                                        Requires os-diff repo (default DIR: ../os-diff)
@@ -156,9 +158,12 @@ VM_RG_PREFIX="$(whoami)-acl-test-vm-rg"
 # - By default, set to false and clean up pre-existing VM RGs for the user
 NO_CLEANUP="${NO_CLEANUP:-false}"
 
-# Pipeline build identifier — used to scope Azure resource cleanup and
-# ensure unique blob/gallery-image-version names across concurrent runs.
+# Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
+
+# Tags applied to Azure resources (VMs, RGs, public IPs) for identification and cleanup.
+# Default: createdBy=<current user>.  Override or extend via --tag=key=value.
+RESOURCE_TAGS=("createdBy=$(whoami)")
 
 # Global variable to store the actual VM resource group name
 # - For QEMU VMs: empty string (not used)
@@ -552,6 +557,14 @@ parse_args() {
             --gpu)
                 BUILD_GPU=true
                 shift
+                ;;
+            --tag=*)
+                RESOURCE_TAGS+=("${1#*=}")
+                shift
+                ;;
+            --tag)
+                RESOURCE_TAGS+=("$2")
+                shift 2
                 ;;
             --run-kola-tests)
                 RUN_KOLA_TESTS=true
@@ -1364,7 +1377,7 @@ wait_for_vm_boot_qemu() {
     local timeout="${2:-300}"
 
     info "Connecting to VM console (will disconnect on login prompt, timeout: ${timeout}s)..."
-    echo "═══════════════════════════════════════════════════════════════════════════════"
+    echo "╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
 
     # Check if expect is available
     if ! command -v expect &>/dev/null; then
@@ -1393,7 +1406,7 @@ expect {
     }
     -re {(login:|Login:)} {
         # Login prompt detected - VM has booted
-        puts "\n═══════════════════════════════════════════════════════════════════════════════"
+        puts "\n╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
         puts "✓ Login prompt detected - VM boot complete"
         # Send escape sequence to disconnect from console
         send "\x1d"
@@ -1402,23 +1415,23 @@ expect {
     }
     -re {(emergency|Emergency mode|Give root password|Press Enter for maintenance|Entering emergency mode|You are in emergency mode)} {
         # Emergency shell detected - switch to interactive mode
-        puts "\n═══════════════════════════════════════════════════════════════════════════════"
+        puts "\n╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
         puts "⚠ EMERGENCY SHELL DETECTED - Switching to interactive console"
         puts "  Press Ctrl+] to disconnect"
-        puts "═══════════════════════════════════════════════════════════════════════════════"
+        puts "╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
         # Enter interactive mode - pass control to user
         interact
         exit 2
     }
     timeout {
-        puts "\n═══════════════════════════════════════════════════════════════════════════════"
+        puts "\n╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
         puts "✗ Timeout waiting for login prompt"
         send "\x1d"
         expect eof
         exit 1
     }
     eof {
-        puts "\n═══════════════════════════════════════════════════════════════════════════════"
+        puts "\n╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
         puts "✗ Console connection lost"
         exit 1
     }
@@ -1989,13 +2002,16 @@ create_vm_azure() {
     local vm_rg_name="$1"
     local image_version_or_id="$2"
     
+    # Always-present tags appended to caller-supplied RESOURCE_TAGS
+    local all_tags=("${RESOURCE_TAGS[@]}" "purpose=VM-testing" "creationTime=$(date +%s)")
+
     # Create VM RG
     if [[ "$(az group exists -n "$vm_rg_name")" == "false" ]]; then
         info "Creating VM RG: $vm_rg_name"
         az group create \
             --name "$vm_rg_name" \
             --location "$AZ_REGION" \
-            --tags "createdBy=$(whoami)" "purpose=VM-testing" "creationTime=$(date +%s)" ${BUILD_ID:+"buildId=${BUILD_ID}"}
+            --tags "${all_tags[@]}"
     fi
     
     # Determine image ID
@@ -2017,7 +2033,7 @@ create_vm_azure() {
         --allocation-method Static \
         --sku Standard \
         --ip-tags FirstPartyUsage=/NonProd \
-        --tags "createdBy=$(whoami)" "purpose=VM-testing" ${BUILD_ID:+"buildId=${BUILD_ID}"}
+        --tags "${all_tags[@]}"
     
     info "Creating an Azure VM ${VM_NAME} in RG ${vm_rg_name}..."
     
@@ -2034,7 +2050,7 @@ create_vm_azure() {
         --image "$image_id"
         --location "$AZ_REGION"
         --public-ip-address "$public_ip_name"
-        --tags "createdBy=$(whoami)" "purpose=VM-testing" ${BUILD_ID:+"buildId=${BUILD_ID}"}
+        --tags "${all_tags[@]}"
     )
     
     # Add security features based on SECURE_BOOT_ENABLED variable
@@ -2141,15 +2157,18 @@ remove_vm_azure() {
         return 0
     fi
     
-    info "Scheduling deletion of VM resources for user: $(whoami)"
+    info "Scheduling deletion of VM resources matching tags: ${RESOURCE_TAGS[*]}"
     
-    # Get resource groups scoped to this user (and build, if BUILD_ID is set)
+    # Build JMESPath filter from RESOURCE_TAGS
+    local query_filter=""
+    for tag in "${RESOURCE_TAGS[@]}"; do
+        local key="${tag%%=*}"
+        local value="${tag#*=}"
+        [[ -n "$query_filter" ]] && query_filter+=" && "
+        query_filter+="tags.${key}=='${value}'"
+    done
     local matching_rgs
-    if [[ -n "${BUILD_ID}" ]]; then
-        matching_rgs=$(az group list --query "[?tags.createdBy=='$(whoami)' && tags.buildId=='${BUILD_ID}'].name" -o tsv)
-    else
-        matching_rgs=$(az group list --tag "createdBy=$(whoami)" --query "[].name" -o tsv)
-    fi
+    matching_rgs=$(az group list --query "[?${query_filter}].name" -o tsv)
     
     if [[ -z "$matching_rgs" ]]; then
         info "No resource groups found for cleanup"
