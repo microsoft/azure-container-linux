@@ -60,22 +60,19 @@ uki_install_rpm() {
     rpm_staging=$(rpm_get_staging_dir)
     local uki_local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
 
-    if [[ ! -d "${uki_local_cache}" ]]; then
-        die "RPM cache directory not found: ${uki_local_cache}"
-    fi
+    # Note: systemd-boot package should already be downloaded by finish_image_rpm()
+    # No need to call rpm_download_packages again - the package is in the local cache
 
-    # Find and install systemd-boot RPM to BOARD_ROOT (target image sysroot).
+    # Find systemd-boot RPM in local cache (pick highest version)
     local rpm_file
-    rpm_file=$(find "${uki_local_cache}" -name "systemd-boot-[0-9]*.rpm" | head -1)
+    rpm_file=$(find "${uki_local_cache}" -name "systemd-boot-[0-9]*.rpm" | sort -V | tail -1)
     if [[ -z "${rpm_file}" ]]; then
         die "RPM file not found for package: systemd-boot in ${uki_local_cache}"
     fi
 
-    info "Installing systemd-boot to BOARD_ROOT"
-    sudo rpm --root="${BOARD_ROOT}" --install -vh --force --nodeps \
-        "${rpm_file}"
-
-    info "UKI/RPM: Successfully installed systemd-boot to BOARD_ROOT"
+    # Import GPG key and install package
+    rpm_import_gpg_key "${BOARD_ROOT}"
+    rpm_install_local_packages "${BOARD_ROOT}" "${rpm_file}" || die "Failed to install systemd-boot to BOARD_ROOT"
 }
 
 uki_provision_rpm() {

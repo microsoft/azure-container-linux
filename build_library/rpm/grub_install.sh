@@ -14,33 +14,26 @@ grub_install_rpm() {
             rpm_staging=$(rpm_get_staging_dir)
             grub_local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
 
-            # Install grub packages to BOARD_ROOT without dependencies
+            # Note: grub/shim packages should already be downloaded by finish_image_rpm()
+            # No need to call rpm_download_packages again - the packages are in the local cache
+
+            # Install grub packages to BOARD_ROOT from local RPM files
             # We only need the grub binaries and modules, not runtime dependencies
-            # Use rpm directly from the local package cache
-            info "RPM mode: Installing grub2 and shim to BOARD_ROOT using rpm --nodeps"
+            info "RPM mode: Installing grub2 and shim to BOARD_ROOT from local RPMs"
 
-            if [[ ! -d "${grub_local_cache}" ]]; then
-                die "RPM cache directory not found: ${grub_local_cache}"
-            fi
-
-            # Find and install grub RPMs without dependencies
+            # Find grub RPMs in local cache (pick highest version of each)
             grub_rpms=()
             for pkg in grub2 grub2-efi grub2-efi-binary shim; do
-                rpm_file=$(find "${grub_local_cache}" -name "${pkg}-[0-9]*.rpm" | head -1)
+                rpm_file=$(find "${grub_local_cache}" -name "${pkg}-[0-9]*.rpm" | sort -V | tail -1)
                 if [[ -z "${rpm_file}" ]]; then
                     die "RPM file not found for package: ${pkg} in ${grub_local_cache}"
                 fi
                 grub_rpms+=("${rpm_file}")
             done
 
-            info "Installing ${#grub_rpms[@]} grub RPMs to BOARD_ROOT (without dependencies)"
-            sudo rpm --root="${BOARD_ROOT}" --install -vh --force --nodeps "${grub_rpms[@]}"
-
-            if [[ $? -ne 0 ]]; then
-                die "Failed to install grub packages to BOARD_ROOT"
-            fi
-
-            info "Successfully installed grub packages to BOARD_ROOT"
+            # Import GPG key and install packages
+            rpm_import_gpg_key "${BOARD_ROOT}"
+            rpm_install_local_packages "${BOARD_ROOT}" "${grub_rpms[@]}" || die "Failed to install grub packages to BOARD_ROOT"
             ;;
         i386-pc)
             # RPM mode: Skip BIOS boot - Azure Linux VMs use UEFI only

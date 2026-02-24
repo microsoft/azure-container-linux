@@ -52,6 +52,10 @@ delete_prompt() {
     echo "Running in non-interactive mode so deleting output directory."
   fi
   if [ "${SURE}" == "y" ] ; then
+    # Unmount any pseudo-filesystems left over from a failed RPM build
+    if type -t rpm_cleanup_build_dir &>/dev/null; then
+        rpm_cleanup_build_dir "${BUILD_DIR}"
+    fi
     sudo rm -rf "${BUILD_DIR}"
     echo "Deleted ${BUILD_DIR}"
   else
@@ -761,6 +765,9 @@ EOF
   else
     # RPM mode: Azure Linux already has these files in /etc from filesystem RPM
     info "RPM mode: Using existing passwd/group files from Azure Linux filesystem"
+    # Clean up conflicting /etc/issue tmpfiles.d entries before running systemd-tmpfiles
+    # This must happen AFTER packages are installed but BEFORE systemd-tmpfiles --create runs
+    finish_image_cleanup_issue_rpm "${root_fs_dir}"
   fi
   sudo systemd-tmpfiles --create --remove --boot --exclude-prefix=/dev --root="${root_fs_dir}"
   if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then

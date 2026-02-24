@@ -123,31 +123,7 @@ The build system requires the Flatcar SDK container, which includes all build to
 - If SDK container is corrupted
 - To be confirmed: Also needed after changing a commit.
 
-### Phase 2: Download Azure Linux RPM Packages
-
-Download required RPM packages from Azure Linux repositories:
-
-```bash
-# Download all required RPMs (recommended - handles repo creation)
-./acl/build_rpm_image.sh --download-rpms
-
-# Force re-download by cleaning staging and build RPM directories first
-./acl/build_rpm_image.sh --clean --download-rpms
-```
-
-**Download behavior:**
-
-- Checks for existing RPMs in staging directory
-- Only downloads missing packages (incremental)
-- Resolves and downloads all dependencies automatically
-- Creates local repository metadata with `createrepo_c`
-
-Note that only a subset of packages is downloaded, as majority of packages is
-downloaded during the image build using `dnf5`.
-
-**Staging directory:** `__build__/rpm-staging/`
-
-### Phase 2.5: Build Custom RPM Packages
+### Phase 2: Build Custom RPM Packages
 
 **Important**: This step is required because `ignition` is not available in Azure Linux repositories.
 
@@ -170,7 +146,7 @@ This step:
 
 **Build output:** Custom RPMs are added to `__build__/rpm-staging/`
 
-### Phase 2.6: Download Unofficial Kernel
+### Phase 2.5: Download Unofficial Kernel
 
 For testing with unofficial/unsigned kernel builds from Azure DevOps CI:
 
@@ -213,7 +189,7 @@ For testing with unofficial/unsigned kernel builds from Azure DevOps CI:
 Build the Flatcar production image using hybrid package sources.
 
 ```bash
-# Download RPMs and build image in one command
+# Build image
 ./acl/build_rpm_image.sh --rebuild
 ```
 

@@ -23,7 +23,7 @@
 #   --clean                              Clean staging and build RPM directories before download
 #   --console-password=PASS              Serial console login password (empty for passwordless)
 #   --console-user=USER                  Serial console login user (default: root)
-#   --download-rpms                      Download Azure Linux RPMs to staging directory
+#   --download-rpms                      [no-op] Kept for pipeline compatibility
 #   --download-unofficial-kernel         Download unofficial kernel RPMs from Azure DevOps build
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
 #   --help                               Show this help message
@@ -98,7 +98,6 @@ BOARD="${BOARD:-amd64-usr}"
 GROUP="${GROUP:-production}"
 BUILD_SDK_CONTAINER=false
 BUILD_RPMS=false
-DOWNLOAD_RPMS=false
 USE_UNOFFICIAL_KERNEL=false
 UNOFFICIAL_KERNEL_BUILD_ID="1037837"
 CLEAN_DIRS=false
@@ -350,8 +349,9 @@ parse_args() {
                 BUILD_RPMS=true
                 shift
                 ;;
-            --download-rpms|--download)
-                DOWNLOAD_RPMS=true
+
+            --download-rpms)
+                # no-op: kept for pipeline compatibility
                 shift
                 ;;
             --download-unofficial-kernel)
@@ -575,7 +575,8 @@ parse_args() {
                 ;;
             *)
                 error "Unknown option: $1"
-                show_help
+                error "Use --help to see available options."
+                exit 1
                 ;;
         esac
     done
@@ -771,31 +772,6 @@ check_azure_prereqs() {
     info "✓ Azure prerequisites met"
 }
 
-# Downloads Azure Linux RPMs.
-download_rpms() {
-    section "Downloading Azure Linux RPMs"
-
-    mkdir -p "${STAGING_DIR}"
-
-    info "Using download_azure_linux_rpms.sh"
-    "${SCRIPT_DIR}/acl/download_azure_linux_rpms.sh" "${STAGING_DIR}"
-
-    # Verify downloads
-    local rpm_count=$(ls -1 "${STAGING_DIR}"/*.rpm 2>/dev/null | wc -l)
-    if [[ "$rpm_count" -eq 0 ]]; then
-        error "No RPMs were downloaded. Check network connectivity and repository access."
-        exit 1
-    fi
-
-    info "✓ Downloaded ${rpm_count} RPM packages"
-
-    # Verify critical packages are present
-    verify_critical_packages
-
-    # Create repository metadata
-    create_repo
-}
-
 # Downloads unofficial kernel RPMs from Azure DevOps build artifacts.
 download_unofficial_kernel() {
     section "Downloading Unofficial Kernel from Azure DevOps"
@@ -904,30 +880,6 @@ download_unofficial_kernel() {
 
     # Update repository metadata
     create_repo
-}
-
-# Verifies critical packages are in staging.
-verify_critical_packages() {
-    info "Verifying critical packages..."
-
-    local critical_packages=(
-        "grub2-efi-binary"
-        "shim"
-    )
-
-    local missing=()
-    for pkg in "${critical_packages[@]}"; do
-        if ! ls "${STAGING_DIR}/${pkg}"-[0-9]*.rpm &>/dev/null; then
-            missing+=("$pkg")
-        fi
-    done
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        error "Missing critical packages: ${missing[*]}"
-        exit 1
-    fi
-
-    info "✓ All critical packages present"
 }
 
 # Creates or updates repository metadata for the staging directory.
@@ -2342,17 +2294,6 @@ print_summary() {
     echo "This script will:"
     echo
 
-    if [[ "$DOWNLOAD_RPMS" == "true" ]]; then
-        echo "  1. Download Azure Linux RPM packages"
-        echo "     Target: ${STAGING_DIR}"
-        if [[ "$CLEAN_DIRS" == "true" ]]; then
-            echo "     Mode: Clean download (remove existing)"
-        else
-            echo "     Mode: Incremental (skip existing)"
-        fi
-        echo
-    fi
-
     if [[ "$BUILD_RPMS" == "true" ]]; then
         echo "  2. Build custom RPM packages"
         echo "     Output: ${STAGING_DIR}"
@@ -2513,12 +2454,7 @@ main() {
     # Step 0.5: Clean RPM directories (if requested)
     cleanup_rpm_directories
 
-    # Step 1: Download RPMs (if requested)
-    if [[ "$DOWNLOAD_RPMS" == "true" ]]; then
-        download_rpms
-    fi
-
-    # Step 1.5: Use unofficial kernel from Azure DevOps (if requested or previously downloaded)
+    # Step 1: Use unofficial kernel from Azure DevOps (if requested or previously downloaded)
     if [[ "$USE_UNOFFICIAL_KERNEL" == "true" ]]; then
         # Flag was passed - download unofficial kernel
         download_unofficial_kernel

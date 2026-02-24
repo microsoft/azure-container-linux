@@ -156,6 +156,8 @@ cleanup() {
     rm -rf "${BUILD_DIR}/base-pkginfo" || true
   fi
   rm -rf "${BUILD_DIR}/img-pkginfo"
+  # Remove RPM package log (created by rpm_install_package, root-owned)
+  rm -f "${BUILD_DIR}/.rpm-packages-explicit"
 }
 
 # Set up trap to execute cleanup() on script exit

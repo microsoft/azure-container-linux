@@ -77,10 +77,20 @@ start_image_rpm() {
 
     # Install filesystem RPM to provide basic directory structure
     # This replaces baselayout and creates /usr/lib, /etc, /bin -> usr/bin symlinks, etc.
-    rpm_install_package "${root_fs_dir}" filesystem || {
+    rpm_install_package --nogpgcheck "${root_fs_dir}" filesystem || {
         error "Failed to install filesystem package"
         return 1
     }
+
+    # Install azurelinux-repos and azurelinux-repos-extended to get the official
+    # repository definitions and GPG keys shipped by Azure Linux.
+    rpm_install_package --nogpgcheck "${root_fs_dir}" azurelinux-repos azurelinux-repos-extended || {
+        error "Failed to install azurelinux-repos packages"
+        return 1
+    }
+    # Remove the bootstrap repo now that the package-provided repos are in place.
+    # All subsequent rpm_install_package calls use GPG checking by default.
+    rpm_use_official_repos "${root_fs_dir}"
 
     # Create sysusers.d configs and run systemd-sysusers to create users/groups
     # BEFORE any RPM packages are installed, since RPM %pre scriptlets may need them
@@ -117,9 +127,7 @@ finish_image_rpm() {
         info "RPM mode: Generating initramfs with dracut"
 
         # Mount required filesystems for dracut
-        sudo mount --bind /dev "${root_fs_dir}/dev" || true
-        sudo mount --bind /proc "${root_fs_dir}/proc" || true
-        sudo mount --bind /sys "${root_fs_dir}/sys" || true
+        rpm_mount_pseudofs "${root_fs_dir}"
 
         # Ensure udevadm and systemd-udevd are findable
         # Azure Linux has udevadm at /usr/bin/udevadm and systemd-udevd at /usr/lib/systemd/systemd-udevd
@@ -470,9 +478,7 @@ EOF
             tail -50 "${dracut_log}" | while read line; do error "  $line"; done
             # Clean up before failing
             sudo rm -f "${root_fs_dir}/tmp/run-dracut.sh"
-            sudo umount "${root_fs_dir}/sys" 2>/dev/null || true
-            sudo umount "${root_fs_dir}/proc" 2>/dev/null || true
-            sudo umount "${root_fs_dir}/dev" 2>/dev/null || true
+            rpm_umount_pseudofs "${root_fs_dir}"
             die "RPM mode: dracut initramfs generation failed"
           }
 
@@ -486,9 +492,7 @@ EOF
         sudo rm -f "${root_fs_dir}/tmp/run-dracut.sh"
 
         # Unmount filesystems
-        sudo umount "${root_fs_dir}/sys" 2>/dev/null || true
-        sudo umount "${root_fs_dir}/proc" 2>/dev/null || true
-        sudo umount "${root_fs_dir}/dev" 2>/dev/null || true
+        rpm_umount_pseudofs "${root_fs_dir}"
 
         if [[ -f "${INITRAMFS_A_PATH}" ]]; then
           info "RPM mode: initramfs generated successfully"
@@ -616,6 +620,36 @@ SYSUSERS_CORE
     # so any directories we create here would be removed. The etc-overlay.sh script 
     # (part of the 99etc-overlay dracut module) creates /home/core with proper permissions
     # BEFORE ignition-files.service runs, which is when ignition writes SSH keys.
+
+    # Download grub/shim/systemd-boot packages for later use by grub_install.sh and uki_install.sh
+    # Must be done here while /etc/yum.repos.d is still available
+    info "RPM mode: Pre-downloading bootloader packages (grub2, shim, systemd-boot)"
+    rpm_staging=$(rpm_get_staging_dir)
+    rpm_download_packages "${rpm_staging}" "${root_fs_dir}" grub2 grub2-efi grub2-efi-binary shim systemd-boot
+}
+
+finish_image_cleanup_issue_rpm() {
+    local root_fs_dir="$1"
+
+    # Remove /etc/issue files and tmpfiles.d entries that conflict with bootengine's issuegen.conf.
+    # Azure Linux packages install /etc/issue and tmpfiles.d rules, but we want issuegen.conf
+    # to be the sole source for /etc/issue → ../run/issue symlink creation at boot.
+    info "RPM mode: Cleaning up /etc/issue conflicts (issuegen.conf will manage /etc/issue at boot)"
+    
+    # Remove physical files
+    sudo rm -f "${root_fs_dir}/etc/issue" "${root_fs_dir}/etc/issue.net"
+    sudo rm -f "${root_fs_dir}/usr/lib/issue" "${root_fs_dir}/usr/lib/issue.net"
+    sudo rm -f "${root_fs_dir}/usr/share/factory/etc/issue" "${root_fs_dir}/usr/share/factory/etc/issue.net"
+
+    # Remove conflicting tmpfiles.d entries
+    # etc.conf has: C! /etc/issue - - - -
+    # provision.conf has: f^ /etc/issue.d/50-provision.conf - - - - login.issue
+    if [[ -f "${root_fs_dir}/usr/lib/tmpfiles.d/etc.conf" ]]; then
+        sudo sed -i '/\/etc\/issue[^.].*$/d' "${root_fs_dir}/usr/lib/tmpfiles.d/etc.conf"
+    fi
+    if [[ -f "${root_fs_dir}/usr/lib/tmpfiles.d/provision.conf" ]]; then
+        sudo sed -i '/\/etc\/issue\.d/d' "${root_fs_dir}/usr/lib/tmpfiles.d/provision.conf"
+    fi
 }
 
 finish_image_kernel_config_rpm() {
@@ -948,7 +982,7 @@ After=sshd-keygen.service
 SSHD_KEYGEN_DROPIN
     # Disable traditional sshd.service, enable sshd.socket instead
     printf "disable sshd.service\nenable sshd.socket\n" | \
-      sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-sshd.preset" > /dev/null
+    sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-sshd.preset" > /dev/null
     # Remove any existing sshd.service enable symlinks from the RPM
     sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/sshd.service"
     sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/sshd.service"
@@ -960,15 +994,7 @@ SSHD_KEYGEN_DROPIN
     sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/extend-filesystems.service"
     sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/extend-filesystems.service"
 
-    # Remove /etc/issue and /usr/lib/issue from azurelinux-release RPM.
-    # azurelinux-release installs /usr/lib/issue (static text) and /etc/issue → ../lib/issue (symlink).
-    # systemd also ships /usr/share/factory/etc/issue which tmpfiles copies to /etc/issue at boot.
-    # We want issuegen.conf tmpfiles to create /etc/issue → ../run/issue at boot instead.
-    # Remove all sources to prevent them from taking precedence over issuegen.conf's L entry.
-    info "RPM mode: Removing azurelinux-release/systemd issue files (issuegen.conf will create symlink at boot)"
-    sudo rm -f "${root_fs_dir}/etc/issue" "${root_fs_dir}/etc/issue.net"
-    sudo rm -f "${root_fs_dir}/usr/lib/issue" "${root_fs_dir}/usr/lib/issue.net"
-    sudo rm -f "${root_fs_dir}/usr/share/factory/etc/issue" "${root_fs_dir}/usr/share/factory/etc/issue.net"
+    # Note: /etc/issue cleanup was moved to finish_image_rpm() to run before systemd-tmpfiles --create
 
     # Remove flatcar-setup-environment.service - requires /oem/bin/flatcar-setup-environment
     # which is an OEM-specific script that ACL does not provide. Also strip references

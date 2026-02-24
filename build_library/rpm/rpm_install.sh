@@ -10,11 +10,8 @@
 #
 # REPOSITORY CONFIGURATION:
 #   - Local cache repository (if RPM_LOCAL_CACHE is set) - priority 1
-#   - Azure Linux official repositories:
-#     * azurelinux-official-base
-#     * azurelinux-official-ms-non-oss
-#     * azurelinux-official-ms-oss
-#     * azurelinux-official-cloud-native
+#   - Bootstrap base repo (used only to install filesystem + azurelinux-repos)
+#   - Azure Linux official repositories (installed via azurelinux-repos RPM)
 
 # =============================================================================
 # Helper function to find RPM staging directory
@@ -89,68 +86,19 @@ EOF
         fi
     fi
 
-    info "  Setting up official repositories"
+    # Minimal bootstrap repo — just enough to install 'filesystem' and
+    # 'azurelinux-repos'.  The azurelinux-repos RPM ships the full set
+    # of official .repo files and GPG keys, so we do not duplicate them here.
+    info "  Setting up bootstrap repository"
 
-    sudo tee "${repo_dir}/azurelinux-official.repo" > /dev/null <<EOF
-[azurelinux-official-base]
-name=Azure Linux Official Base \$releasever \$basearch
+    sudo tee "${repo_dir}/azurelinux-bootstrap.repo" > /dev/null <<EOF
+[azurelinux-bootstrap]
+name=Azure Linux Bootstrap \$releasever \$basearch
 baseurl=https://packages.microsoft.com/azurelinux/\$releasever/prod/base/\$basearch
-gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
-gpgcheck=1
-repo_gpgcheck=1
+gpgcheck=0
+repo_gpgcheck=0
 enabled=1
-skip_if_unavailable=True
-sslverify=1
-
-[azurelinux-official-extended]
-name=Azure Linux Official Extended \$releasever \$basearch
-baseurl=https://packages.microsoft.com/azurelinux/\$releasever/prod/extended/\$basearch
-gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
-gpgcheck=1
-repo_gpgcheck=1
-enabled=1
-skip_if_unavailable=True
-sslverify=1
-
-[azurelinux-official-ms-non-oss]
-name=Azure Linux Official Microsoft Non-Open-Source \$releasever \$basearch
-baseurl=https://packages.microsoft.com/azurelinux/\$releasever/prod/ms-non-oss/\$basearch
-gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
-gpgcheck=1
-repo_gpgcheck=1
-enabled=1
-skip_if_unavailable=True
-sslverify=1
-
-[azurelinux-official-ms-oss]
-name=Azure Linux Official Microsoft Open-Source \$releasever \$basearch
-baseurl=https://packages.microsoft.com/azurelinux/\$releasever/prod/ms-oss/\$basearch
-gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
-gpgcheck=1
-repo_gpgcheck=1
-enabled=1
-skip_if_unavailable=True
-sslverify=1
-
-[azurelinux-official-cloud-native]
-name=Azure Linux Official Cloud Native \$releasever \$basearch
-baseurl=https://packages.microsoft.com/azurelinux/\$releasever/prod/cloud-native/\$basearch
-gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
-gpgcheck=1
-repo_gpgcheck=1
-enabled=1
-skip_if_unavailable=True
-sslverify=1
-
-[azurelinux-official-nvidia]
-name=Azure Linux Official Nvidia \$releasever \$basearch
-baseurl=https://packages.microsoft.com/azurelinux/\$releasever/prod/nvidia/\$basearch
-gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
-gpgcheck=1
-repo_gpgcheck=1
-enabled=1
-skip_if_unavailable=True
-sslverify=1
+skip_if_unavailable=False
 EOF
 
     return 0
@@ -164,7 +112,11 @@ rpm_mount_pseudofs() {
     sudo mkdir -p "${root_fs_dir}"/{dev,proc,sys}
 
     if ! mountpoint -q "${root_fs_dir}/dev"; then
-        sudo mount --bind /dev "${root_fs_dir}/dev"
+        # Use --rbind + --make-rslave so that sub-mounts (pts, shm, etc.)
+        # are visible inside the installroot but unmounting them later does
+        # not tear down the host's /dev sub-mounts.
+        sudo mount --rbind /dev "${root_fs_dir}/dev"
+        sudo mount --make-rslave "${root_fs_dir}/dev"
     fi
 
     if ! mountpoint -q "${root_fs_dir}/proc"; then
@@ -180,16 +132,44 @@ rpm_mount_pseudofs() {
 rpm_umount_pseudofs() {
     local root_fs_dir="$1"
 
+    # Kill processes that RPM/dnf5 may have spawned inside the installroot
+    # (e.g., gpg-agent and scdaemon from GPG signature verification).
+    # These hold file descriptors on /dev and prevent unmounting.
+    if mountpoint -q "${root_fs_dir}/dev"; then
+        local pids
+        pids=$(sudo fuser -m "${root_fs_dir}/dev" 2>/dev/null | tr -s ' ') || true
+        if [[ -n "${pids}" ]]; then
+            info "Killing processes using ${root_fs_dir}/dev:${pids}"
+            sudo fuser -vm "${root_fs_dir}/dev" 2>&1 | head -10 || true
+            sudo fuser -km "${root_fs_dir}/dev" 2>/dev/null || true
+            # Give processes a moment to exit
+            sleep 1
+        fi
+    fi
+
     if mountpoint -q "${root_fs_dir}/sys"; then
-        sudo umount "${root_fs_dir}/sys" || true
+        sudo umount "${root_fs_dir}/sys" || warn "Failed to umount ${root_fs_dir}/sys"
     fi
 
     if mountpoint -q "${root_fs_dir}/proc"; then
-        sudo umount "${root_fs_dir}/proc" || true
+        sudo umount "${root_fs_dir}/proc" || warn "Failed to umount ${root_fs_dir}/proc"
     fi
 
+    # /dev bind-mount brings along sub-mounts (pts, shm, mqueue, hugepages).
+    # Use --recursive so all of them are torn down in one call.
     if mountpoint -q "${root_fs_dir}/dev"; then
-        sudo umount "${root_fs_dir}/dev" || true
+        sudo umount --recursive "${root_fs_dir}/dev" || warn "Failed to umount --recursive ${root_fs_dir}/dev"
+    fi
+
+    # Verify nothing remains mounted under the rootfs
+    local leftover
+    leftover=$(grep -c "${root_fs_dir}/\(dev\|proc\|sys\)" /proc/mounts 2>/dev/null || true)
+    if [[ "${leftover}" -gt 0 ]]; then
+        warn "Pseudo-filesystem mounts still present after unmount:"
+        grep "${root_fs_dir}/\(dev\|proc\|sys\)" /proc/mounts >&2 || true
+        warn "Checking for processes holding mounts open:"
+        sudo fuser -vm "${root_fs_dir}/dev" 2>&1 | head -20 >&2 || true
+        return 1
     fi
 }
 
@@ -232,7 +212,13 @@ remove_denylist_rpm_packages() {
 }
 
 # Install RPM packages to image using dnf5
+# Usage: rpm_install_package [--nogpgcheck] <root_fs_dir> <package> [package ...]
 rpm_install_package() {
+    local nogpgcheck=false
+    if [[ "${1:-}" == "--nogpgcheck" ]]; then
+        nogpgcheck=true
+        shift
+    fi
     local root_fs_dir="$1"; shift
     local packages=("$@")
 
@@ -243,24 +229,29 @@ rpm_install_package() {
     info "Installing ${#packages[@]} RPM packages using dnf5: ${packages[*]}"
 
     # Build dnf5 command arguments (always use --nodocs to minimize image size)
-    # Note: Do NOT use --use-host-config - we want dnf5 to use the repos
-    # configured in the installroot (set up by rpm_setup_repos), not the host
-    # TODO: if we use RPM for setting up Azure Linux repos, we might want to revisit this.
     local dnf_args=(
         --installroot="${root_fs_dir}"
         --releasever=3.0
         --nodocs
         -y
-        --nogpgcheck
     )
+
+    if [[ "${nogpgcheck}" == "true" ]]; then
+        dnf_args+=(--nogpgcheck)
+    fi
 
     # Mount pseudo-filesystems for scriptlets
     rpm_mount_pseudofs "${root_fs_dir}"
 
-    # Install all packages using dnf5
+    # Disable errexit around dnf5 + unmount to guarantee pseudofs cleanup
+    set +e
     info "Running: dnf5 install ${dnf_args[*]} ${packages[*]}"
     sudo /usr/bin/dnf5 install "${dnf_args[@]}" "${packages[@]}" 2>&1 | sudo tee /tmp/rpm-install.log
     local dnf_exit_code=${PIPESTATUS[0]}
+
+    # Always unmount pseudo-filesystems after dnf5 finishes
+    rpm_umount_pseudofs "${root_fs_dir}"
+    set -e
 
     # Check for errors in output
     if grep -q "Error: transaction check" /tmp/rpm-install.log || \
@@ -273,12 +264,8 @@ rpm_install_package() {
         cat /tmp/rpm-install.log | while IFS= read -r line; do
             error "  $line"
         done
-        rpm_umount_pseudofs "${root_fs_dir}"
         return 1
     fi
-
-    # Unmount pseudo-filesystems
-    rpm_umount_pseudofs "${root_fs_dir}"
 
     remove_denylist_rpm_packages "${root_fs_dir}"
 
@@ -300,8 +287,51 @@ rpm_install_package() {
 
     # Append explicitly installed packages to build log
     local pkg_log="${BUILD_DIR}/.rpm-packages-explicit"
-    printf '%s\n' "${packages[@]}" | tee -a "${pkg_log}" > /dev/null
+    printf '%s\n' "${packages[@]}" >> "${pkg_log}"
 
+    return 0
+}
+
+# Import Microsoft GPG key into a root filesystem's RPM database for signature verification
+#
+# Usage: rpm_import_gpg_key <root_fs_dir>
+rpm_import_gpg_key() {
+    local root_fs_dir="$1"
+
+    local gpg_key="/etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY"
+    if [[ -f "${gpg_key}" ]]; then
+        info "Importing Microsoft GPG key into ${root_fs_dir} RPM database"
+        sudo rpm --root="${root_fs_dir}" --import "${gpg_key}"
+    else
+        warn "Microsoft GPG key not found at ${gpg_key} — signature verification may fail"
+    fi
+}
+
+# Install local RPM files directly to a root filesystem with GPG verification
+# This is used for installing packages to BOARD_ROOT without dependency resolution
+# (e.g., bootloader packages that only need binaries, not runtime dependencies)
+#
+# Note: Call rpm_import_gpg_key first to enable signature verification
+#
+# Usage: rpm_install_local_packages <root_fs_dir> <rpm_file> [rpm_file ...]
+rpm_install_local_packages() {
+    local root_fs_dir="$1"; shift
+    local rpm_files=("$@")
+
+    if [[ ${#rpm_files[@]} -eq 0 ]]; then
+        warn "rpm_install_local_packages: no RPM files specified"
+        return 0
+    fi
+
+    info "Installing ${#rpm_files[@]} local RPM(s) to ${root_fs_dir} with GPG signature verification"
+    sudo rpm --root="${root_fs_dir}" --install --verbose --replacepkgs --nodeps "${rpm_files[@]}"
+
+    if [[ $? -ne 0 ]]; then
+        error "Failed to install local RPM packages to ${root_fs_dir}"
+        return 1
+    fi
+
+    info "Successfully installed ${#rpm_files[@]} local RPM(s) to ${root_fs_dir}"
     return 0
 }
 
@@ -544,6 +574,119 @@ rpm_install_package_using_portage_name() {
     return 0
 }
 
+# =============================================================================
+# Download RPM packages to a local staging directory
+# =============================================================================
+# Downloads named packages (and their dependencies) from Azure Linux repos
+# into a local directory, then updates repository metadata so the directory
+# can be used as a local dnf/rpm cache.
+#
+# Usage:  rpm_download_packages <dest_dir> <root_fs_dir> <package> [package ...]
+#
+# <root_fs_dir> must contain /etc/yum.repos.d/ with .repo files
+# (installed by the azurelinux-repos RPM).
+# -----------------------------------------------------------------------------
+rpm_download_packages() {
+    local dest_dir="$1"; shift
+    local root_fs_dir="$1"; shift
+    local packages=("$@")
+
+    if [[ ${#packages[@]} -eq 0 ]]; then
+        warn "rpm_download_packages: no packages specified"
+        return 0
+    fi
+
+    mkdir -p "${dest_dir}"
+
+    local repo_dir="${root_fs_dir}/etc/yum.repos.d"
+    if [[ ! -d "${repo_dir}" ]] || ! ls "${repo_dir}"/*.repo &>/dev/null 2>&1; then
+        die "rpm_download_packages: no repo files found in ${repo_dir} – is azurelinux-repos installed?"
+    fi
+
+    info "Downloading ${#packages[@]} packages to ${dest_dir}: ${packages[*]}"
+
+    # Use --nogpgcheck for downloads since:
+    # 1. Packages come from trusted Azure Linux repos configured in /etc/yum.repos.d
+    # 2. They'll be verified during rpm_install_package (which uses --installroot with GPG check)
+    # 3. Using --installroot here causes dnf5 to write state files inside target FS (permission issues)
+    # Note: Not using --resolve to only download requested packages (dependencies installed separately)
+    dnf5 download \
+        --setopt=reposdir="${repo_dir}" \
+        --releasever=3.0 \
+        --destdir="${dest_dir}" \
+        --nogpgcheck \
+        "${packages[@]}"
+}
+
+# Remove the bootstrap repo after azurelinux-repos has been installed,
+# and propagate the Microsoft GPG key so that both repo_gpgcheck and
+# package gpgcheck work correctly with --installroot.
+rpm_use_official_repos() {
+    local root_fs_dir="$1"
+    local repo_dir="${root_fs_dir}/etc/yum.repos.d"
+    local bootstrap_repo="${repo_dir}/azurelinux-bootstrap.repo"
+
+    if [[ -f "${bootstrap_repo}" ]]; then
+        info "Removing bootstrap repository (replaced by azurelinux-repos)"
+        sudo rm -f "${bootstrap_repo}"
+    fi
+
+    # Add Nvidia repository — azurelinux-repos does not include it
+    info "Adding Nvidia repository"
+    sudo tee "${repo_dir}/azurelinux-nvidia.repo" > /dev/null <<'EOF'
+[azurelinux-official-nvidia]
+name=Azure Linux Official Nvidia $releasever $basearch
+baseurl=https://packages.microsoft.com/azurelinux/$releasever/prod/nvidia/$basearch
+gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
+gpgcheck=1
+repo_gpgcheck=1
+enabled=1
+skip_if_unavailable=True
+sslverify=1
+EOF
+
+    # The azurelinux-repos RPM installs the GPG key into the installroot at
+    # /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY.  The repo files reference it
+    # via gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY.
+    #
+    # Two consumers need to find this key:
+    #   1. librepo (repo_gpgcheck) — resolves the gpgkey path on the SDK host
+    #   2. RPM (gpgcheck) — resolves the path on the host during transactions
+    #
+    # Copy the key to the same path on the SDK host so both work.
+    local gpg_key="${root_fs_dir}/etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY"
+    local host_gpg_dir="/etc/pki/rpm-gpg"
+
+    if [[ -f "${gpg_key}" ]]; then
+        sudo mkdir -p "${host_gpg_dir}"
+        sudo cp "${gpg_key}" "${host_gpg_dir}/MICROSOFT-RPM-GPG-KEY"
+        info "Copied Microsoft GPG key to SDK host ${host_gpg_dir}"
+
+        # Also import into the installroot's RPM keyring for package gpgcheck
+        sudo rpm --root="${root_fs_dir}" --import "${gpg_key}"
+        info "Imported Microsoft GPG key into installroot RPM database"
+    else
+        warn "GPG key not found at ${gpg_key} — GPG checks may fail"
+    fi
+}
+
+# Unmount any pseudo-filesystems under BUILD_DIR before rm -rf.
+# Call this before removing build output directories to avoid
+# "Device or resource busy" errors from stale /dev bind-mounts.
+rpm_cleanup_build_dir() {
+    local build_dir="$1"
+    if [[ ! -d "${build_dir}" ]]; then
+        return 0
+    fi
+    # Look for any rootfs dirs that might have pseudofs mounted
+    local rootfs_dir
+    for rootfs_dir in "${build_dir}"/*-rootfs "${build_dir}"/rootfs; do
+        if [[ -d "${rootfs_dir}" ]]; then
+            rpm_umount_pseudofs "${rootfs_dir}" 2>/dev/null || true
+        fi
+    done
+}
+
 # Export functions
 export -f rpm_install_package_using_portage_name
 export -f rpm_get_staging_dir
@@ -551,3 +694,7 @@ export -f rpm_install_init
 export -f rpm_install_package
 export -f rpm_query_packages
 export -f rpm_get_metadata
+export -f rpm_download_packages
+export -f rpm_use_official_repos
+export -f rpm_cleanup_build_dir
+export -f rpm_umount_pseudofs

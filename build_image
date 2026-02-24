@@ -142,6 +142,10 @@ fi
 # Handle existing directory.
 if [[ -e "${BUILD_DIR}" ]] && [[ "${PROD_IMAGE}" = 1 ]]; then
   if [[ ${FLAGS_replace} -eq ${FLAGS_TRUE} ]]; then
+    # Unmount any pseudo-filesystems left over from a previous build
+    if type -t rpm_cleanup_build_dir &>/dev/null; then
+        rpm_cleanup_build_dir "${BUILD_DIR}"
+    fi
     sudo rm -rf "${BUILD_DIR}"
   else
     error "Directory ${BUILD_DIR} already exists."
