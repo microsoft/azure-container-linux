@@ -2254,7 +2254,11 @@ create_vm_azure() {
         image_id="/subscriptions/$AZ_SUB_ID/resourceGroups/$AZ_GALLERY_RG/providers/Microsoft.Compute/galleries/$AZ_ACG/images/$AZ_VM_IMAGE_DEF/versions/$image_version_or_id"
     fi
     
-    # Create public IP first with required IP policy compliance tags
+    # Create public IP first with required IP policy compliance tags.
+    # az vm create's ARM template always redefines the public IP resource
+    # (even when given a full resource ID), stripping ipTags and violating
+    # Azure policy.  Work around: create the VM without a public IP, then
+    # attach the pre-created IP to its NIC afterwards.
     local public_ip_name="${VM_NAME}PublicIP"
     info "Creating public IP with policy-compliant tags: $public_ip_name"
     az network public-ip create \
@@ -2266,9 +2270,9 @@ create_vm_azure() {
         --ip-tags FirstPartyUsage=/NonProd \
         --tags "${all_tags[@]}"
     
-    info "Creating an Azure VM ${VM_NAME} in RG ${vm_rg_name}..."
+    info "Creating an Azure VM ${VM_NAME} in RG ${vm_rg_name} (without public IP)..."
     
-    # Build base Azure CLI command
+    # Build base Azure CLI command — no --public-ip-address here
     local vm_create_args=(
         --resource-group "$vm_rg_name"
         --name "$VM_NAME"
@@ -2280,7 +2284,7 @@ create_vm_azure() {
         --enable-vtpm true
         --image "$image_id"
         --location "$AZ_REGION"
-        --public-ip-address "$public_ip_name"
+        --public-ip-address ""
         --tags "${all_tags[@]}"
     )
     
@@ -2291,6 +2295,22 @@ create_vm_azure() {
         vm_create_args+=(--enable-secure-boot false)
     fi
     az vm create "${vm_create_args[@]}"
+
+    # Attach the pre-created public IP to the VM's NIC
+    info "Attaching public IP to VM NIC..."
+    local nic_id
+    nic_id=$(az vm show -g "$vm_rg_name" -n "$VM_NAME" \
+        --query 'networkProfile.networkInterfaces[0].id' -o tsv)
+    local nic_name
+    nic_name=$(az network nic show --ids "$nic_id" --query 'name' -o tsv)
+    local ip_config_name
+    ip_config_name=$(az network nic show --ids "$nic_id" \
+        --query 'ipConfigurations[0].name' -o tsv)
+    az network nic ip-config update \
+        --nic-name "$nic_name" \
+        --resource-group "$vm_rg_name" \
+        --name "$ip_config_name" \
+        --public-ip-address "$public_ip_name"
     
     # Enable boot diagnostics
     info "Enabling boot diagnostics..."
