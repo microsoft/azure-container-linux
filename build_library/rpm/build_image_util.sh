@@ -1344,6 +1344,7 @@ normalize_rpm_license() {
             CC-BY-3.0) mapped="CC-BY-3.0" ;;
             CC-BY-4.0|CC-BY) mapped="CC-BY-SA-3.0" ;;
             GFDL-1.3-or-later) mapped="FDL-1.3+" ;;
+            GFDL-1.3-no-invariants-or-later) mapped="FDL-1.3+" ;;
             BSL-1.0|BSL-1.0\)) mapped="Boost-1.0" ;;
             Unlicense|Unlicense\)) mapped="public-domain" ;;
             OpenSSL|OpenSSL\)) mapped="openssl" ;;
@@ -1355,7 +1356,7 @@ normalize_rpm_license() {
             Public|Domain|public|domain) mapped="public-domain" ;;
             LicenseRef-Fedora-Public-Domain) mapped="public-domain" ;;
             # Exceptions and modifiers - skip these
-            LLVM-exception) continue ;;
+            LLVM-exception|eCos-exception-2.0) continue ;;
             exceptions|modification|permitted|advertising|no|Redistributable|Redistributable,) continue ;;
             # Handle parenthesized versions that sneak through
             \(GPL+|\(GPLv2|\(GPLv2+|\(MIT|\(Apache-2.0|\(LGPLv3+|\(MPL-2.0|\(Unlicense|\(ASL) continue ;;
@@ -1367,7 +1368,7 @@ normalize_rpm_license() {
             # Licenses that don't have portage equivalents - suppress warnings
             # TTWL, HSRL, Rdisc, UCD are obscure licenses from specific packages
             # Unknown means the package has no specified license
-            TTWL|HSRL|Rdisc|UCD|Unknown) continue ;;
+            TTWL|HSRL|Rdisc|UCD|Unknown|Nmap|pubkey) continue ;;
         esac
         if [[ -n "$mapped" ]]; then
             result="$result $mapped"
