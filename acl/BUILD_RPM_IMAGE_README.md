@@ -104,6 +104,62 @@ az login --service-principal -u <app-id> -p <password> --tenant <tenant>
 
 The build system requires the Flatcar SDK container, which includes all build tools.
 
+## Quick Start: Hydrate from CI
+
+The fastest way to set up a local build environment is to pull pre-built
+containers and RPMs from the CI pipeline. This avoids rebuilding the SDK
+container, downloading RPMs, and building custom RPMs locally.
+
+### Prerequisites
+
+- **Azure CLI** with the **azure-devops** extension
+- **Docker** (for pulling containers)
+- Reader access to the ACL Azure DevOps organization
+- Reader access to the acl resource group in EdgeOS_Mariner_Platform_AKS_test. Refer to internal documentation for accessing the Azure Portal and locating the resource group.
+
+```bash
+# Install or upgrade azure-devops extension
+az extension add --name azure-devops --upgrade
+
+# Login to Azure and the acldevel container registry
+az login
+az acr login --name acldevel
+```
+
+### Hydrate from Latest CI Build
+
+```bash
+./acl/build_rpm_image.sh --hydrate
+```
+
+This will:
+
+1. Query the latest successful aclmain pipeline main branch build
+2. Pull the build's SDK and mantle containers from ACR
+3. Download and extract the RPM staging tarball from the build
+4. Update `sdk_container/.repo/manifests/mantle-container`
+5. Print an `export ACL_SDK_IMAGE=...` statement to configure your environment
+
+### Hydrate from a Specific Build
+
+To hydrate from a specific build in the aclmain or acldevel pipelines you can use `--hydrate-build-id=<BUILD_ID>`
+
+```bash
+./acl/build_rpm_image.sh --hydrate-build-id=1053102
+```
+
+### After Hydrating
+
+Set the SDK image and build:
+
+```bash
+# Copy the export statement printed by --hydrate
+export ACL_SDK_IMAGE="acldevel.azurecr.io/flatcar-sdk-all:4459.0.0-rpm.1053102"
+
+# Build an image using the SDK and RPMs (including unofficial kernel + built rpms) from the pipeline
+./acl/build_rpm_image.sh --rebuild
+```
+
 ## Complete Build Workflow
 
 ### Phase 1: SDK Container Setup

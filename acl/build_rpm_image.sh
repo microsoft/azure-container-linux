@@ -27,6 +27,8 @@
 #   --download-unofficial-kernel         Download unofficial kernel RPMs from Azure DevOps build
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
 #   --help                               Show this help message
+#   --hydrate                            Pull SDK, mantle containers and RPMs from latest successful aclmain build
+#   --hydrate-build-id=ID                Pull SDK, mantle containers and RPMs from specified ADO pipeline build
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
@@ -126,6 +128,13 @@ SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-false}"  # Enable secure boot (disab
 RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID (bypasses VHD upload)
 BUILD_GPU=false  # Include GPU (NVIDIA driver, container-toolkit, fabric-manager) sysexts
+HYDRATE=false  # Hydrate local environment from CI pipeline build
+HYDRATE_BUILD_ID=""  # Specific build ID for hydrate (empty = latest)
+
+# Hydrate pipeline configuration
+HYDRATE_ORG="https://dev.azure.com/mariner-org"
+HYDRATE_PROJECT="ACL"
+HYDRATE_PIPELINE_ID="5304"
 
 # Set envi var-s required for RPM mode
 export PACKAGE_SOURCE_MODE=RPM
@@ -570,6 +579,15 @@ parse_args() {
                 RUN_KOLA_TESTS=true
                 shift
                 ;;
+            --hydrate)
+                HYDRATE=true
+                shift
+                ;;
+            --hydrate-build-id=*)
+                HYDRATE_BUILD_ID="${1#*=}"
+                HYDRATE=true
+                shift
+                ;;
             --help|-h)
                 show_help
                 ;;
@@ -880,6 +898,267 @@ download_unofficial_kernel() {
 
     # Update repository metadata
     create_repo
+}
+
+# Hydrates local environment from a CI pipeline build.
+# Downloads SDK container, mantle container from acr and RPM staging from Azure DevOps.
+hydrate() {
+    section "Hydrating Local Environment from CI Pipeline"
+
+    local build_id="${HYDRATE_BUILD_ID}"
+    local org="${HYDRATE_ORG}"
+    local project="${HYDRATE_PROJECT}"
+    local pipeline_id="${HYDRATE_PIPELINE_ID}"
+    local temp_dir="${SCRIPT_DIR}/__build__/.hydrate-temp"
+
+    # Verify az cli is installed
+    if ! command -v az &>/dev/null; then
+        error "Azure CLI (az) not found, required for hydrate"
+        if is_azure_linux_3; then
+            error "Install with: sudo tdnf install -y azure-cli"
+        else
+            error "Install with: curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash"
+        fi
+        exit 1
+    fi
+
+    # Verify azure-devops extension is installed
+    if ! az extension show --name azure-devops &>/dev/null 2>&1; then
+        error "Azure DevOps CLI extension not found"
+        error "Install with: az extension add --name azure-devops"
+        exit 1
+    fi
+
+    # Verify ACL project access
+    info "Verifying access to ${org}/${project}..."
+    if ! az devops project show --project "${project}" --org "${org}" &>/dev/null 2>&1; then
+        error "Cannot access ${org}/${project}"
+        error "Ensure you have access to the ACL project and are logged in with: az login"
+        exit 1
+    fi
+
+    # Login to ACR for container pulls
+    info "Logging in to ACR..."
+    if ! az acr login --name acldevel &>/dev/null 2>&1; then
+        error "Cannot access acldevel ACR"
+        error "Ensure you have access to the acldevel ACR and are logged in with: az login"
+        exit 1
+    fi
+
+    # Resolve build ID (latest successful aclmain run if not specified)
+    if [[ -z "${build_id}" ]]; then
+        info "Querying latest successful build from pipeline ${pipeline_id}..."
+        build_id=$(az pipelines runs list \
+            --pipeline-ids "${pipeline_id}" \
+            --branch "main" \
+            --status completed \
+            --result succeeded \
+            --top 1 \
+            --query '[0].id' \
+            -o tsv \
+            --org "${org}" \
+            --project "${project}" 2>/dev/null)
+
+        if [[ -z "${build_id}" || "${build_id}" == "None" ]]; then
+            error "No successful builds found for pipeline ${pipeline_id}"
+            exit 1
+        fi
+        info "Latest successful build: ${build_id}"
+    else
+        info "Using specified build: ${build_id}"
+    fi
+
+    # Create temp directory
+    rm -rf "${temp_dir}"
+    mkdir -p "${temp_dir}"
+
+    # Download published_artifacts.json
+    info "Downloading published artifacts manifest..."
+    if ! az pipelines runs artifact download \
+        --artifact-name "drop_publish_publish_artifacts" \
+        --path "${temp_dir}/manifest" \
+        --run-id "${build_id}" \
+        --org "${org}" \
+        --project "${project}"; then
+        error "Failed to download artifacts manifest from build ${build_id}"
+        error "Available artifacts can be listed with:"
+        error "  az pipelines runs artifact list --run-id ${build_id} --org ${org} --project ${project}"
+        rm -rf "${temp_dir}"
+        exit 1
+    fi
+
+    # Find and parse published_artifacts.json
+    local manifest_file
+    manifest_file=$(find "${temp_dir}/manifest" -name "published_artifacts.json" -type f | head -1)
+    if [[ -z "${manifest_file}" || ! -f "${manifest_file}" ]]; then
+        error "published_artifacts.json not found in downloaded manifest artifact"
+        rm -rf "${temp_dir}"
+        exit 1
+    fi
+
+    info "Parsing ${manifest_file}..."
+
+    # Parse JSON with python3
+    if ! command -v python3 &>/dev/null; then
+        error "python3 not found — required to parse artifacts manifest"
+        rm -rf "${temp_dir}"
+        exit 1
+    fi
+
+    local sdk_image mantle_image rpms_artifact rpms_tarball
+    eval "$(python3 -c "
+import json, sys
+with open('${manifest_file}') as f:
+    m = json.load(f)
+c = m.get('containers', {})
+sdk = c.get('sdk', {}).get('image', '')
+mantle = c.get('mantle', {}).get('image', '')
+r = m.get('rpms', {})
+rpms_artifact = r.get('artifact', '')
+rpms_tarball = r.get('tarball', '')
+print(f'sdk_image={sdk}')
+print(f'mantle_image={mantle}')
+print(f'rpms_artifact={rpms_artifact}')
+print(f'rpms_tarball={rpms_tarball}')
+" 2>/dev/null)" || {
+        error "Failed to parse published_artifacts.json"
+        rm -rf "${temp_dir}"
+        exit 1
+    }
+
+    info "Build:  ${build_id}"
+    info "SDK:    ${sdk_image:-not published}"
+    info "Mantle: ${mantle_image:-not published}"
+    info "RPMs:   ${rpms_artifact:-not published}"
+
+    local skipped=()
+
+    # Pull SDK container
+    if [[ -n "${sdk_image}" ]]; then
+        info "Pulling SDK container: ${sdk_image}"
+        if ! docker pull "${sdk_image}"; then
+            error "Failed to pull SDK container: ${sdk_image}"
+            error "Ensure you have access to the container registry"
+            error "Try: az acr login --name acldevel"
+            rm -rf "${temp_dir}"
+            exit 1
+        fi
+        info "✓ SDK container pulled"
+    else
+        warn "No SDK container in build artifacts — skipping"
+        skipped+=("SDK container")
+    fi
+
+    # Pull mantle container
+    if [[ -n "${mantle_image}" ]]; then
+        info "Pulling mantle container: ${mantle_image}"
+        if ! docker pull "${mantle_image}"; then
+            error "Failed to pull mantle container: ${mantle_image}"
+            error "Ensure you have access to the container registry"
+            error "Try: az acr login --name acldevel"
+            rm -rf "${temp_dir}"
+            exit 1
+        fi
+        # Update mantle-container file for run_local_tests.sh
+        local mantle_file="${SCRIPT_DIR}/sdk_container/.repo/manifests/mantle-container"
+        echo "${mantle_image}" > "${mantle_file}"
+        info "✓ Mantle container pulled"
+        info "  Updated ${mantle_file}"
+    else
+        warn "No mantle container in build artifacts — skipping"
+        skipped+=("mantle container")
+    fi
+
+    # Download and extract RPM staging
+    if [[ -n "${rpms_artifact}" && -n "${rpms_tarball}" ]]; then
+        info "Downloading RPM staging from artifact: ${rpms_artifact}..."
+        if ! az pipelines runs artifact download \
+            --artifact-name "${rpms_artifact}" \
+            --path "${temp_dir}/rpms" \
+            --run-id "${build_id}" \
+            --org "${org}" \
+            --project "${project}"; then
+            error "Failed to download RPM staging artifact"
+            rm -rf "${temp_dir}"
+            exit 1
+        fi
+
+        local tarball_path
+        tarball_path=$(find "${temp_dir}/rpms" -name "${rpms_tarball}" -type f | head -1)
+        if [[ -z "${tarball_path}" || ! -f "${tarball_path}" ]]; then
+            error "${rpms_tarball} not found in downloaded RPM artifact"
+            rm -rf "${temp_dir}"
+            exit 1
+        fi
+
+        info "Extracting RPM staging to ${STAGING_DIR}..."
+        mkdir -p "${STAGING_DIR}"
+        tar -xzf "${tarball_path}" -C "$(dirname "${STAGING_DIR}")"
+
+        local rpm_count
+        rpm_count=$(find "${STAGING_DIR}" -name "*.rpm" -type f | wc -l)
+        info "✓ Extracted ${rpm_count} RPM packages"
+
+        # Regenerate repository metadata
+        if command -v createrepo_c &>/dev/null; then
+            create_repo
+        else
+            warn "createrepo_c not found — skipping repo metadata generation"
+            warn "Install with: sudo apt-get install createrepo-c (or sudo tdnf install createrepo_c)"
+        fi
+    else
+        warn "No RPM staging in build artifacts — skipping"
+        skipped+=("RPM staging")
+    fi
+
+    # Clean up
+    rm -rf "${temp_dir}"
+
+    # Print summary and export statements
+    section "Hydration Complete"
+    info "Build ID: ${build_id}"
+    echo
+    if [[ -n "${sdk_image}" ]]; then
+        echo -e "${GREEN}Run the following to configure your environment:${NC}"
+        echo
+        echo "  export ACL_SDK_IMAGE=\"${sdk_image}\""
+        echo
+    fi
+    if [[ -n "${mantle_image}" ]]; then
+        info "Mantle container: ${mantle_image}"
+        info "  Written to: sdk_container/.repo/manifests/mantle-container"
+    fi
+    if [[ -n "${rpms_artifact}" ]]; then
+        info "RPM staging: ${STAGING_DIR} ($(find "${STAGING_DIR}" -name "*.rpm" -type f 2>/dev/null | wc -l) packages)"
+    fi
+    echo
+    info "You can now build with:"
+    if [[ -n "${sdk_image}" ]]; then
+        echo "  ACL_SDK_IMAGE=\"${sdk_image}\" ./acl/build_rpm_image.sh --rebuild"
+    else
+        echo "  ./acl/build_rpm_image.sh --rebuild"
+    fi
+
+    if [[ ${#skipped[@]} -gt 0 ]]; then
+        echo
+        warn "Hydration was partial — the following were not available in build ${build_id}:"
+        for item in "${skipped[@]}"; do
+            warn "  • ${item}"
+        done
+        echo
+        warn "To complete setup manually, run:"
+        local manual_steps=()
+        for item in "${skipped[@]}"; do
+            case "${item}" in
+                "SDK container")   manual_steps+=("--build-sdk-container") ;;
+                "mantle container") ;; # no CLI flag, must build manually
+                "RPM staging")     manual_steps+=("--download-rpms" "--build-rpms" "--download-unofficial-kernel") ;;
+            esac
+        done
+        if [[ ${#manual_steps[@]} -gt 0 ]]; then
+            warn "  ./acl/build_rpm_image.sh ${manual_steps[*]}"
+        fi
+    fi
 }
 
 # Creates or updates repository metadata for the staging directory.
@@ -2427,6 +2706,12 @@ cleanup_rpm_directories() {
 # Main entry point
 main() {
     parse_args "$@"
+
+    # Hydrate mode: standalone operation, exits after completion
+    if [[ "$HYDRATE" == "true" ]]; then
+        hydrate
+        exit 0
+    fi
 
     section "Azure Container Linux Image Builder"
     info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"
