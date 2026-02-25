@@ -77,19 +77,19 @@ start_image_rpm() {
 
     # Install filesystem RPM to provide basic directory structure
     # This replaces baselayout and creates /usr/lib, /etc, /bin -> usr/bin symlinks, etc.
-    rpm_install_package --nogpgcheck "${root_fs_dir}" filesystem || {
+    rpm_install_package "${root_fs_dir}" filesystem || {
         error "Failed to install filesystem package"
         return 1
     }
 
     # Install azurelinux-repos and azurelinux-repos-extended to get the official
     # repository definitions and GPG keys shipped by Azure Linux.
-    rpm_install_package --nogpgcheck "${root_fs_dir}" azurelinux-repos azurelinux-repos-extended || {
+    rpm_install_package "${root_fs_dir}" azurelinux-repos azurelinux-repos-extended || {
         error "Failed to install azurelinux-repos packages"
         return 1
     }
+
     # Remove the bootstrap repo now that the package-provided repos are in place.
-    # All subsequent rpm_install_package calls use GPG checking by default.
     rpm_use_official_repos "${root_fs_dir}"
 
     # Create sysusers.d configs and run systemd-sysusers to create users/groups

@@ -89,16 +89,20 @@ EOF
     # Minimal bootstrap repo — just enough to install 'filesystem' and
     # 'azurelinux-repos'.  The azurelinux-repos RPM ships the full set
     # of official .repo files and GPG keys, so we do not duplicate them here.
+    # The Microsoft GPG key is baked into the SDK container at
+    # /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
     info "  Setting up bootstrap repository"
 
     sudo tee "${repo_dir}/azurelinux-bootstrap.repo" > /dev/null <<EOF
 [azurelinux-bootstrap]
 name=Azure Linux Bootstrap \$releasever \$basearch
 baseurl=https://packages.microsoft.com/azurelinux/\$releasever/prod/base/\$basearch
-gpgcheck=0
-repo_gpgcheck=0
+gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
+gpgcheck=1
+repo_gpgcheck=1
 enabled=1
 skip_if_unavailable=False
+sslverify=1
 EOF
 
     return 0
@@ -139,26 +143,23 @@ rpm_umount_pseudofs() {
         local pids
         pids=$(sudo fuser -m "${root_fs_dir}/dev" 2>/dev/null | tr -s ' ') || true
         if [[ -n "${pids}" ]]; then
-            info "Killing processes using ${root_fs_dir}/dev:${pids}"
-            sudo fuser -vm "${root_fs_dir}/dev" 2>&1 | head -10 || true
             sudo fuser -km "${root_fs_dir}/dev" 2>/dev/null || true
-            # Give processes a moment to exit
             sleep 1
         fi
     fi
 
     if mountpoint -q "${root_fs_dir}/sys"; then
-        sudo umount "${root_fs_dir}/sys" || warn "Failed to umount ${root_fs_dir}/sys"
+        sudo umount "${root_fs_dir}/sys" 2>/dev/null || warn "Failed to umount ${root_fs_dir}/sys"
     fi
 
     if mountpoint -q "${root_fs_dir}/proc"; then
-        sudo umount "${root_fs_dir}/proc" || warn "Failed to umount ${root_fs_dir}/proc"
+        sudo umount "${root_fs_dir}/proc" 2>/dev/null || warn "Failed to umount ${root_fs_dir}/proc"
     fi
 
     # /dev bind-mount brings along sub-mounts (pts, shm, mqueue, hugepages).
     # Use --recursive so all of them are torn down in one call.
     if mountpoint -q "${root_fs_dir}/dev"; then
-        sudo umount --recursive "${root_fs_dir}/dev" || warn "Failed to umount --recursive ${root_fs_dir}/dev"
+        sudo umount --recursive "${root_fs_dir}/dev" 2>/dev/null || warn "Failed to umount --recursive ${root_fs_dir}/dev"
     fi
 
     # Verify nothing remains mounted under the rootfs
@@ -292,7 +293,8 @@ rpm_install_package() {
     return 0
 }
 
-# Import Microsoft GPG key into a root filesystem's RPM database for signature verification
+# Import Microsoft GPG key into a root filesystem's RPM database for signature verification.
+# The key is baked into the SDK container at /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY.
 #
 # Usage: rpm_import_gpg_key <root_fs_dir>
 rpm_import_gpg_key() {
@@ -303,7 +305,7 @@ rpm_import_gpg_key() {
         info "Importing Microsoft GPG key into ${root_fs_dir} RPM database"
         sudo rpm --root="${root_fs_dir}" --import "${gpg_key}"
     else
-        warn "Microsoft GPG key not found at ${gpg_key} — signature verification may fail"
+        die "Microsoft GPG key not found at ${gpg_key} — it must be baked into the SDK container"
     fi
 }
 
@@ -619,8 +621,12 @@ rpm_download_packages() {
 }
 
 # Remove the bootstrap repo after azurelinux-repos has been installed,
-# and propagate the Microsoft GPG key so that both repo_gpgcheck and
-# package gpgcheck work correctly with --installroot.
+# and import the GPG key into the installroot's RPM keyring.
+#
+# The Microsoft GPG key is already present on the SDK host (baked into the
+# container image at /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY), so librepo and
+# RPM can resolve gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY for
+# both repo_gpgcheck and package gpgcheck.
 rpm_use_official_repos() {
     local root_fs_dir="$1"
     local repo_dir="${root_fs_dir}/etc/yum.repos.d"
@@ -644,30 +650,6 @@ enabled=1
 skip_if_unavailable=True
 sslverify=1
 EOF
-
-    # The azurelinux-repos RPM installs the GPG key into the installroot at
-    # /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY.  The repo files reference it
-    # via gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY.
-    #
-    # Two consumers need to find this key:
-    #   1. librepo (repo_gpgcheck) — resolves the gpgkey path on the SDK host
-    #   2. RPM (gpgcheck) — resolves the path on the host during transactions
-    #
-    # Copy the key to the same path on the SDK host so both work.
-    local gpg_key="${root_fs_dir}/etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY"
-    local host_gpg_dir="/etc/pki/rpm-gpg"
-
-    if [[ -f "${gpg_key}" ]]; then
-        sudo mkdir -p "${host_gpg_dir}"
-        sudo cp "${gpg_key}" "${host_gpg_dir}/MICROSOFT-RPM-GPG-KEY"
-        info "Copied Microsoft GPG key to SDK host ${host_gpg_dir}"
-
-        # Also import into the installroot's RPM keyring for package gpgcheck
-        sudo rpm --root="${root_fs_dir}" --import "${gpg_key}"
-        info "Imported Microsoft GPG key into installroot RPM database"
-    else
-        warn "GPG key not found at ${gpg_key} — GPG checks may fail"
-    fi
 }
 
 # Unmount any pseudo-filesystems under BUILD_DIR before rm -rf.

@@ -38,6 +38,14 @@ RUN echo "=== Testing DNF5 ===" && \
 # Remove problematic compatibility alias that references missing builddep plugin
 RUN sudo rm -f /usr/share/dnf5/aliases.d/compatibility-plugins.conf
 
+# Bake the Microsoft RPM GPG key into the SDK container so that GPG signature
+# verification is active from the very first package install.
+COPY acl/MICROSOFT-RPM-GPG-KEY /tmp/MICROSOFT-RPM-GPG-KEY
+RUN sudo mkdir -p /etc/pki/rpm-gpg && \
+    sudo cp /tmp/MICROSOFT-RPM-GPG-KEY /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY && \
+    sudo chmod 644 /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY && \
+    rm -f /tmp/MICROSOFT-RPM-GPG-KEY
+
 # Verify ukify is available from systemd[boot,ukify]
 RUN ukify --help >/dev/null 2>&1 || (echo "ERROR: ukify not found or broken" && exit 1)
 
