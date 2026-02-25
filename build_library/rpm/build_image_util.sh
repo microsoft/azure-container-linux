@@ -1179,9 +1179,10 @@ SYSUSERS_EOF
         sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/audit-rules.service" "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service"
     fi
 
-    # Create /var/lib/logrotate directory for logrotate state file
-    info "RPM mode: Creating /var/lib/logrotate directory"
-    sudo mkdir -p "${root_fs_dir}/var/lib/logrotate"
+    # Create tmpfiles.d entry for logrotate state directory.
+    # The Azure Linux 3 logrotate RPM doesn't ship a tmpfiles.d drop-in,
+    # so /var/lib/logrotate is not recreated at boot on ACL's immutable rootfs.
+    echo 'd /var/lib/logrotate 0755 root root -' | sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/logrotate.conf" > /dev/null
 
     # Create /etc/resolv.conf symlink to point to systemd-resolved
     info "RPM mode: Configuring /etc/resolv.conf for systemd-resolved"
