@@ -8,6 +8,7 @@
 #   ./build_rpm_image.sh [options]
 #
 # Options:
+#   --acg-gallery-name=NAME              Azure Compute Gallery name to override default (for start-vm --vm-type=azure)
 #   --acg-image-version-id=ID            Azure Compute Gallery image version resource ID. When set,
 #                                        skip VHD upload and image creation; use this image directly
 #                                        (for start-vm --vm-type=azure)
@@ -158,7 +159,7 @@ AZ_STORAGE_CONTAINER="acl-test-vm-img"
 # - Gallery RG
 AZ_GALLERY_RG="acl-test-gallery-rg"
 # - Compute gallery
-AZ_ACG="acltestacg"
+AZ_ACG="${AZ_ACG:-acltestacg}"
 # - VM image definition (user-specific to prevent race conditions when multiple users test concurrently)
 AZ_VM_IMAGE_DEF="$(whoami)-acl-test-vm-img"
 # - Prefix for VM RG name (user-specific to avoid conflicts)
@@ -541,6 +542,14 @@ parse_args() {
                 ;;
             --az-storage-account)
                 AZ_STORAGE_ACC="$2"
+                shift 2
+                ;;
+            --acg-gallery-name=*)
+                AZ_ACG="${1#*=}"
+                shift
+                ;;
+            --acg-gallery-name)
+                AZ_ACG="$2"
                 shift 2
                 ;;
             --acg-image-version-id=*)
@@ -2129,6 +2138,7 @@ check_azure_infra() {
             --sku "$sku" \
             --gallery-name "$AZ_ACG" \
             --resource-group "$AZ_GALLERY_RG" \
+            --location "$AZ_REGION" \
             --os-type Linux \
             --features SecurityType=TrustedLaunchSupported \
             --hyper-v-generation V2
@@ -2217,6 +2227,7 @@ create_gallery_image_version() {
         --gallery-image-version "$image_version" \
         --os-vhd-uri "$blob_url" \
         --os-vhd-storage-account "$storage_account_resource_id" \
+        --location "$AZ_REGION" \
         --target-regions $target_regions \
         --replica-count 1 \
         --storage-account-type Standard_LRS \
