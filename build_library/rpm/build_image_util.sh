@@ -417,14 +417,8 @@ EOF
         # content and layout). The symlink target doesn't exist, producing a dead link.
         sudo rm -f "${tmpfiles_dir}/baselayout-ldso.conf"
 
-        # chrony.conf - time synchronization daemon directories and copy chrony.keys
-        cat <<'EOF' | sudo tee "${tmpfiles_dir}/chrony.conf" > /dev/null
-# Chrony time synchronization daemon directories
-d /var/lib/chrony 0755 root root -
-# Copy chrony.keys from /usr (read-only) to /etc (writable) at boot
-# Set ownership to root:chrony with 0640 permissions per Azure Linux spec
-C+ /etc/chrony.keys 0640 root chrony - /usr/lib/chrony/chrony.keys
-EOF
+        # Note: chrony tmpfiles (var/lib/chrony dir, chrony.keys copy) are installed
+        # by the oem-azure sysext via manglefs.sh
 
         # Create systemd drop-ins for verity device timing
         # These ensure udev has finished device enumeration before verity setup runs
