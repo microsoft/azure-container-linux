@@ -17,6 +17,9 @@ sdk_container/.env
 sdk_container/.sdkenv
 ci-cleanup.sh
 
+# VM reuse state file
+.vm-state.env
+
 # build cache / artefacts directories
 __build__/
 __TESTS__/

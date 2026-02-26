@@ -32,8 +32,10 @@
 #   --hydrate-build-id=ID                Pull SDK, mantle containers and RPMs from specified ADO pipeline build
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
+#   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
 #   --output=DIR                         Output directory for images
+#   --reuse-vm                           Reuse an already-running VM (reads IP/RG from .vm-state.env)
 #   --tag=KEY=VALUE                      Add a resource tag to Azure VMs/RGs (can specify multiple times)
 #                                        Default tag: createdBy=<current user>
 #   --rebuild                            Force rebuild even if image exists
@@ -128,6 +130,9 @@ PARITY=""  # Path to os-diff directory for parity data collection and reporting
 SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-false}"  # Enable secure boot (disable for unsigned kernels)
 RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID (bypasses VHD upload)
+KEEP_VM=false  # Keep VM running after scripts complete (write state file)
+REUSE_VM=false  # Reuse an already-running VM (read state file)
+VM_STATE_FILE="${SCRIPT_DIR}/.vm-state.env"  # State file for VM reuse between invocations
 BUILD_GPU=false  # Include GPU (NVIDIA driver, container-toolkit, fabric-manager) sysexts
 HYDRATE=false  # Hydrate local environment from CI pipeline build
 HYDRATE_BUILD_ID=""  # Specific build ID for hydrate (empty = latest)
@@ -569,6 +574,17 @@ parse_args() {
                 shift 2
                 ;;
             --no-cleanup)
+                NO_CLEANUP=true
+                shift
+                ;;
+            --keep-vm)
+                KEEP_VM=true
+                NO_CLEANUP=true
+                shift
+                ;;
+            --reuse-vm)
+                REUSE_VM=true
+                START_VM=true
                 NO_CLEANUP=true
                 shift
                 ;;
@@ -2419,6 +2435,9 @@ remove_vm_azure() {
         return 0
     fi
     
+    # Remove state file since we're cleaning up the VM
+    remove_vm_state
+
     info "Scheduling deletion of VM resources matching tags: ${RESOURCE_TAGS[*]}"
     
     # Build JMESPath filter from RESOURCE_TAGS
@@ -2530,6 +2549,43 @@ build_vm_image() {
         exit 1
     fi
     info "${vm_type} VM image ready at: ${vm_image_path}"
+}
+
+# Write VM state file so subsequent --reuse-vm invocations can reconnect.
+write_vm_state() {
+    cat > "$VM_STATE_FILE" <<EOF
+VM_IP=${VM_IP}
+VM_RG=${VM_RG}
+VM_NAME=${VM_NAME}
+VM_TYPE=${VM_TYPE}
+EOF
+    info "VM state written to ${VM_STATE_FILE}"
+}
+
+# Read VM state file written by a previous --keep-vm invocation.
+# Sets VM_IP, VM_RG, VM_NAME, and VM_TYPE from the file.
+read_vm_state() {
+    if [[ ! -f "$VM_STATE_FILE" ]]; then
+        error "--reuse-vm requires a running VM, but no state file found at ${VM_STATE_FILE}"
+        error "Provision a VM first with --keep-vm"
+        exit 1
+    fi
+    # Source the state file (contains KEY=VALUE lines)
+    # shellcheck disable=SC1090
+    source "$VM_STATE_FILE"
+    info "Loaded VM state from ${VM_STATE_FILE}"
+    info "  IP:   ${VM_IP}"
+    info "  RG:   ${VM_RG}"
+    info "  Name: ${VM_NAME}"
+    info "  Type: ${VM_TYPE}"
+}
+
+# Remove the VM state file.
+remove_vm_state() {
+    if [[ -f "$VM_STATE_FILE" ]]; then
+        rm -f "$VM_STATE_FILE"
+        info "Removed VM state file"
+    fi
 }
 
 # Starts a VM.
@@ -2819,16 +2875,27 @@ main() {
 
     # Step 4: Start VM (if requested)
     if [[ "$START_VM" == "true" ]]; then
-        # When using a pre-existing ACG image version, no local VHD is needed
-        if [[ -n "${ACG_IMAGE_VERSION_ID}" ]] && [[ "$VM_TYPE" == "azure" ]]; then
-            info "Using pre-existing ACG image version — skipping local image check"
-        elif ! [[ -f "$vm_image_path" ]]; then
-            error "VM image not found at expected path: $vm_image_path"
-            error "Build a VM image first with '--build-vm-image'"
-            exit 1
-        fi
 
-        start_vm "${vm_image_path}"
+        # --reuse-vm: skip provisioning, load state from a prior --keep-vm run
+        if [[ "$REUSE_VM" == "true" ]]; then
+            read_vm_state
+        else
+            # When using a pre-existing ACG image version, no local VHD is needed
+            if [[ -n "${ACG_IMAGE_VERSION_ID}" ]] && [[ "$VM_TYPE" == "azure" ]]; then
+                info "Using pre-existing ACG image version — skipping local image check"
+            elif ! [[ -f "$vm_image_path" ]]; then
+                error "VM image not found at expected path: $vm_image_path"
+                error "Build a VM image first with '--build-vm-image'"
+                exit 1
+            fi
+
+            start_vm "${vm_image_path}"
+
+            # --keep-vm: write state file so subsequent --reuse-vm calls can reconnect
+            if [[ "$KEEP_VM" == "true" ]]; then
+                write_vm_state
+            fi
+        fi  # end: not --reuse-vm
 
         # If scripts are specified, run them via serial console or SSH
         if [[ ${#RUN_SCRIPTS[@]} -gt 0 ]] ; then
@@ -2885,8 +2952,9 @@ main() {
                     fi
                 fi
             fi
-            # Only run nginx curl test if we executed the container test
-            if [[ ${#RUN_SCRIPTS[@]} -gt 0 ]] && [[ "${RUN_SCRIPTS[-1]}" == *"run-container-test.sh" ]]; then
+            # Only run nginx curl test if we executed the container test (QEMU only;
+            # Azure VMs don't expose port 80 through the NSG)
+            if [[ "$VM_TYPE" != "azure" ]] && [[ ${#RUN_SCRIPTS[@]} -gt 0 ]] && [[ "${RUN_SCRIPTS[-1]}" == *"run-container-test.sh" ]]; then
                 # If this is a QEMU VM, IP might not be yet set, so get it
                 if [[ -z "${VM_IP:-}" ]]; then
                     VM_IP=$(get_vm_ip_qemu "${VM_NAME}")
