@@ -11,10 +11,6 @@ The following paths are presrved from Flatcar into ACL builds:
 This is the lower dir in the `/etc` overlay, or `etc-overlay`, setup. Path referenced in:
 
 - `build_library/rpm/additional_files/etc-overlay.sh`
-- `build_library/rpm/additional_files/etc-overlay-populate.service`
-- `build_library/rpm/additional_files/copy-files-etc.conf`
-- `build_library/rpm/additional_files/initrd-setup-etc-overlay.service`
-- `build_library/rpm/additional_files/module-setup.sh`
 - `build_library/rpm/build_image_util.sh`
 
 ### `/boot/flatcar`

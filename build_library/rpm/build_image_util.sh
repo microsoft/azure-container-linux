@@ -359,7 +359,7 @@ SETUP_EOF
 # In Azure Linux, the shadow database is pre-populated by RPM packages
 SYSROOT="${1:-/sysroot}"
 # Ensure essential directories exist
-mkdir -p "${SYSROOT}/etc" "${SYSROOT}/var/log" "${SYSROOT}/var/tmp" "${SYSROOT}/run"
+mkdir -p "${SYSROOT}/etc" 
 # Ensure basic shadow files exist (if not already present)
 for f in passwd group shadow gshadow; do
     if [[ ! -f "${SYSROOT}/etc/${f}" ]] && [[ -f "${SYSROOT}/usr/share/flatcar/etc/${f}" ]]; then
@@ -721,8 +721,7 @@ finish_image_selinux_rpm() {
 
 finish_image_tmpfiles_rpm() {
     local root_fs_dir="$1"
-    local ETC_FULL_PATH="${root_fs_dir}/usr/share/flatcar/etc"
-  
+
     sudo "${root_fs_dir}"/usr/sbin/flatcar-tmpfiles "${root_fs_dir}"
 
     # sshd privilege separation directory
@@ -730,65 +729,14 @@ finish_image_tmpfiles_rpm() {
 # SSH privilege separation directory
 d /var/lib/sshd 0755 root root - -
 TMPFILES_SSHD
-    
-    # ALWAYS run these steps - they set up the /etc overlay and autologin
-    # Previously this was in an 'else' block and was skipped when flatcar-tmpfiles existed
-    info "RPM mode: Setting up /etc overlay configs in ${ETC_FULL_PATH}"
 
-    # In Flatcar, /etc is a tmpfs that gets populated from /usr/share/flatcar/etc at boot.
-    # RPMs install configs to /etc, but we need them in /usr/share/flatcar/etc for persistence
-    # Move essential configs from /etc to /usr/share/flatcar/etc
-    sudo mkdir -p "${ETC_FULL_PATH}"
-
-    # Move PAM configs (from shadow-utils RPM) - CRITICAL for login
-    if [[ -d "${root_fs_dir}/etc/pam.d" ]]; then
-        info "RPM mode: Moving /etc/pam.d to ${ETC_FULL_PATH}/pam.d"
-        sudo mv "${root_fs_dir}/etc/pam.d" "${ETC_FULL_PATH}/"
-        ls "${ETC_FULL_PATH}/pam.d"
-    fi
-
-    # Move security configs (from pam RPM)
-    if [[ -d "${root_fs_dir}/etc/security" ]]; then
-        info "RPM mode: Moving /etc/security to ${ETC_FULL_PATH}/security"
-        sudo mv "${root_fs_dir}/etc/security" "${ETC_FULL_PATH}/"
-    fi
-
-    # Move SSH configs if present
-    if [[ -d "${root_fs_dir}/etc/ssh" ]]; then
-        info "RPM mode: Moving /etc/ssh to ${ETC_FULL_PATH}/ssh"
-        sudo mv "${root_fs_dir}/etc/ssh" "${ETC_FULL_PATH}/"
-    fi
-
-    # Move individual essential config files (except profile - we create our own)
-    for cfg in passwd group shadow gshadow login.defs nsswitch.conf shells environment; do
-        if [[ -f "${root_fs_dir}/etc/${cfg}" ]]; then
-            sudo cp -a "${root_fs_dir}/etc/${cfg}" "${ETC_FULL_PATH}/"
-        fi
-    done
-
-    # Move profile.d if exists
-    if [[ -d "${root_fs_dir}/etc/profile.d" ]]; then
-        # Remove umask.sh installed by Azure Linux bash RPM to
-        # align with upstream Flatcar behavior
-        sudo rm -f "${root_fs_dir}/etc/profile.d/umask.sh"
-        sudo cp -a "${root_fs_dir}/etc/profile.d" "${ETC_FULL_PATH}/"
-    fi
-
-    # Move default directory (useradd defaults)
-    if [[ -d "${root_fs_dir}/etc/default" ]]; then
-        sudo cp -a "${root_fs_dir}/etc/default" "${ETC_FULL_PATH}/"
-    fi
-
-    # Move skel directory if exists
-    if [[ -d "${root_fs_dir}/etc/skel" ]]; then
-        sudo cp -a "${root_fs_dir}/etc/skel" "${ETC_FULL_PATH}/"
-    fi
+    # Remove umask.sh installed by Azure Linux bash RPM to align with upstream Flatcar behavior
+    sudo rm -f "${root_fs_dir}/etc/profile.d/umask.sh"
 
     # Configure sshd to look for authorized_keys in the ignition location
     # Ignition places SSH keys in ~/.ssh/authorized_keys.d/ignition
-    # NOTE: /etc/ssh was moved to /usr/share/flatcar/etc/ssh above, so we modify it there
     info "RPM mode: Configuring sshd AuthorizedKeysFile for Ignition"
-    local ssh_config_dir="${ETC_FULL_PATH}/ssh"
+    local ssh_config_dir="${root_fs_dir}/etc/ssh"
     sudo mkdir -p "${ssh_config_dir}/sshd_config.d"
     sudo tee "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf" > /dev/null <<'SSHD_CONF'
 # Support both traditional authorized_keys and Ignition's authorized_keys.d/ignition
@@ -815,25 +763,11 @@ SSHD_CONFIG_EOF
 
     # Configure sudo for wheel group (passwordless)
     info "RPM mode: Configuring passwordless sudo for wheel group"
-    sudo mkdir -p "${ETC_FULL_PATH}/sudoers.d"
-    sudo tee "${ETC_FULL_PATH}/sudoers.d/wheel-nopasswd" > /dev/null <<'SUDOERS_EOF'
+    sudo mkdir -p "${root_fs_dir}/etc/sudoers.d"
+    sudo tee "${root_fs_dir}/etc/sudoers.d/wheel-nopasswd" > /dev/null <<'SUDOERS_EOF'
 %wheel ALL=(ALL:ALL) NOPASSWD: ALL
 SUDOERS_EOF
-    sudo chmod 440 "${ETC_FULL_PATH}/sudoers.d/wheel-nopasswd"
-
-    info "RPM mode: Creating tmpfiles.d entries to populate /etc at boot"
-    # Create tmpfiles.d entries to populate /etc at boot time
-    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/copy-files-etc.conf" "${root_fs_dir}/usr/lib/tmpfiles.d/copy-files-etc.conf"
-    info "RPM mode: Created /usr/lib/tmpfiles.d/copy-files-etc.conf"
-
-    # Create an early-boot service to populate /etc from /usr/share/flatcar/etc
-    # This runs VERY early, before any login services, to ensure PAM configs are available
-    info "RPM mode: Creating etc-overlay-populate.service for early /etc population"
-    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/etc-overlay-populate.service" "${root_fs_dir}/usr/lib/systemd/system/etc-overlay-populate.service"
-    # Enable the service in sysinit.target (very early)
-    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants"
-    sudo ln -sf ../etc-overlay-populate.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/etc-overlay-populate.service"
-    info "RPM mode: Enabled etc-overlay-populate.service in sysinit.target"
+    sudo chmod 440 "${root_fs_dir}/etc/sudoers.d/wheel-nopasswd"
 
     # Install update-ssh-keys replacement script
     info "RPM mode: Installing update-ssh-keys replacement script"
@@ -849,7 +783,9 @@ SUDOERS_EOF
     info "RPM mode: Enabling systemd-resolved.service"
     sudo ln -sf ../systemd-resolved.service "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/systemd-resolved.service"
 
-    # Fix ntpdate-wrapper - Azure Linux has ntpdate at /usr/bin but wrapper script expects /usr/sbin
+    # Fix ntpdate-wrapper - Azure Linux has ntpdate at /usr/bin but wrapper
+    # script expects /usr/sbin
+    # Tracked by https://dev.azure.com/mariner-org/ACL/_workitems/edit/17804
     if [[ -f "${root_fs_dir}/usr/libexec/ntpdate-wrapper" ]]; then
         info "RPM mode: Patching ntpdate-wrapper to use /usr/bin/ntpdate"
         sudo sed -i 's|/usr/sbin/ntpdate|/usr/bin/ntpdate|g' "${root_fs_dir}/usr/libexec/ntpdate-wrapper"
@@ -1217,7 +1153,7 @@ FSTAB_EOF
 
     # Create /etc/profile.d directory for additional scripts
     info "RPM mode: Creating profile.d directory"
-    sudo mkdir -p "${ETC_FULL_PATH}/profile.d"
+    sudo mkdir -p "${root_fs_dir}/etc/profile.d"
 
     # Ensure /root home directory exists with proper permissions
     sudo mkdir -p "${root_fs_dir}/root"
@@ -1226,16 +1162,16 @@ FSTAB_EOF
 
 finish_image_backup_etc_rpm() {
     local root_fs_dir="$1"
-    local ETC_FULL_PATH="${root_fs_dir}/usr/share/flatcar/etc"
     local FLATCAR_SHARE="${root_fs_dir}/usr/share/flatcar"
+    local ETC_FULL_PATH="${FLATCAR_SHARE}/etc"
 
-    info "RPM mode: Skipping ${ETC_FULL_PATH} recreation (already set up with PAM configs)"
-    # In RPM mode, we already moved configs to /usr/share/flatcar/etc earlier
-    # We just need to ensure any remaining /etc files are also copied
-    # Use rsync-like behavior: copy files that don't exist in destination
-    if [[ -d "${root_fs_dir}/etc" ]]; then
-      sudo cp -an "${root_fs_dir}/etc/." "${ETC_FULL_PATH}/" 2>/dev/null || true
-    fi
+    # Bulk-copy all of /etc to /usr/share/flatcar/etc.
+    # This is the overlay lowerdir — at boot, /etc is a tmpfs overlay
+    # whose lower layer is this directory.  Mirrors the Portage-mode
+    # "sudo cp -a /etc /usr/share/flatcar/etc" in build_image_util.sh.
+    info "RPM mode: Copying /etc to ${ETC_FULL_PATH} for overlay lowerdir"
+    sudo rm -rf "${ETC_FULL_PATH}"
+    sudo cp -a "${root_fs_dir}/etc" "${ETC_FULL_PATH}"
 
     # Create etc-no-whiteouts file required by bootengine's initrd-setup-root
     # This file lists /etc paths that should not be treated as overlay whiteouts
@@ -1257,7 +1193,7 @@ finish_image_backup_etc_rpm() {
     # 2. If machine-id doesn't exist -> that's fine, no action needed
     # Either way, after overlay mount systemd sees no /etc/machine-id and first boot is detected.
     info "Removing machine-id from /usr/share/flatcar/etc (overlay lowerdir) for first-boot detection"
-    sudo rm -f "${root_fs_dir}/usr/share/flatcar/etc/machine-id"
+    sudo rm -f "${FLATCAR_SHARE}/etc/machine-id"
 }
 
 # Escape a string for JSON - handles quotes, backslashes, and control characters
