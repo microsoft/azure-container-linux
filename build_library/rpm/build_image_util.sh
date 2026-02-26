@@ -759,49 +759,6 @@ TMPFILES_SSHD
         sudo mv "${root_fs_dir}/etc/ssh" "${ETC_FULL_PATH}/"
     fi
 
-    if [[ -f "${root_fs_dir}/etc/passwd" ]]; then
-        # Add core user if not already present (UID/GID 500, required for ignition)
-        if ! grep -q "^core:" "${root_fs_dir}/etc/passwd"; then
-            info "RPM mode: Adding core user to /etc/passwd"
-            echo "core:x:500:500:ACL Admin:/home/core:/bin/bash" | sudo tee -a "${root_fs_dir}/etc/passwd" > /dev/null
-        fi
-    fi
-
-    # Add core group to /etc/group if not present
-    if [[ -f "${root_fs_dir}/etc/group" ]]; then
-        if ! grep -q "^core:" "${root_fs_dir}/etc/group"; then
-            info "RPM mode: Adding core group to /etc/group"
-            echo "core:x:500:" | sudo tee -a "${root_fs_dir}/etc/group" > /dev/null
-        fi
-        # Add core to wheel, sudo, docker groups
-        for grp in wheel sudo docker; do
-            if grep -q "^${grp}:" "${root_fs_dir}/etc/group"; then
-                # Add core to the group if not already a member
-                if ! grep "^${grp}:" "${root_fs_dir}/etc/group" | grep -q "core"; then
-                    sudo sed -i "s/^${grp}:\([^:]*:[^:]*:\)\(.*\)/${grp}:\1\2,core/" "${root_fs_dir}/etc/group"
-                    # Clean up any leading comma if group was empty
-                    sudo sed -i "s/^${grp}:\([^:]*:[^:]*:\),/${grp}:\1/" "${root_fs_dir}/etc/group"
-                fi
-            fi
-        done
-    fi
-
-    # Add core user to /etc/shadow if not present (locked password - SSH key only)
-    if [[ -f "${root_fs_dir}/etc/shadow" ]]; then
-        if ! sudo grep -q "^core:" "${root_fs_dir}/etc/shadow"; then
-            info "RPM mode: Adding core user to /etc/shadow"
-            echo "core:*:19000:0:99999:7:::" | sudo tee -a "${root_fs_dir}/etc/shadow" > /dev/null
-        fi
-    fi
-
-    # Set empty root password for passwordless console login
-    # Users can set a password after logging in with 'passwd'
-    # This is standard for cloud VMs where SSH key auth is primary
-    if [[ -f "${root_fs_dir}/etc/shadow" ]]; then
-        info "RPM mode: Setting empty root password for console login"
-        sudo sed -i 's|^root:[^:]*:|root::|' "${root_fs_dir}/etc/shadow"
-    fi
-
     # Move individual essential config files (except profile - we create our own)
     for cfg in passwd group shadow gshadow login.defs nsswitch.conf shells environment; do
         if [[ -f "${root_fs_dir}/etc/${cfg}" ]]; then
