@@ -1000,7 +1000,7 @@ hydrate() {
     # Download published_artifacts.json
     info "Downloading published artifacts manifest..."
     if ! az pipelines runs artifact download \
-        --artifact-name "drop_publish_publish_artifacts" \
+        --artifact-name "drop_publish_final_finalize" \
         --path "${temp_dir}/manifest" \
         --run-id "${build_id}" \
         --org "${org}" \
