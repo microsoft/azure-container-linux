@@ -693,6 +693,16 @@ SYSUSERS_EOF
     echo "disable flanneld.service" | sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-flannel.preset" > /dev/null
     echo "disable flannel-docker-opts.service" | sudo tee -a "${root_fs_dir}/usr/lib/systemd/system-preset/50-flannel.preset" > /dev/null
 
+    # Disable coreos-metadata.service and coreos-metadata-sshkeys@.service by default.
+    # These services require afterburn (coreos-metadata) which handles cloud provider metadata.
+    # They should only start when explicitly needed, not on every boot.
+    # NOTE: The preset must use the template name (coreos-metadata-sshkeys@.service) not
+    # the instance name (@core), because systemctl preset-all matches installed unit files
+    # which are templates, not instances.
+    info "RPM mode: Disabling coreos-metadata and coreos-metadata-sshkeys@ via preset"
+    printf "disable coreos-metadata.service\ndisable coreos-metadata-sshkeys@.service\n" | \
+        sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-coreos-metadata.preset" > /dev/null
+
     # Placeholder audit-rules.service - Azure Linux doesn't provide this but kola tests expect it as a common dependency
     if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service" ]]; then
         info "RPM mode: Installing placeholder audit-rules.service"
