@@ -347,11 +347,6 @@ SSHD_CONFIG_EOF
 SUDOERS_EOF
     sudo chmod 440 "${root_fs_dir}/etc/sudoers.d/wheel-nopasswd"
 
-    # Install update-ssh-keys replacement script
-    info "RPM mode: Installing update-ssh-keys replacement script"
-    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/update-ssh-keys" "${root_fs_dir}/usr/bin/update-ssh-keys"
-    sudo chmod +x "${root_fs_dir}/usr/bin/update-ssh-keys"
-
     # Enable systemd-networkd service
     info "RPM mode: Enabling systemd-networkd.service"
     sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants"

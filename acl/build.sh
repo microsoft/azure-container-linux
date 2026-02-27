@@ -44,7 +44,7 @@ function build_specs() {
     pushd "${BUILD_DIR}/azurelinux/toolkit"
     sudo make build-packages \
         -j"$(nproc)" \
-        SPEC_LIST="ignition rust-afterburn bootengine coreos-cloudinit coreos-init" \
+        SPEC_LIST="ignition rust-afterburn bootengine coreos-cloudinit coreos-init azure-vm-utils update-ssh-keys" \
         SPECS_DIR="${SPECS_DIR}" \
         QUICK_REBUILD_PACKAGES=y \
         PRECACHE=n \
