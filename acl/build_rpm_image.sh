@@ -2830,8 +2830,11 @@ main() {
     if [[ "$USE_UNOFFICIAL_KERNEL" == "true" ]]; then
         # Flag was passed - download unofficial kernel
         download_unofficial_kernel
-    elif ls "${STAGING_DIR}"/kernel-[0-9]*.rpm &>/dev/null 2>&1; then
-        # Kernel RPMs found in staging - use unofficial kernel settings
+    elif [[ "$SECURE_BOOT_ENABLED" != "true" ]] && ls "${STAGING_DIR}"/kernel-[0-9]*.rpm &>/dev/null 2>&1; then
+        # Kernel RPMs found in staging and secure boot is NOT enabled —
+        # assume these are unofficial (unsigned) kernels.
+        # When SECURE_BOOT_ENABLED=true (prod-pipeline), kernel RPMs in staging
+        # are signed prod RPMs and should NOT trigger unofficial kernel mode.
         USE_UNOFFICIAL_KERNEL=true
         info "Detected kernel RPMs in staging directory, using unofficial kernel settings"
     fi
