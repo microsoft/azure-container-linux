@@ -106,6 +106,7 @@ function _test_run_impl() {
     fi
 
     local retries="${MAX_RETRIES:-20}"
+    echo "[DEBUG] ci-automation/test.sh _test_run_impl(): MAX_RETRIES=${MAX_RETRIES:-<not set>}, retries=${retries}"
     local skip_copy_to_bincache=${SKIP_COPY_TO_BINCACHE:-0}
 
     source ci-automation/tapfile_helper_lib.sh

@@ -66,6 +66,7 @@ export PARALLEL_TESTS=${parallel@Q}
 EOF
 
   export MAX_RETRIES=${MAX_RUNS:-1}
+  echo "[DEBUG] run_local_tests.sh set_vars(): MAX_RUNS=${MAX_RUNS:-<not set>} → MAX_RETRIES=${MAX_RETRIES}"
   export SKIP_COPY_TO_BINCACHE=1
 }
 #--
