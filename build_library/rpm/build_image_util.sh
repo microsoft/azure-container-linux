@@ -96,6 +96,9 @@ start_image_rpm() {
     # Create sysusers.d configs and run systemd-sysusers to create users/groups
     # BEFORE any RPM packages are installed, since RPM %pre scriptlets may need them
     start_image_uids_rpm "${root_fs_dir}"
+
+    # Download bootloader packages while /etc/yum.repos.d is still available
+    download_bootloader_packages_rpm "${root_fs_dir}"
 }
 
 finish_image_rpm() {
@@ -242,8 +245,13 @@ SYSUSERS_CORE
     # (part of the 99etc-overlay dracut module) creates /home/core with proper permissions
     # BEFORE ignition-files.service runs, which is when ignition writes SSH keys.
 
-    # Download grub/shim/systemd-boot packages for later use by grub_install.sh and uki_install.sh
-    # Must be done here while /etc/yum.repos.d is still available
+}
+
+# Download grub/shim/systemd-boot packages for later use by grub_install.sh and uki_install.sh
+# Must be called while /etc/yum.repos.d is still available in the root_fs_dir
+download_bootloader_packages_rpm() {
+    local root_fs_dir="$1"
+
     info "RPM mode: Pre-downloading bootloader packages (grub2, shim, systemd-boot)"
     rpm_staging=$(rpm_get_staging_dir)
     rpm_download_packages "${rpm_staging}" "${root_fs_dir}" grub2 grub2-efi grub2-efi-binary shim systemd-boot
