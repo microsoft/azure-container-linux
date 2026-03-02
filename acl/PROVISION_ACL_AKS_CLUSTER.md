@@ -27,10 +27,10 @@ az aks create \
   --aks-custom-headers \
     AKSHTTPCustomFeatures=Microsoft.ContainerService/UseCustomizedOSImage,\
 OSImageSubscriptionID=035db282-f1c8-4ce7-b78f-2a7265d5398c,\
-OSImageResourceGroup=MarinerAKSTest,\
-OSImageGallery=MarinerAKSSig,\
-OSImageName=flatcargen2,\
-OSImageVersion=1.1771631798.14161,\
+OSImageResourceGroup=ACL,\
+OSImageGallery=acldevel,\
+OSImageName=acl-aks-preview,\
+OSImageVersion=1.1772478786.11986,\
 OSSKU=Flatcar,\
 OSDistro=CustomizedImage \
   --nodepool-tags AzSecPackAutoConfigReady=true \
@@ -38,6 +38,17 @@ OSDistro=CustomizedImage \
 ```
 
 NOTE: **Flatcar name is present in the image definition due to temporary work-arounds**
+
+### Available Regions
+
+The alpha image is available in the following regions:
+
+- `westus2`
+- `westus3`
+- `eastus2`
+- `westus`
+- `eastus`
+- `westeurope`
 
 ## 3. Fetch Kubeconfig
 
