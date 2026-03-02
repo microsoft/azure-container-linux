@@ -189,6 +189,9 @@ function _test_run_impl() {
         rm -f "${work_dir}/first_run"
 
         # Note: git safe.directory is not set in this run as it does not use git
+        # Wrap in set +e / set -e to prevent a failure here from silently
+        # terminating the retry loop (the subshell runs under set -e).
+        set +e
         docker run --pull "${pull_policy}" --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
           -w /work -v "$PWD":/work "${mantle_ref}" \
             ci-automation/test_update_reruns.sh \
@@ -197,6 +200,16 @@ function _test_run_impl() {
                 "${tests_dir}/${failfile}" \
                 "${tap_merged_summary}" \
                 "${tap_merged_detailed}"
+        local update_reruns_rc=$?
+        set -e
+
+        if [[ ${update_reruns_rc} -ne 0 ]]; then
+            echo "########### test_update_reruns.sh failed (exit code ${update_reruns_rc}). ###########"
+            echo "Cannot determine which tests to re-run. Treating all as failed."
+            # Write all tests to the failfile so the retry loop continues
+            # with the full test set rather than silently giving up.
+            printf '%s\n' "${tests_escaped[@]}" > "${tests_dir}/${failfile}"
+        fi
 
         readarray -t failed_tests <"${tests_dir}/${failfile}"
         if [ "${#failed_tests[@]}" -eq 0 ] ; then
