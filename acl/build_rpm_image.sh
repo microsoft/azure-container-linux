@@ -117,6 +117,8 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-__build__}"
 STAGING_DIR="${SCRIPT_DIR}/__build__/rpm-staging"
 DISK_LAYOUT="${DISK_LAYOUT:-vm}"  # Use 'vm' layout for larger ROOT partition (needed for RPM mode)
 RUN_SCRIPTS=()  # Scripts to run on VM after boot
+SCRIPT_RESULTS_NAMES=()   # Names of scripts that were executed
+SCRIPT_RESULTS_STATUS=()  # Exit status per script: 0=pass, non-zero=fail
 VM_SSH_USER="${VM_SSH_USER:-core}"
 VM_SSH_KEY="${VM_SSH_KEY:-}"
 VM_SSH_TIMEOUT="${VM_SSH_TIMEOUT:-120}"  # Seconds to wait for SSH
@@ -197,6 +199,56 @@ warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 debug()   { [[ "${DEBUG:-false}" == "true" ]] && echo -e "${BLUE}[DEBUG]${NC} $*" || true; }
 section() { echo -e "\n${GREEN}=========================================${NC}"; echo -e "${GREEN}$*${NC}"; echo -e "${GREEN}=========================================${NC}\n"; }
+
+# Print a summary of script execution results.
+# Uses global arrays SCRIPT_RESULTS_NAMES and SCRIPT_RESULTS_STATUS.
+print_script_results_summary() {
+    if [[ ${#SCRIPT_RESULTS_NAMES[@]} -eq 0 ]]; then
+        return
+    fi
+
+    local passed=0 failed=0 total=${#SCRIPT_RESULTS_NAMES[@]}
+
+    for status in "${SCRIPT_RESULTS_STATUS[@]}"; do
+        if [[ "$status" -eq 0 ]]; then
+            ((passed++)) || true
+        else
+            ((failed++)) || true
+        fi
+    done
+
+    echo ""
+    echo -e "${GREEN}=========================================${NC}"
+    echo -e "${GREEN} Script Execution Summary${NC}"
+    echo -e "${GREEN}=========================================${NC}"
+    printf "  %-50s %s\n" "SCRIPT" "RESULT"
+    printf "  %-50s %s\n" "------" "------"
+
+    for i in "${!SCRIPT_RESULTS_NAMES[@]}"; do
+        local name="${SCRIPT_RESULTS_NAMES[$i]}"
+        local status="${SCRIPT_RESULTS_STATUS[$i]}"
+        if [[ "$status" -eq 0 ]]; then
+            printf "  %-50s ${GREEN}%s${NC}\n" "$name" "PASSED"
+        else
+            printf "  %-50s ${RED}%s${NC}\n" "$name" "FAILED"
+        fi
+    done
+
+    echo -e "  ${GREEN}-----------------------------------------${NC}"
+    printf "  Total: %d  |  " "$total"
+    if [[ $passed -gt 0 ]]; then
+        printf "${GREEN}Passed: %d${NC}  |  " "$passed"
+    else
+        printf "Passed: %d  |  " "$passed"
+    fi
+    if [[ $failed -gt 0 ]]; then
+        printf "${RED}Failed: %d${NC}\n" "$failed"
+    else
+        printf "Failed: %d\n" "$failed"
+    fi
+    echo -e "${GREEN}=========================================${NC}"
+    echo ""
+}
 
 # Get SDK container image to use for builds
 # If ACL_SDK_IMAGE is set, use it directly (allows CI to specify pre-built SDK)
@@ -396,6 +448,7 @@ parse_args() {
                 # RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-systemd-health-test.sh")
+                RUN_SCRIPTS+=("./acl/tests/run-dmesg-io-error-test.sh")
                 shift
                 ;;
             --build-image)
@@ -1600,26 +1653,38 @@ run_scripts_on_vm() {
             local remote_script="/tmp/$(basename "$script")"
             if ! scp $ssh_opts "$script" "${VM_SSH_USER}@${ip}:${remote_script}"; then
                 error "Failed to copy script: $script"
+                SCRIPT_RESULTS_NAMES+=("$script")
+                SCRIPT_RESULTS_STATUS+=(1)
                 failed=1
                 continue
             fi
             if ! ssh $ssh_opts "${VM_SSH_USER}@${ip}" "chmod +x ${remote_script} && sudo ${remote_script}"; then
                 error "Script failed: $script"
+                SCRIPT_RESULTS_NAMES+=("$script")
+                SCRIPT_RESULTS_STATUS+=(1)
                 failed=1
             else
                 info "Script completed: $script"
+                SCRIPT_RESULTS_NAMES+=("$script")
+                SCRIPT_RESULTS_STATUS+=(0)
             fi
         elif [[ "$script" == *";"* ]] || [[ "$script" == *"&&"* ]] || [[ "$script" =~ ^[a-zA-Z] ]]; then
             # Treat as inline command
             info "Running command: $script"
             if ! ssh $ssh_opts "${VM_SSH_USER}@${ip}" "sudo bash -c '$script'"; then
                 error "Command failed: $script"
+                SCRIPT_RESULTS_NAMES+=("$script")
+                SCRIPT_RESULTS_STATUS+=(1)
                 failed=1
             else
                 info "Command completed"
+                SCRIPT_RESULTS_NAMES+=("$script")
+                SCRIPT_RESULTS_STATUS+=(0)
             fi
         else
             warn "Script not found and not a valid command: $script"
+            SCRIPT_RESULTS_NAMES+=("$script")
+            SCRIPT_RESULTS_STATUS+=(1)
             failed=1
         fi
     done
@@ -1883,9 +1948,13 @@ run_scripts_via_console() {
                 # For Azure VMs, use run-command directly with script content
                 if ! run_command_vm_azure "$VM_RG" "$vm_name" "$script_content"; then
                     error "Script failed: $script"
+                    SCRIPT_RESULTS_NAMES+=("$script")
+                    SCRIPT_RESULTS_STATUS+=(1)
                     failed=1
                 else
                     info "✓ Script completed successfully: $script"
+                    SCRIPT_RESULTS_NAMES+=("$script")
+                    SCRIPT_RESULTS_STATUS+=(0)
                 fi
             else
                 # For QEMU VMs, use base64 encoding approach via serial console
@@ -1895,9 +1964,13 @@ run_scripts_via_console() {
 
                 if ! run_command_via_console_qemu "$vm_name" "$remote_cmd" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD"; then
                     error "Script failed: $script"
+                    SCRIPT_RESULTS_NAMES+=("$script")
+                    SCRIPT_RESULTS_STATUS+=(1)
                     failed=1
                 else
                     info "✓ Script completed successfully: $script"
+                    SCRIPT_RESULTS_NAMES+=("$script")
+                    SCRIPT_RESULTS_STATUS+=(0)
                 fi
             fi
         elif [[ "$script" == *";"* ]] || [[ "$script" == *"&&"* ]] || [[ "$script" =~ ^[a-zA-Z] ]]; then
@@ -1906,21 +1979,31 @@ run_scripts_via_console() {
                 info "Running command on Azure VM: $script"
                 if ! run_command_vm_azure "$VM_RG" "$vm_name" "$script"; then
                     error "Command failed: $script"
+                    SCRIPT_RESULTS_NAMES+=("$script")
+                    SCRIPT_RESULTS_STATUS+=(1)
                     failed=1
                 else
                     info "Command completed"
+                    SCRIPT_RESULTS_NAMES+=("$script")
+                    SCRIPT_RESULTS_STATUS+=(0)
                 fi
             else
                 info "Running command via console: $script"
                 if ! run_command_via_console_qemu "$vm_name" "$script" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD"; then
                     error "Command failed: $script"
+                    SCRIPT_RESULTS_NAMES+=("$script")
+                    SCRIPT_RESULTS_STATUS+=(1)
                     failed=1
                 else
                     info "Command completed"
+                    SCRIPT_RESULTS_NAMES+=("$script")
+                    SCRIPT_RESULTS_STATUS+=(0)
                 fi
             fi
         else
             warn "Script not found and not a valid command: $script"
+            SCRIPT_RESULTS_NAMES+=("$script")
+            SCRIPT_RESULTS_STATUS+=(1)
             failed=1
         fi
     done
@@ -2920,8 +3003,10 @@ main() {
 
                 # Run scripts via console
                 if run_scripts_via_console "${VM_NAME}" "${RUN_SCRIPTS[@]}"; then
+                    print_script_results_summary
                     info "All scripts completed successfully!"
                 else
+                    print_script_results_summary
                     error "One or more scripts failed"
                     exit 1
                 fi
@@ -2939,8 +3024,10 @@ main() {
 
                 if wait_for_ssh "$VM_IP" "$VM_SSH_TIMEOUT"; then
                     if run_scripts_on_vm "$VM_IP" "${RUN_SCRIPTS[@]}"; then
+                        print_script_results_summary
                         info "All scripts completed successfully!"
                     else
+                        print_script_results_summary
                         error "One or more scripts failed"
                         exit 1
                     fi

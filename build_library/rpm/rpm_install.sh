@@ -143,7 +143,7 @@ rpm_umount_pseudofs() {
         local pids
         pids=$(sudo fuser -m "${root_fs_dir}/dev" 2>/dev/null | tr -s ' ') || true
         if [[ -n "${pids}" ]]; then
-            sudo fuser -km "${root_fs_dir}/dev" 2>/dev/null || true
+            sudo fuser -km "${root_fs_dir}/dev" >/dev/null 2>&1 || true
             sleep 1
         fi
     fi
