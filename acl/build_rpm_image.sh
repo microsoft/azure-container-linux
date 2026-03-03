@@ -1,8 +1,7 @@
 #!/bin/bash
 # Build Azure Container Linux (ACL) Image - Complete workflow
 #
-# This script builds an Azure Container Linux (ACL) image using Azure Linux RPMs where available,
-# falling back to Portage packages for Flatcar-specific components.
+# This script builds an Azure Container Linux (ACL) image using Azure Linux RPMs and Flatcar SDK container.
 #
 # Usage:
 #   ./build_rpm_image.sh [options]
@@ -52,8 +51,8 @@
 #   --ssh-user=USER                      SSH user for VM scripts (default: core)
 #   --start-vm                           Start the VM after building (implies --build-vm-image)
 #   --unofficial-kernel-build-id=ID      Specify Azure DevOps build ID for kernel (default: 1028516)
-#   --use-serial                         Use serial console for script execution (default, no SSH/ignition needed)
-#   --use-ssh                            Use SSH for script execution (requires working ignition/SSH keys)
+#   --use-serial                         Use serial console for script execution (no SSH/ignition needed)
+#   --use-ssh                            Use SSH for script execution (default, requires working ignition/SSH keys)
 #   --gpu                                Include GPU sysexts (NVIDIA driver, container-toolkit, fabric-manager)
 #   --vm-name=NAME                       Name for the VM (default: acl)
 #   --vm-type=TYPE                       VM type when building VM images: azure|qemu (default: qemu)
@@ -96,8 +95,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
 cd "${SCRIPT_DIR}"
 
-export LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI:-qemu:///system}"
-
 # Default configuration
 BOARD="${BOARD:-amd64-usr}"
 GROUP="${GROUP:-production}"
@@ -117,8 +114,6 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-__build__}"
 STAGING_DIR="${SCRIPT_DIR}/__build__/rpm-staging"
 DISK_LAYOUT="${DISK_LAYOUT:-vm}"  # Use 'vm' layout for larger ROOT partition (needed for RPM mode)
 RUN_SCRIPTS=()  # Scripts to run on VM after boot
-SCRIPT_RESULTS_NAMES=()   # Names of scripts that were executed
-SCRIPT_RESULTS_STATUS=()  # Exit status per script: 0=pass, non-zero=fail
 VM_SSH_USER="${VM_SSH_USER:-core}"
 VM_SSH_KEY="${VM_SSH_KEY:-}"
 VM_SSH_TIMEOUT="${VM_SSH_TIMEOUT:-120}"  # Seconds to wait for SSH
@@ -134,7 +129,6 @@ RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID (bypasses VHD upload)
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
-VM_STATE_FILE="${SCRIPT_DIR}/.vm-state.env"  # State file for VM reuse between invocations
 BUILD_GPU=false  # Include GPU (NVIDIA driver, container-toolkit, fabric-manager) sysexts
 HYDRATE=false  # Hydrate local environment from CI pipeline build
 HYDRATE_BUILD_ID=""  # Specific build ID for hydrate (empty = latest)
@@ -150,41 +144,19 @@ export RPM_STAGING_DIR="${STAGING_DIR}"
 # Bootloader mode: 'grub' (default) or 'uki' (systemd-boot + UKI)
 export BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
 
-# Var-s for Azure VM testing:
-# - Subscription ID
+# Var-s for Azure VM testing (forwarded to validate_rpm_image.sh):
 AZ_SUB_ID="${AZ_SUB_ID:-b99b2264-54e6-408e-812b-2ec280c0ce7a}"
-# - Region
 AZ_REGION="${AZ_REGION:-eastus2}"
-# - Storage RG
-AZ_STORAGE_RG="acl-test-storage-rg"
-# - Storage account
 AZ_STORAGE_ACC="${AZ_STORAGE_ACC:-aclteststorageacc}"
-# - VM size
 AZ_VM_SIZE="${AZ_VM_SIZE:-Standard_D2s_v5}"
-# - Storage container
-AZ_STORAGE_CONTAINER="acl-test-vm-img"
-# - Gallery RG
-AZ_GALLERY_RG="acl-test-gallery-rg"
-# - Compute gallery
 AZ_ACG="${AZ_ACG:-acltestacg}"
-# - VM image definition (user-specific to prevent race conditions when multiple users test concurrently)
-AZ_VM_IMAGE_DEF="$(whoami)-acl-test-vm-img"
-# - Prefix for VM RG name (user-specific to avoid conflicts)
-VM_RG_PREFIX="$(whoami)-acl-test-vm-rg"
-# - By default, set to false and clean up pre-existing VM RGs for the user
 NO_CLEANUP="${NO_CLEANUP:-false}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
 
 # Tags applied to Azure resources (VMs, RGs, public IPs) for identification and cleanup.
-# Default: createdBy=<current user>.  Override or extend via --tag=key=value.
 RESOURCE_TAGS=("createdBy=$(whoami)")
-
-# Global variable to store the actual VM resource group name
-# - For QEMU VMs: empty string (not used)
-# - For Azure VMs: set by start_vm_azure() to actual RG name
-VM_RG=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -199,56 +171,6 @@ warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 debug()   { [[ "${DEBUG:-false}" == "true" ]] && echo -e "${BLUE}[DEBUG]${NC} $*" || true; }
 section() { echo -e "\n${GREEN}=========================================${NC}"; echo -e "${GREEN}$*${NC}"; echo -e "${GREEN}=========================================${NC}\n"; }
-
-# Print a summary of script execution results.
-# Uses global arrays SCRIPT_RESULTS_NAMES and SCRIPT_RESULTS_STATUS.
-print_script_results_summary() {
-    if [[ ${#SCRIPT_RESULTS_NAMES[@]} -eq 0 ]]; then
-        return
-    fi
-
-    local passed=0 failed=0 total=${#SCRIPT_RESULTS_NAMES[@]}
-
-    for status in "${SCRIPT_RESULTS_STATUS[@]}"; do
-        if [[ "$status" -eq 0 ]]; then
-            ((passed++)) || true
-        else
-            ((failed++)) || true
-        fi
-    done
-
-    echo ""
-    echo -e "${GREEN}=========================================${NC}"
-    echo -e "${GREEN} Script Execution Summary${NC}"
-    echo -e "${GREEN}=========================================${NC}"
-    printf "  %-50s %s\n" "SCRIPT" "RESULT"
-    printf "  %-50s %s\n" "------" "------"
-
-    for i in "${!SCRIPT_RESULTS_NAMES[@]}"; do
-        local name="${SCRIPT_RESULTS_NAMES[$i]}"
-        local status="${SCRIPT_RESULTS_STATUS[$i]}"
-        if [[ "$status" -eq 0 ]]; then
-            printf "  %-50s ${GREEN}%s${NC}\n" "$name" "PASSED"
-        else
-            printf "  %-50s ${RED}%s${NC}\n" "$name" "FAILED"
-        fi
-    done
-
-    echo -e "  ${GREEN}-----------------------------------------${NC}"
-    printf "  Total: %d  |  " "$total"
-    if [[ $passed -gt 0 ]]; then
-        printf "${GREEN}Passed: %d${NC}  |  " "$passed"
-    else
-        printf "Passed: %d  |  " "$passed"
-    fi
-    if [[ $failed -gt 0 ]]; then
-        printf "${RED}Failed: %d${NC}\n" "$failed"
-    else
-        printf "Failed: %d\n" "$failed"
-    fi
-    echo -e "${GREEN}=========================================${NC}"
-    echo ""
-}
 
 # Get SDK container image to use for builds
 # If ACL_SDK_IMAGE is set, use it directly (allows CI to specify pre-built SDK)
@@ -278,100 +200,9 @@ get_tty_flag() {
     fi
 }
 
-# Returns the path to the private SSH key that should be used for all flows. If VM_SSH_KEY is set,
-# then returns it. Otherwise, searches for default SSH keys in priority order.
-get_ssh_private_key() {
-    # If VM_SSH_KEY is already set, return it
-    if [[ -n "$VM_SSH_KEY" ]]; then
-        echo "$VM_SSH_KEY"
-        return 0
-    fi
-    
-    # Search for default SSH keys in priority order
-    for keyfile in ~/.ssh/id_rsa.pub ~/.ssh/id_ed25519.pub ~/.ssh/id_ecdsa.pub; do
-        if [[ -f "$keyfile" ]]; then
-            local private_key="${keyfile%.pub}"
-            if [[ -f "$private_key" ]]; then
-                echo "$private_key"
-                return 0
-            fi
-        fi
-    done
-    
-    echo ""
-    return 1
-}
-
 # Detect if running on Azure Linux 3
 is_azure_linux_3() {
     [[ -f /etc/os-release ]] && grep -q 'ID=azurelinux' /etc/os-release && grep -q 'VERSION_ID="3' /etc/os-release
-}
-
-# Ensure libvirt default network exists and is active
-ensure_libvirt_network() {
-    if ! command -v virsh &>/dev/null; then
-        error "virsh not found - required for VM operations"
-        if is_azure_linux_3; then
-            error "Install with: sudo tdnf install -y libvirt libvirt-client"
-        else
-            error "Install with: sudo apt-get install -y libvirt-clients"
-        fi
-        return 1
-    fi
-    
-    # Check if default network exists
-    if ! virsh net-info default &>/dev/null 2>&1; then
-        warn "libvirt default network not found"
-        if [[ -f /usr/share/libvirt/networks/default.xml ]]; then
-            info "Attempting to define default network from template..."
-            if sudo virsh net-define /usr/share/libvirt/networks/default.xml; then
-                info "Default network defined successfully"
-            else
-                error "Failed to define default network. Please run manually:"
-                error "  sudo virsh net-define /usr/share/libvirt/networks/default.xml"
-                return 1
-            fi
-        else
-            error "Default network template not found at /usr/share/libvirt/networks/default.xml"
-            error "Please install libvirt or create the default network manually"
-            return 1
-        fi
-    fi
-    
-    # Check if default network is active
-    if ! virsh net-info default 2>/dev/null | grep -q 'Active:.*yes'; then
-        info "Starting libvirt default network..."
-        if sudo virsh net-start default; then
-            sudo virsh net-autostart default 2>/dev/null || true
-            info "Default network started successfully"
-        else
-            error "Failed to start default network. Please run manually:"
-            error "  sudo virsh net-start default"
-            return 1
-        fi
-    fi
-    
-    return 0
-}
-
-# Check for swtpm SECCOMP issue on Azure Linux 3
-# Note: Not all Azure Linux 3 builds encounter this issue, so we only log at debug level.
-# The fix is documented in BUILD_RPM_IMAGE_README.md for users who encounter it.
-check_swtpm_azure_linux() {
-    if ! is_azure_linux_3; then
-        return 0
-    fi
-    
-    # Check if swtpm exists and if wrapper is installed
-    if [[ -x /usr/bin/swtpm ]]; then
-        if [[ -L /usr/bin/swtpm ]] && [[ -f /usr/bin/swtpm.orig ]]; then
-            debug "swtpm wrapper already installed"
-            return 0
-        fi
-        
-        debug "swtpm found without wrapper - if VM startup fails with 'tpm-emulator: could not send INIT', see BUILD_RPM_IMAGE_README.md for fix"
-    fi
-    return 0
 }
 
 # Show usage information
@@ -707,7 +538,6 @@ check_prerequisites() {
     section "Checking Prerequisites"
 
     local missing=()
-    local warnings=0
 
     # Check for required commands
     for cmd in docker; do
@@ -747,125 +577,7 @@ check_prerequisites() {
         exit 1
     fi
 
-    # Check swtpm on Azure Linux 3 if VM operations are planned
-    if [[ "$START_VM" == "true" ]] || [[ "$BUILD_VM_IMAGE" == "true" ]]; then
-        check_swtpm_azure_linux
-    fi
-
-    # Check libvirt/virsh when starting a QEMU VM or running kola tests
-    if [[ "$VM_TYPE" == "qemu" ]] && ([[ "$START_VM" == "true" ]] || [[ "$RUN_KOLA_TESTS" == "true" ]]); then
-        if ! command -v virsh &>/dev/null; then
-            error "virsh not found - required for VM operations and kola tests"
-            if is_azure_linux_3; then
-                error "Install with: sudo tdnf install -y libvirt libvirt-client qemu-kvm"
-            else
-                error "Install with: sudo apt-get install -y libvirt-clients libvirt-daemon-system qemu-kvm"
-            fi
-            exit 1
-        fi
-        info "✓ virsh found"
-
-        if ! ensure_libvirt_network; then
-            warnings=$((warnings + 1))
-        fi
-    fi
-
-    # Check Azure CLI when starting an Azure VM
-    if [[ "$START_VM" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
-        if ! check_azure_prereqs; then
-            error "Azure prerequisites not met"
-            exit 1
-        fi
-        
-        # Check for serial-console extension if using serial console
-        if [[ "$USE_SERIAL_CONSOLE" == "true" ]]; then
-            if ! az extension show --name serial-console &>/dev/null 2>&1; then
-                info "Installing Azure CLI serial-console extension..."
-                if ! az extension add --name serial-console; then
-                    error "Failed to install serial-console extension"
-                    error "Install manually with: az extension add --name serial-console"
-                    exit 1
-                fi
-                info "✓ Azure CLI serial-console extension installed"
-            else
-                info "✓ Azure CLI serial-console extension found"
-            fi
-        fi
-    fi
-
-    # Check expect when starting a QEMU VM (needed for serial console automation)
-    if [[ "$START_VM" == "true" ]] && [[ "$VM_TYPE" == "qemu" ]]; then
-        if ! command -v expect &>/dev/null; then
-            error "expect not found - required for VM serial console automation"
-            if is_azure_linux_3; then
-                error "Install with: sudo tdnf install -y expect"
-            else
-                error "Install with: sudo apt-get install -y expect"
-            fi
-            exit 1
-        fi
-        info "✓ expect found"
-    fi
-
-    # Check SSH key when running kola tests or using SSH for scripts
-    if [[ "$RUN_KOLA_TESTS" == "true" ]] || [[ "$USE_SERIAL_CONSOLE" == "false" ]]; then
-        local ssh_key_path
-        ssh_key_path=$(get_ssh_private_key)
-        if [[ -z "$ssh_key_path" || ! -f "$ssh_key_path" ]]; then
-            error "SSH private key not found"
-            error "SSH key is required for kola tests and SSH-based VM access"
-            error "Generate one with: ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa"
-            error "Or specify with: --ssh-key=PATH"
-            exit 1
-        fi
-        # Check corresponding public key exists
-        if [[ ! -f "${ssh_key_path}.pub" ]]; then
-            error "SSH public key not found at: ${ssh_key_path}.pub"
-            error "The public key is needed for VM provisioning"
-            exit 1
-        fi
-        # Update VM_SSH_KEY for global access
-        VM_SSH_KEY="$ssh_key_path"
-        info "✓ SSH key found at $ssh_key_path"
-    fi
-
-    if [[ $warnings -gt 0 ]]; then
-        warn "$warnings warning(s) detected - some operations may fail"
-        echo
-    fi
-
-    info "✓ All prerequisites met"
-}
-
-# Checks prerequisites for Azure CLI operations.
-check_azure_prereqs() {
-    info "Checking Azure prerequisites..."
-    if ! command -v az &>/dev/null; then
-        error "Azure CLI (az) not found - required for Azure VM operations"
-        if is_azure_linux_3; then
-            error "Install with: sudo tdnf install -y azure-cli"
-        else
-            error "Install with: curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash"
-        fi
-        return 1
-    fi
-    
-    # Check if logged into Azure with a valid token
-    if ! az account show &>/dev/null; then
-        error "Not logged into Azure. Please run: az login"
-        return 1
-    fi
-    
-    # Test that the token is actually valid by attempting a simple operation
-    if ! az group list --query "[]" -o tsv &>/dev/null; then
-        error "Azure authentication token has expired or is invalid"
-        error "Please re-authenticate with Azure:"
-        error "  az logout"
-        error "  az login"
-        return 1
-    fi
-
-    info "✓ Azure prerequisites met"
+    info "✓ All build prerequisites met"
 }
 
 # Downloads unofficial kernel RPMs from Azure DevOps build artifacts.
@@ -1442,1154 +1154,21 @@ suggest_troubleshooting() {
     echo
 }
 
-# Generates Ignition config file for VM user provisioning.
-# Writes the JSON config to the specified path for use with fw_cfg file parameter.
-generate_ignition_config() {
-    local config_path="$1"
-    local ssh_keys=()
-    local password_hash=""
-
-    # Collect SSH public keys
-    if [[ -n "$VM_SSH_AUTHORIZED_KEYS" ]]; then
-        if [[ -f "$VM_SSH_AUTHORIZED_KEYS" ]]; then
-            # Read keys from file
-            while IFS= read -r line || [[ -n "$line" ]]; do
-                [[ -z "$line" || "$line" == \#* ]] && continue
-                ssh_keys+=("$line")
-            done < "$VM_SSH_AUTHORIZED_KEYS"
-        else
-            # Treat as a single key string
-            ssh_keys+=("$VM_SSH_AUTHORIZED_KEYS")
-        fi
-    fi
-
-    # Try to use default SSH public key if none specified
-    if [[ ${#ssh_keys[@]} -eq 0 ]]; then
-        # Use the helper to get the private key, then derive the public key
-        private_key=$(get_ssh_private_key)
-        public_key="${private_key}.pub"
-        ssh_keys+=("$(cat "$public_key")")
-        info "Using default SSH key: $public_key"
-    fi
-
-    # Generate password hash if password provided
-    if [[ -n "$VM_PASSWORD" ]]; then
-        if command -v openssl &>/dev/null; then
-            password_hash=$(openssl passwd -6 "$VM_PASSWORD")
-        elif command -v mkpasswd &>/dev/null; then
-            password_hash=$(mkpasswd -m sha-512 "$VM_PASSWORD")
-        else
-            warn "Cannot hash password - openssl or mkpasswd not found"
-        fi
-    fi
-
-    # Build SSH keys JSON array
-    local ssh_keys_json="[]"
-    if [[ ${#ssh_keys[@]} -gt 0 ]]; then
-        ssh_keys_json="["
-        for i in "${!ssh_keys[@]}"; do
-            [[ $i -gt 0 ]] && ssh_keys_json+=","
-            # Escape the key for JSON
-            local escaped_key=$(printf '%s' "${ssh_keys[$i]}" | sed 's/\\/\\\\/g; s/"/\\"/g')
-            ssh_keys_json+="\"${escaped_key}\""
-        done
-        ssh_keys_json+="]"
-    fi
-
-    # Generate Ignition config (spec 3.3.0) - write to file
-    cat > "${config_path}" <<EOF
-{
-  "ignition": {
-    "version": "3.3.0"
-  },
-  "passwd": {
-    "users": [
-      {
-        "name": "${VM_SSH_USER}",
-        "sshAuthorizedKeys": ${ssh_keys_json}$(if [[ -n "$password_hash" ]]; then echo ",
-        \"passwordHash\": \"${password_hash}\""; fi),
-        "groups": ["wheel"]
-      }
-    ]
-  },
-  "storage": {
-    "files": [
-      {
-        "path": "/etc/hostname",
-        "mode": 420,
-        "overwrite": true,
-        "contents": {
-          "source": "data:,${VM_NAME}"
-        }
-      }
-    ]
-  }
-}
-EOF
-    # Make world-readable so QEMU can access it
-    chmod 644 "${config_path}"
-
-    info "Generated Ignition config: $config_path"
-    debug "SSH keys configured: ${#ssh_keys[@]}"
-    debug "Password configured: $(if [[ -n "$password_hash" ]]; then echo 'yes'; else echo 'no'; fi)"
-}
-
-# Gets IP address of a QEMU VM from libvirt.
-get_vm_ip_qemu() {
-    local vm_name="$1"
-    local ip=""
-
-    # Try to get IP from virsh domifaddr (most reliable, queries VM directly)
-    ip=$(virsh domifaddr "$vm_name" 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d'/' -f1 | head -1)
-
-    # Validate the IP is not empty and looks like an IP
-    if [[ -n "$ip" ]] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "$ip"
-        return 0
-    fi
-
-    echo ""
-}
-
-# Waits for SSH to become available.
-wait_for_ssh() {
-    local ip="$1"
-    local timeout="$2"
-    local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes"
-
-    ssh_opts+=" -i $VM_SSH_KEY"
-
-    info "Waiting for SSH to become available on $ip (timeout: ${timeout}s)..."
-
-    local start_time=$(date +%s)
-    local end_time=$((start_time + timeout))
-
-    while [[ $(date +%s) -lt $end_time ]]; do
-        if ssh $ssh_opts "${VM_SSH_USER}@${ip}" "echo 'SSH ready'" &>/dev/null; then
-            info "SSH connection established!"
-            return 0
-        fi
-        sleep 5
-    done
-
-    error "Timeout waiting for SSH on $ip"
-    return 1
-}
-
-# Waits for a QEMU VM to obtain an IP address.
-# Returns: Sets VM_IP global variable, returns 0 on success, 1 on timeout.
-wait_for_vm_ip_qemu() {
-    local vm_name="$1"
-    local timeout="${2:-60}"
-
-    info "Waiting for VM to obtain IP address (timeout: ${timeout}s)..."
-
-    local start_time=$(date +%s)
-    local end_time=$((start_time + timeout))
-    VM_IP=""
-
-    while [[ -z "$VM_IP" ]] && [[ $(date +%s) -lt $end_time ]]; do
-        sleep 2
-        VM_IP=$(get_vm_ip_qemu "$vm_name")
-    done
-
-    if [[ -z "$VM_IP" ]]; then
-        error "Failed to get VM IP address after ${timeout}s"
-        return 1
-    fi
-
-    info "VM IP address: $VM_IP"
-    return 0
-}
-
-# Connects to VM interactively via SSH.
-connect_vm_ssh() {
-    local ip="$1"
-    local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    ssh_opts="$ssh_opts -i $VM_SSH_KEY"
-    
-    info "Connecting to ${VM_SSH_USER}@${ip}..."
-    ssh $ssh_opts "${VM_SSH_USER}@${ip}"
-}
-
-# Connects to a QEMU VM interactively via serial console.
-connect_vm_console_qemu() {
-    local vm_name="$1"
-    info "Connecting to console..."
-    info "Press Ctrl+] to disconnect from console"
-    sleep 1
-    virsh console "$vm_name"
-}
-
-# Connects to an Azure VM interactively via serial console.
-connect_vm_console_azure() {
-    local vm_rg_name="$1"
-    local vm_name="$2"
-    
-    info "Connecting to Azure VM serial console..."
-    info "Press Ctrl+] followed by 'q' to disconnect from console"
-    sleep 1
-    
-    # Use Azure serial console for true interactive experience
-    az serial-console connect \
-        --resource-group "$vm_rg_name" \
-        --name "$vm_name"
-}
-
-# Executes scripts on VM via SSH.
-run_scripts_on_vm() {
-    local ip="$1"
-    shift
-    local scripts=("$@")
-    local failed=0
-
-    local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
-    ssh_opts+=" -i $VM_SSH_KEY"
-
-    for script in "${scripts[@]}"; do
-        if [[ -f "$script" ]]; then
-            info "Running script: $script"
-            # Copy script to VM and execute
-            local remote_script="/tmp/$(basename "$script")"
-            if ! scp $ssh_opts "$script" "${VM_SSH_USER}@${ip}:${remote_script}"; then
-                error "Failed to copy script: $script"
-                SCRIPT_RESULTS_NAMES+=("$script")
-                SCRIPT_RESULTS_STATUS+=(1)
-                failed=1
-                continue
-            fi
-            if ! ssh $ssh_opts "${VM_SSH_USER}@${ip}" "chmod +x ${remote_script} && sudo ${remote_script}"; then
-                error "Script failed: $script"
-                SCRIPT_RESULTS_NAMES+=("$script")
-                SCRIPT_RESULTS_STATUS+=(1)
-                failed=1
-            else
-                info "Script completed: $script"
-                SCRIPT_RESULTS_NAMES+=("$script")
-                SCRIPT_RESULTS_STATUS+=(0)
-            fi
-        elif [[ "$script" == *";"* ]] || [[ "$script" == *"&&"* ]] || [[ "$script" =~ ^[a-zA-Z] ]]; then
-            # Treat as inline command
-            info "Running command: $script"
-            if ! ssh $ssh_opts "${VM_SSH_USER}@${ip}" "sudo bash -c '$script'"; then
-                error "Command failed: $script"
-                SCRIPT_RESULTS_NAMES+=("$script")
-                SCRIPT_RESULTS_STATUS+=(1)
-                failed=1
-            else
-                info "Command completed"
-                SCRIPT_RESULTS_NAMES+=("$script")
-                SCRIPT_RESULTS_STATUS+=(0)
-            fi
-        else
-            warn "Script not found and not a valid command: $script"
-            SCRIPT_RESULTS_NAMES+=("$script")
-            SCRIPT_RESULTS_STATUS+=(1)
-            failed=1
-        fi
-    done
-
-    return $failed
-}
-
-# Waits for a QEMU VM to boot and show login prompt via serial console.
-wait_for_vm_boot_qemu() {
-    local vm_name="$1"
-    local timeout="${2:-300}"
-
-    info "Connecting to VM console (will disconnect on login prompt, timeout: ${timeout}s)..."
-    echo "╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
-
-    # Check if expect is available
-    if ! command -v expect &>/dev/null; then
-        error "'expect' is required for console monitoring. Install with: apt-get install expect"
-        return 1
-    fi
-
-    # Create expect script that monitors console and disconnects on login prompt
-    local expect_script=$(mktemp)
-    cat > "$expect_script" <<'EXPECT_EOF'
-#!/usr/bin/expect -f
-set timeout [lindex $argv 0]
-set vm_name [lindex $argv 1]
-
-log_user 1
-
-# Connect to VM console
-spawn virsh console $vm_name
-
-# Wait for console connection, then monitor for login prompt
-expect {
-    "Escape character" {
-        # Send Enter to trigger any pending output
-        send "\r"
-        exp_continue
-    }
-    -re {(login:|Login:)} {
-        # Login prompt detected - VM has booted
-        puts "\n╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
-        puts "✓ Login prompt detected - VM boot complete"
-        # Send escape sequence to disconnect from console
-        send "\x1d"
-        expect eof
-        exit 0
-    }
-    -re {(emergency|Emergency mode|Give root password|Press Enter for maintenance|Entering emergency mode|You are in emergency mode)} {
-        # Emergency shell detected - switch to interactive mode
-        puts "\n╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
-        puts "⚠ EMERGENCY SHELL DETECTED - Switching to interactive console"
-        puts "  Press Ctrl+] to disconnect"
-        puts "╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
-        # Enter interactive mode - pass control to user
-        interact
-        exit 2
-    }
-    timeout {
-        puts "\n╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
-        puts "✗ Timeout waiting for login prompt"
-        send "\x1d"
-        expect eof
-        exit 1
-    }
-    eof {
-        puts "\n╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
-        puts "✗ Console connection lost"
-        exit 1
-    }
-}
-EXPECT_EOF
-
-    chmod +x "$expect_script"
-
-    # Run expect script - output goes directly to terminal
-    local exit_code
-    "$expect_script" "$timeout" "$vm_name"
-    exit_code=$?
-    rm -f "$expect_script"
-    
-    case $exit_code in
-        0) return 0 ;;                    # Normal boot completed
-        2) warn "Emergency shell was detected - user exited interactive console"
-           return 2 ;;                    # Emergency shell detected
-        *) return 1 ;;                    # Timeout or other error
-    esac
-}
-
-# Executes a command on a QEMU VM via serial console using expect.
-run_command_via_console_qemu() {
-    local vm_name="$1"
-    local command="$2"
-    local user="${3:-root}"
-    local password="${4:-}"
-    local timeout="${5:-60}"
-
-    # Check if expect is available
-    if ! command -v expect &>/dev/null; then
-        error "'expect' is required for serial console execution. Install with: apt-get install expect"
-        return 1
-    fi
-
-    info "Running command via serial console: $command"
-
-    # Escape the command for TCL - replace backslashes, quotes, and dollars
-    local tcl_safe_command="${command//\\/\\\\}"  # Escape backslashes first
-    tcl_safe_command="${tcl_safe_command//\"/\\\"}"  # Escape double quotes
-    tcl_safe_command="${tcl_safe_command//\$/\\\$}"  # Escape dollar signs
-    tcl_safe_command="${tcl_safe_command//\[/\\\[}"  # Escape square brackets
-    tcl_safe_command="${tcl_safe_command//\]/\\\]}"  # Escape square brackets
-
-    # Create expect script
-    local expect_script=$(mktemp)
-    cat > "$expect_script" <<EXPECT_EOF
-#!/usr/bin/expect -f
-set timeout $timeout
-log_user 1
-
-# Connect to VM console
-spawn virsh console $vm_name
-
-# Wait for console connection
-expect {
-    "Escape character" {
-        send "\r"
-    }
-    timeout {
-        puts "ERROR: Failed to connect to console"
-        exit 1
-    }
-}
-
-# Wait for login prompt or shell prompt
-expect {
-    -re "login:|Login:" {
-        send "$user\r"
-        # Handle password if needed
-        expect {
-            -re "[Pp]assword:" {
-                send "$password\r"
-                expect -re "\\$|#"
-            }
-            -re "\\$|#" {
-                # No password needed
-            }
-            timeout {
-                puts "ERROR: Timeout after login"
-                exit 1
-            }
-        }
-    }
-    -re "\\$|#" {
-        # Already logged in at shell prompt
-    }
-    timeout {
-        puts "ERROR: Timeout waiting for login prompt"
-        exit 1
-    }
-}
-
-# Send command
-send "$tcl_safe_command\r"
-
-# Wait for command completion and capture exit code
-expect {
-    -re "SCRIPT_EXIT_CODE:(\[0-9\]+)" {
-        set exit_code \$expect_out(1,string)
-        # Wait a moment for any remaining output
-        sleep 0.5
-        if {\$exit_code != "0"} {
-            puts "Command failed with exit code: \$exit_code"
-            exit 1
-        }
-    }
-    timeout {
-        puts "ERROR: Command timeout"
-        exit 1
-    }
-}
-
-# Exit cleanly - send Ctrl+] to disconnect from console
-send "\035"
-expect eof
-exit 0
-EXPECT_EOF
-
-    chmod +x "$expect_script"
-
-    # Run expect script
-    local result=0
-    "$expect_script" || result=$?
-
-    rm -f "$expect_script"
-
-    return $result
-}
-
-# Executes a command on an Azure VM using Azure CLI.
-run_command_vm_azure() {
-    local vm_rg_name="$1"
-    local vm_name="$2"
-    local command="$3"
-    local timeout="${4:-60}"
-
-    info "Running command on Azure VM: $command"
-
-    # Escape command for JSON
-    local escaped_command
-    escaped_command=$(printf '%s' "$command" | sed 's/\\/\\\\/g; s/"/\\"/g')
-
-    # Create a script that runs the command and captures exit code
-    local script_content="#!/bin/bash\nset -e\n$command\necho \"SCRIPT_EXIT_CODE:\$?\""
-
-    # Execute command using Azure CLI run-command
-    local result=0
-    local output
-    if output=$(az vm run-command invoke \
-        --resource-group "$vm_rg_name" \
-        --name "$vm_name" \
-        --command-id RunShellScript \
-        --scripts "$script_content" \
-        --query 'value[0].message' \
-        --output tsv 2>&1); then
-        
-        # Display the output
-        echo "$output"
-        
-        # Check if command succeeded by looking for SCRIPT_EXIT_CODE:0
-        if echo "$output" | grep -q "SCRIPT_EXIT_CODE:0"; then
-            info "✓ Command completed successfully"
-        else
-            error "Command failed or returned non-zero exit code"
-            result=1
-        fi
-    else
-        error "Failed to execute command on Azure VM: $output"
-        result=1
-    fi
-
-    return $result
-}
-
-# Runs scripts via serial console (QEMU) or run-command (Azure).
-run_scripts_via_console() {
-    local vm_name="$1"
-    shift
-    local scripts=("$@")
-    local failed=0
-
-    for script in "${scripts[@]}"; do
-        if [[ -f "$script" ]]; then
-            info "Running script via console: $script"
-            # Read script and execute line by line (simple approach)
-            # For complex scripts, we'd need to base64 encode and decode
-            local script_content
-            script_content=$(cat "$script")
-
-            if [[ "$VM_TYPE" == "azure" ]]; then
-                # For Azure VMs, use run-command directly with script content
-                if ! run_command_vm_azure "$VM_RG" "$vm_name" "$script_content"; then
-                    error "Script failed: $script"
-                    SCRIPT_RESULTS_NAMES+=("$script")
-                    SCRIPT_RESULTS_STATUS+=(1)
-                    failed=1
-                else
-                    info "✓ Script completed successfully: $script"
-                    SCRIPT_RESULTS_NAMES+=("$script")
-                    SCRIPT_RESULTS_STATUS+=(0)
-                fi
-            else
-                # For QEMU VMs, use base64 encoding approach via serial console
-                local encoded
-                encoded=$(base64 -w0 "$script")
-                local remote_cmd="echo '$encoded' | base64 -d > /tmp/script.sh && chmod +x /tmp/script.sh && /tmp/script.sh; echo \"SCRIPT_EXIT_CODE:\$?\""
-
-                if ! run_command_via_console_qemu "$vm_name" "$remote_cmd" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD"; then
-                    error "Script failed: $script"
-                    SCRIPT_RESULTS_NAMES+=("$script")
-                    SCRIPT_RESULTS_STATUS+=(1)
-                    failed=1
-                else
-                    info "✓ Script completed successfully: $script"
-                    SCRIPT_RESULTS_NAMES+=("$script")
-                    SCRIPT_RESULTS_STATUS+=(0)
-                fi
-            fi
-        elif [[ "$script" == *";"* ]] || [[ "$script" == *"&&"* ]] || [[ "$script" =~ ^[a-zA-Z] ]]; then
-            # Treat as inline command
-            if [[ "$VM_TYPE" == "azure" ]]; then
-                info "Running command on Azure VM: $script"
-                if ! run_command_vm_azure "$VM_RG" "$vm_name" "$script"; then
-                    error "Command failed: $script"
-                    SCRIPT_RESULTS_NAMES+=("$script")
-                    SCRIPT_RESULTS_STATUS+=(1)
-                    failed=1
-                else
-                    info "Command completed"
-                    SCRIPT_RESULTS_NAMES+=("$script")
-                    SCRIPT_RESULTS_STATUS+=(0)
-                fi
-            else
-                info "Running command via console: $script"
-                if ! run_command_via_console_qemu "$vm_name" "$script" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD"; then
-                    error "Command failed: $script"
-                    SCRIPT_RESULTS_NAMES+=("$script")
-                    SCRIPT_RESULTS_STATUS+=(1)
-                    failed=1
-                else
-                    info "Command completed"
-                    SCRIPT_RESULTS_NAMES+=("$script")
-                    SCRIPT_RESULTS_STATUS+=(0)
-                fi
-            fi
-        else
-            warn "Script not found and not a valid command: $script"
-            SCRIPT_RESULTS_NAMES+=("$script")
-            SCRIPT_RESULTS_STATUS+=(1)
-            failed=1
-        fi
-    done
-
-    return $failed
-}
-
-# Starts a QEMU VM using libvirt.
-# Sets global: booted_image_path, abs_disk_path.
-start_vm_qemu() {
-    local vm_image_path="$1"
-
-    booted_image_path="${vm_image_path}.booted"
-    cp "${vm_image_path}" "${booted_image_path}"
-    
-    # Get absolute path for disk image
-    abs_disk_path="$(cd "$(dirname "${booted_image_path}")" && pwd)/$(basename "${booted_image_path}")"
-    
-    # Get paths to OVMF firmware files
-    local ovmf_code="" ovmf_vars_template="" secure_attr="" smm_feature=""
-    
-    if [[ "${SECURE_BOOT_ENABLED}" != "true" ]]; then
-        info "Secure boot DISABLED - using unsigned kernel"
-        # Use non-secure boot OVMF firmware
-        # Try Azure Linux paths first, then Ubuntu/Debian paths
-        for code_file in \
-            "/usr/share/edk2/ovmf/OVMF_CODE.fd" \
-            "/usr/share/OVMF/OVMF_CODE_4M.fd" \
-            "/usr/share/OVMF/OVMF_CODE.fd"; do
-            if [[ -f "$code_file" ]]; then
-                ovmf_code="$code_file"
-                break
-            fi
-        done
-        for vars_file in \
-            "/usr/share/edk2/ovmf/OVMF_VARS.fd" \
-            "/usr/share/OVMF/OVMF_VARS_4M.fd" \
-            "/usr/share/OVMF/OVMF_VARS.fd"; do
-            if [[ -f "$vars_file" ]]; then
-                ovmf_vars_template="$vars_file"
-                break
-            fi
-        done
-        secure_attr=""
-        smm_feature=""
-    else
-        # Use secure boot OVMF firmware
-        # Try Azure Linux paths first, then Ubuntu/Debian paths
-        for code_file in \
-            "/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd" \
-            "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd" \
-            "/usr/share/OVMF/OVMF_CODE.secboot.fd" \
-            "/usr/share/edk2/ovmf/OVMF_CODE.secboot.fd" \
-            "/usr/share/OVMF/OVMF_CODE_4M.fd" \
-            "/usr/share/OVMF/OVMF_CODE.fd"; do
-            if [[ -f "$code_file" ]]; then
-                ovmf_code="$code_file"
-                break
-            fi
-        done
-        for vars_file in \
-            "/usr/share/edk2/x64/OVMF_VARS.ms.4m.fd" \
-            "/usr/share/OVMF/OVMF_VARS_4M.ms.fd" \
-            "/usr/share/OVMF/OVMF_VARS.ms.fd" \
-            "/usr/share/edk2/x64/OVMF_VARS.secboot.fd" \
-            "/usr/share/OVMF/OVMF_VARS_4M.fd" \
-            "/usr/share/OVMF/OVMF_VARS.fd" \
-            "/usr/share/edk2/x64/OVMF_VARS.4m.fd"; do
-            if [[ -f "$vars_file" ]]; then
-                ovmf_vars_template="$vars_file"
-                break
-            fi
-        done
-        secure_attr=" secure='yes'"
-        smm_feature="    <smm state='on'/>"
-    fi
-    
-    if [[ -z "$ovmf_code" ]] || [[ -z "$ovmf_vars_template" ]]; then
-        error "OVMF firmware files not found"
-        error "Install with: sudo apt-get install -y ovmf"
-        exit 1
-    fi
-    
-    info "Using OVMF firmware:"
-    info "  Code: $ovmf_code"
-    info "  Vars: $ovmf_vars_template"
-    
-    # Create a writable copy of OVMF_VARS for this VM
-    local vm_vars_path="${abs_disk_path}.vars"
-    cp "$ovmf_vars_template" "$vm_vars_path"
-    
-    # Generate Ignition config file in /tmp (accessible to QEMU without AppArmor issues)
-    local ignition_config="/tmp/${VM_NAME}-ignition.ign"
-    generate_ignition_config "$ignition_config"
-    
-    # Create VM XML definition
-    if [[ "${SECURE_BOOT_ENABLED}" != "true" ]]; then
-        info "Creating VM definition WITHOUT secure boot..."
-    else
-        info "Creating VM definition with secure boot..."
-    fi
-    cat > /tmp/${VM_NAME}.xml <<EOF
-<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
-  <name>${VM_NAME}</name>
-  <memory unit='KiB'>2097152</memory>
-  <currentMemory unit='KiB'>2097152</currentMemory>
-  <vcpu placement='static'>2</vcpu>
-  <os>
-    <type arch='x86_64' machine='q35'>hvm</type>
-    <loader readonly='yes'${secure_attr} type='pflash'>${ovmf_code}</loader>
-    <nvram>${vm_vars_path}</nvram>
-    <boot dev='hd'/>
-  </os>
-  <features>
-    <acpi/>
-    <apic/>
-${smm_feature}
-  </features>
-  <cpu mode='host-passthrough'/>
-  <clock offset='utc'>
-    <timer name='rtc' tickpolicy='catchup'/>
-    <timer name='pit' tickpolicy='delay'/>
-    <timer name='hpet' present='no'/>
-  </clock>
-  <pm>
-    <suspend-to-mem enabled='no'/>
-    <suspend-to-disk enabled='no'/>
-  </pm>
-  <devices>
-    <emulator>/usr/bin/qemu-system-x86_64</emulator>
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2'/>
-      <source file='${abs_disk_path}'/>
-      <target dev='sda' bus='sata'/>
-    </disk>
-    <interface type='network'>
-      <source network='default'/>
-      <model type='e1000'/>
-    </interface>
-    <console type='pty'>
-      <target type='serial'/>
-    </console>
-    <tpm model='tpm-crb'>
-      <backend type='emulator' version='2.0'/>
-    </tpm>
-  </devices>
-  <seclabel type='none'/>
-  <qemu:commandline>
-    <qemu:arg value='-fw_cfg'/>
-    <qemu:arg value='name=opt/org.flatcar-linux/config,file=${ignition_config}'/>
-  </qemu:commandline>
-</domain>
-EOF
-
-    # Define and start the VM with virsh
-    info "Defining VM with virsh..."
-    virsh define /tmp/${VM_NAME}.xml
-    
-    info "Starting VM..."
-    virsh start "${VM_NAME}"
-    
-    rm -f /tmp/${VM_NAME}.xml
-    info "VM '${VM_NAME}' started successfully!"
-}
-
-# Checks that required Azure infrastructure exists.
-check_azure_infra() {
-    info "Checking that required Azure infrastructure exists..."
-    
-    # Check storage RG
-    if [[ "$(az group exists -n "$AZ_STORAGE_RG")" == "false" ]]; then
-        info "Creating storage resource group: $AZ_STORAGE_RG"
-        az group create --name "$AZ_STORAGE_RG" --location "$AZ_REGION"
-    fi
-    
-    # Check gallery RG
-    if [[ "$(az group exists -n "$AZ_GALLERY_RG")" == "false" ]]; then
-        info "Creating gallery resource group: $AZ_GALLERY_RG"
-        az group create --name "$AZ_GALLERY_RG" --location "$AZ_REGION"
-    fi
-    
-    # Check storage account
-    local storage_account_resource_id="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/$AZ_STORAGE_RG/providers/Microsoft.Storage/storageAccounts/$AZ_STORAGE_ACC"
-    if ! az storage account show --ids "$storage_account_resource_id" &>/dev/null; then
-        info "Creating storage account: $AZ_STORAGE_ACC"
-        if [[ "$(az storage account check-name --name "$AZ_STORAGE_ACC" --query nameAvailable)" == "false" ]]; then
-            error "Storage account name $AZ_STORAGE_ACC is not available"
-            exit 1
-        fi
-        az storage account create \
-            --resource-group "$AZ_STORAGE_RG" \
-            --name "$AZ_STORAGE_ACC" \
-            --location "$AZ_REGION" \
-            --allow-shared-key-access false \
-            --sku Standard_LRS
-    fi
-    
-    # Check storage container
-    local container_exists
-    container_exists=$(az storage container exists --account-name "$AZ_STORAGE_ACC" --name "$AZ_STORAGE_CONTAINER" --auth-mode login --query exists -o tsv)
-    if [[ "$container_exists" != "true" ]]; then
-        info "Creating storage container: $AZ_STORAGE_CONTAINER"
-        az storage container create \
-            --account-name "$AZ_STORAGE_ACC" \
-            --name "$AZ_STORAGE_CONTAINER" \
-            --auth-mode login
-    fi
-    
-    # Check shared image gallery
-    if ! az sig show -r "$AZ_ACG" -g "$AZ_GALLERY_RG" &>/dev/null; then
-        info "Creating shared image gallery: $AZ_ACG"
-        az sig create \
-            --resource-group "$AZ_GALLERY_RG" \
-            --gallery-name "$AZ_ACG" \
-            --location "$AZ_REGION"
-    fi
-    
-    # Check image definition
-    local image_def_exists
-    local publisher="$(whoami)-ACL"
-    local offer="$AZ_VM_IMAGE_DEF"
-    local sku="$(whoami)-TestBase"
-    
-    image_def_exists=$(az sig image-definition list -r "$AZ_ACG" -g "$AZ_GALLERY_RG" --query "[?name=='$AZ_VM_IMAGE_DEF' && identifier.publisher=='$publisher' && identifier.offer=='$offer' && identifier.sku=='$sku'] | length(@)" -o tsv)
-    if [[ "$image_def_exists" -eq 0 ]]; then
-        info "Creating image definition: $AZ_VM_IMAGE_DEF"
-        az sig image-definition create \
-            --gallery-image-definition "$AZ_VM_IMAGE_DEF" \
-            --publisher "$publisher" \
-            --offer "$offer" \
-            --sku "$sku" \
-            --gallery-name "$AZ_ACG" \
-            --resource-group "$AZ_GALLERY_RG" \
-            --location "$AZ_REGION" \
-            --os-type Linux \
-            --features SecurityType=TrustedLaunchSupported \
-            --hyper-v-generation V2
-    else
-        info "Image definition already exists: $AZ_VM_IMAGE_DEF"
-    fi
-    
-    info "Azure infrastructure ready"
-}
-
-# Uploads VHD to Azure Storage.
-upload_vhd_to_storage() {
-    local vhd_path="$1"
-    local blob_name="$2"
-    
-    info "Uploading VHD to Azure storage..."
-    info "  Local file:  $vhd_path"
-    info "  Blob name:   $blob_name"
-    info "  Storage account: $AZ_STORAGE_ACC"
-    info "  Container:       $AZ_STORAGE_CONTAINER"
-    
-    az storage blob upload \
-        --account-name "$AZ_STORAGE_ACC" \
-        --container-name "$AZ_STORAGE_CONTAINER" \
-        --name "$blob_name" \
-        --file "$vhd_path" \
-        --auth-mode login \
-        --overwrite
-    
-    info "✓ VHD uploaded successfully"
-}
-
-# Returns next available image version.
-get_next_image_version() {
-    # Use BUILD_ID for deterministic, unique versions in CI
-    if [[ -n "${BUILD_ID}" ]]; then
-        echo "1.0.${BUILD_ID}"
-        return
-    fi
-
-    # Get latest version and increment
-    local latest_version
-    latest_version=$(az sig image-version list \
-        --resource-group "$AZ_GALLERY_RG" \
-        --gallery-name "$AZ_ACG" \
-        --gallery-image-name "$AZ_VM_IMAGE_DEF" \
-        --query '[].name' -o tsv | \
-        sort -t "." -k1,1n -k2,2n -k3,3n | \
-        tail -1)
-    
-    if [[ -z "$latest_version" ]]; then
-        echo "1.0.0"
-    else
-        echo "$latest_version" | awk -F. '{print $1"."$2"."$3+1}'
-    fi
-}
-
-# Creates gallery image version from uploaded VHD.
-create_gallery_image_version() {
-    local image_version="$1"
-    local blob_name="$2"
-    
-    info "Creating gallery image version: $image_version"
-    
-    local storage_account_resource_id="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/$AZ_STORAGE_RG/providers/Microsoft.Storage/storageAccounts/$AZ_STORAGE_ACC"
-    local blob_url="https://$AZ_STORAGE_ACC.blob.core.windows.net/$AZ_STORAGE_CONTAINER/$blob_name"
-    
-    # The target regions must include the gallery's own location.
-    local gallery_location
-    gallery_location=$(az sig show -r "$AZ_ACG" -g "$AZ_GALLERY_RG" --query location -o tsv)
-    local target_regions="$AZ_REGION"
-    local replication_mode="Shallow"
-    if [[ "${gallery_location,,}" != "${AZ_REGION,,}" ]]; then
-        # Shallow replication only supports the gallery's home region.
-        # Use Full replication when we need additional target regions.
-        warn "Gallery location '${gallery_location}' differs from target region '${AZ_REGION}'; switching to Full replication mode (this will be slower)"
-        target_regions="$AZ_REGION $gallery_location"
-        replication_mode="Full"
-    fi
-
-    # Create image version using Azure CLI
-    az sig image-version create \
-        --resource-group "$AZ_GALLERY_RG" \
-        --gallery-name "$AZ_ACG" \
-        --gallery-image-definition "$AZ_VM_IMAGE_DEF" \
-        --gallery-image-version "$image_version" \
-        --os-vhd-uri "$blob_url" \
-        --os-vhd-storage-account "$storage_account_resource_id" \
-        --location "$AZ_REGION" \
-        --target-regions $target_regions \
-        --replica-count 1 \
-        --storage-account-type Standard_LRS \
-        --replication-mode "$replication_mode"
-    
-    info "✓ Gallery image version created: $image_version"
-}
-
-# Creates Azure VM.
-# Args: vm_rg_name image_id_or_version
-#   If ACG_IMAGE_VERSION_ID is set, the second arg is the full resource ID.
-#   Otherwise it is a gallery image version string used to compose the ID.
-create_vm_azure() {
-    local vm_rg_name="$1"
-    local image_version_or_id="$2"
-    
-    # Always-present tags appended to caller-supplied RESOURCE_TAGS
-    local all_tags=("${RESOURCE_TAGS[@]}" "purpose=VM-testing" "creationTime=$(date +%s)")
-
-    # Create VM RG
-    if [[ "$(az group exists -n "$vm_rg_name")" == "false" ]]; then
-        info "Creating VM RG: $vm_rg_name"
-        az group create \
-            --name "$vm_rg_name" \
-            --location "$AZ_REGION" \
-            --tags "${all_tags[@]}"
-    fi
-    
-    # Determine image ID
-    local image_id
-    if [[ -n "${ACG_IMAGE_VERSION_ID}" ]]; then
-        image_id="${image_version_or_id}"
-    else
-        # Compose image ID inside the gallery
-        image_id="/subscriptions/$AZ_SUB_ID/resourceGroups/$AZ_GALLERY_RG/providers/Microsoft.Compute/galleries/$AZ_ACG/images/$AZ_VM_IMAGE_DEF/versions/$image_version_or_id"
-    fi
-    
-    # Create public IP first with required IP policy compliance tags.
-    # az vm create's ARM template always redefines the public IP resource
-    # (even when given a full resource ID), stripping ipTags and violating
-    # Azure policy.  Work around: create the VM without a public IP, then
-    # attach the pre-created IP to its NIC afterwards.
-    local public_ip_name="${VM_NAME}PublicIP"
-    info "Creating public IP with policy-compliant tags: $public_ip_name"
-    az network public-ip create \
-        --name "$public_ip_name" \
-        --resource-group "$vm_rg_name" \
-        --location "$AZ_REGION" \
-        --allocation-method Static \
-        --sku Standard \
-        --ip-tags FirstPartyUsage=/NonProd \
-        --tags "${all_tags[@]}"
-    
-    info "Creating an Azure VM ${VM_NAME} in RG ${vm_rg_name} (without public IP)..."
-    
-    # Build base Azure CLI command — no --public-ip-address here
-    local vm_create_args=(
-        --resource-group "$vm_rg_name"
-        --name "$VM_NAME"
-        --size "$AZ_VM_SIZE"
-        --os-disk-size-gb 60
-        --admin-username "$VM_SSH_USER"
-        --ssh-key-values "@${VM_SSH_KEY}.pub"
-        --security-type TrustedLaunch
-        --enable-vtpm true
-        --image "$image_id"
-        --location "$AZ_REGION"
-        --public-ip-address ""
-        --tags "${all_tags[@]}"
-    )
-    
-    # Add security features based on SECURE_BOOT_ENABLED variable
-    if [[ "$SECURE_BOOT_ENABLED" == "true" ]]; then
-        vm_create_args+=(--enable-secure-boot true)
-    else
-        vm_create_args+=(--enable-secure-boot false)
-    fi
-    az vm create "${vm_create_args[@]}"
-
-    # Attach the pre-created public IP to the VM's NIC
-    info "Attaching public IP to VM NIC..."
-    local nic_id
-    nic_id=$(az vm show -g "$vm_rg_name" -n "$VM_NAME" \
-        --query 'networkProfile.networkInterfaces[0].id' -o tsv)
-    local nic_name
-    nic_name=$(az network nic show --ids "$nic_id" --query 'name' -o tsv)
-    local ip_config_name
-    ip_config_name=$(az network nic show --ids "$nic_id" \
-        --query 'ipConfigurations[0].name' -o tsv)
-    az network nic ip-config update \
-        --nic-name "$nic_name" \
-        --resource-group "$vm_rg_name" \
-        --name "$ip_config_name" \
-        --public-ip-address "$public_ip_name"
-    
-    # Enable boot diagnostics
-    info "Enabling boot diagnostics..."
-    az vm boot-diagnostics enable \
-        --name "$VM_NAME" \
-        --resource-group "$vm_rg_name"
-}
-
-# Generates a unique VM RG name.
-get_vm_rg_name() {
-  local suffix
-  suffix=$(tr -dc 'a-z0-9' </dev/urandom | head -c 8)
-  printf '%s-%s\n' "$VM_RG_PREFIX" "$suffix"
-}
-
-# Starts an Azure VM.
-start_vm_azure() {
-    local vm_image_path="$1"
-    
-    section "Starting Azure VM"
-
-    # Get VM RG name for this build
-    local vm_rg_name=$(get_vm_rg_name)
-    
-    # Set global VM_RG variable for use by console functions
-    VM_RG="$vm_rg_name"
-    
-    info "Azure VM Configuration:"
-    info "  Subscription:      ${AZ_SUB_ID}"
-    info "  Storage RG:        ${AZ_STORAGE_RG}"
-    info "  Location:          ${AZ_REGION}"
-    info "  VM Resource Group: ${vm_rg_name}"
-    info "  VM Name:           ${VM_NAME}"
-    info "  Gallery:           ${AZ_ACG}"
-    info "  Image Definition:  ${AZ_VM_IMAGE_DEF}"
-    echo
-    
-    # Set subscription
-    info "Setting Azure subscription..."
-    az account set --subscription "$AZ_SUB_ID"
-    
-    if [[ -n "${ACG_IMAGE_VERSION_ID}" ]]; then
-        # Use pre-existing gallery image version — skip VHD upload and image creation
-        info "Using pre-existing ACG image version: ${ACG_IMAGE_VERSION_ID}"
-        create_vm_azure "$vm_rg_name" "${ACG_IMAGE_VERSION_ID}"
-    else
-        # Step 1: Check/Create Azure infrastructure
-        check_azure_infra
-        
-        # Step 2: Upload VHD to storage
-        local blob_name="$(date +%y%m%d.%H%M%S)-${BUILD_ID:+${BUILD_ID}-}${IMG_NAME}.vhd"
-        upload_vhd_to_storage "$vm_image_path" "$blob_name"
-        
-        # Step 3: Create gallery image version
-        local image_version
-        image_version=$(get_next_image_version)
-        create_gallery_image_version "$image_version" "$blob_name"
-        
-        # Step 4: Create VM RG and VM
-        create_vm_azure "$vm_rg_name" "$image_version"
-    fi
-    
-    # Step 5: Get VM IP and validate that VM deployment succeeded
-    export VM_IP=$(az vm show -d -g "$vm_rg_name" -n "$VM_NAME" --query "publicIps" -o tsv)
-    # Use az cli to confirm the VM deployment status is successful
-    while [ "$(az vm show -d -g "$vm_rg_name" -n "$VM_NAME" --query provisioningState -o tsv)" != "Succeeded" ]; do sleep 1; done
-    
-    info "✓ Azure VM '${VM_NAME}' started successfully!"
-    info " IP Address:     ${VM_IP}"
-}
-
-# Removes any existing VM of the specified type and name.
-remove_old_vm() {
-    # Remove VM based on type
-    case "$VM_TYPE" in
-        qemu)
-            info "Removing qemu VM '${VM_NAME}' if present..."
-            virsh destroy "${VM_NAME}" 2>/dev/null || true
-            virsh undefine --nvram "${VM_NAME}" 2>/dev/null || true
-            ;;
-        azure)
-            remove_vm_azure
-            ;;
-        *)
-            error "Unsupported VM type: $VM_TYPE"
-            exit 1
-            ;;
-    esac
-}
-
-# Schedules cleanup of VM RGs.
-remove_vm_azure() {
-    if [[ "$NO_CLEANUP" == "true" ]]; then
-        info "--no-cleanup specified, so skipping cleanup of VM resources"
-        return 0
-    fi
-    
-    # Remove state file since we're cleaning up the VM
-    remove_vm_state
-
-    info "Scheduling deletion of VM resources matching tags: ${RESOURCE_TAGS[*]}"
-    
-    # Build JMESPath filter from RESOURCE_TAGS
-    local query_filter=""
-    for tag in "${RESOURCE_TAGS[@]}"; do
-        local key="${tag%%=*}"
-        local value="${tag#*=}"
-        [[ -n "$query_filter" ]] && query_filter+=" && "
-        query_filter+="tags.${key}=='${value}'"
-    done
-    local matching_rgs
-    matching_rgs=$(az group list --query "[?${query_filter}].name" -o tsv)
-    
-    if [[ -z "$matching_rgs" ]]; then
-        info "No resource groups found for cleanup"
-        return 0
-    fi
-
-    # Schedule deletion of all matching resource groups without waiting
-    local rg_count=0
-    local failed_count=0
-    while IFS= read -r rg_name; do
-        [[ -z "$rg_name" ]] && continue
-        info "Scheduling deletion of RG: $rg_name"
-        local err
-        # Disable errexit temporarily b/c az group delete issues a non-0 error code, and the script fails?
-        # Even though deletion is scheduled successfully
-        set +e
-        if err=$(az group delete -n "$rg_name" -y --no-wait 2>&1 >/dev/null); then
-            ((rg_count++))
-        else
-            warn "Failed to schedule deletion of RG: $rg_name"
-            warn "  az error: $err"
-            ((failed_count++))
-        fi
-        set -e
-    done <<< "$matching_rgs"
-    
-    info "Scheduled deletion of $rg_count resource group(s)"
-    if [[ $failed_count -gt 0 ]]; then
-        info "$failed_count resource group(s) couldn't be scheduled (likely already deleting)"
-    fi
-    return 0
-}
-
-# Builds VM image at vm_image_path based on VM type.
+# Builds a VM image (qemu_uefi or azure) from the base image using the SDK container.
 build_vm_image() {
     local vm_type="$1"
     local vm_image_path="$2"
     local format
-    
-    # Set format string based on VM type
+
     case "$vm_type" in
-        qemu)
-            format="qemu_uefi"
-            ;;
-        azure)
-            format="azure"
-            ;;
-        *)
-            error "Unsupported VM type: $VM_TYPE"
-            exit 1
-            ;;
+        qemu)   format="qemu_uefi" ;;
+        azure)  format="azure" ;;
+        *)      error "Unsupported VM type: $VM_TYPE"; exit 1 ;;
     esac
 
     local sdk_image
     sdk_image=$(get_sdk_image)
 
-    # Build args for image_to_vm.sh
     local build_args=(
         "--image_compression_formats=none"
         "--from=../build/images/${BOARD}/latest"
@@ -2597,9 +1176,7 @@ build_vm_image() {
         "--format=${format}"
         "--image_name=${IMG_NAME}_image.bin"
     )
-    
-    # Use -C to specify custom SDK image (avoids trying to download non-existent version-specific image)
-    # Use --rm to remove old container and ensure environment variables are set correctly
+
     info "Building ${vm_type} VM image using SDK container..."
 
     # In CI test-only mode the git checkout may be newer than the artifacts.
@@ -2619,6 +1196,8 @@ build_vm_image() {
         version_args=( -U )
     fi
 
+    # Use -C to specify custom SDK image (avoids trying to download non-existent version-specific image)
+    # Use --rm to remove old container and ensure environment variables are set correctly
     "${SCRIPT_DIR}/run_sdk_container" \
         --rm \
         $(get_tty_flag) \
@@ -2626,72 +1205,12 @@ build_vm_image() {
         -C "${sdk_image}" \
         -- \
         ./image_to_vm.sh "${build_args[@]}"
-    
+
     if ! [[ -f "$vm_image_path" ]]; then
         error "${vm_type} VM image generation failed"
         exit 1
     fi
     info "${vm_type} VM image ready at: ${vm_image_path}"
-}
-
-# Write VM state file so subsequent --reuse-vm invocations can reconnect.
-write_vm_state() {
-    cat > "$VM_STATE_FILE" <<EOF
-VM_IP=${VM_IP}
-VM_RG=${VM_RG}
-VM_NAME=${VM_NAME}
-VM_TYPE=${VM_TYPE}
-EOF
-    info "VM state written to ${VM_STATE_FILE}"
-}
-
-# Read VM state file written by a previous --keep-vm invocation.
-# Sets VM_IP, VM_RG, VM_NAME, and VM_TYPE from the file.
-read_vm_state() {
-    if [[ ! -f "$VM_STATE_FILE" ]]; then
-        error "--reuse-vm requires a running VM, but no state file found at ${VM_STATE_FILE}"
-        error "Provision a VM first with --keep-vm"
-        exit 1
-    fi
-    # Source the state file (contains KEY=VALUE lines)
-    # shellcheck disable=SC1090
-    source "$VM_STATE_FILE"
-    info "Loaded VM state from ${VM_STATE_FILE}"
-    info "  IP:   ${VM_IP}"
-    info "  RG:   ${VM_RG}"
-    info "  Name: ${VM_NAME}"
-    info "  Type: ${VM_TYPE}"
-}
-
-# Remove the VM state file.
-remove_vm_state() {
-    if [[ -f "$VM_STATE_FILE" ]]; then
-        rm -f "$VM_STATE_FILE"
-        info "Removed VM state file"
-    fi
-}
-
-# Starts a VM.
-start_vm() {
-    local vm_image_path="$1"
-    
-    remove_old_vm
-
-    section "Starting a ${VM_TYPE} VM '${VM_NAME}'"
-
-    # Start VM based on type
-    case "$VM_TYPE" in
-        qemu)
-            start_vm_qemu "$vm_image_path"
-            ;;
-        azure)
-            start_vm_azure "$vm_image_path"
-            ;;
-        *)
-            error "Unsupported VM type: $VM_TYPE"
-            exit 1
-            ;;
-    esac
 }
 
 # Print size summary of built images
@@ -2778,71 +1297,6 @@ print_summary() {
     fi
 
     echo
-}
-
-# Collects parity data from running VM and generates comparison report.
-collect_parity_data() {
-    local vm_image_path="$1"
-    
-    if [[ ! -d "$PARITY" ]]; then
-        error "os-diff directory not found: $PARITY"
-        error "Specify a valid path with --parity=/path/to/os-diff"
-        exit 1
-    fi
-    
-    local os_diff_dir="$PARITY"
-    local collector_bin="${os_diff_dir}/os-data-collector"
-    [[ ! -x "$collector_bin" ]] && collector_bin="${os_diff_dir}/os-data-collector-static"
-    if [[ ! -x "$collector_bin" ]]; then
-        error "os-data-collector not found in $os_diff_dir"
-        error "Build it with: cd $os_diff_dir && make build static"
-        exit 1
-    fi
-    
-    if ! wait_for_ssh "$VM_IP" "$VM_SSH_TIMEOUT"; then
-        error "SSH not available for data collection"
-        exit 1
-    fi
-    
-    local collect_output_dir="${SCRIPT_DIR}/__build__/data-collection"
-    mkdir -p "$collect_output_dir"
-    local timestamp
-    timestamp=$(date +%Y%m%d-%H%M%S)
-    local collected_file="${collect_output_dir}/${timestamp}-comparison-data.json"
-    
-    info "Running data collection..."
-    "${SCRIPT_DIR}/acl/collect_vm_data.sh" --host="$VM_IP" --collector="$collector_bin" --user="$VM_SSH_USER" --output="$collected_file" >/dev/null 2>&1
-
-    # Compress VM image with bzip2 -9 to get compressed size
-    info "Compressing image with bzip2 -9 for size measurement..."
-    rm -f "${vm_image_path}.bz2"
-    bzip2 -9 -k "$vm_image_path"
-    local compressed_size
-    compressed_size=$(stat -c%s "${vm_image_path}.bz2")
-    info "Compressed image size: $(numfmt --to=iec-i --suffix=B $compressed_size) ($compressed_size bytes)"
-    
-    # Inject compressed_image_size into the collected JSON
-    info "Adding compressed_image_size to collected data..."
-    local tmp_file
-    tmp_file=$(mktemp)
-    jq --argjson size "$compressed_size" '.os_info.compressed_image_size = $size' "$collected_file" > "$tmp_file" && mv "$tmp_file" "$collected_file"
-    
-    # Run comparison report
-    local upstream_data="${SCRIPT_DIR}/acl/upstream-fc-comparison-data.json"
-    local reporter="${os_diff_dir}/os-comparison-reporter"
-    [[ ! -x "$reporter" ]] && reporter="${os_diff_dir}/os-comparison-reporter-static"
-    if [[ ! -x "$reporter" ]]; then
-        error "os-comparison-reporter not found in $os_diff_dir"
-        exit 1
-    fi
-    if [[ ! -f "$upstream_data" ]]; then
-        error "Upstream comparison data not found: $upstream_data"
-        exit 1
-    fi
-    local report_file="${collect_output_dir}/${timestamp}-report.md"
-    info "Running comparison report..."
-    "$reporter" -s -o "$report_file" "$upstream_data" "$collected_file"
-    info "Report generated: $report_file"
 }
 
 # Cleans RPM directories before operations.
@@ -2939,199 +1393,60 @@ main() {
         print_size_summary
     fi
 
-    # Step 3: Build VM image (if requested)
-    local vm_image_path
-    
-    # Set expected VM image path based on VM type
-    case "$VM_TYPE" in
-        qemu)
-            vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_qemu_uefi_image.img"
-            ;;
-        azure)
-            vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_azure_image.vhd"
-            ;;
-    esac
-    
+    # Step 4: Build VM image (if requested)
     if [[ "$BUILD_VM_IMAGE" == "true" ]]; then
+        local vm_image_path
+        case "$VM_TYPE" in
+            qemu)  vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_qemu_uefi_image.img" ;;
+            azure) vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_azure_image.vhd" ;;
+        esac
         section "Building VM Image at ${vm_image_path}"
         info "Converting base image to ${VM_TYPE} VM format..."
-        
         build_vm_image "$VM_TYPE" "$vm_image_path"
     fi
 
-    # Step 4: Start VM (if requested)
-    if [[ "$START_VM" == "true" ]]; then
+    # Step 5: VM lifecycle & kola tests — delegate to validate_rpm_image.sh
+    if [[ "$START_VM" == "true" ]] || [[ "$RUN_KOLA_TESTS" == "true" ]]; then
+        local validate_args=()
+        validate_args+=("--board=${BOARD}")
+        validate_args+=("--img-name=${IMG_NAME}")
+        validate_args+=("--vm-type=${VM_TYPE}")
+        validate_args+=("--vm-name=${VM_NAME}")
+        validate_args+=("--ssh-user=${VM_SSH_USER}")
+        validate_args+=("--ssh-timeout=${VM_SSH_TIMEOUT}")
+        validate_args+=("--boot-timeout=${VM_BOOT_TIMEOUT}")
+        validate_args+=("--console-user=${VM_CONSOLE_USER}")
+        validate_args+=("--az-sub-id=${AZ_SUB_ID}")
+        validate_args+=("--az-region=${AZ_REGION}")
+        validate_args+=("--az-storage-account=${AZ_STORAGE_ACC}")
+        validate_args+=("--acg-gallery-name=${AZ_ACG}")
+        validate_args+=("--az-vm-size=${AZ_VM_SIZE}")
+        [[ -n "$BUILD_ID" ]]                  && validate_args+=("--build-id=${BUILD_ID}")
 
-        # --reuse-vm: skip provisioning, load state from a prior --keep-vm run
-        if [[ "$REUSE_VM" == "true" ]]; then
-            read_vm_state
-        else
-            # When using a pre-existing ACG image version, no local VHD is needed
-            if [[ -n "${ACG_IMAGE_VERSION_ID}" ]] && [[ "$VM_TYPE" == "azure" ]]; then
-                info "Using pre-existing ACG image version — skipping local image check"
-            elif ! [[ -f "$vm_image_path" ]]; then
-                error "VM image not found at expected path: $vm_image_path"
-                error "Build a VM image first with '--build-vm-image'"
-                exit 1
-            fi
+        [[ -n "$VM_SSH_KEY" ]]              && validate_args+=("--ssh-key=${VM_SSH_KEY}")
+        [[ -n "$VM_SSH_AUTHORIZED_KEYS" ]]  && validate_args+=("--ssh-authorized-keys=${VM_SSH_AUTHORIZED_KEYS}")
+        [[ -n "$VM_CONSOLE_PASSWORD" ]]     && validate_args+=("--console-password=${VM_CONSOLE_PASSWORD}")
+        [[ -n "$ACG_IMAGE_VERSION_ID" ]]    && validate_args+=("--acg-image-version-id=${ACG_IMAGE_VERSION_ID}")
+        [[ -n "$PARITY" ]]                  && validate_args+=("--parity=${PARITY}")
 
-            start_vm "${vm_image_path}"
+        [[ "$START_VM" == "true" ]]             && validate_args+=("--start-vm")
+        [[ "$KEEP_VM" == "true" ]]              && validate_args+=("--keep-vm")
+        [[ "$REUSE_VM" == "true" ]]             && validate_args+=("--reuse-vm")
+        [[ "$NO_CLEANUP" == "true" ]]           && validate_args+=("--no-cleanup")
+        [[ "$RUN_KOLA_TESTS" == "true" ]]       && validate_args+=("--run-kola-tests")
+        [[ "$USE_SERIAL_CONSOLE" == "true" ]]   && validate_args+=("--use-serial")
+        [[ "$USE_SERIAL_CONSOLE" == "false" ]]  && validate_args+=("--use-ssh")
+        [[ "${BUILD_GPU:-false}" == "true" ]]   && validate_args+=("--gpu")
 
-            # --keep-vm: write state file so subsequent --reuse-vm calls can reconnect
-            if [[ "$KEEP_VM" == "true" ]]; then
-                write_vm_state
-            fi
-        fi  # end: not --reuse-vm
+        for script in "${RUN_SCRIPTS[@]}"; do
+            validate_args+=("--run-script=${script}")
+        done
 
-        # If scripts are specified, run them via serial console or SSH
-        if [[ ${#RUN_SCRIPTS[@]} -gt 0 ]] ; then
-            section "Running Scripts on VM"
+        for tag in "${RESOURCE_TAGS[@]}"; do
+            validate_args+=("--tag=${tag}")
+        done
 
-            if [[ "$USE_SERIAL_CONSOLE" == "true" ]]; then
-                # Use serial console execution
-                info "Using serial console for script execution"
-                
-                # If this is a QEMU VM, wait for boot first
-                if [[ "$VM_TYPE" == "qemu" ]]; then
-                    info "Waiting for QEMU VM to boot..."
-                    if ! wait_for_vm_boot_qemu "${VM_NAME}" "$VM_BOOT_TIMEOUT"; then
-                        error "VM failed to boot within timeout"
-                        exit 1
-                    fi
-                fi
-                # For an Azure VM, we assume boot is done after start_vm_azure completes
-
-                # Run scripts via console
-                if run_scripts_via_console "${VM_NAME}" "${RUN_SCRIPTS[@]}"; then
-                    print_script_results_summary
-                    info "All scripts completed successfully!"
-                else
-                    print_script_results_summary
-                    error "One or more scripts failed"
-                    exit 1
-                fi
-            else
-                # Use SSH execution
-                info "Using SSH for script execution"
-
-                # If this is a QEMU VM, wait for VM IP first
-                if [[ "$VM_TYPE" == "qemu" ]]; then
-                    if ! wait_for_vm_ip_qemu "${VM_NAME}" 60; then
-                        warn "You can still connect manually: virsh console ${VM_NAME}"
-                        exit 1
-                    fi
-                fi
-
-                if wait_for_ssh "$VM_IP" "$VM_SSH_TIMEOUT"; then
-                    if run_scripts_on_vm "$VM_IP" "${RUN_SCRIPTS[@]}"; then
-                        print_script_results_summary
-                        info "All scripts completed successfully!"
-                    else
-                        print_script_results_summary
-                        error "One or more scripts failed"
-                        exit 1
-                    fi
-                else
-                    error "SSH not available - cannot run scripts"
-                    warn "Try using --use-serial for serial console execution"
-                    warn "You can still connect manually:"
-                    if [[ "$VM_TYPE" == "qemu" ]]; then
-                        warn "  virsh console ${VM_NAME}"
-                    else
-                        warn "  az vm run-command invoke --command-id RunShellScript --name ${VM_NAME} --resource-group ${VM_RG} --scripts 'echo Hello'"
-                    fi
-                fi
-            fi
-            # Only run nginx curl test if we executed the container test (QEMU only;
-            # Azure VMs don't expose port 80 through the NSG)
-            if [[ "$VM_TYPE" != "azure" ]] && [[ ${#RUN_SCRIPTS[@]} -gt 0 ]] && [[ "${RUN_SCRIPTS[-1]}" == *"run-container-test.sh" ]]; then
-                # If this is a QEMU VM, IP might not be yet set, so get it
-                if [[ -z "${VM_IP:-}" ]]; then
-                    VM_IP=$(get_vm_ip_qemu "${VM_NAME}")
-                fi
-                curl --connect-timeout 10 --max-time 30 http://$VM_IP | grep "Thank you for using nginx."
-            fi
-            print_size_summary
-        else
-            if [[ "$VM_TYPE" == "qemu" ]]; then
-                # No scripts - wait for boot, then either collect data or connect interactively
-                echo
-                info "Waiting for VM to boot (showing console output)..."
-                
-                # Wait for boot and show progress
-                if ! wait_for_vm_boot_qemu "${VM_NAME}" "$VM_BOOT_TIMEOUT"; then
-                    warn "Boot detection timed out"
-                fi
-                if ! wait_for_vm_ip_qemu "${VM_NAME}" 60; then
-                    error "Could not get VM IP for data collection"
-                    exit 1
-                fi
-            fi
-            
-            # Run parity data collection if requested
-            if [[ -n "$PARITY" ]]; then
-                collect_parity_data "$vm_image_path"
-            elif [[ "$USE_SERIAL_CONSOLE" == "true" ]]; then
-                if [[ "$VM_TYPE" == "qemu" ]]; then
-                    connect_vm_console_qemu "${VM_NAME}"
-                elif [[ "$VM_TYPE" == "azure" ]]; then
-                    connect_vm_console_azure "$VM_RG" "${VM_NAME}"
-                fi
-            else
-                # Connect via SSH
-                info "VM is ready! Connecting via SSH..."
-                
-                if [[ "$VM_TYPE" == "qemu" ]]; then
-                    if wait_for_vm_ip_qemu "${VM_NAME}" 60 && wait_for_ssh "$VM_IP" "$VM_SSH_TIMEOUT"; then
-                        connect_vm_ssh "$VM_IP"
-                    else
-                        warn "SSH not available, falling back to console"
-                        connect_vm_console_qemu "${VM_NAME}"
-                    fi
-                elif [[ "$VM_TYPE" == "azure" ]]; then
-                    if [[ -n "${VM_IP:-}" ]] && wait_for_ssh "$VM_IP" "$VM_SSH_TIMEOUT"; then
-                        connect_vm_ssh "$VM_IP"
-                    else
-                        warn "SSH not available, falling back to console"
-                        connect_vm_console_azure "$VM_RG" "${VM_NAME}"
-                    fi
-                fi
-            fi
-        fi
-
-    elif [[ "$VM_TYPE" == "qemu" ]]; then
-        # Print instructions for manual libvirt deployment
-        echo
-        info "To deploy to libvirt, run:"
-        echo "  virsh destroy ${VM_NAME} || true"
-        echo "  virsh undefine --nvram ${VM_NAME} || true"
-        echo "  virt-install --name ${VM_NAME} --memory 2048 --vcpus 2 --os-variant generic --import --disk ${vm_image_path} --network default --machine q35 --boot uefi --noautoconsole"
-        echo "  virsh console ${VM_NAME}"
-    else
-        # Print instructions for manual Azure deployment
-        echo
-        info "To deploy to Azure, run:"
-        echo "  az vm create --resource-group <rg-name> --name <vm-name> --image <image-id> --admin-username <username> --ssh-key-values <ssh-key-file> --size Standard_D2s_v5 --security-type TrustedLaunch --enable-secure-boot true --enable-vtpm true"
-        echo "  az vm boot-diagnostics enable --name <vm-name> --resource-group <rg-name>"
-        echo "  az vm show -d -g <rg-name> -n <vm-name> --query publicIps -o tsv"
-    fi
-
-    # Run kola tests if requested
-    if [[ "$RUN_KOLA_TESTS" == "true" ]]; then
-        if [[ "$VM_TYPE" == "azure" ]]; then
-            error "Running kola tests not yet supported on Azure VMs"
-            exit 1
-        fi
-        section "Running Kola Tests"
-        cleanup_containers "name=flatcar-tests-"
-        info "Running kola tests via run_local_tests.sh..."
-        export PACKAGE_SOURCE_MODE=RPM
-        if "${SCRIPT_DIR}/run_local_tests.sh"; then
-            info "Kola tests completed successfully!"
-        else
-            error "Kola tests failed"
-            exit 1
-        fi
+        "${SCRIPT_DIR}/acl/validate_rpm_image.sh" "${validate_args[@]}"
     fi
 }
 
