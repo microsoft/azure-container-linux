@@ -2,7 +2,7 @@
 
 Name:           bootengine
 Version:        0.0.38
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Flatcar bootengine dracut modules and helper utilities
 
 License:        BSD-2-Clause
@@ -11,6 +11,7 @@ Distribution:   Azure Linux
 URL:            https://github.com/flatcar/bootengine
 Source0:        https://github.com/flatcar/bootengine/archive/%{commit_hash}.tar.gz#/%{name}-%{version}.tar.gz
 Patch0:         0001-modify-tests.patch
+Patch1:         0002-ignition-quench-delete-uki-firstboot-addon.patch
 BuildArch:      noarch
 BuildRequires:  dracut
 Requires:       util-linux
@@ -71,6 +72,9 @@ chmod +x \
 %{_sbindir}/update-bootengine
 
 %changelog
+* Mon Mar 02 2026 Lanze Liu <lanzeliu@microsoft.com> - 0.0.38-2
+- Patch ignition-quench.service to delete UKI firstboot addon after Ignition.
+
 * Tue Jan 27 2026 Sumit Jena <v-sumitjena@microsoft.com> - 0.0.38-1
 - Initial Azure Linux import from the source project (license: same as "License" tag).
 - License verified.

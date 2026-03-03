@@ -125,9 +125,18 @@ fix_mtab
 # Setup new (raw) image, possibly resizing filesystems
 setup_disk_image "${FLAGS_disk_layout}"
 
-# Optionally install any OEM packages
-install_oem_package
+# Optionally install any OEM packages.
+# In UKI mode, skip install_oem_package (which installs the OEM
+# partition's grub.cfg) because systemd-boot does not read GRUB
+# configs.  Instead, OEM-specific cmdline args are delivered via a
+# UKI addon built by install_uki_oem_addon.
+if [[ "${BOOTLOADER_MODE:-grub}" != "uki" ]]; then
+    install_oem_package
+else
+    install_uki_oem_addon
+fi
 install_oem_sysext
+
 run_fs_hook
 
 # Changes done, glue it together

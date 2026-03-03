@@ -635,7 +635,8 @@ install_oem_sysext() {
     local upload_dir to_move
     upload_dir="$(_dst_dir)"
     for to_move in "${built_sysext_dir}/${oem_sysext}"*; do
-        mv "${to_move}" "${upload_dir}/${to_move##*/}"
+        # -f to overwrite stale artifacts from previous runs
+        mv -f "${to_move}" "${upload_dir}/${to_move##*/}"
     done
     # Generate dev-key-signed update payload for testing
     delta_generator \
@@ -648,6 +649,44 @@ install_oem_sysext() {
 
     # Mark the installed sysext as active.
     sudo touch "${VM_TMP_ROOT}${installed_sysext_oem_dir}/active-${oem_sysext}"
+}
+
+# Build and install a UKI addon with OEM-specific kernel cmdline args.
+# Requires: BOOTLOADER_MODE=uki, ukify on PATH, the main UKI already
+# installed on the ESP (by uki_install.sh during build_image).
+install_uki_oem_addon() {
+    if [[ "${BOOTLOADER_MODE:-grub}" != "uki" ]]; then
+        return 0
+    fi
+
+    local oem_use=$(_get_vm_opt OEM_USE)
+    if [[ -z "${oem_use}" ]]; then
+        info "UKI addon: No OEM_USE defined for ${VM_IMG_TYPE}; skipping addon"
+        return 0
+    fi
+
+    # The ESP is mounted at ${VM_TMP_ROOT}/boot during image_to_vm.
+    local esp_dir="${VM_TMP_ROOT}/boot"
+    if [[ ! -d "${esp_dir}/EFI/Linux" ]]; then
+        warn "UKI addon: ESP directory ${esp_dir}/EFI/Linux not found; skipping"
+        return 0
+    fi
+
+    # Locate the per-platform uki.cfg files in the coreos-overlay.
+    local oem_files_dir="${SRC_ROOT}/third_party/coreos-overlay/coreos-base/common-oem-files/files"
+
+    info "UKI addon: Building OEM addon for '${oem_use}' (${VM_IMG_TYPE})"
+
+    # The EFI stub (linuxx64.efi.stub) is a build-time artifact in the
+    # board sysroot, not shipped in the image's /usr partition.
+    # image_to_vm.sh reuses the same SDK container as build_image, so
+    # BOARD_ROOT (/build/amd64-usr) still has systemd-boot installed.
+    "${BUILD_LIBRARY_DIR}/rpm/uki_addon.sh" \
+        "${esp_dir}" \
+        "${oem_use}" \
+        "${ARCH}" \
+        "${BOARD_ROOT}" \
+        "${oem_files_dir}"
 }
 
 # Any other tweaks required?

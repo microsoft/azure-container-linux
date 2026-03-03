@@ -147,17 +147,22 @@ uki_provision_rpm() {
     else
         cmdline="mount.usr=PARTUUID=${usr_a_uuid} mount.usrflags=ro"
     fi
-    # Common args
+    # Common base args — platform-agnostic, same for all image types.
     cmdline+=" root=LABEL=ROOT rootflags=rw"
     cmdline+=" consoleblank=0"
-    cmdline+=" console=tty0 console=ttyS0,115200n8"
-    # OEM / platform identification
-    # TODO: Make oem_id configurable (currently hardcoded for generic/qemu images)
-    cmdline+=" flatcar.oem.id=qemu ignition.platform.id=qemu"
-    # NOTE: first-boot args (flatcar.first_boot=detected, ignition.firstboot=1)
-    # are deliberately NOT baked into the UKI cmdline because they must only
-    # appear on the very first boot. A separate mechanism (e.g. a first-boot
-    # systemd unit or an addons UKI) will handle this later.
+    # OEM / platform identification (oem_id, ignition platform, console
+    # settings, etc.) are NOT baked into the main UKI.  They are injected
+    # via a per-platform UKI addon built during image_to_vm.sh so that
+    # each VM image format gets the correct OEM-specific cmdline.
+    # See build_library/rpm/uki_addon.sh for the addon builder.
+    #
+    # NOTE: first-boot args (flatcar.first_boot=detected) are deliberately
+    # NOT baked into the main UKI cmdline because they must only appear on
+    # the very first boot.  Instead, a separate firstboot addon EFI is
+    # placed in the .extra.d/ directory; ignition-quench.service deletes it
+    # after Ignition completes, mirroring how GRUB uses the
+    # /boot/flatcar/first_boot marker file.
+    # See _uki_build_firstboot_addon() below.
 
     # Write cmdline to a temp file for ukify
     echo "${cmdline}" > "${uki_temp_dir}/cmdline.txt"
@@ -207,8 +212,46 @@ uki_provision_rpm() {
 	EOF
     info "UKI/RPM: Wrote loader/loader.conf"
 
+    # Build and install the firstboot addon
+    _uki_build_firstboot_addon "${ESP_DIR}"
+
     # Clean up
     rm -rf "${uki_temp_dir}"
+}
+
+# Build a self-removing firstboot addon that triggers Ignition on first boot.
+_uki_build_firstboot_addon() {
+    local esp_dir="$1"
+
+    info "UKI/RPM: Building firstboot addon"
+
+    local addon_dir="${esp_dir}/EFI/Linux/acl.efi.extra.d"
+    sudo mkdir -p "${addon_dir}"
+
+    local firstboot_cmdline="flatcar.first_boot=detected"
+
+    local fb_temp_dir
+    fb_temp_dir=$(mktemp -d)
+
+    echo "${firstboot_cmdline}" > "${fb_temp_dir}/firstboot-cmdline.txt"
+
+    # efi_stub existence was already verified by the caller.
+    local efi_stub="${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub"
+
+    sudo ukify build \
+        --cmdline=@"${fb_temp_dir}/firstboot-cmdline.txt" \
+        --stub="${efi_stub}" \
+        --output="${fb_temp_dir}/firstboot.addon.efi"
+
+    if [[ ! -f "${fb_temp_dir}/firstboot.addon.efi" ]]; then
+        die "UKI/RPM: ukify failed to produce firstboot.addon.efi"
+    fi
+
+    sudo cp "${fb_temp_dir}/firstboot.addon.efi" "${addon_dir}/firstboot.addon.efi"
+    info "UKI/RPM: Installed firstboot addon → EFI/Linux/acl.efi.extra.d/firstboot.addon.efi"
+    info "UKI/RPM: firstboot cmdline = ${firstboot_cmdline}"
+
+    rm -rf "${fb_temp_dir}"
 }
 
 info "Installing UKI packages for target ${FLAGS_target}"
