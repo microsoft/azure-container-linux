@@ -17,7 +17,7 @@ declare -gA PACKAGE_CATALOG=(
 
     # Base system packages
     # Note: for now, we're using systemd to pull in packages that aren't sent through the catalog.
-    ["sys-apps/systemd"]="systemd systemd-journal-remote libselinux-utils selinux-policy policycoreutils ca-certificates"
+    ["sys-apps/systemd"]="systemd systemd-journal-remote libselinux-utils selinux-policy policycoreutils ca-certificates oras"
     ["sys-libs/systemd-libs"]="systemd-libs"
     ["sys-apps/systemd-networkd"]="systemd-networkd"
     ["net-misc/systemd-networkd"]="systemd-networkd"
