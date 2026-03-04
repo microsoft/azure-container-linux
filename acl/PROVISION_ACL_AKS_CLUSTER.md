@@ -16,16 +16,22 @@ export DEFAULT_RG="<your-resource-group>"
 export DEFAULT_PUBKEY="$HOME/.ssh/id_rsa.pub"
 ```
 
+## 2. Create a Resource Group
+
+```bash
+az group create --name "$DEFAULT_RG" --location "westus2"
+```
+
 ## 2. Create the AKS Cluster
 
 ```bash
 az aks create \
-  -g $DEFAULT_RG \
-  -n acl-cluster \
-  --location westus3 \
-  --ssh-key-value $DEFAULT_PUBKEY \
+  --resource-group "$DEFAULT_RG" \
+  --name "acl-cluster" \
+  --location "westus2" \
+  --ssh-key-value "$DEFAULT_PUBKEY" \
   --aks-custom-headers \
-    AKSHTTPCustomFeatures=Microsoft.ContainerService/UseCustomizedOSImage,\
+AKSHTTPCustomFeatures=Microsoft.ContainerService/UseCustomizedOSImage,\
 OSImageSubscriptionID=035db282-f1c8-4ce7-b78f-2a7265d5398c,\
 OSImageResourceGroup=ACL,\
 OSImageGallery=acldevel,\
