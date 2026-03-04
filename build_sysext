@@ -229,6 +229,13 @@ fi
 
 info "Building '${SYSEXTNAME}' squashfs with (meta-)packages '${@}' in '${BUILD_DIR}' using '${FLAGS_compression}' compression".
 
+# Unlike Portage (one dir per package), RPM uses a single DB file that gets
+# fully copied-up by overlayfs on any write, so rpm -qa after install returns
+# base + new packages. Snapshot here to diff later.
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]] && [[ -d "${BUILD_DIR}/${FLAGS_install_root_basename}/var/lib/rpm" ]]; then
+  rpm --root="${BUILD_DIR}/${FLAGS_install_root_basename}" -qa 2>/dev/null | sort > "${BUILD_DIR}/.rpm-base.tmp"
+fi
+
 for package; do
   echo "Installing package into sysext image: $package"
   
@@ -276,12 +283,12 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
   ROOT="${BUILD_DIR}/${FLAGS_install_root_basename}" PORTAGE_CONFIGROOT="${BUILD_DIR}/${FLAGS_install_root_basename}" \
         equery --no-color list --format '$cpv::$repo' '*' > "${BUILD_DIR}/${SYSEXTNAME}_packages.txt"
 else
-  # In RPM mode, create a placeholder packages.txt
-  info "  No Portage database - creating packages.txt from RPM info"
-  echo "# Packages installed via RPM in RPM mode" > "${BUILD_DIR}/${SYSEXTNAME}_packages.txt"
-  # If RPM database exists, list packages from it
+  # Diff against pre-install snapshot to list only sysext-added packages.
   if [[ -d "${BUILD_DIR}/${FLAGS_install_root_basename}/var/lib/rpm" ]]; then
-    rpm --root="${BUILD_DIR}/${FLAGS_install_root_basename}" -qa >> "${BUILD_DIR}/${SYSEXTNAME}_packages.txt" 2>/dev/null || true
+    rpm --root="${BUILD_DIR}/${FLAGS_install_root_basename}" -qa 2>/dev/null | sort > "${BUILD_DIR}/.rpm-all.tmp"
+    # comm -13: output lines unique to the right file (i.e. newly installed packages only)
+    comm -13 "${BUILD_DIR}/.rpm-base.tmp" "${BUILD_DIR}/.rpm-all.tmp" >> "${BUILD_DIR}/${SYSEXTNAME}_packages.txt"
+    rm -f "${BUILD_DIR}/.rpm-base.tmp" "${BUILD_DIR}/.rpm-all.tmp"
   fi
 fi
 
