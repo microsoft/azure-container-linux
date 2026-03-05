@@ -17,7 +17,7 @@ declare -gA PACKAGE_CATALOG=(
 
     # Base system packages
     # Note: for now, we're using systemd to pull in packages that aren't sent through the catalog.
-    ["sys-apps/systemd"]="systemd systemd-journal-remote libselinux-utils selinux-policy policycoreutils ca-certificates oras"
+    ["sys-apps/systemd"]="systemd systemd-journal-remote libselinux-utils selinux-policy policycoreutils ca-certificates"
     ["sys-libs/systemd-libs"]="systemd-libs"
     ["sys-apps/systemd-networkd"]="systemd-networkd"
     ["net-misc/systemd-networkd"]="systemd-networkd"
@@ -223,7 +223,8 @@ declare -gA PACKAGE_CATALOG=(
     ["sys-apps/ignition"]="ignition"
 
     # Dependencies of oem-azure for Azure image building
-    ["app-emulation/wa-linux-agent"]="WALinuxAgent"
+    # oras is not sent through the catalog (used to pull sysexts)
+    ["app-emulation/wa-linux-agent"]="WALinuxAgent oras"
     ["app-emulation/hv-daemons"]="hyperv-daemons"
     ["net-misc/chrony"]="chrony"
     ["dev-python/urllib3"]="python3-urllib3 python-setuptools"
