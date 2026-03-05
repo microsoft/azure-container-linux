@@ -251,6 +251,13 @@ _uki_build_firstboot_addon() {
     info "UKI/RPM: Installed firstboot addon → EFI/Linux/acl.efi.extra.d/firstboot.addon.efi"
     info "UKI/RPM: firstboot cmdline = ${firstboot_cmdline}"
 
+    # Keep a template copy outside the auto-discovery directory so that
+    # runtime tools (e.g., flatcar-reset) can restore it.
+    local template_dir="${esp_dir}/acl/uki-addons"
+    sudo mkdir -p "${template_dir}"
+    sudo cp "${fb_temp_dir}/firstboot.addon.efi" "${template_dir}/firstboot.addon.efi"
+    info "UKI/RPM: Saved firstboot addon template → acl/uki-addons/firstboot.addon.efi"
+
     rm -rf "${fb_temp_dir}"
 }
 

@@ -1,6 +1,6 @@
 Name:           coreos-init
 Version:        0.0.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Init scripts for Flatcar (systemd units, scripts, configs)
 
 License:        BSD-3-Clause
@@ -15,6 +15,7 @@ BuildArch:      noarch
 
 # tarball matches the ebuild SRC_URI pattern:
 Source0:        https://github.com/flatcar/init/archive/%{commit}/init-%{commit}.tar.gz#/%{name}-%{version}-%{shortcommit}.tar.gz
+Patch0:         0001-flatcar-reset-uki-mode.patch
 
 # optional tests, analogous to IUSE=test
 %bcond_without tests
@@ -47,7 +48,7 @@ and configuration files used during early boot and provisioning. The upstream pr
 organizes content under configs/, scripts/, systemd/, udev/, etc. [1](https://github.com/flatcar/init)
 
 %prep
-%autosetup -n init-%{commit}
+%autosetup -p1 -n init-%{commit}
 
 %install
 rm -rf %{buildroot}
@@ -94,6 +95,9 @@ find %{buildroot} -type f -o -type l \
 %doc README.md
 
 %changelog
+* Wed Mar 04 2026 Lanze Liu <lanzeliu@microsoft.com> - 0.0.1-2
+- Patch flatcar-reset to restore firstboot addon in UKI (systemd-boot) mode.
+
 * Mon Feb 02 2026 Sumit Jena (HCL Technologies Ltd) - 0.0.1-1
 - Initial Azure Linux import from the source project (license: same as "License" tag).
 - License verified.
