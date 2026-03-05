@@ -1,8 +1,5 @@
 %bcond_with check
 
-%global ignedgecommit a2587490b2a9a215ad12cf15866025efbe027552
-%global ignedgeshortcommit %(c=%{ignedgecommit}; echo ${c:0:7})
-
 %global goarch %{_arch}
 %ifarch x86_64
 %global goarch amd64
@@ -27,7 +24,7 @@ Version:                2.22.0
 %global dracutlibdir %{_prefix}/lib/dracut
 
 Name:           ignition
-Release:        1%{?dist}
+Release:        2%{?dist}
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
 Summary:        First boot installer and configuration tool
@@ -98,7 +95,6 @@ the configuration.
 
 This package contains a tool for validating Ignition configurations.
 
-############## validate-redistributable subpackage ##############
 %endif
 
 %if 0%{?with_grub}
@@ -120,14 +116,6 @@ This package contains the grub2 config which is compatable with bootupd.
 
 %build
 export LDFLAGS="-X github.com/coreos/ignition/v2/internal/version.Raw=%{version} -X github.com/coreos/ignition/v2/internal/distro.selinuxRelabel=false "
-%if 0%{?rhel} && 0%{?rhel} <= 8
-# Disable writing ssh keys fragments on RHEL/CentOS <= 8
-LDFLAGS+=' -X github.com/coreos/ignition/v2/internal/distro.writeAuthorizedKeysFragment=false '
-%endif
-%if 0%{?rhel}
-# Need uncompressed debug symbols for debuginfo extraction
-LDFLAGS+=' -compressdwarf=false '
-%endif
 export GOFLAGS="-mod=vendor"
 
 echo "Building ignition..."
@@ -211,6 +199,9 @@ VERSION=%{version} GOARCH=%{goarch} ./test
 %endif
 
 %changelog
+* Wed Mar 4 2026 Jiri Appl <jiria@microsoft.com> - 2.22.0-2
+- Version bump.
+
 * Fri Jan 16 2026 Sumit Jena <v-sumitjena@microsoft.com> - 2.22.1-2
 - Initial Azure Linux import from Fedora 43 (license: MIT)
 - License verified
