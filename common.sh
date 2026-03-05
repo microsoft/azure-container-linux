@@ -368,6 +368,45 @@ fi
 # Compatibility alias
 FLATCAR_VERSION_STRING="${FLATCAR_VERSION}"
 
+# Image version for OS identity (os-release, lsb-release) in RPM builds.
+# This is separate from FLATCAR_VERSION which must track the SDK container.
+# Override via environment: IMAGE_VERSION_ID, IMAGE_BUILD_ID
+# Default: 3.0.YYYYMMDD+HHMMSS-<git-short-hash>[-dirty]
+# Values are cached in __build__/image-version.env to ensure consistency
+# across build steps. Delete that file (or use --rebuild) to regenerate.
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+  _image_version_stamp="${SCRIPTS_DIR}/__build__/image-version.env"
+
+  # Read cached values if no env override is set
+  if [[ -f "${_image_version_stamp}" ]] \
+      && [[ -z "${IMAGE_VERSION:-}" ]] \
+      && [[ -z "${IMAGE_VERSION_ID:-}" ]] \
+      && [[ -z "${IMAGE_BUILD_ID:-}" ]]; then
+    source "${_image_version_stamp}"
+  fi
+
+  : ${IMAGE_VERSION_ID:="3.0.$(date +%Y%m%d)"}
+  if [[ -z "${IMAGE_BUILD_ID:-}" ]]; then
+    _git_hash=$(git -C "${SCRIPTS_DIR}" rev-parse --short HEAD 2>/dev/null || echo unknown)
+    _git_dirty=""
+    if ! git -C "${SCRIPTS_DIR}" diff --quiet HEAD 2>/dev/null; then
+      _git_dirty="-dirty"
+    fi
+    IMAGE_BUILD_ID="$(date +%H%M%S)-${_git_hash}${_git_dirty}"
+    unset _git_hash _git_dirty
+  fi
+  IMAGE_VERSION="${IMAGE_VERSION:-${IMAGE_VERSION_ID}+${IMAGE_BUILD_ID}}"
+
+  # Persist for subsequent build steps
+  mkdir -p "$(dirname "${_image_version_stamp}")"
+  cat > "${_image_version_stamp}" <<-STAMP
+	IMAGE_VERSION_ID="${IMAGE_VERSION_ID}"
+	IMAGE_BUILD_ID="${IMAGE_BUILD_ID}"
+	IMAGE_VERSION="${IMAGE_VERSION}"
+	STAMP
+  unset _image_version_stamp
+fi
+
 # Calculate what today's build version should be, used by release
 # scripts to provide a reasonable default value. The value is the number
 # of days since COREOS_EPOCH, Mon Jul  1 00:00:00 UTC 2013

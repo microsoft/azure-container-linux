@@ -41,11 +41,11 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
   CPE_ORG="$OS_ID-linux"
   CPE_DISTRO="${OS_ID}_linux"
 elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
-  OS_NAME="Azure Container Linux"
-  OS_CODENAME=""
+  OS_NAME="Microsoft Azure Container Linux"
+  OS_CODENAME="AzureContainerLinux"
   OS_ID="azurecontainerlinux"
   OS_ID_LIKE="azurelinux"
-  OS_PRETTY_NAME="$OS_NAME $FLATCAR_VERSION"
+  OS_PRETTY_NAME="$OS_NAME $IMAGE_VERSION"
   ANSI_COLOR="1;34"
   HOME_URL="https://aka.ms/azurelinux"
   BUG_REPORT_URL="https://aka.ms/azurelinux"
@@ -58,9 +58,20 @@ FLATCAR_APPID="{e96281a6-d1af-4bde-9a0a-97b76e56dc57}"
 
 # DISTRIB_* are the standard lsb-release names
 sudo mkdir -p "${ROOT_FS_DIR}/usr/share/flatcar" "${ROOT_FS_DIR}/etc/flatcar"
+# For RPM mode, use IMAGE_VERSION for OS identity; for Portage, use FLATCAR_VERSION
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+  _OS_VERSION="${IMAGE_VERSION}"
+  _OS_VERSION_ID="${IMAGE_VERSION_ID}"
+  _OS_BUILD_ID="${IMAGE_BUILD_ID}"
+else
+  _OS_VERSION="${FLATCAR_VERSION}"
+  _OS_VERSION_ID="${FLATCAR_VERSION_ID}"
+  _OS_BUILD_ID="${FLATCAR_BUILD_ID}"
+fi
+
 sudo_clobber "${ROOT_FS_DIR}/usr/share/flatcar/lsb-release" <<EOF
 DISTRIB_ID="$OS_NAME"
-DISTRIB_RELEASE=$FLATCAR_VERSION
+DISTRIB_RELEASE=$_OS_VERSION
 DISTRIB_CODENAME="$OS_CODENAME"
 DISTRIB_DESCRIPTION="$OS_PRETTY_NAME"
 EOF
@@ -72,9 +83,9 @@ sudo ln -sf "../usr/share/flatcar/lsb-release" "${ROOT_FS_DIR}/etc/lsb-release"
 NAME="$OS_NAME"
 ID=$OS_ID
 ID_LIKE=$OS_ID_LIKE
-VERSION=$FLATCAR_VERSION
-VERSION_ID=$FLATCAR_VERSION_ID
-BUILD_ID=$FLATCAR_BUILD_ID
+VERSION=$_OS_VERSION
+VERSION_ID=$_OS_VERSION_ID
+BUILD_ID=$_OS_BUILD_ID
 SYSEXT_LEVEL=1.0
 PRETTY_NAME="$OS_PRETTY_NAME"
 ANSI_COLOR="$ANSI_COLOR"
@@ -82,7 +93,7 @@ HOME_URL="$HOME_URL"
 BUG_REPORT_URL="$BUG_REPORT_URL"
 SUPPORT_URL="$SUPPORT_URL"
 FLATCAR_BOARD="$FLAGS_board"
-CPE_NAME="cpe:2.3:o:$CPE_ORG:$CPE_DISTRO:${FLATCAR_VERSION}:*:*:*:*:*:*:*"
+CPE_NAME="cpe:2.3:o:$CPE_ORG:$CPE_DISTRO:${_OS_VERSION}:*:*:*:*:*:*:*"
 EOF
 sudo ln -sf "../usr/lib/os-release" "${ROOT_FS_DIR}/etc/os-release"
 sudo mkdir -p "${ROOT_FS_DIR}/usr/share/flatcar"
@@ -96,7 +107,7 @@ fi
 
 # Create the defaults for the coreos configuration files in the usr directory
 sudo_clobber "${ROOT_FS_DIR}/usr/share/flatcar/release" <<EOF
-FLATCAR_RELEASE_VERSION=$FLATCAR_VERSION
+FLATCAR_RELEASE_VERSION=$_OS_VERSION
 FLATCAR_RELEASE_BOARD=$FLAGS_board
 FLATCAR_RELEASE_APPID=$FLATCAR_APPID
 EOF

@@ -145,6 +145,10 @@ export PACKAGE_SOURCE_MODE=RPM
 export RPM_STAGING_DIR="${STAGING_DIR}"
 # Bootloader mode: 'grub' (default) or 'uki' (systemd-boot + UKI)
 export BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
+# Forward ACL version overrides into run_sdk_container → docker container
+export IMAGE_VERSION="${IMAGE_VERSION:-}"
+export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
+export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 
 # Var-s for Azure VM testing (forwarded to validate_rpm_image.sh):
 AZ_SUB_ID="${AZ_SUB_ID:-b99b2264-54e6-408e-812b-2ec280c0ce7a}"
@@ -1384,6 +1388,10 @@ main() {
 
     # Step 3: Build image (if requested)
     if [[ "$BUILD_IMAGE" == "true" ]]; then
+        # Reset cached image version so common.sh generates fresh values
+        if [[ "$FORCE_REBUILD" == "true" ]]; then
+            rm -f "${SCRIPT_DIR}/__build__/image-version.env"
+        fi
         build_image
         print_size_summary
     fi

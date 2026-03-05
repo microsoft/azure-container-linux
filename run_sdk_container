@@ -156,6 +156,9 @@ if [[ -z ${stat} ]] ; then
         -e RPM_STAGING_DIR="/mnt/host/source/src/scripts/__build__/rpm-staging"
         -e SYSEXT_COMPRESSION="${SYSEXT_COMPRESSION:-}"
         -e GPU_SYSEXTS_SPEC="${GPU_SYSEXTS_SPEC:-}"
+        -e IMAGE_VERSION="${IMAGE_VERSION:-}"
+        -e IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
+        -e IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
         --name="${name}"
         --hostname="${hostname}"
         --entrypoint /bin/bash

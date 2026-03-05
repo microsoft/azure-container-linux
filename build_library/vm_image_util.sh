@@ -576,7 +576,12 @@ install_oem_sysext() {
     local built_sysext_dir="${FLAGS_to}/${oem_sysext}-sysext"
     local built_sysext_filename="${oem_sysext}.raw"
     local built_sysext_path="${built_sysext_dir}/${built_sysext_filename}"
+    # Use the version that matches what os-release VERSION will contain at boot,
+    # since initrd-setup-root-after-ignition looks up the sysext by that value.
     local version="${FLATCAR_VERSION}"
+    if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+        version="${IMAGE_VERSION}"
+    fi
     local metapkg="coreos-base/${oem_sysext}"
     # The --install_root_basename="${name}-oem-sysext-rootfs" flag is
     # important - it sets the name of a rootfs directory, which is
@@ -609,6 +614,9 @@ install_oem_sysext() {
         local build_sysext_env=(
             "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE}"
             "RPM_STAGING_DIR=${RPM_STAGING_DIR}"
+            "IMAGE_VERSION=${IMAGE_VERSION:-}"
+            "IMAGE_VERSION_ID=${IMAGE_VERSION_ID:-}"
+            "IMAGE_BUILD_ID=${IMAGE_BUILD_ID:-}"
         )
         info "RPM mode: Set environment variables:"
         # Print environment variables for debugging
@@ -714,6 +722,9 @@ install_gpu_sysexts() {
         build_sysext_env=(
             "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE}"
             "RPM_STAGING_DIR=${RPM_STAGING_DIR:-}"
+            "IMAGE_VERSION=${IMAGE_VERSION:-}"
+            "IMAGE_VERSION_ID=${IMAGE_VERSION_ID:-}"
+            "IMAGE_BUILD_ID=${IMAGE_BUILD_ID:-}"
         )
     fi
 

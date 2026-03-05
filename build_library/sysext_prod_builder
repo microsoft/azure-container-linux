@@ -73,6 +73,9 @@ create_prod_sysext() {
   sudo "FLATCAR_BUILD_ID=$FLATCAR_BUILD_ID" \
       "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE:-PORTAGE}" \
       "RPM_STAGING_DIR=${RPM_STAGING_DIR:-}" \
+      "IMAGE_VERSION=${IMAGE_VERSION:-}" \
+      "IMAGE_VERSION_ID=${IMAGE_VERSION_ID:-}" \
+      "IMAGE_BUILD_ID=${IMAGE_BUILD_ID:-}" \
       "${SCRIPTS_DIR}/build_sysext" \
             --board="${BOARD}" \
             --image_builddir="${workdir}/sysext-build" \

@@ -206,9 +206,16 @@ if [[ -z $REPO_BUILD_ID ]] && [[ ${COREOS_OFFICIAL:-0} -ne 1 ]]; then
     info "Setting FLATCAR_VERSION to '$FLATCAR_VERSION'"
 fi
 
-if [ "$VERSION_BOARD" != "$FLATCAR_VERSION" ]; then
+# In RPM mode, os-release VERSION uses IMAGE_VERSION (independent of FLATCAR_VERSION).
+# Compare against IMAGE_VERSION instead so the check doesn't false-positive.
+_expected_version="${FLATCAR_VERSION}"
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && -n "${IMAGE_VERSION:-}" ]]; then
+  _expected_version="${IMAGE_VERSION}"
+fi
+
+if [ "$VERSION_BOARD" != "$_expected_version" ]; then
   warn "Base squashfs version: $VERSION_BOARD"
-  warn "SDK board packages version: $FLATCAR_VERSION"
+  warn "Expected version: $_expected_version"
   if [[ "${FLAGS_ignore_version_mismatch}" = "${FLAGS_TRUE}" ]] ; then
     warn "Ignoring version mismatch as requested."
   else
@@ -337,7 +344,13 @@ elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
   OS_ID="azurecontainerlinux"
 fi
 
-version_field="${VERSION_FIELD_OVERRIDE:-VERSION_ID=${FLATCAR_VERSION_ID}}"
+# extension-release VERSION_ID must match the host os-release VERSION_ID.
+# In RPM mode that's IMAGE_VERSION_ID, not FLATCAR_VERSION_ID.
+_sysext_version_id="${FLATCAR_VERSION_ID}"
+if [[ "${PACKAGE_SOURCE_MODE:-PORTAGE}" == "RPM" && -n "${IMAGE_VERSION_ID:-}" ]]; then
+  _sysext_version_id="${IMAGE_VERSION_ID}"
+fi
+version_field="${VERSION_FIELD_OVERRIDE:-VERSION_ID=${_sysext_version_id}}"
 all_fields=(
   "ID=${OS_ID}"
   "${version_field}"

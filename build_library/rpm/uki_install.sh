@@ -99,12 +99,12 @@ uki_provision_rpm() {
     # Generate os-release for the UKI.
     local osrelease="${uki_temp_dir}/os-release"
     cat > "${osrelease}" <<-OSREL
-NAME="Azure Container Linux"
-ID=azurecontainerlinux
-ID_LIKE="azurelinux"
-VERSION="${FLATCAR_VERSION:-0.0.0}"
-VERSION_ID="${FLATCAR_VERSION_ID:-0.0.0}"
-PRETTY_NAME="Azure Container Linux ${FLATCAR_VERSION:-}"
+		NAME="Azure Container Linux"
+		ID=azurecontainerlinux
+		ID_LIKE="azurelinux"
+		VERSION="${IMAGE_VERSION:-0.0.0}"
+		VERSION_ID="${IMAGE_VERSION_ID:-0.0.0}"
+		PRETTY_NAME="Azure Container Linux ${IMAGE_VERSION:-}"
 OSREL
     info "UKI/RPM: Generated os-release for UKI"
 

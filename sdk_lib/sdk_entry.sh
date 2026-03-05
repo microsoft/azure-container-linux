@@ -93,6 +93,17 @@ if [[ -n "${GPU_SYSEXTS_SPEC:-}" ]]; then
     sed -i -e '/export GPU_SYSEXTS_SPEC=/d' /home/sdk/.bashrc 2>/dev/null || true
     echo "export GPU_SYSEXTS_SPEC='${GPU_SYSEXTS_SPEC}'" >> /home/sdk/.bashrc
 fi
+# Forward ACL version overrides so common.sh picks them up inside the container
+sed -i -e '/export IMAGE_VERSION=/d' -e '/export IMAGE_VERSION_ID=/d' -e '/export IMAGE_BUILD_ID=/d' /home/sdk/.bashrc 2>/dev/null || true
+if [[ -n "${IMAGE_VERSION:-}" ]]; then
+    echo "export IMAGE_VERSION='${IMAGE_VERSION}'" >> /home/sdk/.bashrc
+fi
+if [[ -n "${IMAGE_VERSION_ID:-}" ]]; then
+    echo "export IMAGE_VERSION_ID='${IMAGE_VERSION_ID}'" >> /home/sdk/.bashrc
+fi
+if [[ -n "${IMAGE_BUILD_ID:-}" ]]; then
+    echo "export IMAGE_BUILD_ID='${IMAGE_BUILD_ID}'" >> /home/sdk/.bashrc
+fi
 
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"
