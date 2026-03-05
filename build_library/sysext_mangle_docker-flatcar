@@ -3,6 +3,14 @@
 set -euo pipefail
 rootfs="${1}"
 
+# In RPM mode, moby-engine has 'Requires: containerd' which pulls in
+# containerd2 + runc.  These are already provided by the containerd-flatcar
+# sysext, so strip them here to avoid redundant files.
+if [[ "${PACKAGE_SOURCE_MODE:-PORTAGE}" == "RPM" ]]; then
+  echo ">>> NOTICE: $0: removing containerd/runc (provided by containerd-flatcar sysext)"
+  rpm --root="${rootfs}" -e --nodeps --noscripts containerd2 runc
+fi
+
 # Remove debug and contrib
 echo ">>> NOTICE: $0: removing '/usr/lib/debug/', '/usr/share/docker/contrib' from sysext"
 rm -rf "${rootfs}/usr/lib/debug/" "${rootfs}/usr/share/docker/contrib/"
