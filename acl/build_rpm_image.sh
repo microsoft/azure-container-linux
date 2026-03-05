@@ -53,7 +53,6 @@
 #   --unofficial-kernel-build-id=ID      Specify Azure DevOps build ID for kernel (default: 1028516)
 #   --use-serial                         Use serial console for script execution (no SSH/ignition needed)
 #   --use-ssh                            Use SSH for script execution (default, requires working ignition/SSH keys)
-#   --gpu                                Include GPU sysexts (NVIDIA driver, container-toolkit, fabric-manager)
 #   --vm-name=NAME                       Name for the VM (default: acl)
 #   --vm-type=TYPE                       VM type when building VM images: azure|qemu (default: qemu)
 #
@@ -129,7 +128,10 @@ RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID (bypasses VHD upload)
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
-BUILD_GPU=false  # Include GPU (NVIDIA driver, container-toolkit, fabric-manager) sysexts
+
+# GPU sysext definitions — maintained in a separate config file for easy
+# extension.  See acl/gpu_sysexts.conf for format docs and how-to-add.
+source "${SCRIPT_DIR}/acl/gpu_sysexts.conf"
 HYDRATE=false  # Hydrate local environment from CI pipeline build
 HYDRATE_BUILD_ID=""  # Specific build ID for hydrate (empty = latest)
 
@@ -470,10 +472,6 @@ parse_args() {
                 REUSE_VM=true
                 START_VM=true
                 NO_CLEANUP=true
-                shift
-                ;;
-            --gpu)
-                BUILD_GPU=true
                 shift
                 ;;
             --tag=*)
@@ -1081,14 +1079,6 @@ build_image() {
         "--image_name=${IMG_NAME}_image.bin"
     )
 
-    # GPU sysexts: disabled by default, enabled with --gpu
-    if [[ "$BUILD_GPU" == "true" ]]; then
-        info "  GPU sysexts:     enabled"
-    else
-        build_args+=("--gpu_sysexts=")
-        info "  GPU sysexts:     disabled (use --gpu to enable)"
-    fi
-
     if [[ "$FORCE_REBUILD" == "true" ]]; then
         build_args+=("--replace")
     fi
@@ -1176,6 +1166,11 @@ build_vm_image() {
         "--format=${format}"
         "--image_name=${IMG_NAME}_image.bin"
     )
+
+    # Export GPU sysext spec so run_sdk_container passes it into the container
+    # where image_to_vm.sh → install_gpu_sysexts() picks it up.
+    export GPU_SYSEXTS_SPEC="${GPU_SYSEXTS[*]}"
+    info "GPU sysexts will be built during VM conversion: ${GPU_SYSEXTS_SPEC}"
 
     info "Building ${vm_type} VM image using SDK container..."
 
@@ -1283,7 +1278,7 @@ print_summary() {
         echo "     Board: ${BOARD}"
         echo "     Group: ${GROUP}"
         echo "     Mode: RPM (Azure Linux RPMs + Portage)"
-        echo "     GPU sysexts: ${BUILD_GPU}"
+        echo "     GPU sysexts: enabled"
         echo
     fi
 
@@ -1436,7 +1431,6 @@ main() {
         [[ "$RUN_KOLA_TESTS" == "true" ]]       && validate_args+=("--run-kola-tests")
         [[ "$USE_SERIAL_CONSOLE" == "true" ]]   && validate_args+=("--use-serial")
         [[ "$USE_SERIAL_CONSOLE" == "false" ]]  && validate_args+=("--use-ssh")
-        [[ "${BUILD_GPU:-false}" == "true" ]]   && validate_args+=("--gpu")
 
         for script in "${RUN_SCRIPTS[@]}"; do
             validate_args+=("--run-script=${script}")

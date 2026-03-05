@@ -89,6 +89,10 @@ fi
 if [[ -n "${SYSEXT_COMPRESSION:-}" ]]; then
     echo "export SYSEXT_COMPRESSION='${SYSEXT_COMPRESSION}'" >> /home/sdk/.bashrc
 fi
+if [[ -n "${GPU_SYSEXTS_SPEC:-}" ]]; then
+    sed -i -e '/export GPU_SYSEXTS_SPEC=/d' /home/sdk/.bashrc 2>/dev/null || true
+    echo "export GPU_SYSEXTS_SPEC='${GPU_SYSEXTS_SPEC}'" >> /home/sdk/.bashrc
+fi
 
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"

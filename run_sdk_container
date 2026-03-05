@@ -155,6 +155,7 @@ if [[ -z ${stat} ]] ; then
         -e BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
         -e RPM_STAGING_DIR="/mnt/host/source/src/scripts/__build__/rpm-staging"
         -e SYSEXT_COMPRESSION="${SYSEXT_COMPRESSION:-}"
+        -e GPU_SYSEXTS_SPEC="${GPU_SYSEXTS_SPEC:-}"
         --name="${name}"
         --hostname="${hostname}"
         --entrypoint /bin/bash

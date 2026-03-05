@@ -689,6 +689,80 @@ install_uki_oem_addon() {
         "${oem_files_dir}"
 }
 
+# Build GPU sysexts as standalone .raw artifacts (not installed into the image).
+# Reads GPU_SYSEXTS_SPEC from the environment — a space-separated list of
+# "name|portage-style-package[&package]" entries, e.g.:
+#   "cuda-open|nvidia-gpu-drivers/cuda-open nvidia-container-toolkit|nvidia-user-space/nvidia-container-toolkit"
+# If GPU_SYSEXTS_SPEC is empty the function is a no-op.
+install_gpu_sysexts() {
+    if [[ -z "${GPU_SYSEXTS_SPEC:-}" ]]; then
+        return 0
+    fi
+
+    local version="${FLATCAR_VERSION}"
+    local compression_opt=""
+    if [[ -n "${SYSEXT_COMPRESSION:-}" ]]; then
+        compression_opt="--compression=${SYSEXT_COMPRESSION}"
+    fi
+
+    local upload_dir
+    upload_dir="$(_dst_dir)"
+
+    # For RPM mode, set environment variables to pass to build_sysext
+    local -a build_sysext_env=()
+    if [[ "${PACKAGE_SOURCE_MODE:-}" == "RPM" ]]; then
+        build_sysext_env=(
+            "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE}"
+            "RPM_STAGING_DIR=${RPM_STAGING_DIR:-}"
+        )
+    fi
+
+    local sysext_spec
+    for sysext_spec in ${GPU_SYSEXTS_SPEC}; do
+        local name="${sysext_spec%%|*}"
+        local packages="${sysext_spec#*|}"
+        info "Building GPU sysext: ${name} (${packages//&/, })"
+
+        # Expand multi-package separator & → individual package args
+        local -a pkg_args=()
+        IFS='&' read -ra pkg_args <<< "$packages"
+
+        local built_sysext_dir="${FLAGS_to}/${name}-sysext"
+        mkdir -p "${built_sysext_dir}"
+
+        local -a sysext_flags=(
+            --board="${BOARD}"
+            --squashfs_base="${VM_SRC_SYSEXT_IMG}"
+            --image_builddir="${built_sysext_dir}"
+            --install_root_basename="${name}-gpu-sysext-rootfs"
+            ${compression_opt}
+        )
+
+        # Use mangle script if one exists under build_library/
+        local mangle_fs="${BUILD_LIBRARY_DIR}/sysext_mangle_${name}"
+        if [[ -x "${mangle_fs}" ]]; then
+            sysext_flags+=(
+                --manglefs_script="${mangle_fs}"
+            )
+        fi
+
+        # Sysext name + packages as positional args
+        sysext_flags+=("${name}" "${pkg_args[@]}")
+
+        sudo "${build_sysext_env[@]}" "${SCRIPT_ROOT}/build_sysext" "${sysext_flags[@]}"
+
+        # Move sysext artifacts to upload/output directory
+        local to_move
+        for to_move in "${built_sysext_dir}/${name}"*; do
+            [[ -e "${to_move}" ]] && mv "${to_move}" "${upload_dir}/${to_move##*/}"
+        done
+
+        # Clean up work directory
+        rm -rf "${built_sysext_dir}"
+        info "Built GPU sysext: ${upload_dir}/${name}.raw"
+    done
+}
+
 # Any other tweaks required?
 run_fs_hook() {
     local fs_hook=$(_get_vm_opt FS_HOOK)

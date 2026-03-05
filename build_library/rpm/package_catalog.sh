@@ -664,9 +664,10 @@ declare -gA PACKAGE_CATALOG=(
     ["sys-power/acpid"]="SKIP"
 
     # NVIDIA GPU
-    ["x11-drivers/nvidia-drivers"]="cuda-open"
     ## Note: the following packages are not originally offered by Flatcar, thus they are placeholders for now
     ## before we determine the right strategy to build sysexts for ACL for components not supported by Flatcar
+    ["nvidia-gpu-drivers/cuda-open"]="cuda-open"
+    ["nvidia-gpu-drivers/cuda"]="cuda"
     ["nvidia-user-space/nvidia-container-toolkit"]="nvidia-container-toolkit"
     ["nvidia-user-space/nvidia-fabric-manager"]="nvidia-fabric-manager"
 )

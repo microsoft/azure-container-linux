@@ -136,7 +136,7 @@ else
     install_uki_oem_addon
 fi
 install_oem_sysext
-
+install_gpu_sysexts
 run_fs_hook
 
 # Changes done, glue it together

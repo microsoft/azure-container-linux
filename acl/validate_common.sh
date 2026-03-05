@@ -725,9 +725,6 @@ parse_validate_args() {
             --build-id=*)
                 BUILD_ID="${1#*=}"
                 shift ;;
-            --gpu)
-                # Accept but ignore (build concern, not validation)
-                shift ;;
             --help)
                 echo "Usage: $0 [options]"
                 echo ""

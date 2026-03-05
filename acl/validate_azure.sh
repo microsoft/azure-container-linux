@@ -203,15 +203,32 @@ create_gallery_image_version() {
     info "Creating gallery image version: $image_version"
     local storage_account_resource_id="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/$AZ_STORAGE_RG/providers/Microsoft.Storage/storageAccounts/$AZ_STORAGE_ACC"
     local blob_url="https://$AZ_STORAGE_ACC.blob.core.windows.net/$AZ_STORAGE_CONTAINER/$blob_name"
+
+    # The --location for az sig image-version create must match the region of
+    # the source VHD blob (storage account), so the intermediate managed disk
+    # is co-located.  When the storage account or gallery are in a different
+    # region from AZ_REGION (the VM target), we add extra target regions and
+    # switch to Full replication.
+    local storage_location
+    storage_location=$(az storage account show -n "$AZ_STORAGE_ACC" --query location -o tsv)
     local gallery_location
     gallery_location=$(az sig show -r "$AZ_ACG" -g "$AZ_GALLERY_RG" --query location -o tsv)
-    local target_regions="$AZ_REGION"
+
+    if [[ "${storage_location,,}" != "${gallery_location,,}" ]]; then
+        error "Storage account '$AZ_STORAGE_ACC' is in '${storage_location}' but gallery '$AZ_ACG' is in '${gallery_location}'. They must be in the same region."
+        exit 1
+    fi
+
+    # Build unique set of target regions (gallery home + VM target).
+    local image_location="$storage_location"
     local replication_mode="Shallow"
-    if [[ "${gallery_location,,}" != "${AZ_REGION,,}" ]]; then
-        warn "Gallery location '${gallery_location}' differs from target region '${AZ_REGION}'; switching to Full replication mode (this will be slower)"
-        target_regions="$AZ_REGION $gallery_location"
+    local target_regions="$image_location"
+    if [[ "${image_location,,}" != "${AZ_REGION,,}" ]]; then
+        warn "Storage/gallery region '${image_location}' differs from VM target region '${AZ_REGION}'; adding '${AZ_REGION}' as extra target (Full replication, slower)"
+        target_regions="$image_location $AZ_REGION"
         replication_mode="Full"
     fi
+
     az sig image-version create \
         --resource-group "$AZ_GALLERY_RG" \
         --gallery-name "$AZ_ACG" \
@@ -219,7 +236,7 @@ create_gallery_image_version() {
         --gallery-image-version "$image_version" \
         --os-vhd-uri "$blob_url" \
         --os-vhd-storage-account "$storage_account_resource_id" \
-        --location "$AZ_REGION" \
+        --location "$image_location" \
         --target-regions $target_regions \
         --replica-count 1 \
         --storage-account-type Standard_LRS \
