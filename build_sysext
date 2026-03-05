@@ -334,7 +334,7 @@ mkdir -p "${BUILD_DIR}/${FLAGS_install_root_basename}/usr/lib/extension-release.
 if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
   OS_ID="flatcar"
 elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
-  OS_ID="acl"
+  OS_ID="azurecontainerlinux"
 fi
 
 version_field="${VERSION_FIELD_OVERRIDE:-VERSION_ID=${FLATCAR_VERSION_ID}}"
