@@ -22,10 +22,10 @@ run_localedef() {
 # Returns non-zero if no packages found (to fail fast during build)
 image_packages_portage() {
     local root_fs_dir="$1"
-    
+
     local dbpath="${root_fs_dir}/var/lib/rpm"
     local pkg_count=0
-    
+
     if [[ -d "${dbpath}" ]]; then
         pkg_count=$(rpm_query_packages "${root_fs_dir}" | wc -l)
         info "RPM database at ${dbpath}: ${pkg_count} packages"
@@ -39,13 +39,13 @@ image_packages_portage() {
         error "RPM database not found and no backup available for ${root_fs_dir}"
         return 1
     fi
-    
+
     # Fail fast if no packages found
     if [[ ${pkg_count} -eq 0 ]]; then
         error "ERROR: RPM package list is empty for ${root_fs_dir}"
         return 1
     fi
-    
+
     return 0
 }
 
@@ -103,7 +103,7 @@ start_image_rpm() {
 
 finish_image_rpm() {
   local root_fs_dir="$1"
-    
+
     # Create /usr/share/oem -> ../../oem symlink for backward compatibility
     # The OEM partition is mounted at /oem, but legacy configs reference /usr/share/oem
     # Use relative symlink (../../oem) so it works correctly when accessed via /sysroot in initrd
@@ -147,14 +147,14 @@ start_image_uids_rpm() {
 # D-Bus system message bus user
 u messagebus 81 "System Message Bus" /run/dbus
 SYSUSERS_DBUS
-    
+
     # polkitd user - Fedora setup uses UID 114
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/polkit.conf" > /dev/null <<'SYSUSERS_POLKIT'
 # PolicyKit daemon user
 g polkitd 114 -
 u polkitd 114:114 "PolicyKit Daemon Owner" /etc/polkit-1 /bin/false
 SYSUSERS_POLKIT
-    
+
     # tss user/group - Azure Linux tpm2-tss uses UID/GID 59 (matches Gentoo)
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/tss.conf" > /dev/null <<'SYSUSERS_TSS'
 # TCG Software Stack (TPM2) user
@@ -169,7 +169,7 @@ SYSUSERS_TSS
 g sshd - -
 u sshd - "Privilege-separated SSH" /usr/share/empty.sshd
 SYSUSERS_SSHD
-    
+
     # systemd-coredump user - for coredump handling
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/systemd-coredump.conf" > /dev/null <<'SYSUSERS_COREDUMP'
 # systemd coredump user
@@ -241,7 +241,7 @@ SYSUSERS_CORE
 
     # NOTE: /home/core directory creation happens in initramfs via etc-overlay.sh
     # The finish_image() function deletes everything except /boot, /usr, /oem at build time,
-    # so any directories we create here would be removed. The etc-overlay.sh script 
+    # so any directories we create here would be removed. The etc-overlay.sh script
     # (part of the 99etc-overlay dracut module) creates /home/core with proper permissions
     # BEFORE ignition-files.service runs, which is when ignition writes SSH keys.
 
@@ -264,7 +264,7 @@ finish_image_cleanup_issue_rpm() {
     # Azure Linux packages install /etc/issue and tmpfiles.d rules, but we want issuegen.conf
     # to be the sole source for /etc/issue → ../run/issue symlink creation at boot.
     info "RPM mode: Cleaning up /etc/issue conflicts (issuegen.conf will manage /etc/issue at boot)"
-    
+
     # Remove physical files
     sudo rm -f "${root_fs_dir}/etc/issue" "${root_fs_dir}/etc/issue.net"
     sudo rm -f "${root_fs_dir}/usr/lib/issue" "${root_fs_dir}/usr/lib/issue.net"
@@ -595,6 +595,15 @@ EOF
     info "RPM mode: Masking nftables.service"
     sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/nftables.service"
 
+    # Mask mdmonitor-oneshot timer and service - mdadm --monitor is only
+    # meaningful for redundant RAID levels (1/4/5/6/10) where arrays can
+    # degrade. azure-vm-utils uses mdadm solely for RAID-0 (NVMe striping),
+    # which has no degraded state to monitor (see man mdadm, "Follow or
+    # Monitor" mode).
+    info "RPM mode: Masking mdmonitor-oneshot (not useful for RAID-0)"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/mdmonitor-oneshot.timer"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/mdmonitor-oneshot.service"
+
     # Remove etcd server and etcdutl binaries - we only need etcdctl from the etcd RPM.
     # The etcd server runs inside a Docker container via etcd-wrapper, not natively.
     if [[ -f "${root_fs_dir}/usr/bin/etcd" ]]; then
@@ -774,7 +783,7 @@ finish_image_backup_etc_rpm() {
 
     # NOTE: flatcar-tmpfiles is created earlier in finish_image_rpm() before dracut runs
     # so it gets included in the initramfs
-  
+
     # IMPORTANT: For first-boot detection with bootengine's /etc overlay:
     # - The rootfs upperdir (/etc) should NOT contain machine-id - it will be deleted with the rest of /etc
     # - The lowerdir (/usr/share/flatcar/etc) must NOT have machine-id either
@@ -802,7 +811,7 @@ json_escape() {
 # This function extracts individual license names and maps them to Portage equivalents
 normalize_rpm_license() {
     local lic="$1"
-    
+
     # Replace SPDX operators with spaces (use word boundaries via spaces)
     # Handle: " AND ", " OR ", " WITH ", " and ", " or ", " with "
     local normalized
@@ -817,7 +826,7 @@ normalize_rpm_license() {
             -e 's/  */ /g' \
             -e 's/^ *//' \
             -e 's/ *$//')
-    
+
     # Map common RPM/SPDX license names to Portage license file names
     local result=""
     for l in $normalized; do
