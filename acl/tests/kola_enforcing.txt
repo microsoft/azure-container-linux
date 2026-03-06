@@ -17,7 +17,6 @@ cl.etcd-member.etcdctlv3
 cl.etcd-member.v2-backup-restore
 cl.filesystem
 cl.ignition.instantiated.enable-unit
-cl.ignition.kargs
 cl.ignition.luks
 cl.ignition.oem.indirect
 cl.ignition.oem.indirect.new
