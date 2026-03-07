@@ -1,7 +1,7 @@
 #!/bin/bash
-# Shared mangle library for doca-ofed RPM-based sysexts (cuda-open, cuda, etc.).
+# Shared mangle library for doca-ofed RPM-based sysexts (nvidia-driver-cuda-open, nvidia-driver-cuda, etc.).
 #
-# Sourced by per-sysext wrapper scripts (e.g. sysext_mangle_cuda-open).
+# Sourced by per-sysext wrapper scripts (e.g. sysext_mangle_nvidia-driver-cuda-open).
 # Provides mangle_doca_ofed_relocate() which handles the common tasks:
 #   - Merging /bin, /sbin, /lib, /lib64 into /usr
 #   - Relocating /etc into /usr (systemd-sysext only merges /usr and /opt)

@@ -68,7 +68,7 @@ ACL_OS_VERSION="4459.2.2"
 ACL_GPU_REPO="maritimusstaging.azurecr.io/acl/nvidia-gpu"
 
 # Mandatory: contains the NVIDIA GPU driver
-oras pull -o /tmp/sysext ${ACL_GPU_REPO}/cuda-open:${ACL_OS_VERSION}
+oras pull -o /tmp/sysext ${ACL_GPU_REPO}/nvidia-driver-cuda-open:${ACL_OS_VERSION}
 
 # Optional: required for GPU container usage
 oras pull -o /tmp/sysext ${ACL_GPU_REPO}/nvidia-container-toolkit:${ACL_OS_VERSION}

@@ -700,7 +700,7 @@ install_uki_oem_addon() {
 # Build GPU sysexts as standalone .raw artifacts (not installed into the image).
 # Reads GPU_SYSEXTS_SPEC from the environment — a space-separated list of
 # "name|portage-style-package[&package]" entries, e.g.:
-#   "cuda-open|nvidia-gpu-drivers/cuda-open nvidia-container-toolkit|nvidia-user-space/nvidia-container-toolkit"
+#   "nvidia-driver-cuda-open|nvidia-gpu-drivers/cuda-open nvidia-container-toolkit|nvidia-user-space/nvidia-container-toolkit"
 # If GPU_SYSEXTS_SPEC is empty the function is a no-op.
 install_gpu_sysexts() {
     if [[ -z "${GPU_SYSEXTS_SPEC:-}" ]]; then
