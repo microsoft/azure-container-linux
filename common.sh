@@ -368,6 +368,11 @@ fi
 # Compatibility alias
 FLATCAR_VERSION_STRING="${FLATCAR_VERSION}"
 
+# Package source mode: PORTAGE (traditional Gentoo) or RPM (Azure Linux).
+# Scripts that need RPM mode should export PACKAGE_SOURCE_MODE=RPM
+# *before* sourcing common.sh.
+PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
+
 # Image version for OS identity (os-release, lsb-release) in RPM builds.
 # This is separate from FLATCAR_VERSION which must track the SDK container.
 # Override via environment: IMAGE_VERSION_ID, IMAGE_BUILD_ID

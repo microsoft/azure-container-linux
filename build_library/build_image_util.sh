@@ -18,7 +18,6 @@ else
 fi
 BUILD_DIR="${FLAGS_output_root}/${BOARD}/${IMAGE_SUBDIR}"
 OUTSIDE_OUTPUT_DIR="../build/images/${BOARD}/${IMAGE_SUBDIR}"
-PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
 
 source "${BUILD_LIBRARY_DIR}/reports_util.sh" || exit 1
 source "${BUILD_LIBRARY_DIR}/sbsign_util.sh" || exit 1

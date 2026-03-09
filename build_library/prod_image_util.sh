@@ -3,8 +3,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
-
 # Lookup the current version of a binary package, downloading it if needed.
 # Usage: get_binary_pkg some-pkg/name
 # Prints: some-pkg/name-1.2.3

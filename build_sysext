@@ -120,7 +120,6 @@ source "${BUILD_LIBRARY_DIR}/toolchain_util.sh" || exit 1
 source "${BUILD_LIBRARY_DIR}/board_options.sh" || exit 1
 source "${BUILD_LIBRARY_DIR}/reports_util.sh" || exit 1
 
-PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
   source "${BUILD_LIBRARY_DIR}/rpm/build_sysext"
 fi

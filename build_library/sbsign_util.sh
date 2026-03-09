@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
 if [[ ${COREOS_OFFICIAL:-0} -ne 1 ]]; then
     SBSIGN_KEY="/usr/share/sb_keys/shim.key"
     SBSIGN_CERT="/usr/share/sb_keys/shim.pem"

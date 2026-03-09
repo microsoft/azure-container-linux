@@ -41,7 +41,6 @@ switch_to_strict_mode
 
 # Our GRUB lives under flatcar/grub so new pygrub versions cannot find grub.cfg
 GRUB_DIR="flatcar/grub/${FLAGS_target}"
-PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
     source "${BUILD_LIBRARY_DIR}/rpm/grub_install.sh" || exit 1
 fi
