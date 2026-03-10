@@ -1,5 +1,4 @@
 source "${BUILD_LIBRARY_DIR}/rpm/package_catalog.sh" || exit 1
-source "${BUILD_LIBRARY_DIR}/rpm/package_source_config.sh" || exit 1
 source "${BUILD_LIBRARY_DIR}/rpm/rpm_install.sh" || exit 1
 source "${BUILD_LIBRARY_DIR}/rpm/dracut_install.sh" || exit 1
 

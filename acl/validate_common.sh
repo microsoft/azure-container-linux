@@ -47,8 +47,6 @@ REUSE_VM=false  # Reuse an already-running VM (read state file)
 VM_STATE_FILE="${SCRIPT_DIR}/.vm-state.env"  # State file for VM reuse between invocations
 VM_IMAGE_PATH=""  # Explicit VM image path (auto-detected if empty)
 
-# Set env vars required for RPM mode
-export PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-RPM}"
 export BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
 
 VM_IP=""
@@ -944,7 +942,6 @@ validate_main() {
         section "Running Kola Tests"
         cleanup_containers "name=flatcar-tests-"
         info "Running kola tests via run_local_tests.sh..."
-        export PACKAGE_SOURCE_MODE=RPM
         if "${SCRIPT_DIR}/run_local_tests.sh"; then
             info "Kola tests completed successfully!"
         else

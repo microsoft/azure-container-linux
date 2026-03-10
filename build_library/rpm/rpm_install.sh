@@ -506,7 +506,7 @@ rpm_install_package_using_portage_name() {
     while IFS= read -r dep; do
         [[ -z "$dep" ]] && continue
 
-        local source=$(get_package_source "$dep")
+        local source=$(get_package_status "$dep")
         case "$source" in
             RPM)
                 local rpm_name=$(get_rpm_package_name "$dep")
