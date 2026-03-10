@@ -1,6 +1,6 @@
 Name:           coreos-init
 Version:        0.0.1
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Init scripts for Flatcar (systemd units, scripts, configs)
 
 License:        BSD-3-Clause
@@ -16,6 +16,7 @@ BuildArch:      noarch
 # tarball matches the ebuild SRC_URI pattern:
 Source0:        https://github.com/flatcar/init/archive/%{commit}/init-%{commit}.tar.gz#/%{name}-%{version}-%{shortcommit}.tar.gz
 Patch0:         0001-flatcar-reset-uki-mode.patch
+Patch1:         0002-systemd-Add-noop-sysupdate-transfer-config.patch
 
 # optional tests, analogous to IUSE=test
 %bcond_without tests
@@ -95,6 +96,11 @@ find %{buildroot} -type f -o -type l \
 %doc README.md
 
 %changelog
+* Tue Mar 10 2026 Nikola Bojanic <nbojanic@microsoft.com> - 0.0.1-3
+- Add patch from Flatcar upstream with noop systemd-sysupdate transfer config to prevent service failure.
+- Change .transfer to .conf, since .transfer is only introduced in systemd 257 (.conf stays supported for compatibility)
+- If we bump to more recent upstream commit, we should keep .conf while systemd on < 257.
+
 * Wed Mar 04 2026 Lanze Liu <lanzeliu@microsoft.com> - 0.0.1-2
 - Patch flatcar-reset to restore firstboot addon in UKI (systemd-boot) mode.
 
