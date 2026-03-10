@@ -90,6 +90,9 @@ VM_GROUP=
 # Contains a list of all generated files
 VM_GENERATED_FILES=()
 
+# Bootloader mode: 'grub' (default) or 'uki' (systemd-boot + UKI)
+BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
+
 ## DEFAULT
 # If set to 0 then a partition skeleton won't be laid out on VM_TMP_IMG
 IMG_DEFAULT_PARTITIONED_IMG=1
@@ -533,6 +536,12 @@ setup_disk_image() {
 install_oem_package() {
     local oem_pkg=$(_get_vm_opt OEM_PACKAGE)
     local oem_use=$(_get_vm_opt OEM_USE)
+
+    # In UKI mode, tell the ebuild to skip installing grub.cfg (OEM cmdline
+    # args are delivered via a UKI addon instead).
+    if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
+        oem_use="${oem_use} uki"
+    fi
     # The "${VM_IMG_TYPE}-oem-image-rootfs" directory name is
     # important - it is used to determine the package target in
     # coreos/base/profile.bashrc
@@ -561,8 +570,15 @@ install_oem_package() {
         --root="${oem_tmp}" --sysroot="${oem_tmp}" \
         --usepkgonly ${getbinpkg} \
         --verbose --jobs=2 "${oem_pkg}"
+
     sudo rsync -a "${oem_tmp}/oem/" "${VM_TMP_ROOT}/oem/"
     sudo rm -rf "${oem_tmp}"
+
+    # In UKI mode, OEM-specific kernel cmdline args are delivered via a
+    # UKI addon (replacing the role of grub.cfg).
+    if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
+        install_uki_oem_addon
+    fi
 }
 
 # Write the OEM sysext file into the OEM partition.
@@ -663,7 +679,7 @@ install_oem_sysext() {
 # Requires: BOOTLOADER_MODE=uki, ukify on PATH, the main UKI already
 # installed on the ESP (by uki_install.sh during build_image).
 install_uki_oem_addon() {
-    if [[ "${BOOTLOADER_MODE:-grub}" != "uki" ]]; then
+    if [[ "${BOOTLOADER_MODE}" != "uki" ]]; then
         return 0
     fi
 
