@@ -16,14 +16,14 @@
 #
 # Prerequisites:
 # - Flatcar OS image and qemu uefi code to be tested in
-#   __build__/images/images/amd64-usr/latest/
+#   __build__/images/images/<arch>-usr/latest/
 # 
 #   This script is intended to be run after building a qemu_uefi image with the SDK container:
 #    ./build_packages
 #    ./build_image
-#    ./image_to_vm.sh --from=../build/images/amd64-usr/latest/ --format=qemu_uefi --image_compression_formats none
+#    ./image_to_vm.sh --from=../build/images/<arch>-usr/latest/ --format=qemu_uefi --image_compression_formats none
 #   Then, EXIT the SDK container (or run this on a different terminal):
-#   ./run_local_tests.sh
+#   ./run_local_tests.sh [amd64|arm64]
 #
 # Optional prerequisites:
 # - Custom Mantle container image / version in sdk_container/.repo/manifests/mantle-container.
@@ -90,7 +90,7 @@ function run_local_tests() (
   # NOTE that update tests get special handling because qemu_update is a separate "platform".
   if [[ $# -eq 0 ]] ; then
     tests="$(docker run "${mantle_container}" \
-              kola list --platform qemu \
+              kola list --platform qemu --board="${arch}-usr" \
               | awk '!/^(devcontainer|Test)/ {if ($1 != "") print gensub(/^([^.]+).*/,"\\1",1,$1) ".*"}' | uniq)"
     update_tests=true
   else

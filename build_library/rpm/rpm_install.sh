@@ -237,6 +237,10 @@ rpm_install_package() {
         -y
     )
 
+    if [[ ${BOARD:-} == "arm64-usr" ]]; then
+        dnf_args+=(--forcearch="aarch64")
+    fi
+
     if [[ "${nogpgcheck}" == "true" ]]; then
         dnf_args+=(--nogpgcheck)
     fi
@@ -326,7 +330,19 @@ rpm_install_local_packages() {
     fi
 
     info "Installing ${#rpm_files[@]} local RPM(s) to ${root_fs_dir} with GPG signature verification"
-    sudo rpm --root="${root_fs_dir}" --install --verbose --replacepkgs --nodeps "${rpm_files[@]}"
+    local rpm_args=(
+        --root="${root_fs_dir}"
+        --install
+        --verbose
+        --replacepkgs
+        --nodeps
+    )
+
+    if [[ ${BOARD:-} == "arm64-usr" ]]; then
+        rpm_args+=(--ignorearch)
+    fi
+
+    sudo rpm "${rpm_args[@]}" "${rpm_files[@]}"
 
     if [[ $? -ne 0 ]]; then
         error "Failed to install local RPM packages to ${root_fs_dir}"
@@ -612,12 +628,18 @@ rpm_download_packages() {
     # 2. They'll be verified during rpm_install_package (which uses --installroot with GPG check)
     # 3. Using --installroot here causes dnf5 to write state files inside target FS (permission issues)
     # Note: Not using --resolve to only download requested packages (dependencies installed separately)
-    dnf5 download \
-        --setopt=reposdir="${repo_dir}" \
-        --releasever=3.0 \
-        --destdir="${dest_dir}" \
-        --nogpgcheck \
-        "${packages[@]}"
+    local download_args=(
+        --setopt=reposdir="${repo_dir}"
+        --releasever=3.0
+        --destdir="${dest_dir}"
+        --nogpgcheck
+    )
+
+    if [[ ${BOARD:-} == "arm64-usr" ]]; then
+        download_args+=(--forcearch="aarch64")
+    fi
+
+    dnf5 download "${download_args[@]}" "${packages[@]}"
 }
 
 # Remove the bootstrap repo after azurelinux-repos has been installed,

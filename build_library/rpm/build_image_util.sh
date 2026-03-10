@@ -741,9 +741,14 @@ LABEL=OEM        /oem           auto    nodev           0       2
 FSTAB_EOF
     sudo chmod 644 "${root_fs_dir}/etc/fstab"
 
-    # Enable serial-getty on ttyS0 (autologin is controlled by generator based on cmdline)
+    # Enable serial-getty (autologin is controlled by generator based on cmdline)
+    # arm64 uses ttyAMA0 (PL011 UART), x86_64 uses ttyS0 (8250 UART)
+    local serial_tty="ttyS0"
+    if [[ "${BOARD}" == "arm64-usr" ]]; then
+        serial_tty="ttyAMA0"
+    fi
     sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants"
-    sudo ln -sf ../serial-getty@.service "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
+    sudo ln -sf ../serial-getty@.service "${root_fs_dir}/usr/lib/systemd/system/getty.target.wants/serial-getty@${serial_tty}.service"
 
     # Remove ImportCredential= from getty services (credentials directory doesn't exist)
     info "RPM mode: Removing ImportCredential from getty services"

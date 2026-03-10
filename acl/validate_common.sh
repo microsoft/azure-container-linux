@@ -330,11 +330,12 @@ run_scripts_via_console() {
 
 start_vm() {
     local vm_image_path="$1"
+    local board="$2"
     remove_old_vm
-    section "Starting a ${VM_TYPE} VM '${VM_NAME}'"
+    section "Starting a ${VM_TYPE} VM '${VM_NAME}' Board: '${BOARD}'"
     case "$VM_TYPE" in
         qemu)
-            start_vm_qemu "$vm_image_path"
+            start_vm_qemu "$vm_image_path" "$board"
             ;;
         azure)
             start_vm_azure "$vm_image_path"
@@ -808,7 +809,7 @@ validate_main() {
                 exit 1
             fi
 
-            start_vm "${vm_image_path}"
+            start_vm "${vm_image_path}" "${BOARD}"
 
             if [[ "$KEEP_VM" == "true" ]]; then
                 write_vm_state
@@ -842,6 +843,11 @@ validate_main() {
                 info "Using SSH for script execution"
 
                 if [[ "$VM_TYPE" == "qemu" ]]; then
+                    info "Waiting for QEMU VM to boot..."
+                    if ! wait_for_vm_boot_qemu "${VM_NAME}" "$VM_BOOT_TIMEOUT"; then
+                        error "VM failed to boot within timeout"
+                        exit 1
+                    fi
                     if ! wait_for_vm_ip_qemu "${VM_NAME}" 60; then
                         warn "You can still connect manually: virsh console ${VM_NAME}"
                         exit 1
@@ -941,8 +947,9 @@ validate_main() {
         fi
         section "Running Kola Tests"
         cleanup_containers "name=flatcar-tests-"
-        info "Running kola tests via run_local_tests.sh..."
-        if "${SCRIPT_DIR}/run_local_tests.sh"; then
+        local kola_arch="${BOARD%%-*}"  # arm64-usr → arm64, amd64-usr → amd64
+        info "Running kola tests via run_local_tests.sh (arch=${kola_arch})..."
+        if "${SCRIPT_DIR}/run_local_tests.sh" "${kola_arch}"; then
             info "Kola tests completed successfully!"
         else
             error "Kola tests failed"

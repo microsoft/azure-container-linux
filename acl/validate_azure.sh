@@ -22,11 +22,20 @@ AZ_SUB_ID="${AZ_SUB_ID:-b99b2264-54e6-408e-812b-2ec280c0ce7a}"
 AZ_REGION="${AZ_REGION:-eastus2}"
 AZ_STORAGE_RG="${AZ_STORAGE_RG:-acl-test-storage-rg}"
 AZ_STORAGE_ACC="${AZ_STORAGE_ACC:-aclteststorageacc}"
-AZ_VM_SIZE="${AZ_VM_SIZE:-Standard_D2s_v5}"
+BOARD="${BOARD:-amd64-usr}"
+case "${BOARD}" in
+    arm64-usr)
+        AZ_VM_SIZE="${AZ_VM_SIZE:-Standard_D2ps_v6}"
+        AZ_VM_IMAGE_DEF="${AZ_VM_IMAGE_DEF:-$(whoami)-acl-test-vm-img-arm64}"
+        ;;
+    *)
+        AZ_VM_SIZE="${AZ_VM_SIZE:-Standard_D2s_v5}"
+        AZ_VM_IMAGE_DEF="${AZ_VM_IMAGE_DEF:-$(whoami)-acl-test-vm-img}"
+        ;;
+esac
 AZ_STORAGE_CONTAINER="${AZ_STORAGE_CONTAINER:-acl-test-vm-img}"
 AZ_GALLERY_RG="${AZ_GALLERY_RG:-acl-test-gallery-rg}"
 AZ_ACG="${AZ_ACG:-acltestacg}"
-AZ_VM_IMAGE_DEF="${AZ_VM_IMAGE_DEF:-$(whoami)-acl-test-vm-img}"
 NO_CLEANUP="${NO_CLEANUP:-false}"
 BUILD_ID="${BUILD_ID:-}"
 RESOURCE_TAGS=("createdBy=$(whoami)")
@@ -141,17 +150,25 @@ check_azure_infra() {
     image_def_exists=$(az sig image-definition list -r "$AZ_ACG" -g "$AZ_GALLERY_RG" --query "[?name=='$AZ_VM_IMAGE_DEF' && identifier.publisher=='$publisher' && identifier.offer=='$offer' && identifier.sku=='$sku'] | length(@)" -o tsv)
     if [[ "$image_def_exists" -eq 0 ]]; then
         info "Creating image definition: $AZ_VM_IMAGE_DEF"
-        az sig image-definition create \
-            --gallery-image-definition "$AZ_VM_IMAGE_DEF" \
-            --publisher "$publisher" \
-            --offer "$offer" \
-            --sku "$sku" \
-            --gallery-name "$AZ_ACG" \
-            --resource-group "$AZ_GALLERY_RG" \
-            --location "$AZ_REGION" \
-            --os-type Linux \
-            --features SecurityType=TrustedLaunchSupported \
+        local create_sig_image_def_args=(
+            --gallery-image-definition "$AZ_VM_IMAGE_DEF"
+            --publisher "$publisher"
+            --offer "$offer"
+            --sku "$sku"
+            --gallery-name "$AZ_ACG"
+            --resource-group "$AZ_GALLERY_RG"
+            --location "$AZ_REGION"
+            --os-type Linux
+            --features SecurityType=TrustedLaunchSupported
             --hyper-v-generation V2
+        )
+
+        if [[ $BOARD == "arm64-usr" ]]; then
+            create_sig_image_def_args+=(--architecture Arm64)
+        fi
+
+        az sig image-definition create "${create_sig_image_def_args[@]}"
+
     else
         info "Image definition already exists: $AZ_VM_IMAGE_DEF"
     fi
@@ -333,8 +350,7 @@ get_vm_rg_name() {
 
 start_vm_azure() {
     local vm_image_path="$1"
-
-    section "Starting Azure VM"
+    section "Starting Azure VM for board '${BOARD}'"
 
     local vm_rg_name=$(get_vm_rg_name)
     VM_RG="$vm_rg_name"
@@ -347,6 +363,7 @@ start_vm_azure() {
     info "  VM Name:           ${VM_NAME}"
     info "  Gallery:           ${AZ_ACG}"
     info "  Image Definition:  ${AZ_VM_IMAGE_DEF}"
+    info "  Board:             ${BOARD}"
     echo
 
     info "Setting Azure subscription..."

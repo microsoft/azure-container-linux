@@ -1,4 +1,11 @@
 grub_install_rpm() {
+    # Map EFI target to RPM architecture for package selection
+    local rpm_arch
+    case "${FLAGS_target}" in
+        x86_64-efi) rpm_arch="x86_64" ;;
+        arm64-efi)  rpm_arch="aarch64" ;;
+    esac
+
     case "${FLAGS_target}" in
         x86_64-efi|arm64-efi)
             info "RPM mode: Using Azure Linux pre-built EFI binaries"
@@ -21,12 +28,13 @@ grub_install_rpm() {
             # We only need the grub binaries and modules, not runtime dependencies
             info "RPM mode: Installing grub2 and shim to BOARD_ROOT from local RPMs"
 
-            # Find grub RPMs in local cache (pick highest version of each)
+            # Find grub RPMs in local cache — filter by target architecture
+            # so arm64 builds pick aarch64 RPMs and x86 builds pick x86_64 RPMs.
             grub_rpms=()
             for pkg in grub2 grub2-efi grub2-efi-binary shim; do
-                rpm_file=$(find "${grub_local_cache}" -name "${pkg}-[0-9]*.rpm" | sort -V | tail -1)
+                rpm_file=$(find "${grub_local_cache}" -name "${pkg}-[0-9]*.${rpm_arch}.rpm" | sort -V | tail -1)
                 if [[ -z "${rpm_file}" ]]; then
-                    die "RPM file not found for package: ${pkg} in ${grub_local_cache}"
+                    die "RPM file not found for package: ${pkg} (${rpm_arch}) in ${grub_local_cache}"
                 fi
                 grub_rpms+=("${rpm_file}")
             done
@@ -34,6 +42,7 @@ grub_install_rpm() {
             # Import GPG key and install packages
             rpm_import_gpg_key "${BOARD_ROOT}"
             rpm_install_local_packages "${BOARD_ROOT}" "${grub_rpms[@]}" || die "Failed to install grub packages to BOARD_ROOT"
+
             ;;
         i386-pc)
             # RPM mode: Skip BIOS boot - Azure Linux VMs use UEFI only
@@ -138,6 +147,7 @@ grub_provision_rpm() {
                 cp --no-preserve=mode "${ESP_DIR}/EFI/boot/boot${EFI_ARCH}.efi" \
                     "${FLAGS_copy_shim}"
             fi
+
             ;;
         i386-pc)
             # RPM mode: Skip BIOS boot - Azure Linux VMs use UEFI only

@@ -501,14 +501,14 @@ setup_disk_image() {
     cp --sparse=always "${VM_SRC_IMG}" "${VM_TMP_IMG}"
 
     if [[ $(_get_vm_opt PARTITIONED_IMG) -eq 1 ]]; then
-      "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" \
+      "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" \
           update "${VM_TMP_IMG}"
     fi
 
     assert_image_size "${VM_TMP_IMG}" raw
 
     info "Mounting image to $(relpath "${VM_TMP_ROOT}")"
-    "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" \
+    "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" \
         mount "${VM_TMP_IMG}" "${VM_TMP_ROOT}"
 
     # The only filesystems after this point that may be modified are OEM

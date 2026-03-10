@@ -63,11 +63,11 @@ uki_install_rpm() {
     # Note: systemd-boot package should already be downloaded by finish_image_rpm()
     # No need to call rpm_download_packages again - the package is in the local cache
 
-    # Find systemd-boot RPM in local cache (pick highest version)
+    # Find systemd-boot RPM in local cache — filter by target architecture
     local rpm_file
-    rpm_file=$(find "${uki_local_cache}" -name "systemd-boot-[0-9]*.rpm" | sort -V | tail -1)
+    rpm_file=$(find "${uki_local_cache}" -name "systemd-boot-[0-9]*.${RPM_ARCH}.rpm" | sort -V | tail -1)
     if [[ -z "${rpm_file}" ]]; then
-        die "RPM file not found for package: systemd-boot in ${uki_local_cache}"
+        die "RPM file not found for package: systemd-boot (${RPM_ARCH}) in ${uki_local_cache}"
     fi
 
     # Import GPG key and install package

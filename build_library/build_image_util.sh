@@ -67,7 +67,7 @@ extract_update() {
   local disk_layout="$2"
   local update="${BUILD_DIR}/${image_name%_image.bin}_update.bin"
 
-  "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" \
+  "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" \
     extract "${BUILD_DIR}/${image_name}" "USR-A" "${update}"
 
   # Compress image
@@ -84,7 +84,7 @@ generate_update() {
 
   # Extract the partition if it isn't extracted already.
   [[ -s ${update} ]] ||
-    "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" \
+    "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" \
       extract "${BUILD_DIR}/${image_name}" "USR-A" "${update}"
 
   echo "Generating update payload, signed with a dev key"
@@ -576,12 +576,12 @@ start_image() {
       "${BUILD_DIR}"/configroot/etc/portage/
 
   info "Using image type ${disk_layout}"
-  "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" \
+  "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" \
       format "${disk_img}"
 
   assert_image_size "${disk_img}" raw
 
-  "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" \
+  "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" \
       mount --writable_verity "${disk_img}" "${root_fs_dir}"
   trap "cleanup_mounts '${root_fs_dir}' && delete_prompt" EXIT
 
@@ -875,7 +875,7 @@ EOF
     # Unmount /usr partition
     sudo umount --recursive "${root_fs_dir}/usr" || exit 1
 
-    "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" verity \
+    "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" verity \
         --root_hash="${BUILD_DIR}/${image_name%.bin}_verity.txt" \
         "${BUILD_DIR}/${image_name}"
 
@@ -989,7 +989,7 @@ EOF
   fi
 
   # Mount the final image again, as readonly, to generate some reports.
-  "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" \
+  "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" \
       mount --read_only "${disk_img}" "${root_fs_dir}"
   trap "cleanup_mounts '${root_fs_dir}'" EXIT
 
@@ -1039,7 +1039,7 @@ sbsign_image() {
     *) die "Unknown board ${BOARD@Q}" ;;
   esac
 
-  "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" \
+  "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" \
       mount "${disk_img}" "${root_fs_dir}"
   trap "cleanup_mounts '${root_fs_dir}'; cleanup_sbsign_certs" EXIT
 

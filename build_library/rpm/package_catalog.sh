@@ -302,7 +302,7 @@ declare -gA PACKAGE_CATALOG=(
     ["sec-policy/selinux-sssd"]="SKIP"
     ["sec-policy/selinux-unconfined"]="SKIP"
 
-    # Kernel headers and firmware (skip in RPM mode - use Flatcar versions)
+    # Kernel headers and firmware
     ["sys-kernel/linux-headers"]="SKIP"
     ["sys-firmware/intel-microcode"]="microcode_ctl"
     ["sys-kernel/coreos-firmware"]="SKIP"
@@ -671,6 +671,34 @@ declare -gA PACKAGE_CATALOG=(
     ["nvidia-user-space/nvidia-container-toolkit"]="nvidia-container-toolkit"
     ["nvidia-user-space/nvidia-fabric-manager"]="nvidia-fabric-manager"
 )
+
+# Packages that are only available for specific architectures.
+# Entries listed under an arch are SKIPped when building for a *different* arch.
+declare -gA _CATALOG_AMD64_ONLY=(
+    ["nvidia-gpu-drivers/cuda-open"]=1
+    ["nvidia-gpu-drivers/cuda"]=1
+    ["sys-firmware/intel-microcode"]=1
+)
+
+# Apply architecture filter: mark arch-incompatible packages as SKIP.
+# Called automatically when BOARD is set; callers may also invoke it explicitly.
+catalog_filter_by_arch() {
+    local board="${1:-${BOARD:-amd64-usr}}"
+    case "${board}" in
+        arm64-usr)
+            for pkg in "${!_CATALOG_AMD64_ONLY[@]}"; do
+                if [[ -v "PACKAGE_CATALOG[$pkg]" ]]; then
+                    PACKAGE_CATALOG["$pkg"]="SKIP"
+                fi
+            done
+            ;;
+    esac
+}
+
+# Auto-filter when sourced if BOARD is already set.
+if [[ -n "${BOARD:-}" ]]; then
+    catalog_filter_by_arch "${BOARD}"
+fi
 
 # Get RPM package name from Portage package name
 get_rpm_package_name() {

@@ -99,6 +99,7 @@ BOARD="${BOARD:-amd64-usr}"
 GROUP="${GROUP:-production}"
 BUILD_SDK_CONTAINER=false
 BUILD_RPMS=false
+BUILD_RPMS_QEMU=false
 USE_UNOFFICIAL_KERNEL=false
 UNOFFICIAL_KERNEL_BUILD_ID="1037837"
 CLEAN_DIRS=false
@@ -251,6 +252,10 @@ parse_args() {
                 ;;
             --build-rpms)
                 BUILD_RPMS=true
+                shift
+                ;;
+            --build-rpms-qemu)
+                BUILD_RPMS_QEMU=true
                 shift
                 ;;
 
@@ -589,8 +594,12 @@ download_unofficial_kernel() {
     local build_id="${UNOFFICIAL_KERNEL_BUILD_ID}"
     local org="https://dev.azure.com/mariner-org"
     local project="mariner"
-    # Artifact name for AMD64 kernel build
-    local artifact_name="drop_buddy_build_amd64_build_amd64"
+    # Artifact name depends on target architecture
+    local artifact_arch="amd64"
+    if [[ "${BOARD}" == "arm64-usr" ]]; then
+        artifact_arch="arm64"
+    fi
+    local artifact_name="drop_buddy_build_${artifact_arch}_build_${artifact_arch}"
     local temp_dir="${STAGING_DIR}/.unofficial-kernel-temp"
 
     info "Build ID: ${build_id}"
@@ -1037,13 +1046,26 @@ build_rpms() {
         exit 1
     fi
 
+    # Default package list — build.sh receives this as positional args
+    local -a package_list=(
+        "azure-vm-utils"
+        "bootengine"
+        "coreos-cloudinit"
+        "coreos-init"
+        "ignition"
+        "rust-afterburn"
+        "sdnotify-proxy"
+        "update-ssh-keys"
+    )
+
     info "Running RPM build script..."
     info "  Build script: $build_script"
+    info "  Package list: ${package_list[*]}"
     info "  Output dir:   ${STAGING_DIR}"
     echo
 
     # Run the build script
-    if ! "$build_script"; then
+    if ! "$build_script" "${package_list[@]}"; then
         error "RPM build failed"
         exit 1
     fi
@@ -1054,6 +1076,36 @@ build_rpms() {
     info "  Total RPMs in staging: ${rpm_count}"
 
     # Update repository metadata with new RPMs
+    create_repo
+}
+
+# Builds only the qemu RPM package.
+# On Azure Linux 3, qemu ships without --enable-user-static.
+# For arm64-usr cross-builds we need to build it ourselves.
+build_rpms_qemu() {
+    section "Building QEMU RPM Package"
+
+    local build_script="${SCRIPT_DIR}/acl/build.sh"
+
+    if [[ ! -f "$build_script" ]]; then
+        error "RPM build script not found: $build_script"
+        exit 1
+    fi
+
+    info "Running RPM build script for qemu..."
+    info "  Build script: $build_script"
+    info "  Output dir:   ${STAGING_DIR}"
+    echo
+
+    if ! "$build_script" "qemu"; then
+        error "QEMU RPM build failed"
+        exit 1
+    fi
+
+    local rpm_count=$(ls -1 "${STAGING_DIR}"/*.rpm 2>/dev/null | wc -l)
+    info "✓ QEMU RPM build complete"
+    info "  Total RPMs in staging: ${rpm_count}"
+
     create_repo
 }
 
@@ -1173,7 +1225,17 @@ build_vm_image() {
 
     # Export GPU sysext spec so run_sdk_container passes it into the container
     # where image_to_vm.sh → install_gpu_sysexts() picks it up.
-    export GPU_SYSEXTS_SPEC="${GPU_SYSEXTS[*]}"
+    # Filter out amd64-only sysexts (NVIDIA/CUDA) when building for arm64.
+    local -a gpu_sysexts_filtered=()
+    for _entry in "${GPU_SYSEXTS[@]}"; do
+        local _sysext_name="${_entry%%|*}"
+        if [[ "${BOARD}" == "arm64-usr" && ( "${_sysext_name}" == "nvidia-driver-cuda-open" || "${_sysext_name}" == "nvidia-driver-cuda" ) ]]; then
+            info "Skipping GPU sysext ${_sysext_name} (not available for arm64)"
+            continue
+        fi
+        gpu_sysexts_filtered+=("${_entry}")
+    done
+    export GPU_SYSEXTS_SPEC="${gpu_sysexts_filtered[*]}"
     info "GPU sysexts will be built during VM conversion: ${GPU_SYSEXTS_SPEC}"
 
     info "Building ${vm_type} VM image using SDK container..."
@@ -1386,8 +1448,37 @@ main() {
         build_rpms
     fi
 
+    # Step 2b: Build QEMU RPM package (if requested)
+    if [[ "$BUILD_RPMS_QEMU" == "true" ]]; then
+        build_rpms_qemu
+    fi
+
     # Step 3: Build image (if requested)
     if [[ "$BUILD_IMAGE" == "true" ]]; then
+        # Install qemu-user-static-aarch64 for arm64 cross-builds.
+        # The QEMU spec produces many sub-packages; we only need the aarch64
+        # static binary.  In the pipeline the RPMs were pre-built by
+        # build_rpms_qemu and restored into STAGING_DIR.  Install all QEMU
+        # RPMs from there so tdnf can resolve inter-package dependencies
+        # locally.
+        if [[ "$BOARD" == "arm64-usr" ]] && is_azure_linux_3 \
+                && ! command -v qemu-aarch64-static &>/dev/null; then
+            info "Installing qemu-user-static-aarch64 for arm64 cross-build..."
+            local -a qemu_rpms
+            mapfile -t qemu_rpms < <(find "${STAGING_DIR}" -maxdepth 1 -name 'qemu*.rpm' 2>/dev/null)
+            if [[ ${#qemu_rpms[@]} -gt 0 ]]; then
+                info "  Found ${#qemu_rpms[@]} QEMU RPMs in staging"
+                sudo tdnf install -y "${qemu_rpms[@]}" || {
+                    error "Failed to install QEMU RPMs from staging"
+                    exit 1
+                }
+            else
+                error "No QEMU RPMs found in ${STAGING_DIR}."
+                error "Run --build-rpms-qemu first, or ensure the pipeline restores the QEMU artifact."
+                exit 1
+            fi
+            info "✓ qemu-aarch64-static installed successfully"
+        fi
         # Reset cached image version so common.sh generates fresh values
         if [[ "$FORCE_REBUILD" == "true" ]]; then
             rm -f "${SCRIPT_DIR}/__build__/image-version.env"
