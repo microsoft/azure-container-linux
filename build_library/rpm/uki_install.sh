@@ -30,9 +30,11 @@ switch_to_strict_mode
 case "${FLAGS_target}" in
     x86_64-efi)
         EFI_ARCH="x64"
+        RPM_ARCH="x86_64"
         ;;
     arm64-efi)
         EFI_ARCH="aa64"
+        RPM_ARCH="aarch64"
         ;;
     i386-pc|x86_64-xen)
         # UKI is UEFI-only — nothing to do for legacy targets

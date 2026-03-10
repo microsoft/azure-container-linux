@@ -90,9 +90,6 @@ VM_GROUP=
 # Contains a list of all generated files
 VM_GENERATED_FILES=()
 
-# Bootloader mode: 'grub' (default) or 'uki' (systemd-boot + UKI)
-BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
-
 ## DEFAULT
 # If set to 0 then a partition skeleton won't be laid out on VM_TMP_IMG
 IMG_DEFAULT_PARTITIONED_IMG=1
@@ -570,7 +567,6 @@ install_oem_package() {
         --root="${oem_tmp}" --sysroot="${oem_tmp}" \
         --usepkgonly ${getbinpkg} \
         --verbose --jobs=2 "${oem_pkg}"
-
     sudo rsync -a "${oem_tmp}/oem/" "${VM_TMP_ROOT}/oem/"
     sudo rm -rf "${oem_tmp}"
 

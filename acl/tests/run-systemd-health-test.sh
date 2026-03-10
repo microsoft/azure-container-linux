@@ -21,28 +21,18 @@ KNOWN_FAILURES=()
 # these services are silently skipped.
 # EFI_LOADER_VARIABLE (systemd) namespace
 STUB_EFI_VAR=/sys/firmware/efi/efivars/StubPcrKernelImage-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
-# EFI_GLOBAL_VARIABLE (UEFI spec) namespace
-SB_EFI_VAR=/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c
 
-if [ -f "$STUB_EFI_VAR" ]; then
-    sb_enabled=false
-    if [ -f "$SB_EFI_VAR" ]; then
-        # Last byte: 0x01 = enabled, 0x00 = disabled
-        sb_byte=$(od -An -t u1 -j4 -N1 "$SB_EFI_VAR" | tr -d ' ')
-        [ "$sb_byte" = "1" ] && sb_enabled=true
-    fi
-    if ! $sb_enabled; then
-        echo "Detected UKI boot without Secure Boot — excluding pcrlock services from checks"
-        KNOWN_FAILURES=(
-            "systemd-pcrlock-firmware-code.service"
-            "systemd-pcrlock-firmware-config.service"
-            "systemd-pcrlock-secureboot-policy.service"
-            "systemd-pcrlock-secureboot-authority.service"
-            "systemd-pcrlock-file-system.service"
-            "systemd-pcrlock-machine-id.service"
-            "systemd-pcrlock-make-policy.service"
-        )
-    fi
+if [ -f "$STUB_EFI_VAR" ] && ! mokutil --sb 2>/dev/null | grep -q "SecureBoot enabled"; then
+    echo "Detected UKI boot without Secure Boot — excluding pcrlock services from checks"
+    KNOWN_FAILURES=(
+        "systemd-pcrlock-firmware-code.service"
+        "systemd-pcrlock-firmware-config.service"
+        "systemd-pcrlock-secureboot-policy.service"
+        "systemd-pcrlock-secureboot-authority.service"
+        "systemd-pcrlock-file-system.service"
+        "systemd-pcrlock-machine-id.service"
+        "systemd-pcrlock-make-policy.service"
+    )
 fi
 
 # Check if systemd is running

@@ -947,7 +947,7 @@ EOF
     #   "grub" (default) – GRUB + shim (upstream path)
     #   "uki"            – systemd-boot + Unified Kernel Image
     # Portage builds always use GRUB.
-    local bootloader_mode="${BOOTLOADER_MODE:-grub}"
+    local bootloader_mode="${BOOTLOADER_MODE}"
 
     if [[ "${PACKAGE_SOURCE_MODE}" != "RPM" || "${bootloader_mode}" == "grub" ]]; then
       local grub_args=("${bootloader_args[@]}")
