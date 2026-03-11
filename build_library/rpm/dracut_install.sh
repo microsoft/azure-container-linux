@@ -336,15 +336,6 @@ EOF
 JobRunningTimeoutSec=infinity
 EOF
 
-    # Drop-in for systemd-veritysetup@usr.service - wait for udev settle
-    info "RPM mode: Creating drop-in for systemd-veritysetup@usr.service (wait for udev)"
-    sudo mkdir -p "${systemd_dropin_dir}/systemd-veritysetup@usr.service.d"
-    cat <<'EOF' | sudo tee "${systemd_dropin_dir}/systemd-veritysetup@usr.service.d/wait-for-udev.conf" > /dev/null
-[Unit]
-# Wait for udev to finish device enumeration before attempting verity setup
-After=systemd-udev-settle.service
-Wants=systemd-udev-settle.service
-EOF
 }
 
 # Generate initramfs using dracut inside the root filesystem chroot.
