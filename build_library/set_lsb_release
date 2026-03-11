@@ -42,7 +42,7 @@ elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
   OS_NAME="Microsoft Azure Container Linux"
   OS_CODENAME="AzureContainerLinux"
   OS_ID="azurecontainerlinux"
-  OS_ID_LIKE="azurelinux"
+  OS_ID_LIKE="azurelinux flatcar"
   OS_PRETTY_NAME="$OS_NAME $IMAGE_VERSION"
   ANSI_COLOR="1;34"
   HOME_URL="https://aka.ms/azurelinux"
@@ -80,7 +80,7 @@ sudo ln -sf "../usr/share/flatcar/lsb-release" "${ROOT_FS_DIR}/etc/lsb-release"
   sudo_clobber "${ROOT_FS_DIR}/usr/lib/os-release" <<EOF
 NAME="$OS_NAME"
 ID=$OS_ID
-ID_LIKE=$OS_ID_LIKE
+ID_LIKE="$OS_ID_LIKE"
 VERSION=$_OS_VERSION
 VERSION_ID=$_OS_VERSION_ID
 BUILD_ID=$_OS_BUILD_ID
