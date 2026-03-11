@@ -603,6 +603,23 @@ EOF
     sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/mdmonitor-oneshot.timer"
     sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/mdmonitor-oneshot.service"
 
+    # Mask systemd-pcrlock services. Gated by ConditionSecurity=measured-uki,
+    # UKI boots only, skipped in GRUB mode. The emulated TPM2 devices used in
+    # our environments (QEMU/swtpm, Azure vTPM) do not produce event logs that
+    # match actual PCR state, which causes these services to fail and puts the
+    # system into a degraded state.
+    info "RPM mode: Masking systemd-pcrlock services (no pcrlock policy enrollment)"
+    for pcrlock_unit in \
+        systemd-pcrlock-firmware-code.service \
+        systemd-pcrlock-firmware-config.service \
+        systemd-pcrlock-secureboot-policy.service \
+        systemd-pcrlock-secureboot-authority.service \
+        systemd-pcrlock-file-system.service \
+        systemd-pcrlock-machine-id.service \
+        systemd-pcrlock-make-policy.service; do
+        sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/${pcrlock_unit}"
+    done
+
     # Remove etcd server and etcdutl binaries - we only need etcdctl from the etcd RPM.
     # The etcd server runs inside a Docker container via etcd-wrapper, not natively.
     if [[ -f "${root_fs_dir}/usr/bin/etcd" ]]; then
