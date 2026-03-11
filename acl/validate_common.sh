@@ -781,6 +781,7 @@ parse_validate_args() {
 
 validate_main() {
     parse_validate_args "$@"
+    resolve_azure_defaults
 
     section "Azure Container Linux Image Validator"
 

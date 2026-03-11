@@ -151,14 +151,6 @@ export IMAGE_VERSION="${IMAGE_VERSION:-}"
 export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 
-# Var-s for Azure VM testing (forwarded to validate_rpm_image.sh):
-AZ_SUB_ID="${AZ_SUB_ID:-b99b2264-54e6-408e-812b-2ec280c0ce7a}"
-AZ_REGION="${AZ_REGION:-eastus2}"
-AZ_STORAGE_ACC="${AZ_STORAGE_ACC:-aclteststorageacc}"
-AZ_VM_SIZE="${AZ_VM_SIZE:-Standard_D2s_v5}"
-AZ_ACG="${AZ_ACG:-acltestacg}"
-NO_CLEANUP="${NO_CLEANUP:-false}"
-
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
 
@@ -1513,11 +1505,11 @@ main() {
         validate_args+=("--ssh-timeout=${VM_SSH_TIMEOUT}")
         validate_args+=("--boot-timeout=${VM_BOOT_TIMEOUT}")
         validate_args+=("--console-user=${VM_CONSOLE_USER}")
-        validate_args+=("--az-sub-id=${AZ_SUB_ID}")
-        validate_args+=("--az-region=${AZ_REGION}")
-        validate_args+=("--az-storage-account=${AZ_STORAGE_ACC}")
-        validate_args+=("--acg-gallery-name=${AZ_ACG}")
-        validate_args+=("--az-vm-size=${AZ_VM_SIZE}")
+        [[ -n "${AZ_SUB_ID:-}" ]] && validate_args+=("--az-sub-id=${AZ_SUB_ID}")
+        [[ -n "${AZ_REGION:-}" ]] && validate_args+=("--az-region=${AZ_REGION}")
+        [[ -n "${AZ_STORAGE_ACC:-}" ]] && validate_args+=("--az-storage-account=${AZ_STORAGE_ACC}")
+        [[ -n "${AZ_ACG:-}" ]] && validate_args+=("--acg-gallery-name=${AZ_ACG}")
+        [[ -n "${AZ_VM_SIZE:-}" ]] && validate_args+=("--az-vm-size=${AZ_VM_SIZE}")
         [[ -n "$BUILD_ID" ]]                  && validate_args+=("--build-id=${BUILD_ID}")
 
         [[ -n "$VM_SSH_KEY" ]]              && validate_args+=("--ssh-key=${VM_SSH_KEY}")
@@ -1529,7 +1521,7 @@ main() {
         [[ "$START_VM" == "true" ]]             && validate_args+=("--start-vm")
         [[ "$KEEP_VM" == "true" ]]              && validate_args+=("--keep-vm")
         [[ "$REUSE_VM" == "true" ]]             && validate_args+=("--reuse-vm")
-        [[ "$NO_CLEANUP" == "true" ]]           && validate_args+=("--no-cleanup")
+        [[ -n "${NO_CLEANUP:-}" ]] && [[ "$NO_CLEANUP" == "true" ]] && validate_args+=("--no-cleanup")
         [[ "$RUN_KOLA_TESTS" == "true" ]]       && validate_args+=("--run-kola-tests")
         [[ "$USE_SERIAL_CONSOLE" == "true" ]]   && validate_args+=("--use-serial")
         [[ "$USE_SERIAL_CONSOLE" == "false" ]]  && validate_args+=("--use-ssh")

@@ -22,17 +22,6 @@ AZ_SUB_ID="${AZ_SUB_ID:-b99b2264-54e6-408e-812b-2ec280c0ce7a}"
 AZ_REGION="${AZ_REGION:-eastus2}"
 AZ_STORAGE_RG="${AZ_STORAGE_RG:-acl-test-storage-rg}"
 AZ_STORAGE_ACC="${AZ_STORAGE_ACC:-aclteststorageacc}"
-BOARD="${BOARD:-amd64-usr}"
-case "${BOARD}" in
-    arm64-usr)
-        AZ_VM_SIZE="${AZ_VM_SIZE:-Standard_D2ps_v6}"
-        AZ_VM_IMAGE_DEF="${AZ_VM_IMAGE_DEF:-$(whoami)-acl-test-vm-img-arm64}"
-        ;;
-    *)
-        AZ_VM_SIZE="${AZ_VM_SIZE:-Standard_D2s_v5}"
-        AZ_VM_IMAGE_DEF="${AZ_VM_IMAGE_DEF:-$(whoami)-acl-test-vm-img}"
-        ;;
-esac
 AZ_STORAGE_CONTAINER="${AZ_STORAGE_CONTAINER:-acl-test-vm-img}"
 AZ_GALLERY_RG="${AZ_GALLERY_RG:-acl-test-gallery-rg}"
 AZ_ACG="${AZ_ACG:-acltestacg}"
@@ -41,6 +30,21 @@ BUILD_ID="${BUILD_ID:-}"
 RESOURCE_TAGS=("createdBy=$(whoami)")
 VM_RG_PREFIX="${VM_RG_PREFIX:-$(whoami)-acl-test-vm-rg}"
 VM_RG=""
+
+# Resolve Azure VM size and image definition based on BOARD.
+# Must be called after argument parsing so that --board is applied.
+resolve_azure_defaults() {
+    case "${BOARD:-amd64-usr}" in
+        arm64-usr)
+            AZ_VM_SIZE="${AZ_VM_SIZE:-Standard_D2ps_v6}"
+            AZ_VM_IMAGE_DEF="${AZ_VM_IMAGE_DEF:-$(whoami)-acl-test-vm-img-arm64}"
+            ;;
+        *)
+            AZ_VM_SIZE="${AZ_VM_SIZE:-Standard_D2s_v5}"
+            AZ_VM_IMAGE_DEF="${AZ_VM_IMAGE_DEF:-$(whoami)-acl-test-vm-img}"
+            ;;
+    esac
+}
 
 # ── Azure console ─────────────────────────────────────────────────
 
@@ -364,6 +368,7 @@ start_vm_azure() {
     info "  Gallery:           ${AZ_ACG}"
     info "  Image Definition:  ${AZ_VM_IMAGE_DEF}"
     info "  Board:             ${BOARD}"
+    info "  VM Size:           ${AZ_VM_SIZE}"
     echo
 
     info "Setting Azure subscription..."
