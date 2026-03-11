@@ -668,6 +668,7 @@ declare -gA PACKAGE_CATALOG=(
     ## before we determine the right strategy to build sysexts for ACL for components not supported by Flatcar
     ["nvidia-gpu-drivers/cuda-open"]="cuda-open"
     ["nvidia-gpu-drivers/cuda"]="cuda"
+    ["nvidia-gpu-drivers/vgpu"]="nvidia-vgpu-guest-driver"
     ["nvidia-user-space/nvidia-container-toolkit"]="nvidia-container-toolkit"
     ["nvidia-user-space/nvidia-fabric-manager"]="nvidia-fabric-manager"
 )
