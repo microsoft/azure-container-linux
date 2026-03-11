@@ -709,13 +709,13 @@ install_uki_oem_addon() {
         "${oem_files_dir}"
 }
 
-# Build GPU sysexts as standalone .raw artifacts (not installed into the image).
-# Reads GPU_SYSEXTS_SPEC from the environment — a space-separated list of
+# Build standalone sysexts as .raw artifacts (not installed into the image).
+# Reads STANDALONE_SYSEXTS_SPEC from the environment — a space-separated list of
 # "name|portage-style-package[&package]" entries, e.g.:
 #   "nvidia-driver-cuda-open|nvidia-gpu-drivers/cuda-open nvidia-container-toolkit|nvidia-user-space/nvidia-container-toolkit"
-# If GPU_SYSEXTS_SPEC is empty the function is a no-op.
-install_gpu_sysexts() {
-    if [[ -z "${GPU_SYSEXTS_SPEC:-}" ]]; then
+# If STANDALONE_SYSEXTS_SPEC is empty the function is a no-op.
+install_standalone_sysexts() {
+    if [[ -z "${STANDALONE_SYSEXTS_SPEC:-}" ]]; then
         return 0
     fi
 
@@ -741,10 +741,10 @@ install_gpu_sysexts() {
     fi
 
     local sysext_spec
-    for sysext_spec in ${GPU_SYSEXTS_SPEC}; do
+    for sysext_spec in ${STANDALONE_SYSEXTS_SPEC}; do
         local name="${sysext_spec%%|*}"
         local packages="${sysext_spec#*|}"
-        info "Building GPU sysext: ${name} (${packages//&/, })"
+        info "Building standalone sysext: ${name} (${packages//&/, })"
 
         # Expand multi-package separator & → individual package args
         local -a pkg_args=()
@@ -757,7 +757,7 @@ install_gpu_sysexts() {
             --board="${BOARD}"
             --squashfs_base="${VM_SRC_SYSEXT_IMG}"
             --image_builddir="${built_sysext_dir}"
-            --install_root_basename="${name}-gpu-sysext-rootfs"
+            --install_root_basename="${name}-standalone-sysext-rootfs"
             ${compression_opt}
         )
 
@@ -782,7 +782,7 @@ install_gpu_sysexts() {
 
         # Clean up work directory
         rm -rf "${built_sysext_dir}"
-        info "Built GPU sysext: ${upload_dir}/${name}.raw"
+        info "Built standalone sysext: ${upload_dir}/${name}.raw"
     done
 }
 

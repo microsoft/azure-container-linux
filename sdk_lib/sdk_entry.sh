@@ -89,9 +89,9 @@ fi
 if [[ -n "${SYSEXT_COMPRESSION:-}" ]]; then
     echo "export SYSEXT_COMPRESSION='${SYSEXT_COMPRESSION}'" >> /home/sdk/.bashrc
 fi
-if [[ -n "${GPU_SYSEXTS_SPEC:-}" ]]; then
-    sed -i -e '/export GPU_SYSEXTS_SPEC=/d' /home/sdk/.bashrc 2>/dev/null || true
-    echo "export GPU_SYSEXTS_SPEC='${GPU_SYSEXTS_SPEC}'" >> /home/sdk/.bashrc
+if [[ -n "${STANDALONE_SYSEXTS_SPEC:-}" ]]; then
+    sed -i -e '/export STANDALONE_SYSEXTS_SPEC=/d' /home/sdk/.bashrc 2>/dev/null || true
+    echo "export STANDALONE_SYSEXTS_SPEC='${STANDALONE_SYSEXTS_SPEC}'" >> /home/sdk/.bashrc
 fi
 # Forward ACL version overrides so common.sh picks them up inside the container
 sed -i -e '/export IMAGE_VERSION=/d' -e '/export IMAGE_VERSION_ID=/d' -e '/export IMAGE_BUILD_ID=/d' /home/sdk/.bashrc 2>/dev/null || true

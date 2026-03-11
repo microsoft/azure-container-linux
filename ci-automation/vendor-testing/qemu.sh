@@ -34,6 +34,12 @@ else
     lbunzip2 "${QEMU_IMAGE_NAME}.bz2"
 fi
 
+# In ACL/RPM mode Docker is a standalone sysext; require it to be present.
+if [ -n "${QEMU_DOCKER_SYSEXT:-}" ] && [ ! -f "${QEMU_DOCKER_SYSEXT}" ] ; then
+    echo "ERROR: ${QEMU_DOCKER_SYSEXT} not found. Ensure it is available before running tests." >&2
+    exit 1
+fi
+
 firmware="${QEMU_FIRMWARE}"
 if [ "${CIA_TESTSCRIPT}" = "qemu_uefi.sh" ] ; then
     firmware="${QEMU_UEFI_FIRMWARE}"
@@ -83,6 +89,7 @@ kola run \
     --platform=qemu \
     --qemu-firmware="${firmware}" \
     --qemu-image="${QEMU_IMAGE_NAME}" \
+    ${QEMU_DOCKER_SYSEXT:+--docker-sysext="${QEMU_DOCKER_SYSEXT}"} \
     --tapfile="${CIA_TAPFILE}" \
     "${ovmf_vars:+--qemu-ovmf-vars=${ovmf_vars}}" \
     ${QEMU_KOLA_SKIP_MANGLE:+--qemu-skip-mangle} \

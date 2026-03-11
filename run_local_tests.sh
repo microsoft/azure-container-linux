@@ -50,8 +50,9 @@ function set_vars() {
 
   # Determine image name prefix based on PACKAGE_SOURCE_MODE
   # RPM mode uses "acl_production", PORTAGE mode uses "flatcar_production"
+  PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
   local img_prefix="flatcar_production"
-  if [[ "${PACKAGE_SOURCE_MODE:-PORTAGE}" == "RPM" ]]; then
+  if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
     img_prefix="acl_production"
   fi
 
@@ -59,6 +60,7 @@ function set_vars() {
   # The local directory ("pwd") will be mounted to /work/ in the container.
   cat > sdk_container/.env <<EOF
 export QEMU_IMAGE_NAME=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_image.bin
+$([[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]] && echo "export QEMU_DOCKER_SYSEXT=/work/__build__/images/images/${arch@Q}-usr/latest/docker-flatcar.raw")
 export QEMU_UEFI_FIRMWARE=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_efi_code.qcow2
 export QEMU_UEFI_OVMF_VARS=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_efi_vars.qcow2
 export QEMU_UPDATE_PAYLOAD=/work/__build__/images/images/${arch@Q}-usr/latest/flatcar_test_update.gz

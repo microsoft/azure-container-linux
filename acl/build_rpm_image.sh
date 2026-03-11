@@ -130,9 +130,9 @@ ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version reso
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
 
-# GPU sysext definitions — maintained in a separate config file for easy
-# extension.  See acl/gpu_sysexts.conf for format docs and how-to-add.
-source "${SCRIPT_DIR}/acl/gpu_sysexts.conf"
+# Standalone sysext definitions — maintained in a separate config file for easy
+# extension.  See acl/standalone_sysexts.conf for format docs and how-to-add.
+source "${SCRIPT_DIR}/acl/standalone_sysexts.conf"
 HYDRATE=false  # Hydrate local environment from CI pipeline build
 HYDRATE_BUILD_ID=""  # Specific build ID for hydrate (empty = latest)
 
@@ -1126,6 +1126,8 @@ build_image() {
     info "Using ${rpm_count} pre-downloaded RPM packages"
 
     # Build arguments for build_image
+    # Docker is built as a standalone sysext (not baked into the rootfs), so
+    # override --base_sysexts to include only containerd.
     local build_args=(
         "--image_compression_formats=none"
         "--nogenerate_update"
@@ -1133,6 +1135,7 @@ build_image() {
         "--group=${GROUP}"
         "--disk_layout=${DISK_LAYOUT}"
         "--image_name=${IMG_NAME}_image.bin"
+        "--base_sysexts=containerd-flatcar|app-containers/containerd"
     )
 
     if [[ "$FORCE_REBUILD" == "true" ]]; then
@@ -1223,20 +1226,20 @@ build_vm_image() {
         "--image_name=${IMG_NAME}_image.bin"
     )
 
-    # Export GPU sysext spec so run_sdk_container passes it into the container
-    # where image_to_vm.sh → install_gpu_sysexts() picks it up.
+    # Export standalone sysext spec so run_sdk_container passes it into the
+    # container where image_to_vm.sh → install_standalone_sysexts() picks it up.
     # Filter out amd64-only sysexts (NVIDIA/CUDA) when building for arm64.
-    local -a gpu_sysexts_filtered=()
-    for _entry in "${GPU_SYSEXTS[@]}"; do
+    local -a standalone_sysexts_filtered=()
+    for _entry in "${STANDALONE_SYSEXTS[@]}"; do
         local _sysext_name="${_entry%%|*}"
         if [[ "${BOARD}" == "arm64-usr" && ( "${_sysext_name}" == "nvidia-driver-cuda-open" || "${_sysext_name}" == "nvidia-driver-cuda" ) ]]; then
-            info "Skipping GPU sysext ${_sysext_name} (not available for arm64)"
+            info "Skipping standalone sysext ${_sysext_name} (not available for arm64)"
             continue
         fi
-        gpu_sysexts_filtered+=("${_entry}")
+        standalone_sysexts_filtered+=("${_entry}")
     done
-    export GPU_SYSEXTS_SPEC="${gpu_sysexts_filtered[*]}"
-    info "GPU sysexts will be built during VM conversion: ${GPU_SYSEXTS_SPEC}"
+    export STANDALONE_SYSEXTS_SPEC="${standalone_sysexts_filtered[*]}"
+    info "Standalone sysexts will be built during VM conversion: ${STANDALONE_SYSEXTS_SPEC}"
 
     info "Building ${vm_type} VM image using SDK container..."
 
@@ -1344,7 +1347,7 @@ print_summary() {
         echo "     Board: ${BOARD}"
         echo "     Group: ${GROUP}"
         echo "     Mode: RPM (Azure Linux RPMs + Portage)"
-        echo "     GPU sysexts: enabled"
+        echo "     Standalone sysexts: enabled"
         echo
     fi
 
