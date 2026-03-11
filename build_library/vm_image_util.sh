@@ -777,7 +777,7 @@ install_standalone_sysexts() {
         # Move sysext artifacts to upload/output directory
         local to_move
         for to_move in "${built_sysext_dir}/${name}"*; do
-            [[ -e "${to_move}" ]] && mv "${to_move}" "${upload_dir}/${to_move##*/}"
+            [[ -e "${to_move}" ]] && mv -f "${to_move}" "${upload_dir}/${to_move##*/}"
         done
 
         # Clean up work directory
