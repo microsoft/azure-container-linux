@@ -24,7 +24,6 @@
 #   --console-password=PASS              Serial console login password (empty for passwordless)
 #   --console-user=USER                  Serial console login user (default: root)
 #   --download-rpms                      [no-op] Kept for pipeline compatibility
-#   --download-unofficial-kernel         Download unofficial kernel RPMs from Azure DevOps build
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
 #   --help                               Show this help message
 #   --hydrate                            Pull SDK, mantle containers and RPMs from latest successful aclmain build
@@ -50,7 +49,6 @@
 #   --ssh-timeout=SECS                   Timeout waiting for SSH (default: 120)
 #   --ssh-user=USER                      SSH user for VM scripts (default: core)
 #   --start-vm                           Start the VM after building (implies --build-vm-image)
-#   --unofficial-kernel-build-id=ID      Specify Azure DevOps build ID for kernel (default: 1028516)
 #   --use-serial                         Use serial console for script execution (no SSH/ignition needed)
 #   --use-ssh                            Use SSH for script execution (default, requires working ignition/SSH keys)
 #   --vm-name=NAME                       Name for the VM (default: acl)
@@ -100,8 +98,6 @@ GROUP="${GROUP:-production}"
 BUILD_SDK_CONTAINER=false
 BUILD_RPMS=false
 BUILD_RPMS_QEMU=false
-USE_UNOFFICIAL_KERNEL=false
-UNOFFICIAL_KERNEL_BUILD_ID="1037837"
 CLEAN_DIRS=false
 FORCE_REBUILD=false
 BUILD_IMAGE=false
@@ -124,7 +120,7 @@ VM_CONSOLE_USER="${VM_CONSOLE_USER:-root}"  # Console login user
 VM_CONSOLE_PASSWORD="${VM_CONSOLE_PASSWORD:-}"  # Console login password (empty for no password)
 VM_BOOT_TIMEOUT="${VM_BOOT_TIMEOUT:-180}"  # Seconds to wait for VM boot
 PARITY=""  # Path to os-diff directory for parity data collection and reporting
-SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-false}"  # Enable secure boot (disable for unsigned kernels)
+SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-true}"  # Enable secure boot
 RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID (bypasses VHD upload)
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
@@ -255,15 +251,6 @@ parse_args() {
                 # no-op: kept for pipeline compatibility
                 shift
                 ;;
-            --download-unofficial-kernel)
-                USE_UNOFFICIAL_KERNEL=true
-                shift
-                ;;
-            --unofficial-kernel-build-id=*)
-                UNOFFICIAL_KERNEL_BUILD_ID="${1#*=}"
-                USE_UNOFFICIAL_KERNEL=true
-                shift
-                ;;
             --clean)
                 CLEAN_DIRS=true
                 shift
@@ -278,8 +265,7 @@ parse_args() {
                 BUILD_IMAGE=true
                 BUILD_VM_IMAGE=true
                 START_VM=true
-                # Disabled while we are running on the buddy built kernel
-                # RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
+                RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-systemd-health-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-dmesg-io-error-test.sh")
@@ -579,120 +565,6 @@ check_prerequisites() {
     info "✓ All build prerequisites met"
 }
 
-# Downloads unofficial kernel RPMs from Azure DevOps build artifacts.
-download_unofficial_kernel() {
-    section "Downloading Unofficial Kernel from Azure DevOps"
-
-    local build_id="${UNOFFICIAL_KERNEL_BUILD_ID}"
-    local org="https://dev.azure.com/mariner-org"
-    local project="mariner"
-    # Artifact name depends on target architecture
-    local artifact_arch="amd64"
-    if [[ "${BOARD}" == "arm64-usr" ]]; then
-        artifact_arch="arm64"
-    fi
-    local artifact_name="drop_buddy_build_${artifact_arch}_build_${artifact_arch}"
-    local temp_dir="${STAGING_DIR}/.unofficial-kernel-temp"
-
-    info "Build ID: ${build_id}"
-    info "Organization: ${org}"
-    info "Project: ${project}"
-    info "Artifact: ${artifact_name}"
-
-    # Check for az CLI
-    if ! command -v az &>/dev/null; then
-        error "Azure CLI (az) not found - required to download unofficial kernel"
-        if is_azure_linux_3; then
-            error "Install with: sudo tdnf install -y azure-cli"
-        else
-            error "Install with: curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash"
-        fi
-        exit 1
-    fi
-
-    # Check for azure-devops extension
-    if ! az extension show --name azure-devops &>/dev/null 2>&1; then
-        info "Installing azure-devops extension..."
-        az extension add --name azure-devops
-    fi
-
-    # Create temp directory
-    rm -rf "${temp_dir}"
-    mkdir -p "${temp_dir}"
-
-    info "Downloading artifacts from build ${build_id}..."
-    
-    if ! az pipelines runs artifact download \
-        --artifact-name "${artifact_name}" \
-        --path "${temp_dir}" \
-        --run-id "${build_id}" \
-        --org "${org}" \
-        --project "${project}"; then
-        error "Failed to download artifacts from Azure DevOps"
-        error "Ensure you are logged in with: az login"
-        error "And have access to ${org}/${project}"
-        error "Available artifacts can be listed with:"
-        error "  az pipelines runs artifact list --run-id ${build_id} --org ${org} --project ${project}"
-        rm -rf "${temp_dir}"
-        exit 1
-    fi
-
-    # Look for rpms.tar.gz in the downloaded artifacts
-    local rpms_tarball
-    rpms_tarball=$(find "${temp_dir}" -name "rpms.tar.gz" -type f | head -1)
-    
-    if [[ -z "${rpms_tarball}" || ! -f "${rpms_tarball}" ]]; then
-        # List what was downloaded for debugging
-        warn "Contents of downloaded artifacts:"
-        find "${temp_dir}" -type f 2>/dev/null | head -30 || true
-        error "rpms.tar.gz not found in downloaded artifacts"
-        rm -rf "${temp_dir}"
-        exit 1
-    fi
-
-    info "Found: ${rpms_tarball}"
-    info "Extracting kernel RPMs..."
-    
-    # Detect file type and extract accordingly
-    local file_type
-    file_type=$(file -b "${rpms_tarball}" 2>/dev/null || echo "unknown")
-    info "File type: ${file_type}"
-    
-    # Extract RPMs to staging directory
-    # The Azure DevOps artifact is a plain tar archive (despite .tar.gz extension)
-    local extract_failed=false
-    if ! tar -xf "${rpms_tarball}" -C "${temp_dir}"; then
-        extract_failed=true
-    fi
-    
-    if [[ "${extract_failed}" == "true" ]]; then
-        error "Failed to extract rpms.tar.gz (type: ${file_type})"
-        error "Temp directory preserved for debugging: ${temp_dir}"
-        exit 1
-    fi
-
-    # Find and copy RPM files to staging
-    local rpm_count=0
-    while IFS= read -r -d '' rpm_file; do
-        cp "${rpm_file}" "${STAGING_DIR}/"
-        ((rpm_count++)) || true
-    done < <(find "${temp_dir}" -name "*.rpm" -type f -print0)
-
-    if [[ "${rpm_count}" -eq 0 ]]; then
-        error "No RPM files found in the extracted artifacts"
-        error "Temp directory preserved for debugging: ${temp_dir}"
-        exit 1
-    fi
-
-    info "✓ Extracted ${rpm_count} RPM packages from unofficial kernel build"
-
-    # Clean up temp directory
-    rm -rf "${temp_dir}"
-
-    # Update repository metadata
-    create_repo
-}
-
 # Hydrates local environment from a CI pipeline build.
 # Downloads SDK container, mantle container from acr and RPM staging from Azure DevOps.
 hydrate() {
@@ -945,7 +817,7 @@ print(f'rpms_tarball={rpms_tarball}')
             case "${item}" in
                 "SDK container")   manual_steps+=("--build-sdk-container") ;;
                 "mantle container") ;; # no CLI flag, must build manually
-                "RPM staging")     manual_steps+=("--download-rpms" "--build-rpms" "--download-unofficial-kernel") ;;
+                "RPM staging")     manual_steps+=("--download-rpms" "--build-rpms") ;;
             esac
         done
         if [[ ${#manual_steps[@]} -gt 0 ]]; then
@@ -1327,13 +1199,6 @@ print_summary() {
         echo
     fi
 
-    if [[ "$USE_UNOFFICIAL_KERNEL" == "true" ]]; then
-        echo "  2.6. Use unofficial kernel from Azure DevOps"
-        echo "     Build ID: ${UNOFFICIAL_KERNEL_BUILD_ID}"
-        echo "     Output: ${STAGING_DIR}"
-        echo
-    fi
-
     if [[ "$BUILD_IMAGE" == "true" ]]; then
         echo "  3. Build Azure Container Linux image using SDK container"
         echo "     Board: ${BOARD}"
@@ -1399,11 +1264,10 @@ main() {
     check_prerequisites
     print_summary
 
-    # Use gzip compression for sysexts when NOT using unofficial kernel or on Azure Linux 3
-    # (ACL kernel doesn't support squashfs-zstd yet, Once unofficial kernel is accepted upstream we can standardize to zstd)
-    if [[ "$USE_UNOFFICIAL_KERNEL" != "true" ]] || is_azure_linux_3; then
-        export SYSEXT_COMPRESSION=gzip
-        info "Using gzip compression for sysexts (official kernel compatibility)"
+    # UKI images are not yet signed, so disable secure boot automatically
+    if [[ "$BOOTLOADER_MODE" == "uki" ]] && [[ "$SECURE_BOOT_ENABLED" == "true" ]]; then
+        warn "Disabling secure boot (UKI images are unsigned)"
+        SECURE_BOOT_ENABLED=false
     fi
 
     # Step 0: Update SDK container if requested (before download/build)
@@ -1418,25 +1282,6 @@ main() {
 
     # Step 0.5: Clean RPM directories (if requested)
     cleanup_rpm_directories
-
-    # Step 1: Use unofficial kernel from Azure DevOps (if requested or previously downloaded)
-    if [[ "$USE_UNOFFICIAL_KERNEL" == "true" ]]; then
-        # Flag was passed - download unofficial kernel
-        download_unofficial_kernel
-    elif [[ "$SECURE_BOOT_ENABLED" != "true" ]] && ls "${STAGING_DIR}"/kernel-[0-9]*.rpm &>/dev/null 2>&1; then
-        # Kernel RPMs found in staging and secure boot is NOT enabled —
-        # assume these are unofficial (unsigned) kernels.
-        # When SECURE_BOOT_ENABLED=true (prod-pipeline), kernel RPMs in staging
-        # are signed prod RPMs and should NOT trigger unofficial kernel mode.
-        USE_UNOFFICIAL_KERNEL=true
-        info "Detected kernel RPMs in staging directory, using unofficial kernel settings"
-    fi
-
-    # Automatically disable secure boot when using unofficial (unsigned) kernel
-    if [[ "$USE_UNOFFICIAL_KERNEL" == "true" ]] && [[ "$SECURE_BOOT_ENABLED" == "true" ]]; then
-        warn "Disabling secure boot (unofficial kernel is unsigned)"
-        SECURE_BOOT_ENABLED=false
-    fi
 
     # Step 2: Build custom RPM packages (if requested)
     if [[ "$BUILD_RPMS" == "true" ]]; then

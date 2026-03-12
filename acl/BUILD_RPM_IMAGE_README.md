@@ -156,7 +156,7 @@ Set the SDK image and build:
 # Copy the export statement printed by --hydrate
 export ACL_SDK_IMAGE="acldevel.azurecr.io/flatcar-sdk-all:4459.0.0-rpm.1053102"
 
-# Build an image using the SDK and RPMs (including unofficial kernel + built rpms) from the pipeline
+# Build an image using the SDK and RPMs from the pipeline
 ./acl/build_rpm_image.sh --rebuild
 ```
 
@@ -201,44 +201,6 @@ This step:
 - Updates repository metadata automatically
 
 **Build output:** Custom RPMs are added to `__build__/rpm-staging/`
-
-### Phase 2.5: Download Unofficial Kernel
-
-For testing with unofficial/unsigned kernel builds from Azure DevOps CI:
-
-```bash
-# Download kernel RPMs from default build ID
-./acl/build_rpm_image.sh --download-unofficial-kernel
-
-# Download from a specific build ID
-./acl/build_rpm_image.sh --download-unofficial-kernel --unofficial-kernel-build-id=1028516
-```
-
-**Prerequisites for unofficial kernel download:**
-
-1. **Azure CLI**: Install the Azure CLI:
-
-   ```bash
-   # Ubuntu/Debian
-   curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-
-   # Azure Linux
-   sudo tdnf install -y azure-cli
-   ```
-
-2. **Azure DevOps Extension**: The script will auto-install if missing, or install manually:
-
-   ```bash
-   az extension add --name azure-devops
-   ```
-
-3. **Azure Login**: Authenticate with Azure:
-
-   ```bash
-   az login
-   ```
-
-**Note**: The unofficial kernel is unsigned and requires `--no-secure-boot` when starting the VM (see Phase 5).
 
 ### Phase 3: Build the Image
 
@@ -298,7 +260,7 @@ The script automatically configures libvirt (default network, URI) on Azure Linu
 # Just start the VM and observe the boot sequence, get access to interactive console.
 ./acl/build_rpm_image.sh --start-vm
 
-# Start VM without secure boot (required for unsigned/unofficial kernels)
+# Start VM without secure boot (e.g. for UKI bootloader mode)
 ./acl/build_rpm_image.sh --start-vm --no-secure-boot
 
 # Start VM and run inline command via SSH
@@ -313,7 +275,8 @@ The script automatically configures libvirt (default network, URI) on Azure Linu
 ./acl/build_rpm_image.sh --start-vm \
   --run-script=./acl/tests/run-secureboot-test.sh \
   --run-script=./acl/tests/run-container-test.sh \
-  --run-script=./acl/tests/run-systemd-health-test.sh
+  --run-script=./acl/tests/run-systemd-health-test.sh \
+  --run-script=./acl/tests/run-dmesg-io-error-test.sh
 ```
 
 Subsequent runs will clean up the VM automatically. To manually clean up the VM:
@@ -465,9 +428,9 @@ Efficient workflow for iterative development:
 
 ### Common Issues
 
-- **Issue**: VM fails to boot with unofficial/unsigned kernel
-  **Cause**: Secure boot rejects unsigned kernels.
-  **Solution**: Use `--no-secure-boot` flag:
+- **Issue**: VM fails to boot with UKI bootloader mode
+  **Cause**: UKI images are not yet signed; secure boot rejects them.
+  **Solution**: Use `--no-secure-boot` flag (this is done automatically when `BOOTLOADER_MODE=uki`):
 
   ```bash
   ./acl/build_rpm_image.sh --start-vm --no-secure-boot
