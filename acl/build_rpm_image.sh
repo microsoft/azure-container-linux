@@ -120,7 +120,6 @@ VM_CONSOLE_USER="${VM_CONSOLE_USER:-root}"  # Console login user
 VM_CONSOLE_PASSWORD="${VM_CONSOLE_PASSWORD:-}"  # Console login password (empty for no password)
 VM_BOOT_TIMEOUT="${VM_BOOT_TIMEOUT:-180}"  # Seconds to wait for VM boot
 PARITY=""  # Path to os-diff directory for parity data collection and reporting
-SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-true}"  # Enable secure boot
 RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID (bypasses VHD upload)
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
@@ -1265,9 +1264,9 @@ main() {
     print_summary
 
     # UKI images are not yet signed, so disable secure boot automatically
-    if [[ "$BOOTLOADER_MODE" == "uki" ]] && [[ "$SECURE_BOOT_ENABLED" == "true" ]]; then
+    if [[ "$BOOTLOADER_MODE" == "uki" ]]; then
         warn "Disabling secure boot (UKI images are unsigned)"
-        SECURE_BOOT_ENABLED=false
+        export SECURE_BOOT_ENABLED=false
     fi
 
     # Step 0: Update SDK container if requested (before download/build)

@@ -439,7 +439,7 @@ start_vm_qemu() {
         secure_attr=""
         smm_feature=""
     elif [[ "${SECURE_BOOT_ENABLED}" != "true" ]]; then
-        info "Secure boot DISABLED - using unsigned kernel"
+        info "Secure boot DISABLED"
         for code_file in \
             "/usr/share/edk2/ovmf/OVMF_CODE.fd" \
             "/usr/share/OVMF/OVMF_CODE_4M.fd" \
