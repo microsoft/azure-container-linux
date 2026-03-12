@@ -1096,7 +1096,7 @@ build_vm_image() {
     local -a standalone_sysexts_filtered=()
     for _entry in "${STANDALONE_SYSEXTS[@]}"; do
         local _sysext_name="${_entry%%|*}"
-        if [[ "${BOARD}" == "arm64-usr" && ( "${_sysext_name}" == "nvidia-driver-cuda-open" || "${_sysext_name}" == "nvidia-driver-cuda" ) ]]; then
+        if [[ "${BOARD}" == "arm64-usr" && ( "${_sysext_name}" == "nvidia-driver-cuda-open" || "${_sysext_name}" == "nvidia-driver-cuda" || "${_sysext_name}" == "nvidia-driver-vgpu" ) ]]; then
             info "Skipping standalone sysext ${_sysext_name} (not available for arm64)"
             continue
         fi
