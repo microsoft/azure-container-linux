@@ -32,6 +32,7 @@
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
+#   --no-standalone-sysexts               Skip building standalone sysexts during VM image conversion (faster builds)
 #   --output=DIR                         Output directory for images
 #   --reuse-vm                           Reuse an already-running VM (reads IP/RG from .vm-state.env)
 #   --tag=KEY=VALUE                      Add a resource tag to Azure VMs/RGs (can specify multiple times)
@@ -124,6 +125,7 @@ RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID (bypasses VHD upload)
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
+SKIP_STANDALONE_SYSEXTS=false  # Skip building standalone sysexts during VM image conversion
 
 # Standalone sysext definitions — maintained in a separate config file for easy
 # extension.  See acl/standalone_sysexts.conf for format docs and how-to-add.
@@ -447,6 +449,10 @@ parse_args() {
                 ;;
             --no-cleanup)
                 NO_CLEANUP=true
+                shift
+                ;;
+            --no-standalone-sysexts)
+                SKIP_STANDALONE_SYSEXTS=true
                 shift
                 ;;
             --keep-vm)
@@ -1092,17 +1098,22 @@ build_vm_image() {
     # Export standalone sysext spec so run_sdk_container passes it into the
     # container where image_to_vm.sh → install_standalone_sysexts() picks it up.
     # Filter out amd64-only sysexts (NVIDIA/CUDA) when building for arm64.
-    local -a standalone_sysexts_filtered=()
-    for _entry in "${STANDALONE_SYSEXTS[@]}"; do
-        local _sysext_name="${_entry%%|*}"
-        if [[ "${BOARD}" == "arm64-usr" && ( "${_sysext_name}" == "nvidia-driver-cuda-open" || "${_sysext_name}" == "nvidia-driver-cuda" || "${_sysext_name}" == "nvidia-driver-vgpu" ) ]]; then
-            info "Skipping standalone sysext ${_sysext_name} (not available for arm64)"
-            continue
-        fi
-        standalone_sysexts_filtered+=("${_entry}")
-    done
-    export STANDALONE_SYSEXTS_SPEC="${standalone_sysexts_filtered[*]}"
-    info "Standalone sysexts will be built during VM conversion: ${STANDALONE_SYSEXTS_SPEC}"
+    if [[ "$SKIP_STANDALONE_SYSEXTS" == "true" ]]; then
+        export STANDALONE_SYSEXTS_SPEC=""
+        info "Skipping standalone sysexts (--no-standalone-sysexts)"
+    else
+        local -a standalone_sysexts_filtered=()
+        for _entry in "${STANDALONE_SYSEXTS[@]}"; do
+            local _sysext_name="${_entry%%|*}"
+            if [[ "${BOARD}" == "arm64-usr" && ( "${_sysext_name}" == "nvidia-driver-cuda-open" || "${_sysext_name}" == "nvidia-driver-cuda" || "${_sysext_name}" == "nvidia-driver-vgpu" ) ]]; then
+                info "Skipping standalone sysext ${_sysext_name} (not available for arm64)"
+                continue
+            fi
+            standalone_sysexts_filtered+=("${_entry}")
+        done
+        export STANDALONE_SYSEXTS_SPEC="${standalone_sysexts_filtered[*]}"
+        info "Standalone sysexts will be built during VM conversion: ${STANDALONE_SYSEXTS_SPEC}"
+    fi
 
     info "Building ${vm_type} VM image using SDK container..."
 
