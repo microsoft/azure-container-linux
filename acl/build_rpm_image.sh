@@ -995,8 +995,6 @@ build_image() {
     info "Using ${rpm_count} pre-downloaded RPM packages"
 
     # Build arguments for build_image
-    # Docker is built as a standalone sysext (not baked into the rootfs), so
-    # override --base_sysexts to include only containerd.
     local build_args=(
         "--image_compression_formats=none"
         "--nogenerate_update"
@@ -1004,7 +1002,6 @@ build_image() {
         "--group=${GROUP}"
         "--disk_layout=${DISK_LAYOUT}"
         "--image_name=${IMG_NAME}_image.bin"
-        "--base_sysexts=containerd-flatcar|app-containers/containerd"
     )
 
     if [[ "$FORCE_REBUILD" == "true" ]]; then
