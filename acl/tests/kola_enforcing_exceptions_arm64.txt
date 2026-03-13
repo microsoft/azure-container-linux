@@ -1,0 +1,13 @@
+# Tests from kola_enforcing.txt that are allowed to fail on arm64 (aarch64).
+#
+# These tests are still executed, but failures do not block the pipeline.
+# Each entry is a prefix match (same as kola_enforcing.txt).
+# Add a comment explaining why each exception exists.
+
+# kubeadm calico/cilium tests hit kubectl wait timeouts on emulated arm64 QEMU
+kubeadm.v1.34.1.calico.base
+kubeadm.v1.32.4.cilium.base
+kubeadm.v1.34.1.cilium.base
+kubeadm.v1.32.4.calico.base
+kubeadm.v1.33.0.calico.base
+kubeadm.v1.33.0.cilium.base
