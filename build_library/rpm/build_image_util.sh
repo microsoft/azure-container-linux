@@ -603,22 +603,17 @@ EOF
     sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/mdmonitor-oneshot.timer"
     sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/mdmonitor-oneshot.service"
 
-    # Mask systemd-pcrlock services. Gated by ConditionSecurity=measured-uki,
-    # UKI boots only, skipped in GRUB mode. The emulated TPM2 devices used in
-    # our environments (QEMU/swtpm, Azure vTPM) do not produce event logs that
-    # match actual PCR state, which causes these services to fail and puts the
-    # system into a degraded state.
-    info "RPM mode: Masking systemd-pcrlock services (no pcrlock policy enrollment)"
-    for pcrlock_unit in \
-        systemd-pcrlock-firmware-code.service \
-        systemd-pcrlock-firmware-config.service \
-        systemd-pcrlock-secureboot-policy.service \
-        systemd-pcrlock-secureboot-authority.service \
-        systemd-pcrlock-file-system.service \
-        systemd-pcrlock-machine-id.service \
-        systemd-pcrlock-make-policy.service; do
-        sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/${pcrlock_unit}"
-    done
+    # Add drop-in for systemd-pcrlock-secureboot-policy.service to skip cleanly
+    # when Secure Boot is not available. The upstream unit only gates on
+    # ConditionSecurity=measured-uki but lock-secureboot-policy reads the
+    # SecureBoot EFI variable and fails with exit-code 1 when it is absent. The
+    # drop-in makes this a clean condition skip instead of a hard failure.
+    local sb_dropin_dir="${root_fs_dir}/etc/systemd/system/systemd-pcrlock-secureboot-policy.service.d"
+    info "RPM mode: Adding Secure Boot condition to pcrlock-secureboot-policy"
+    sudo install -d -m 0755 "${sb_dropin_dir}"
+    printf '[Unit]\nConditionPathExists=/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c\n' \
+        | sudo tee "${sb_dropin_dir}/condition-secureboot.conf" > /dev/null
+    sudo chmod 0644 "${sb_dropin_dir}/condition-secureboot.conf"
 
     # Remove etcd server and etcdutl binaries - we only need etcdctl from the etcd RPM.
     # The etcd server runs inside a Docker container via etcd-wrapper, not natively.
