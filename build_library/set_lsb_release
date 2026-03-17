@@ -41,8 +41,10 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
 elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
   OS_NAME="Microsoft Azure Container Linux"
   OS_CODENAME="AzureContainerLinux"
-  OS_ID="azurecontainerlinux"
+  OS_ID="azurelinux"
   OS_ID_LIKE="azurelinux flatcar"
+  VARIANT="Azure Container Linux"
+  VARIANT_ID="azurecontainerlinux"
   OS_PRETTY_NAME="$OS_NAME $IMAGE_VERSION"
   ANSI_COLOR="1;34"
   HOME_URL="https://aka.ms/azurelinux"

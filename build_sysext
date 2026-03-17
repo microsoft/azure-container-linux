@@ -340,7 +340,7 @@ mkdir -p "${BUILD_DIR}/${FLAGS_install_root_basename}/usr/lib/extension-release.
 if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
   OS_ID="flatcar"
 elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
-  OS_ID="azurecontainerlinux"
+  OS_ID="azurelinux"
 fi
 
 # extension-release VERSION_ID must match the host os-release VERSION_ID.
