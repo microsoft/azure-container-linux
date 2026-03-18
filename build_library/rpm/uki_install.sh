@@ -109,7 +109,7 @@ uki_provision_rpm() {
 		ID=azurelinux
 		ID_LIKE="azurelinux flatcar"
         VARIANT="Azure Container Linux"
-        VARIANT_ID="azurecontainerlinux
+        VARIANT_ID="azurecontainerlinux"
 		VERSION="${IMAGE_VERSION:-0.0.0}"
 		VERSION_ID="${IMAGE_VERSION_ID:-0.0.0}"
 		PRETTY_NAME="Microsoft Azure Container Linux ${IMAGE_VERSION:-}"

@@ -83,6 +83,8 @@ sudo ln -sf "../usr/share/flatcar/lsb-release" "${ROOT_FS_DIR}/etc/lsb-release"
 NAME="$OS_NAME"
 ID=$OS_ID
 ID_LIKE="$OS_ID_LIKE"
+${VARIANT:+VARIANT=\"$VARIANT\"}
+${VARIANT_ID:+VARIANT_ID=$VARIANT_ID}
 VERSION=$_OS_VERSION
 VERSION_ID=$_OS_VERSION_ID
 BUILD_ID=$_OS_BUILD_ID
