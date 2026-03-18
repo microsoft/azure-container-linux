@@ -47,7 +47,7 @@ case "${FLAGS_target}" in
 esac
 
 uki_install_rpm() {
-    info "UKI/RPM mode: Installing systemd-boot to BOARD_ROOT"
+    info "UKI/RPM mode: Installing systemd-boot and shim to BOARD_ROOT"
 
     # Verify that ukify is available in the SDK
     if ! command -v ukify &>/dev/null; then
@@ -62,19 +62,23 @@ uki_install_rpm() {
     rpm_staging=$(rpm_get_staging_dir)
     local uki_local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
 
-    # Note: systemd-boot package should already be downloaded by finish_image_rpm()
-    # No need to call rpm_download_packages again - the package is in the local cache
+    # Note: systemd-boot and shim packages should already be downloaded by finish_image_rpm()
+    # No need to call rpm_download_packages again - the packages are in the local cache
 
-    # Find systemd-boot RPM in local cache — filter by target architecture
+    # Find systemd-boot and shim RPMs in local cache — filter by target architecture
+    local uki_rpms=()
     local rpm_file
-    rpm_file=$(find "${uki_local_cache}" -name "systemd-boot-[0-9]*.${RPM_ARCH}.rpm" | sort -V | tail -1)
-    if [[ -z "${rpm_file}" ]]; then
-        die "RPM file not found for package: systemd-boot (${RPM_ARCH}) in ${uki_local_cache}"
-    fi
+    for pkg in systemd-boot shim; do
+        rpm_file=$(find "${uki_local_cache}" -name "${pkg}-[0-9]*.${RPM_ARCH}.rpm" | sort -V | tail -1)
+        if [[ -z "${rpm_file}" ]]; then
+            die "RPM file not found for package: ${pkg} (${RPM_ARCH}) in ${uki_local_cache}"
+        fi
+        uki_rpms+=("${rpm_file}")
+    done
 
-    # Import GPG key and install package
+    # Import GPG key and install packages
     rpm_import_gpg_key "${BOARD_ROOT}"
-    rpm_install_local_packages "${BOARD_ROOT}" "${rpm_file}" || die "Failed to install systemd-boot to BOARD_ROOT"
+    rpm_install_local_packages "${BOARD_ROOT}" "${uki_rpms[@]}" || die "Failed to install systemd-boot and shim to BOARD_ROOT"
 }
 
 uki_provision_rpm() {
@@ -194,16 +198,29 @@ OSREL
 
     info "UKI/RPM: UKI built successfully ($(du -h "${uki_output}" | cut -f1))"
 
-    # systemd-boot binary from the RPM
-    local sd_boot_efi="${BOARD_ROOT}/usr/lib/systemd/boot/efi/systemd-boot${EFI_ARCH}.efi"
-    if [[ ! -f "${sd_boot_efi}" ]]; then
-        die "UKI/RPM: systemd-boot EFI binary not found at ${sd_boot_efi}"
+    # Secure Boot chain: shim (BOOTX64.EFI, signed by Microsoft) →
+    # systemd-boot (grubx64.efi, signed by Mariner CA) → UKI → addons.
+    # Both shim and systemd-boot RPMs install to /boot/efi/EFI/BOOT/.
+    local azl_efi_dir="${BOARD_ROOT}/boot/efi/EFI/BOOT"
+
+    # Install shim as the default UEFI bootloader
+    local shim_efi="${azl_efi_dir}/boot${EFI_ARCH}.efi"
+    if [[ ! -f "${shim_efi}" ]]; then
+        die "UKI/RPM: Shim not found at ${shim_efi}. Ensure the shim RPM is installed."
     fi
 
-    # Install as the default UEFI bootloader
     sudo mkdir -p "${ESP_DIR}/EFI/BOOT"
-    sudo cp "${sd_boot_efi}" "${ESP_DIR}/EFI/BOOT/BOOT${EFI_ARCH^^}.EFI"
-    info "UKI/RPM: Installed systemd-boot → EFI/BOOT/BOOT${EFI_ARCH^^}.EFI"
+    sudo cp "${shim_efi}" "${ESP_DIR}/EFI/BOOT/BOOT${EFI_ARCH^^}.EFI"
+    info "UKI/RPM: Installed shim → EFI/BOOT/BOOT${EFI_ARCH^^}.EFI"
+
+    # Install systemd-boot where shim expects its second-stage bootloader
+    local sd_boot_efi="${azl_efi_dir}/grub${EFI_ARCH}.efi"
+    if [[ ! -f "${sd_boot_efi}" ]]; then
+        die "UKI/RPM: systemd-boot not found at ${sd_boot_efi}. Ensure the systemd-boot RPM is installed."
+    fi
+
+    sudo cp "${sd_boot_efi}" "${ESP_DIR}/EFI/BOOT/grub${EFI_ARCH}.efi"
+    info "UKI/RPM: Installed systemd-boot → EFI/BOOT/grub${EFI_ARCH}.efi"
 
     sudo mkdir -p "${ESP_DIR}/EFI/Linux"
     sudo cp "${uki_output}" "${ESP_DIR}/EFI/Linux/acl.efi"
