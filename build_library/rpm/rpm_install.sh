@@ -181,7 +181,7 @@ remove_denylist_rpm_packages() {
     local root_fs_dir="$1"
     local dbpath_fs="${root_fs_dir}/var/lib/rpm"
     local dbpath_root="/var/lib/rpm"
-    local denylist_globs=("perl*" "ncurses-term" "texinfo")
+    local denylist_globs=("perl*" "ncurses-term" "texinfo" "rpm" "rpm-libs" "libarchive")
 
     info "RPM mode: Removing denylisted rpm packages"
     if [[ ! -d "${dbpath_fs}" ]]; then
