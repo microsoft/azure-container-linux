@@ -42,7 +42,7 @@ elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
   OS_NAME="Microsoft Azure Container Linux"
   OS_CODENAME="AzureContainerLinux"
   OS_ID="azurelinux"
-  OS_ID_LIKE="azurelinux flatcar"
+  OS_ID_LIKE="flatcar"
   VARIANT="Azure Container Linux"
   VARIANT_ID="azurecontainerlinux"
   OS_PRETTY_NAME="$OS_NAME $IMAGE_VERSION"

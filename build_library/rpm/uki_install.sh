@@ -107,7 +107,7 @@ uki_provision_rpm() {
     cat > "${osrelease}" <<-OSREL
 		NAME="Microsoft Azure Container Linux"
 		ID=azurelinux
-		ID_LIKE="azurelinux flatcar"
+		ID_LIKE="flatcar"
         VARIANT="Azure Container Linux"
         VARIANT_ID="azurecontainerlinux"
 		VERSION="${IMAGE_VERSION:-0.0.0}"
