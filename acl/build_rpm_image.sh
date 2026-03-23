@@ -925,6 +925,7 @@ build_rpms() {
         "rust-afterburn"
         "sdnotify-proxy"
         "update-ssh-keys"
+        "WALinuxAgent"
     )
 
     info "Running RPM build script..."
