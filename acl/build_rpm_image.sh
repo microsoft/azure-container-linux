@@ -125,7 +125,7 @@ RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID (bypasses VHD upload)
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
-SKIP_STANDALONE_SYSEXTS=false  # Skip building standalone sysexts during VM image conversion
+BUILD_STANDALONE_SYSEXTS=false  # Build standalone sysexts as a separate step (not during VM image conversion)
 
 # Standalone sysext definitions — maintained in a separate config file for easy
 # extension.  See acl/standalone_sysexts.conf for format docs and how-to-add.
@@ -265,6 +265,7 @@ parse_args() {
                 FORCE_REBUILD=true
                 BUILD_IMAGE=true
                 BUILD_VM_IMAGE=true
+                BUILD_STANDALONE_SYSEXTS=true
                 START_VM=true
                 RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
@@ -278,6 +279,8 @@ parse_args() {
                 ;;
             --build-vm-image)
                 BUILD_VM_IMAGE=true
+                # Temporarily also build standalone sysexts during VM image conversion until the matching change is merged into acl-pipelines.
+                BUILD_STANDALONE_SYSEXTS=true
                 shift
                 ;;
             --vm-type=*)
@@ -451,8 +454,8 @@ parse_args() {
                 NO_CLEANUP=true
                 shift
                 ;;
-            --no-standalone-sysexts)
-                SKIP_STANDALONE_SYSEXTS=true
+            --build-standalone-sysexts)
+                BUILD_STANDALONE_SYSEXTS=true
                 shift
                 ;;
             --keep-vm)
@@ -1070,6 +1073,94 @@ suggest_troubleshooting() {
     echo
 }
 
+# Builds standalone sysexts as a separate step (not during VM image conversion).
+# Uses the sysext base squashfs produced by build_image.
+build_standalone_sysexts() {
+    section "Building Standalone Sysexts"
+
+    local sdk_image
+    sdk_image=$(get_sdk_image)
+
+    # Filter sysexts by architecture (same logic as build_vm_image)
+    local -a standalone_sysexts_filtered=()
+    for _entry in "${STANDALONE_SYSEXTS[@]}"; do
+        local _sysext_name="${_entry%%|*}"
+        if [[ "${BOARD}" == "arm64-usr" && ( "${_sysext_name}" == "nvidia-driver-cuda-open" || "${_sysext_name}" == "nvidia-driver-cuda" || "${_sysext_name}" == "nvidia-driver-vgpu" ) ]]; then
+            info "Skipping standalone sysext ${_sysext_name} (not available for arm64)"
+            continue
+        fi
+        standalone_sysexts_filtered+=("${_entry}")
+    done
+
+    if [[ ${#standalone_sysexts_filtered[@]} -eq 0 ]]; then
+        info "No standalone sysexts to build for ${BOARD}"
+        return 0
+    fi
+
+    local from_dir="${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest"
+    local sysext_base="${from_dir}/${IMG_NAME}_image_sysext.squashfs"
+    if [[ ! -f "${sysext_base}" ]]; then
+        error "Sysext base squashfs not found: ${sysext_base}"
+        error "Run --build-image first to produce the sysext base."
+        exit 1
+    fi
+
+    # CI mode: copy artifact version.txt so the SDK container picks up matching versions
+    local version_args=()
+    if [[ "${NO_TTY:-false}" == "true" ]] && [[ -f "${from_dir}/version.txt" ]]; then
+        info "Installing artifact version.txt into manifest location (CI mode)"
+        cp "${from_dir}/version.txt" \
+           "${SCRIPT_DIR}/sdk_container/.repo/manifests/version.txt"
+        version_args=( -U )
+    fi
+
+    # Build each sysext via run_sdk_container → build_sysext
+    for sysext_spec in "${standalone_sysexts_filtered[@]}"; do
+        local name="${sysext_spec%%|*}"
+        local packages="${sysext_spec#*|}"
+        info "Building standalone sysext: ${name} (${packages//&/, })"
+
+        # Expand multi-package separator & → individual package args
+        local -a pkg_args=()
+        IFS='&' read -ra pkg_args <<< "$packages"
+
+        local -a sysext_flags=(
+            --board="${BOARD}"
+            --squashfs_base="../build/images/${BOARD}/latest/${IMG_NAME}_image_sysext.squashfs"
+            --image_builddir="../build/images/${BOARD}/latest"
+            --install_root_basename="${name}-standalone-sysext-rootfs"
+        )
+
+        # Use mangle script if one exists under build_library/
+        local mangle_fs="${SCRIPT_DIR}/build_library/sysext_mangle_${name}"
+        if [[ -x "${mangle_fs}" ]]; then
+            sysext_flags+=(
+                --manglefs_script="./build_library/sysext_mangle_${name}"
+            )
+        fi
+
+        # Sysext name + packages as positional args
+        sysext_flags+=("${name}" "${pkg_args[@]}")
+
+        "${SCRIPT_DIR}/run_sdk_container" \
+            --rm \
+            $(get_tty_flag) \
+            "${version_args[@]}" \
+            -C "${sdk_image}" \
+            -- \
+            sudo "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE}" \
+                 "RPM_STAGING_DIR=${RPM_STAGING_DIR:-}" \
+                 "IMAGE_VERSION=${IMAGE_VERSION:-}" \
+                 "IMAGE_VERSION_ID=${IMAGE_VERSION_ID:-}" \
+                 "IMAGE_BUILD_ID=${IMAGE_BUILD_ID:-}" \
+                 ./build_sysext "${sysext_flags[@]}"
+
+        info "Built standalone sysext: ${name}.raw"
+    done
+
+    info "All standalone sysexts built successfully"
+}
+
 # Builds a VM image (qemu_uefi or azure) from the base image using the SDK container.
 build_vm_image() {
     local vm_type="$1"
@@ -1092,26 +1183,6 @@ build_vm_image() {
         "--format=${format}"
         "--image_name=${IMG_NAME}_image.bin"
     )
-
-    # Export standalone sysext spec so run_sdk_container passes it into the
-    # container where image_to_vm.sh → install_standalone_sysexts() picks it up.
-    # Filter out amd64-only sysexts (NVIDIA/CUDA) when building for arm64.
-    if [[ "$SKIP_STANDALONE_SYSEXTS" == "true" ]]; then
-        export STANDALONE_SYSEXTS_SPEC=""
-        info "Skipping standalone sysexts (--no-standalone-sysexts)"
-    else
-        local -a standalone_sysexts_filtered=()
-        for _entry in "${STANDALONE_SYSEXTS[@]}"; do
-            local _sysext_name="${_entry%%|*}"
-            if [[ "${BOARD}" == "arm64-usr" && ( "${_sysext_name}" == "nvidia-driver-cuda-open" || "${_sysext_name}" == "nvidia-driver-cuda" || "${_sysext_name}" == "nvidia-driver-vgpu" ) ]]; then
-                info "Skipping standalone sysext ${_sysext_name} (not available for arm64)"
-                continue
-            fi
-            standalone_sysexts_filtered+=("${_entry}")
-        done
-        export STANDALONE_SYSEXTS_SPEC="${standalone_sysexts_filtered[*]}"
-        info "Standalone sysexts will be built during VM conversion: ${STANDALONE_SYSEXTS_SPEC}"
-    fi
 
     info "Building ${vm_type} VM image using SDK container..."
 
@@ -1222,6 +1293,12 @@ print_summary() {
         echo "     Base Image: ${IMG_NAME}_${VM_TYPE}_uefi_image.img"
         echo "     Start VM after build: ${START_VM}"
         echo "     VM Name: ${VM_NAME}"
+        echo
+    fi
+
+    if [[ "$BUILD_STANDALONE_SYSEXTS" == "true" ]]; then
+        echo "  4b. Build standalone sysexts (separate from VM image)"
+        echo "      Sysexts: ${STANDALONE_SYSEXTS[*]}"
         echo
     fi
 
@@ -1345,6 +1422,11 @@ main() {
         section "Building VM Image at ${vm_image_path}"
         info "Converting base image to ${VM_TYPE} VM format..."
         build_vm_image "$VM_TYPE" "$vm_image_path"
+    fi
+
+    # Step 4b: Build standalone sysexts (if requested)
+    if [[ "$BUILD_STANDALONE_SYSEXTS" == "true" ]]; then
+        build_standalone_sysexts
     fi
 
     # Step 5: VM lifecycle & kola tests — delegate to validate_rpm_image.sh
