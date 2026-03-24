@@ -30,6 +30,7 @@ BUILD_ID="${BUILD_ID:-}"
 RESOURCE_TAGS=("createdBy=$(whoami)")
 VM_RG_PREFIX="${VM_RG_PREFIX:-$(whoami)-acl-test-vm-rg}"
 VM_RG=""
+AZ_VM_ARGS="${AZ_VM_ARGS:-}"
 
 # Resolve Azure VM size and image definition based on BOARD.
 # Must be called after argument parsing so that --board is applied.
@@ -321,6 +322,12 @@ create_vm_azure() {
     else
         vm_create_args+=(--enable-secure-boot false)
     fi
+
+    if [[ -n "$AZ_VM_ARGS" ]]; then
+        info "Adding extra Azure VM create args: $AZ_VM_ARGS"
+        vm_create_args+=($AZ_VM_ARGS)
+    fi
+
     az vm create "${vm_create_args[@]}"
 
     info "Attaching public IP to VM NIC..."

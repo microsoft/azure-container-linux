@@ -46,7 +46,7 @@ KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
 VM_STATE_FILE="${SCRIPT_DIR}/.vm-state.env"  # State file for VM reuse between invocations
 VM_IMAGE_PATH=""  # Explicit VM image path (auto-detected if empty)
-
+AZ_VM_ARGS="${AZ_VM_ARGS:-}"  # Additional arguments to pass when starting Azure VMs (e.g., for user-data)
 export BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
 
 VM_IP=""
@@ -724,6 +724,9 @@ parse_validate_args() {
             --build-id=*)
                 BUILD_ID="${1#*=}"
                 shift ;;
+            --az-vm-args=*)
+                AZ_VM_ARGS="${1#*=}"
+                shift ;;
             --help)
                 echo "Usage: $0 [options]"
                 echo ""
@@ -751,6 +754,7 @@ parse_validate_args() {
                 echo "  --use-serial               Use serial console"
                 echo "  --use-ssh                  Use SSH"
                 echo "  --vm-image-path=PATH       Path to VM image"
+                echo "  --az-vm-args=ARGS          Additional arguments to pass when starting Azure VMs"
                 echo "  --vm-name=NAME             VM name (default: acl)"
                 echo "  --vm-type=TYPE             VM type: azure|qemu (default: qemu)"
                 exit 0

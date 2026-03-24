@@ -54,6 +54,9 @@
 #   --use-ssh                            Use SSH for script execution (default, requires working ignition/SSH keys)
 #   --vm-name=NAME                       Name for the VM (default: acl)
 #   --vm-type=TYPE                       VM type when building VM images: azure|qemu (default: qemu)
+#   --az-vm-args=ARGS                    Additional arguments to pass to vm start command, esp azure vms
+#                                        Space separated list ('--az-vm-args="<key><space><value><space>"')
+#                                        ex: --az-vm-args="--user-data <path-to-ignition-file> --enable-vtpm true"
 #
 # Examples:
 #   # Build and run a test script on the VM via serial console
@@ -126,6 +129,7 @@ ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version reso
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
 BUILD_STANDALONE_SYSEXTS=false  # Build standalone sysexts as a separate step (not during VM image conversion)
+AZ_VM_ARGS="${AZ_VM_ARGS:-}"  # Additional arguments to pass to start azure VM
 
 # Standalone sysext definitions — maintained in a separate config file for easy
 # extension.  See acl/standalone_sysexts.conf for format docs and how-to-add.
@@ -489,6 +493,14 @@ parse_args() {
                 HYDRATE_BUILD_ID="${1#*=}"
                 HYDRATE=true
                 shift
+                ;;
+            --az-vm-args=*)
+                AZ_VM_ARGS="${1#*=}"
+                shift
+                ;;
+            --az-vm-args)
+                AZ_VM_ARGS="$2"
+                shift 2
                 ;;
             --help|-h)
                 show_help
@@ -1460,6 +1472,8 @@ main() {
         [[ "$RUN_KOLA_TESTS" == "true" ]]       && validate_args+=("--run-kola-tests")
         [[ "$USE_SERIAL_CONSOLE" == "true" ]]   && validate_args+=("--use-serial")
         [[ "$USE_SERIAL_CONSOLE" == "false" ]]  && validate_args+=("--use-ssh")
+
+        [[ "$VM_TYPE" == "azure" ]] && [[ -n "$AZ_VM_ARGS" ]] && validate_args+=("--az-vm-args=${AZ_VM_ARGS}")
 
         for script in "${RUN_SCRIPTS[@]}"; do
             validate_args+=("--run-script=${script}")

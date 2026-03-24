@@ -726,6 +726,14 @@ SYSUSERS_EOF
     printf "disable coreos-metadata.service\ndisable coreos-metadata-sshkeys@.service\n" | \
         sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-coreos-metadata.preset" > /dev/null
 
+    # Disable azure-ephemeral-disk-setup.service by default, in line with Flatcar.
+    # This service is only needed for Azure ephemeral disk setup, and should not run
+    # on non-Azure platforms during boot.
+    # It can be enabled via Ignition when needed.
+    info "RPM mode: Disabling azure-ephemeral-disk-setup via preset"
+    printf "disable azure-ephemeral-disk-setup.service\n" | \
+        sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-azure-ephemeral-disk-setup.preset" > /dev/null
+
     # Placeholder audit-rules.service - Azure Linux doesn't provide this but kola tests expect it as a common dependency
     if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service" ]]; then
         info "RPM mode: Installing placeholder audit-rules.service"
