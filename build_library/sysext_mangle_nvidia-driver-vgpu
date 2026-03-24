@@ -16,9 +16,6 @@ rootfs="$1"
 
 cd "${rootfs}"
 
-# ── Remove build artifacts ──────────────────────────────────────────
-rm -rf ./var
-
 # ── Relocate /etc/modprobe.d/ → /usr/lib/modprobe.d/ ────────────────
 # systemd natively searches /usr/lib/modprobe.d, no symlink needed.
 if [[ -d ./etc/modprobe.d ]]; then
