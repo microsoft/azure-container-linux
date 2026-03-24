@@ -317,12 +317,17 @@ fi
 # by mangle scripts (e.g. containerd2/runc from docker-flatcar) are excluded.
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
   info "Writing ${SYSEXTNAME}_packages.txt"
+  # Create the file unconditionally; the diff below will overwrite it with
+  # actual contents when an RPM database is present.
+  touch "${BUILD_DIR}/${SYSEXTNAME}_packages.txt"
   # Diff against pre-install snapshot to list only sysext-added packages.
   if [[ -d "${BUILD_DIR}/${FLAGS_install_root_basename}/var/lib/rpm" ]]; then
     rpm --root="${BUILD_DIR}/${FLAGS_install_root_basename}" -qa 2>/dev/null | sort > "${BUILD_DIR}/.rpm-all.tmp"
     # comm -13: output lines unique to the right file (i.e. newly installed packages only)
     comm -13 "${BUILD_DIR}/.rpm-base.tmp" "${BUILD_DIR}/.rpm-all.tmp" > "${BUILD_DIR}/${SYSEXTNAME}_packages.txt"
     rm -f "${BUILD_DIR}/.rpm-base.tmp" "${BUILD_DIR}/.rpm-all.tmp"
+  else
+    warn "No RPM database found for ${SYSEXTNAME}; ${SYSEXTNAME}_packages.txt will be empty"
   fi
 fi
 
