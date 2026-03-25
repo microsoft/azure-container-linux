@@ -1332,12 +1332,6 @@ main() {
     check_prerequisites
     print_summary
 
-    # UKI images are not yet signed, so disable secure boot automatically
-    if [[ "$BOOTLOADER_MODE" == "uki" ]]; then
-        warn "Disabling secure boot (UKI images are unsigned)"
-        export SECURE_BOOT_ENABLED=false
-    fi
-
     # Step 0: Update SDK container if requested (before download/build)
     if [[ "$BUILD_SDK_CONTAINER" == "true" ]]; then
         update_sdk_container

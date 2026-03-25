@@ -608,6 +608,25 @@ EOF
         | sudo tee "${sb_dropin_dir}/condition-secureboot.conf" > /dev/null
     sudo chmod 0644 "${sb_dropin_dir}/condition-secureboot.conf"
 
+    # Workaround: skip pcrlock services on Hyper-V — Azure's vTPM event log
+    # uses hash algorithms that systemd-pcrlock doesn't expect, causing
+    # "Hash algorithms in event log record don't match log" failures.
+    # TODO: Remove when systemd or Azure vTPM resolves this incompatibility.
+    local pcrlock_hyper_v_skip=(
+        systemd-pcrlock-firmware-code.service
+        systemd-pcrlock-firmware-config.service
+        systemd-pcrlock-make-policy.service
+        systemd-pcrlock-secureboot-authority.service
+    )
+    for svc in "${pcrlock_hyper_v_skip[@]}"; do
+        local dropin_dir="${root_fs_dir}/etc/systemd/system/${svc}.d"
+        info "RPM mode: Adding Hyper-V skip condition to ${svc}"
+        sudo install -d -m 0755 "${dropin_dir}"
+        printf '[Unit]\nConditionVirtualization=!microsoft\n' \
+            | sudo tee "${dropin_dir}/skip-hyperv.conf" > /dev/null
+        sudo chmod 0644 "${dropin_dir}/skip-hyperv.conf"
+    done
+
     # Remove etcd server and etcdutl binaries - we only need etcdctl from the etcd RPM.
     # The etcd server runs inside a Docker container via etcd-wrapper, not natively.
     if [[ -f "${root_fs_dir}/usr/bin/etcd" ]]; then

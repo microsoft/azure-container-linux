@@ -62,6 +62,8 @@ function set_vars() {
 export QEMU_IMAGE_NAME=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_image.bin
 export QEMU_UEFI_FIRMWARE=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_efi_code.qcow2
 export QEMU_UEFI_OVMF_VARS=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_efi_vars.qcow2
+export QEMU_UEFI_SECURE_FIRMWARE=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_secure_efi_code.qcow2
+export QEMU_UEFI_SECURE_OVMF_VARS=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_secure_efi_vars.qcow2
 export QEMU_UPDATE_PAYLOAD=/work/__build__/images/images/${arch@Q}-usr/latest/flatcar_test_update.gz
 export PARALLEL_TESTS=${parallel@Q}
 EOF
@@ -111,10 +113,23 @@ function run_local_tests() (
   echo "Using Mantle docker image '${mantle_container}'"
 
   rm -f results.sqlite
+
+  # Choose firmware: use Secure Boot firmware when SECURE_BOOT_ENABLED=true
+  # and the secure OVMF files exist, otherwise use standard UEFI firmware.
+  local qemu_platform="qemu_uefi"
+  local _prefix="flatcar_production"
+  if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    _prefix="acl_production"
+  fi
+  local secure_firmware="__build__/images/images/${arch}-usr/latest/${_prefix}_qemu_uefi_secure_efi_code.qcow2"
+  if [[ "${SECURE_BOOT_ENABLED:-false}" == "true" && -f "${secure_firmware}" ]]; then
+    qemu_platform="qemu_uefi_secure"
+  fi
+
   if [[ -n "${tests}" ]] ; then
     echo "================================="
-    echo "Running qemu_uefi tests"
-    test_run "${arch}" qemu_uefi ${tests}
+    echo "Running ${qemu_platform} tests"
+    test_run "${arch}" "${qemu_platform}" ${tests}
   fi
 
   if ${update_tests} ; then

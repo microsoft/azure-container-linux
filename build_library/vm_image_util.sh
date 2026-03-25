@@ -998,12 +998,19 @@ _write_qemu_uefi_secure_conf() {
             ;;
     esac
 
+    local add_uki_cert_args=()
+    local uki_signing_cert="$(_dst_dir)/uki-signing-ca.pem"
+    if [[ -f "${uki_signing_cert}" ]]; then
+        add_uki_cert_args=(--add-db "${owner}" "${uki_signing_cert}")
+    fi
+
     # TODO: Remove the temporary flatcar shim signing cert
     virt-fw-vars \
         --input "${flash_in}" \
         --output "$(_dst_dir)/${flash_rw}" \
         --add-db "${owner}" /usr/share/sb_keys/DB.crt \
-        --add-db "${owner}" "${BUILD_LIBRARY_DIR}/flatcar-sb-dev-shim-2025.cert"
+        --add-db "${owner}" "${BUILD_LIBRARY_DIR}/flatcar-sb-dev-shim-2025.cert" \
+        "${add_uki_cert_args[@]}"
 
     sed -e "s%^SECURE_BOOT=.*%SECURE_BOOT=1%" -i "${script}"
 }
