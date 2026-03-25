@@ -129,7 +129,6 @@ setup_disk_image "${FLAGS_disk_layout}"
 # plus grub.cfg in GRUB mode or a UKI addon in UKI mode).
 install_oem_package
 install_oem_sysext
-install_standalone_sysexts
 run_fs_hook
 
 # Changes done, glue it together

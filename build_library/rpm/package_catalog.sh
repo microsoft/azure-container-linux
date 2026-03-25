@@ -662,22 +662,11 @@ declare -gA PACKAGE_CATALOG=(
     ["sys-libs/nss-usrfiles"]="SKIP"
     ["sys-libs/tevent"]="SKIP"
     ["sys-power/acpid"]="SKIP"
-
-    # NVIDIA GPU
-    ## Note: the following packages are not originally offered by Flatcar, thus they are placeholders for now
-    ## before we determine the right strategy to build sysexts for ACL for components not supported by Flatcar
-    ["nvidia-gpu-drivers/cuda-open"]="cuda-open"
-    ["nvidia-gpu-drivers/cuda"]="cuda"
-    ["nvidia-gpu-drivers/vgpu"]="nvidia-vgpu-guest-driver"
-    ["nvidia-user-space/nvidia-container-toolkit"]="nvidia-container-toolkit"
-    ["nvidia-user-space/nvidia-fabric-manager"]="nvidia-fabric-manager"
 )
 
 # Packages that are only available for specific architectures.
 # Entries listed under an arch are SKIPped when building for a *different* arch.
 declare -gA _CATALOG_AMD64_ONLY=(
-    ["nvidia-gpu-drivers/cuda-open"]=1
-    ["nvidia-gpu-drivers/cuda"]=1
     ["sys-firmware/intel-microcode"]=1
 )
 
@@ -749,42 +738,6 @@ get_package_status() {
     fi
 }
 
-# Check if package is available in Azure Linux repo
-rpm_check_available() {
-    local rpm_pkg="$1"
-    local repo_url="$2"
-    local arch="${3:-x86_64}"
-
-    # Try to query the package using dnf/tdnf
-    # This is a simple check - could be enhanced with actual repo queries
-    if command -v dnf &>/dev/null; then
-        dnf repoquery --disablerepo='*' --repofrompath="azl,${repo_url}/${arch}" \
-            --enablerepo=azl "${rpm_pkg}" &>/dev/null
-        return $?
-    elif command -v tdnf &>/dev/null; then
-        tdnf repoquery --disablerepo='*' --repofrompath="azl,${repo_url}/${arch}" \
-            --enablerepo=azl "${rpm_pkg}" &>/dev/null
-        return $?
-    else
-        # Fallback: assume available if in catalog
-        return 0
-    fi
-}
-
-# List all packages by status
-list_packages_by_status() {
-    local status_filter="$1"
-
-    for pkg in "${!PACKAGE_CATALOG[@]}"; do
-        local status=$(get_package_status "$pkg")
-        if [[ "$status" == "$status_filter" ]]; then
-            echo "$pkg"
-        fi
-    done
-}
-
 # Export functions
 export -f get_rpm_package_name
 export -f get_package_status
-export -f rpm_check_available
-export -f list_packages_by_status

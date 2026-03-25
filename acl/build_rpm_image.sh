@@ -131,9 +131,9 @@ REUSE_VM=false  # Reuse an already-running VM (read state file)
 BUILD_STANDALONE_SYSEXTS=false  # Build standalone sysexts as a separate step (not during VM image conversion)
 AZ_VM_ARGS="${AZ_VM_ARGS:-}"  # Additional arguments to pass to start azure VM
 
-# Standalone sysext definitions — maintained in a separate config file for easy
-# extension.  See acl/standalone_sysexts.conf for format docs and how-to-add.
-source "${SCRIPT_DIR}/acl/standalone_sysexts.conf"
+# Standalone sysext definitions — maintained in a YAML config for easy extension.
+# See acl/standalone_sysexts.yaml for schema, arch support, and how-to-add.
+STANDALONE_SYSEXTS_YAML="${SCRIPT_DIR}/acl/standalone_sysexts.yaml"
 HYDRATE=false  # Hydrate local environment from CI pipeline build
 HYDRATE_BUILD_ID=""  # Specific build ID for hydrate (empty = latest)
 
@@ -283,8 +283,6 @@ parse_args() {
                 ;;
             --build-vm-image)
                 BUILD_VM_IMAGE=true
-                # Temporarily also build standalone sysexts during VM image conversion until the matching change is merged into acl-pipelines.
-                BUILD_STANDALONE_SYSEXTS=true
                 shift
                 ;;
             --vm-type=*)
@@ -1086,28 +1084,26 @@ suggest_troubleshooting() {
 }
 
 # Builds standalone sysexts as a separate step (not during VM image conversion).
-# Uses the sysext base squashfs produced by build_image.
+# Uses the sysext base squashfs produced by build_image and delegates to
+# build_standalone_sysext_images() from build_library/standalone_sysext_util.sh
+# inside the SDK container.
 build_standalone_sysexts() {
     section "Building Standalone Sysexts"
 
-    local sdk_image
-    sdk_image=$(get_sdk_image)
+    # Source the YAML parser from the shared utility
+    source "${SCRIPT_DIR}/build_library/standalone_sysext_util.sh"
 
-    # Filter sysexts by architecture (same logic as build_vm_image)
-    local -a standalone_sysexts_filtered=()
-    for _entry in "${STANDALONE_SYSEXTS[@]}"; do
-        local _sysext_name="${_entry%%|*}"
-        if [[ "${BOARD}" == "arm64-usr" && ( "${_sysext_name}" == "nvidia-driver-cuda-open" || "${_sysext_name}" == "nvidia-driver-cuda" || "${_sysext_name}" == "nvidia-driver-vgpu" ) ]]; then
-            info "Skipping standalone sysext ${_sysext_name} (not available for arm64)"
-            continue
-        fi
-        standalone_sysexts_filtered+=("${_entry}")
-    done
+    # Parse YAML config — arch filtering is handled by the YAML schema
+    local sysext_spec_str
+    sysext_spec_str=$(parse_standalone_sysexts_yaml "${STANDALONE_SYSEXTS_YAML}" "${BOARD}")
 
-    if [[ ${#standalone_sysexts_filtered[@]} -eq 0 ]]; then
+    if [[ -z "${sysext_spec_str// /}" ]]; then
         info "No standalone sysexts to build for ${BOARD}"
         return 0
     fi
+
+    local sdk_image
+    sdk_image=$(get_sdk_image)
 
     local from_dir="${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest"
     local sysext_base="${from_dir}/${IMG_NAME}_image_sysext.squashfs"
@@ -1126,49 +1122,22 @@ build_standalone_sysexts() {
         version_args=( -U )
     fi
 
-    # Build each sysext via run_sdk_container → build_sysext
-    for sysext_spec in "${standalone_sysexts_filtered[@]}"; do
-        local name="${sysext_spec%%|*}"
-        local packages="${sysext_spec#*|}"
-        info "Building standalone sysext: ${name} (${packages//&/, })"
+    # Paths as seen inside the SDK container
+    local container_squashfs="../build/images/${BOARD}/latest/${IMG_NAME}_image_sysext.squashfs"
+    local container_output="../build/images/${BOARD}/latest"
 
-        # Expand multi-package separator & → individual package args
-        local -a pkg_args=()
-        IFS='&' read -ra pkg_args <<< "$packages"
-
-        local -a sysext_flags=(
-            --board="${BOARD}"
-            --squashfs_base="../build/images/${BOARD}/latest/${IMG_NAME}_image_sysext.squashfs"
-            --image_builddir="../build/images/${BOARD}/latest"
-            --install_root_basename="${name}-standalone-sysext-rootfs"
-        )
-
-        # Use mangle script if one exists under build_library/
-        local mangle_fs="${SCRIPT_DIR}/build_library/sysext_mangle_${name}"
-        if [[ -x "${mangle_fs}" ]]; then
-            sysext_flags+=(
-                --manglefs_script="./build_library/sysext_mangle_${name}"
-            )
-        fi
-
-        # Sysext name + packages as positional args
-        sysext_flags+=("${name}" "${pkg_args[@]}")
-
-        "${SCRIPT_DIR}/run_sdk_container" \
-            --rm \
-            $(get_tty_flag) \
-            "${version_args[@]}" \
-            -C "${sdk_image}" \
-            -- \
-            sudo "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE}" \
-                 "RPM_STAGING_DIR=${RPM_STAGING_DIR:-}" \
-                 "IMAGE_VERSION=${IMAGE_VERSION:-}" \
-                 "IMAGE_VERSION_ID=${IMAGE_VERSION_ID:-}" \
-                 "IMAGE_BUILD_ID=${IMAGE_BUILD_ID:-}" \
-                 ./build_sysext "${sysext_flags[@]}"
-
-        info "Built standalone sysext: ${name}.raw"
-    done
+    # Single container invocation using the shared utility via build_standalone_sysexts
+    STANDALONE_SYSEXTS_SPEC="${sysext_spec_str}" \
+    "${SCRIPT_DIR}/run_sdk_container" \
+        --rm \
+        $(get_tty_flag) \
+        "${version_args[@]}" \
+        -C "${sdk_image}" \
+        -- \
+        ./build_standalone_sysexts \
+            --board="${BOARD}" \
+            --squashfs_base="${container_squashfs}" \
+            --output_dir="${container_output}"
 
     info "All standalone sysexts built successfully"
 }
@@ -1282,8 +1251,8 @@ print_summary() {
     echo
 
     if [[ "$BUILD_RPMS" == "true" ]]; then
-        echo "  2. Build custom RPM packages"
-        echo "     Output: ${STAGING_DIR}"
+        echo "  Build custom RPM packages"
+        echo "  Output: ${STAGING_DIR}"
         if [[ "$CLEAN_DIRS" == "true" ]]; then
             echo "     Mode: Clean build (remove existing)"
         fi
@@ -1291,26 +1260,28 @@ print_summary() {
     fi
 
     if [[ "$BUILD_IMAGE" == "true" ]]; then
-        echo "  3. Build Azure Container Linux image using SDK container"
-        echo "     Board: ${BOARD}"
-        echo "     Group: ${GROUP}"
-        echo "     Mode: RPM (Azure Linux RPMs + Portage)"
-        echo "     Standalone sysexts: enabled"
+        echo "  Build Azure Container Linux image using SDK container"
+        echo "  Board: ${BOARD}"
+        echo "  Group: ${GROUP}"
+        echo "  Mode: RPM (Azure Linux RPMs)"
+        echo "  Standalone sysexts: enabled"
         echo
     fi
 
     if [[ "$BUILD_VM_IMAGE" == "true" ]]; then
-        echo "  4. Build Azure Container Linux VM image"
-        echo "     VM Type: ${VM_TYPE}"
-        echo "     Base Image: ${IMG_NAME}_${VM_TYPE}_uefi_image.img"
-        echo "     Start VM after build: ${START_VM}"
-        echo "     VM Name: ${VM_NAME}"
+        echo "  Build Azure Container Linux VM image"
+        echo "  VM Type: ${VM_TYPE}"
+        echo "  Base Image: ${IMG_NAME}_${VM_TYPE}_uefi_image.img"
+        echo "  Start VM after build: ${START_VM}"
+        echo "  VM Name: ${VM_NAME}"
         echo
     fi
 
     if [[ "$BUILD_STANDALONE_SYSEXTS" == "true" ]]; then
-        echo "  4b. Build standalone sysexts (separate from VM image)"
-        echo "      Sysexts: ${STANDALONE_SYSEXTS[*]}"
+        echo "  Build standalone sysexts (separate from VM image)"
+        local _sysext_names
+        _sysext_names=$(yq eval -r '.sysexts[].name' "${STANDALONE_SYSEXTS_YAML}" 2>/dev/null | tr '\n' ' ')
+        echo "  Sysexts: ${_sysext_names:-<none>}"
         echo
     fi
 

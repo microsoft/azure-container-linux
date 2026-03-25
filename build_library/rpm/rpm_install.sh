@@ -212,6 +212,29 @@ remove_denylist_rpm_packages() {
     info "RPM mode: Package cleanup complete"
 }
 
+# Check whether a package name is available in the configured RPM repos.
+# Uses dnf5 repoquery which is fast and doesn't modify the system.
+# Returns 0 if found, 1 otherwise.
+# Usage: _rpm_package_exists <root_fs_dir> <package_name>
+_rpm_package_exists() {
+    local root_fs_dir="$1"
+    local pkg_name="$2"
+
+    local dnf_args=(
+        --installroot="${root_fs_dir}"
+        --releasever=3.0
+        -q
+    )
+    if [[ ${BOARD:-} == "arm64-usr" ]]; then
+        dnf_args+=(--forcearch="aarch64")
+    fi
+
+    # repoquery exits 0 with output if package exists, 0 with no output if not
+    local result
+    result=$(sudo /usr/bin/dnf5 repoquery "${dnf_args[@]}" "${pkg_name}" 2>/dev/null)
+    [[ -n "${result}" ]]
+}
+
 # Install RPM packages to image using dnf5
 # Usage: rpm_install_package [--nogpgcheck] <root_fs_dir> <package> [package ...]
 rpm_install_package() {
@@ -495,19 +518,57 @@ get_all_dependencies() {
 }
 
 # Full RPM mode installation workflow:
-# 1. Audit all dependencies for requested packages (including SKIP packages)
-# 2. Route each dependency through catalog and filter out SKIP packages
-# 3. Install RPM packages first
+# For each package, first attempt direct RPM installation (the name may already
+# be a valid RPM package).  If the name is not found in the repos, fall back to
+# the portage-to-RPM catalog translation and dependency resolution.
 rpm_install_package_using_portage_name() {
     local root_fs_dir="$1"; shift
     local packages=("$@")
 
     info "Requested packages: ${packages[*]}"
 
-    # Step 1: Get complete dependency tree (resolve even SKIP packages to get their deps)
-    info "Step 1: Auditing dependencies..."
+    local direct_rpms=()
+    local catalog_pkgs=()
+
+    # Triage: check which names are directly available as RPMs.
+    # Names containing '/' are portage-style (e.g. "sys-apps/foo") and go
+    # straight to the catalog without probing RPM repos.
+    for pkg in "${packages[@]}"; do
+        if [[ "${pkg}" == */* ]]; then
+            info "Package '${pkg}' is portage-style — routing to catalog"
+            catalog_pkgs+=("${pkg}")
+        elif _rpm_package_exists "${root_fs_dir}" "${pkg}"; then
+            info "Package '${pkg}' found in RPM repos — will install directly"
+            direct_rpms+=("${pkg}")
+        else
+            info "Package '${pkg}' not in RPM repos — falling back to catalog"
+            catalog_pkgs+=("${pkg}")
+        fi
+    done
+
+    # Install any packages that are directly available as RPMs
+    if [[ ${#direct_rpms[@]} -gt 0 ]]; then
+        info "Installing ${#direct_rpms[@]} direct RPM package(s): ${direct_rpms[*]}"
+        rpm_install_package "${root_fs_dir}" "${direct_rpms[@]}" || {
+            error "Failed to install direct RPM packages: ${direct_rpms[*]}"
+            return 1
+        }
+    fi
+
+    # Nothing left to resolve via catalog
+    if [[ ${#catalog_pkgs[@]} -eq 0 ]]; then
+        # Skipping backup of installed package list for now. That logic is only
+        # used for the base image, and base image is only created using Portage
+        # packages. We should revisit this over time.
+        return 0
+    fi
+
+    # --- Catalog-based resolution for remaining packages ---
+    info "Resolving ${#catalog_pkgs[@]} package(s) via catalog..."
+
+    # Step 1: Get complete dependency tree
     local all_deps
-    all_deps=$(get_all_dependencies "${root_fs_dir}" "${packages[@]}")
+    all_deps=$(get_all_dependencies "${root_fs_dir}" "${catalog_pkgs[@]}")
 
     local dep_count=$(echo "$all_deps" | grep -c . || echo 0)
     info "Total dependencies found: ${dep_count}"

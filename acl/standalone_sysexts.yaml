@@ -1,0 +1,53 @@
+# Standalone sysext definitions for Azure Container Linux (ACL)
+# ==============================================================
+#
+# This file defines sysexts built alongside ACL images as standalone
+# squashfs images (.raw), activated at runtime via systemd-sysext.
+#
+# HOW TO ADD A NEW STANDALONE SYSEXT
+# -----------------------------------
+# 1. Add an entry under 'sysexts:' below.
+#    Fields:
+#      name      — sysext output filename (e.g. "my-extension" → my-extension.raw)
+#      packages  — list of package names to install into the sysext.
+#                  Names can be RPM package names (e.g. "cuda-open") or portage-style
+#                  category/package names (e.g. "app-containers/docker").
+#                  In RPM mode, each name is first checked against the RPM repos;
+#                  if not found, it falls back to the portage-to-RPM catalog.
+#      archs     — (optional) list of boards to build for: [amd64-usr], [arm64-usr],
+#                  or both.  Omit to build for all architectures.
+#
+# 2. (Optional) Create a mangle script: build_library/sysext_mangle_<name>
+#    Needed when the RPM installs files outside /usr (e.g. /etc, /bin, /lib).
+#    sysexts only ship files under /usr, so the mangle script relocates them.
+#
+# The rest of the pipeline (build_standalone_sysexts, run_sdk_container,
+# validation) is fully data-driven and picks up new entries automatically.
+
+sysexts:
+  # --- GPU / hardware sysexts -------------------------------------------
+  - name: nvidia-driver-cuda-open
+    packages:
+      - cuda-open
+    archs:
+      - amd64-usr
+
+  - name: nvidia-driver-cuda
+    packages:
+      - cuda
+    archs:
+      - amd64-usr
+
+  - name: nvidia-driver-vgpu
+    packages:
+      - nvidia-vgpu-guest-driver
+    archs:
+      - amd64-usr
+
+  - name: nvidia-container-toolkit
+    packages:
+      - nvidia-container-toolkit
+
+  - name: nvidia-fabric-manager
+    packages:
+      - nvidia-fabric-manager

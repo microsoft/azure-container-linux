@@ -237,13 +237,6 @@ SYSUSERS_CORE
     sudo systemd-sysusers --root="${root_fs_dir}"
 
     info "RPM mode: Created sysusers.d configs for system users"
-
-    # NOTE: /home/core directory creation happens in initramfs via etc-overlay.sh
-    # The finish_image() function deletes everything except /boot, /usr, /oem at build time,
-    # so any directories we create here would be removed. The etc-overlay.sh script
-    # (part of the 99etc-overlay dracut module) creates /home/core with proper permissions
-    # BEFORE ignition-files.service runs, which is when ignition writes SSH keys.
-
 }
 
 # Download grub/shim/systemd-boot packages for later use by grub_install.sh and uki_install.sh
