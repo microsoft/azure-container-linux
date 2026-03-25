@@ -1373,7 +1373,9 @@ main() {
                 && ! command -v qemu-aarch64-static &>/dev/null; then
             info "Installing qemu-user-static-aarch64 for arm64 cross-build..."
             local -a qemu_rpms
-            mapfile -t qemu_rpms < <(find "${STAGING_DIR}" -maxdepth 1 -name 'qemu*.rpm' 2>/dev/null)
+            # Copying cross project rpm artifacts for arm64-usr will also install aarm64 compiled qemu
+            # rpms to staging. Find only x86_64 compiled artifacts to install.
+            mapfile -t qemu_rpms < <(find "${STAGING_DIR}" -maxdepth 1 -name 'qemu*.x86_64.rpm' 2>/dev/null)
             if [[ ${#qemu_rpms[@]} -gt 0 ]]; then
                 info "  Found ${#qemu_rpms[@]} QEMU RPMs in staging"
                 sudo tdnf install -y "${qemu_rpms[@]}" || {
