@@ -665,6 +665,12 @@ EOF
     sudo mkdir -p "${root_fs_dir}/usr/lib/flatcar"
     sudo cp "${etcd_wrapper_src}/etcd-wrapper" "${root_fs_dir}/usr/lib/flatcar/etcd-wrapper"
     sudo chmod 0755 "${root_fs_dir}/usr/lib/flatcar/etcd-wrapper"
+    # Azure Linux symlinks /etc/ssl/certs -> /etc/pki/tls/certs -> /etc/pki/ca-trust/extracted/pem
+    # etcd-wrapper bind-mounts /etc/ssl/certs and /usr/share/ca-certificates into the
+    # Docker container, but the files are symlinks to /etc/pki/ca-trust/extracted/pem/... which
+    # doesn't exist in the container. Add an extra bind mount so the symlinks resolve.
+    sudo sed -i 's|-v ${ETCD_SSL_DIR}:/etc/ssl/certs:ro|-v /etc/pki/ca-trust/extracted/pem:/etc/pki/ca-trust/extracted/pem:ro -v ${ETCD_SSL_DIR}:/etc/ssl/certs:ro|' \
+        "${root_fs_dir}/usr/lib/flatcar/etcd-wrapper"
     # CLC transpiler generates ExecStart=/usr/lib/coreos/etcd-wrapper
     # Create compat symlink so /usr/lib/coreos -> flatcar resolves
     sudo ln -sfT flatcar "${root_fs_dir}/usr/lib/coreos"
@@ -691,8 +697,7 @@ SYSUSERS_EOF
     # tries to mkdir it on the read-only /usr partition, causing the container to
     # fail with "mkdir /usr/share/ca-certificates: read-only file system".
     # Fix: create the directory in the image with a symlink to the ACL CA bundle.
-    # (The other mount, ETCD_SSL_DIR=/etc/ssl/certs, already works because ACL
-    # has /etc/ssl/certs -> /etc/pki/tls/certs symlink.)
+    # Above we add a bind mount for /etc/pki/ca-trust/extracted/pem so the symlink resolves.
     info "RPM mode: Creating /usr/share/ca-certificates for etcd-wrapper Docker mount"
     sudo mkdir -p "${root_fs_dir}/usr/share/ca-certificates"
     sudo ln -sf /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
