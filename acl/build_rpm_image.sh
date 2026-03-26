@@ -32,7 +32,6 @@
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
-#   --no-standalone-sysexts               Skip building standalone sysexts during VM image conversion (faster builds)
 #   --output=DIR                         Output directory for images
 #   --reuse-vm                           Reuse an already-running VM (reads IP/RG from .vm-state.env)
 #   --tag=KEY=VALUE                      Add a resource tag to Azure VMs/RGs (can specify multiple times)
@@ -40,8 +39,11 @@
 #   --rebuild                            Force rebuild even if image exists
 #   --parity[=DIR]                       Run parity data collection and comparison report.
 #                                        Requires os-diff repo (default DIR: ../os-diff)
-#   --rebuild-and-test                   Rebuild image and run container tests (equivalent to
-#                                        --rebuild --build-vm-image --start-vm --run-script ./run-container-test.sh)
+#   --rebuild-and-test                   Rebuild image and run smoke tests (equivalent to
+#                                        --rebuild --build-vm-image --run-tests)
+#   --run-tests                          Start a VM and run a series of predefined tests on the VM after boot
+#                                        (includes run-secureboot-test.sh, run-container-test.sh,
+#                                        run-systemd-health-test.sh, run-dmesg-io-error-test.sh)
 #   --run-script=PATH                    Run script on VM after boot (can specify multiple times)
 #                                        Can be a file path or inline command. Implies --start-vm
 #   --run-kola-tests                     Run kola tests using run_local_tests.sh after building
@@ -270,6 +272,9 @@ parse_args() {
                 BUILD_IMAGE=true
                 BUILD_VM_IMAGE=true
                 BUILD_STANDALONE_SYSEXTS=true
+                # Passthrough
+                ;&
+            --run-tests)
                 START_VM=true
                 RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
