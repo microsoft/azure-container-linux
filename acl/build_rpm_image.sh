@@ -661,9 +661,15 @@ hydrate() {
     mkdir -p "${temp_dir}"
 
     # Download published_artifacts.json
-    info "Downloading published artifacts manifest..."
+    # Derive arch suffix from BOARD for the per-architecture artifact name.
+    local artifact_arch
+    case "${BOARD}" in
+        arm64-usr) artifact_arch="arm64" ;;
+        *)         artifact_arch="amd64" ;;
+    esac
+    info "Downloading published artifacts manifest (arch: ${artifact_arch})..."
     if ! az pipelines runs artifact download \
-        --artifact-name "drop_publish_final_finalize" \
+        --artifact-name "drop_publish_final_${artifact_arch}_finalize" \
         --path "${temp_dir}/manifest" \
         --run-id "${build_id}" \
         --org "${org}" \
