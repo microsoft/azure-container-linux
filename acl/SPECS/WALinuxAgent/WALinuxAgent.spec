@@ -1,7 +1,7 @@
 Summary:        The Windows Azure Linux Agent
 Name:           WALinuxAgent
 Version:        2.11.1.4
-Release:        4%{?dist}
+Release:        5%{?dist}
 License:        ASL 2.0
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
@@ -113,6 +113,9 @@ python3 setup.py check && python3 setup.py test
 
 
 %changelog
+* Fri Mar 27 2026 Mayank Singh <mayansingh@microsoft.com> - 2.11.1.4-5
+- Bump version for the restart_ssh_service fix to pickup latest
+
 * Fri Feb 27 2026 Mayank Singh <mayansingh@microsoft.com> - 2.11.1.4-4
 - Add patch to update setup.py with acl support
 
