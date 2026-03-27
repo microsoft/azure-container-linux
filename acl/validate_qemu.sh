@@ -462,6 +462,7 @@ start_vm_qemu() {
         smm_feature=""
     else
         for code_file in \
+            "${image_dir}/acl_production_qemu_uefi_secure_efi_code.qcow2" \
             "/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd" \
             "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd" \
             "/usr/share/OVMF/OVMF_CODE.secboot.fd" \
@@ -474,6 +475,7 @@ start_vm_qemu() {
             fi
         done
         for vars_file in \
+            "${image_dir}/acl_production_qemu_uefi_secure_efi_vars.qcow2" \
             "/usr/share/edk2/x64/OVMF_VARS.ms.4m.fd" \
             "/usr/share/OVMF/OVMF_VARS_4M.ms.fd" \
             "/usr/share/OVMF/OVMF_VARS.ms.fd" \
