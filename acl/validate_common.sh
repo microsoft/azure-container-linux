@@ -42,6 +42,7 @@ PARITY=""  # Path to os-diff directory for parity data collection and reporting
 SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-true}"  # Enable secure boot
 RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID
+REUSE_IMAGE=false  # Reuse the latest published gallery image (skip VHD upload)
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
 VM_STATE_FILE="${SCRIPT_DIR}/.vm-state.env"  # State file for VM reuse between invocations
@@ -673,6 +674,10 @@ parse_validate_args() {
                 START_VM=true
                 NO_CLEANUP=true
                 shift ;;
+            --reuse-image)
+                REUSE_IMAGE=true
+                START_VM=true
+                shift ;;
             --no-cleanup)
                 NO_CLEANUP=true
                 shift ;;
@@ -743,6 +748,7 @@ parse_validate_args() {
                 echo "  --keep-vm                  Keep VM running after scripts complete"
                 echo "  --no-cleanup               Skip cleanup of existing VM resource groups"
                 echo "  --parity[=DIR]             Run parity data collection"
+                echo "  --reuse-image              Reuse the latest published gallery image (skip VHD upload)"
                 echo "  --reuse-vm                 Reuse an already-running VM"
                 echo "  --run-kola-tests           Run kola tests"
                 echo "  --run-script=PATH          Run script on VM (can specify multiple)"
@@ -775,7 +781,7 @@ parse_validate_args() {
             esac
         fi
         # Don't auto-build if image already exists or using ACG image
-        if [[ -n "${ACG_IMAGE_VERSION_ID}" ]] || [[ -f "$auto_vm_path" ]]; then
+        if [[ -n "${ACG_IMAGE_VERSION_ID}" ]] || [[ "${REUSE_IMAGE}" == "true" ]] || [[ -f "$auto_vm_path" ]]; then
             : # Image exists or using gallery image, no need to build
         fi
     fi
@@ -808,6 +814,8 @@ validate_main() {
         else
             if [[ -n "${ACG_IMAGE_VERSION_ID}" ]] && [[ "$VM_TYPE" == "azure" ]]; then
                 info "Using pre-existing ACG image version — skipping local image check"
+            elif [[ "${REUSE_IMAGE}" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
+                info "Reusing latest gallery image — skipping local image check"
             elif ! [[ -f "$vm_image_path" ]]; then
                 error "VM image not found at expected path: $vm_image_path"
                 error "Build a VM image first with '--build-vm-image'"

@@ -128,6 +128,7 @@ VM_BOOT_TIMEOUT="${VM_BOOT_TIMEOUT:-180}"  # Seconds to wait for VM boot
 PARITY=""  # Path to os-diff directory for parity data collection and reporting
 RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID (bypasses VHD upload)
+REUSE_IMAGE=false  # Reuse the latest published gallery image (skip VHD upload)
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
 BUILD_STANDALONE_SYSEXTS=false  # Build standalone sysexts as a separate step (not during VM image conversion)
@@ -476,6 +477,11 @@ parse_args() {
                 NO_CLEANUP=true
                 shift
                 ;;
+            --reuse-image)
+                REUSE_IMAGE=true
+                START_VM=true
+                shift
+                ;;
             --tag=*)
                 RESOURCE_TAGS+=("${1#*=}")
                 shift
@@ -538,6 +544,19 @@ parse_args() {
                 exit 1
                 ;;
         esac
+    fi
+
+    if [[ "$REUSE_IMAGE" == "true" ]]; then
+        if [[ "$VM_TYPE" != "azure" ]]; then
+            error "--reuse-image can only be used with VM_TYPE=azure"
+            exit 1
+        fi
+    fi
+
+    # Ensure only one of ACG_IMAGE_VERSION_ID or REUSE_IMAGE is set to avoid ambiguity
+    if [[ -n "$ACG_IMAGE_VERSION_ID" && "$REUSE_IMAGE" == "true" ]]; then
+        error "Cannot set both ACG_IMAGE_VERSION_ID and REUSE_IMAGE. Please choose one."
+        exit 1
     fi
 }
 
@@ -1446,6 +1465,7 @@ main() {
         [[ "$START_VM" == "true" ]]             && validate_args+=("--start-vm")
         [[ "$KEEP_VM" == "true" ]]              && validate_args+=("--keep-vm")
         [[ "$REUSE_VM" == "true" ]]             && validate_args+=("--reuse-vm")
+        [[ "$REUSE_IMAGE" == "true" ]]           && validate_args+=("--reuse-image")
         [[ -n "${NO_CLEANUP:-}" ]] && [[ "$NO_CLEANUP" == "true" ]] && validate_args+=("--no-cleanup")
         [[ "$RUN_KOLA_TESTS" == "true" ]]       && validate_args+=("--run-kola-tests")
         [[ "$USE_SERIAL_CONSOLE" == "true" ]]   && validate_args+=("--use-serial")

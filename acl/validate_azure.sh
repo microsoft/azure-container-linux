@@ -219,6 +219,31 @@ get_next_image_version() {
     fi
 }
 
+# Return the latest Succeeded gallery image version, or empty string if none.
+get_latest_image_version() {
+    az sig image-version list \
+        --resource-group "$AZ_GALLERY_RG" \
+        --gallery-name "$AZ_ACG" \
+        --gallery-image-definition "$AZ_VM_IMAGE_DEF" \
+        --query "[?provisioningState=='Succeeded'].name" -o tsv 2>/dev/null | \
+        sort -t "." -k1,1n -k2,2n -k3,3n | \
+        tail -1
+}
+
+# Check whether a gallery image version already exists and is in a usable
+# provisioning state (Succeeded).  Returns 0 if the version can be reused.
+gallery_image_version_exists() {
+    local image_version="$1"
+    local state
+    state=$(az sig image-version show \
+        --resource-group "$AZ_GALLERY_RG" \
+        --gallery-name "$AZ_ACG" \
+        --gallery-image-definition "$AZ_VM_IMAGE_DEF" \
+        --gallery-image-version "$image_version" \
+        --query 'provisioningState' -o tsv 2>/dev/null) || return 1
+    [[ "${state}" == "Succeeded" ]]
+}
+
 create_gallery_image_version() {
     local image_version="$1"
     local blob_name="$2"
@@ -384,13 +409,29 @@ start_vm_azure() {
     if [[ -n "${ACG_IMAGE_VERSION_ID}" ]]; then
         info "Using pre-existing ACG image version: ${ACG_IMAGE_VERSION_ID}"
         create_vm_azure "$vm_rg_name" "${ACG_IMAGE_VERSION_ID}"
+    elif [[ "${REUSE_IMAGE}" == "true" ]]; then
+        check_azure_infra
+        local image_version
+        image_version=$(get_latest_image_version)
+        if [[ -z "$image_version" ]]; then
+            die "--reuse-image: no existing gallery image version found in ${AZ_ACG}/${AZ_VM_IMAGE_DEF}"
+        fi
+        info "Reusing latest gallery image version: ${image_version} — skipping VHD upload"
+        create_vm_azure "$vm_rg_name" "$image_version"
     else
         check_azure_infra
-        local blob_name="$(date +%y%m%d.%H%M%S)-${BUILD_ID:+${BUILD_ID}-}${IMG_NAME}.vhd"
-        upload_vhd_to_storage "$vm_image_path" "$blob_name"
         local image_version
         image_version=$(get_next_image_version)
-        create_gallery_image_version "$image_version" "$blob_name"
+
+        # When BUILD_ID is set the version is deterministic (1.0.<BUILD_ID>),
+        # so the same image may already have been published by a prior run.
+        if [[ -n "${BUILD_ID}" ]] && gallery_image_version_exists "$image_version"; then
+            info "Gallery image version ${image_version} already exists and is ready — skipping VHD upload"
+        else
+            local blob_name="$(date +%y%m%d.%H%M%S)-${BUILD_ID:+${BUILD_ID}-}${IMG_NAME}.vhd"
+            upload_vhd_to_storage "$vm_image_path" "$blob_name"
+            create_gallery_image_version "$image_version" "$blob_name"
+        fi
         create_vm_azure "$vm_rg_name" "$image_version"
     fi
 
