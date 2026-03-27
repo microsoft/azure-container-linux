@@ -276,18 +276,87 @@ create_gallery_image_version() {
         replication_mode="Full"
     fi
 
-    az sig image-version create \
-        --resource-group "$AZ_GALLERY_RG" \
-        --gallery-name "$AZ_ACG" \
-        --gallery-image-definition "$AZ_VM_IMAGE_DEF" \
-        --gallery-image-version "$image_version" \
-        --os-vhd-uri "$blob_url" \
-        --os-vhd-storage-account "$storage_account_resource_id" \
-        --location "$image_location" \
-        --target-regions $target_regions \
-        --replica-count 1 \
-        --storage-account-type Standard_LRS \
-        --replication-mode "$replication_mode"
+    # Check for ephemeral UKI signing cert next to the VHD. When present, we
+    # must use the REST API to enroll it in the image's Secure Boot db (az CLI
+    # does not expose securityProfile on image-version create).
+    local signing_cert="${_VM_IMAGE_DIR}/uki-signing-ca.pem"
+    if [[ -f "${signing_cert}" ]]; then
+        info "Found UKI signing cert: ${signing_cert} — using REST API with Secure Boot profile"
+        local cert_b64
+        cert_b64=$(grep -v '^-----' "${signing_cert}" | tr -d '\n\r')
+        local version_resource_id="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/${AZ_GALLERY_RG}/providers/Microsoft.Compute/galleries/${AZ_ACG}/images/${AZ_VM_IMAGE_DEF}/versions/${image_version}"
+
+        # Build targetRegions JSON array from computed target_regions.
+        local target_regions_json=""
+        for region in $target_regions; do
+            [[ -n "$target_regions_json" ]] && target_regions_json+=","
+            target_regions_json+="{\"name\": \"${region}\", \"regionalReplicaCount\": 1, \"storageAccountType\": \"Standard_LRS\"}"
+        done
+
+        az rest --method PUT \
+            --url "${version_resource_id}?api-version=2023-07-03" \
+            --body "{
+              \"location\": \"${image_location}\",
+              \"properties\": {
+                \"storageProfile\": {
+                  \"osDiskImage\": {
+                    \"source\": {
+                      \"uri\": \"${blob_url}\",
+                      \"storageAccountId\": \"${storage_account_resource_id}\"
+                    }
+                  }
+                },
+                \"publishingProfile\": {
+                  \"targetRegions\": [${target_regions_json}],
+                  \"replicationMode\": \"${replication_mode}\"
+                },
+                \"securityProfile\": {
+                  \"uefiSettings\": {
+                    \"signatureTemplateNames\": [\"MicrosoftUefiCertificateAuthorityTemplate\"],
+                    \"additionalSignatures\": {
+                      \"db\": [{\"type\": \"x509\", \"value\": [\"${cert_b64}\"]}]
+                    }
+                  }
+                }
+              }
+            }"
+
+        # az rest doesn't handle long-running operations — poll until provisioned.
+        info "Waiting for image version provisioning to complete..."
+        local state
+        for attempt in $(seq 1 60); do
+            state=$(az rest --method GET \
+                --url "${version_resource_id}?api-version=2023-07-03" \
+                --query "properties.provisioningState" -o tsv 2>/dev/null || echo "Unknown")
+            if [[ "${state}" == "Succeeded" ]]; then
+                info "✓ Image version provisioning succeeded (attempt ${attempt})"
+                break
+            elif [[ "${state}" == "Failed" ]]; then
+                error "Image version provisioning failed"
+                az rest --method GET --url "${version_resource_id}?api-version=2023-07-03" || true
+                exit 1
+            fi
+            info "  Provisioning state: ${state} (attempt ${attempt}/60, waiting 30s...)"
+            sleep 30
+        done
+        if [[ "${state}" != "Succeeded" ]]; then
+            error "Image version provisioning timed out after 30 minutes"
+            exit 1
+        fi
+    else
+        az sig image-version create \
+            --resource-group "$AZ_GALLERY_RG" \
+            --gallery-name "$AZ_ACG" \
+            --gallery-image-definition "$AZ_VM_IMAGE_DEF" \
+            --gallery-image-version "$image_version" \
+            --os-vhd-uri "$blob_url" \
+            --os-vhd-storage-account "$storage_account_resource_id" \
+            --location "$image_location" \
+            --target-regions $target_regions \
+            --replica-count 1 \
+            --storage-account-type Standard_LRS \
+            --replication-mode "$replication_mode"
+    fi
     info "✓ Gallery image version created: $image_version"
 }
 
@@ -420,6 +489,7 @@ start_vm_azure() {
         create_vm_azure "$vm_rg_name" "$image_version"
     else
         check_azure_infra
+        _VM_IMAGE_DIR="$(cd "$(dirname "${vm_image_path}")" && pwd)"
         local image_version
         image_version=$(get_next_image_version)
 
