@@ -1,4 +1,4 @@
-From 5a8be3faa2ee3037a6ffd2f870e872220e39803b Mon Sep 17 00:00:00 2001
+From 0f9c3a2abd15da9d47568f884c42ff0643810a51 Mon Sep 17 00:00:00 2001
 From: Mayank Singh <mayankfz@gmail.com>
 Date: Fri, 20 Mar 2026 04:56:16 +0000
 Subject: [PATCH] add ACL support
@@ -6,13 +6,14 @@ Subject: [PATCH] add ACL support
 Signed-off-by: Mayank Singh <mayankfz@gmail.com>
 ---
  azurelinuxagent/common/future.py             |  8 +++++
+ azurelinuxagent/common/osutil/mariner.py     |  6 ++++
  azurelinuxagent/common/version.py            |  3 +-
  azurelinuxagent/ga/persist_firewall_rules.py |  1 +
  config/acl/waagent.conf                      | 36 ++++++++++++++++++++
  init/acl/10-waagent-sysext.conf              |  2 ++
  init/acl/waagent.service                     | 21 ++++++++++++
  setup.py                                     | 27 ++++++++++-----
- 7 files changed, 89 insertions(+), 9 deletions(-)
+ 8 files changed, 95 insertions(+), 9 deletions(-)
  create mode 100644 config/acl/waagent.conf
  create mode 100644 init/acl/10-waagent-sysext.conf
  create mode 100644 init/acl/waagent.service
@@ -33,6 +34,36 @@ index be28ba9..09622fe 100644
 +    For example, for Azure Container Linux, the variant ID is "azurecontainerlinux", which differentiates it from other variants of AzureLinux.
 +    """
 +    return distro.os_release_attr("variant_id")
+diff --git a/azurelinuxagent/common/osutil/mariner.py b/azurelinuxagent/common/osutil/mariner.py
+index b6ea590..653d77f 100644
+--- a/azurelinuxagent/common/osutil/mariner.py
++++ b/azurelinuxagent/common/osutil/mariner.py
+@@ -17,12 +17,14 @@
+ #
+ 
+ from azurelinuxagent.common.osutil.default import DefaultOSUtil
++from azurelinuxagent.common.version import DISTRO_VARIANT_ID
+ 
+ 
+ class MarinerOSUtil(DefaultOSUtil):
+     def __init__(self):
+         super(MarinerOSUtil, self).__init__()
+         self.jit_enabled = True
++        self.distro_variant_id = DISTRO_VARIANT_ID
+ 
+     @staticmethod
+     def get_systemd_unit_file_install_path():
+@@ -42,6 +44,10 @@ class MarinerOSUtil(DefaultOSUtil):
+         self._run_command_without_raising(["systemctl", "restart", "systemd-networkd"])
+ 
+     def restart_ssh_service(self):
++        # ACL uses sshd.socket for socket-activated SSH (similar to Flatcar/CoreOS).
++        # Restarting sshd.service would conflict with the active sshd.socket.
++        if self.distro_variant_id == "azurecontainerlinux":
++            return
+         self._run_command_without_raising(["systemctl", "restart", "sshd"])
+ 
+     def stop_dhcp_service(self):
 diff --git a/azurelinuxagent/common/version.py b/azurelinuxagent/common/version.py
 index b4e93e8..cf61e9e 100644
 --- a/azurelinuxagent/common/version.py
