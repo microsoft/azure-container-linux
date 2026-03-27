@@ -406,7 +406,7 @@ parse_args() {
                 shift
                 ;;
             --no-secure-boot)
-                SECURE_BOOT_ENABLED=false
+                export SECURE_BOOT_ENABLED=false
                 shift
                 ;;
             --az-sub-id=*)
