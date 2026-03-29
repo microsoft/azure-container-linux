@@ -613,7 +613,11 @@ install_oem_sysext() {
         ${compression_opt}
     )
     local overlay_path mangle_fs
-    overlay_path=$(portageq get_repo_path / coreos-overlay)
+    if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+        overlay_path="${SCRIPT_ROOT}/sdk_container/src/third_party/coreos-overlay"
+    else
+        overlay_path=$(portageq get_repo_path / coreos-overlay)
+    fi
     mangle_fs="${overlay_path}/${metapkg}/files/manglefs.sh"
     if [[ -x "${mangle_fs}" ]]; then
         build_sysext_flags+=(
@@ -621,9 +625,10 @@ install_oem_sysext() {
         )
     fi
 
+    local -a build_sysext_env=()
     # For RPM mode, set environment variables to pass to build_sysext
     if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
-        local build_sysext_env=(
+        build_sysext_env+=(
             "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE}"
             "RPM_STAGING_DIR=${RPM_STAGING_DIR}"
             "IMAGE_VERSION=${IMAGE_VERSION:-}"
