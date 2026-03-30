@@ -136,7 +136,7 @@ run_fs_hook
 # place (acl.efi + addons). The public certificate is written to the image
 # output directory so _write_qemu_uefi_secure_conf() can enroll it in the OVMF
 # Secure Boot db.
-if [[ "${BOOTLOADER_MODE:-grub}" == "uki" ]]; then
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]; then
     "${BUILD_LIBRARY_DIR}/rpm/sign_uki_ephemeral.sh" \
         "${VM_TMP_ROOT}/boot" \
         "$(_dst_dir)"

@@ -148,8 +148,8 @@ HYDRATE_PIPELINE_ID="5304"
 # Set envi var-s required for RPM mode
 export PACKAGE_SOURCE_MODE=RPM
 export RPM_STAGING_DIR="${STAGING_DIR}"
-# Bootloader mode: 'grub' (default) or 'uki' (systemd-boot + UKI)
-export BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
+# Bootloader mode: 'uki' (default, systemd-boot + UKI) or 'grub'
+export BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
 # Forward ACL version overrides into run_sdk_container → docker container
 export IMAGE_VERSION="${IMAGE_VERSION:-}"
 export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"

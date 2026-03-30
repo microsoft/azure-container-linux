@@ -373,10 +373,10 @@ FLATCAR_VERSION_STRING="${FLATCAR_VERSION}"
 # *before* sourcing common.sh.
 PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
 
-# Bootloader mode: 'grub' (default) or 'uki' (systemd-boot + UKI).
-# Scripts that need UKI mode should export BOOTLOADER_MODE=uki
+# Bootloader mode: 'uki' (default, systemd-boot + UKI) or 'grub'.
+# Scripts that need grub mode should export BOOTLOADER_MODE=grub
 # *before* sourcing common.sh.
-BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
+BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
 
 # Image version for OS identity (os-release, lsb-release) in RPM builds.
 # This is separate from FLATCAR_VERSION which must track the SDK container.

@@ -48,7 +48,7 @@ REUSE_VM=false  # Reuse an already-running VM (read state file)
 VM_STATE_FILE="${SCRIPT_DIR}/.vm-state.env"  # State file for VM reuse between invocations
 VM_IMAGE_PATH=""  # Explicit VM image path (auto-detected if empty)
 AZ_VM_ARGS="${AZ_VM_ARGS:-}"  # Additional arguments to pass when starting Azure VMs (e.g., for user-data)
-export BOOTLOADER_MODE="${BOOTLOADER_MODE:-grub}"
+export BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
 
 VM_IP=""
 
