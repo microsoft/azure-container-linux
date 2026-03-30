@@ -78,6 +78,7 @@ kubeadm.v1.34.1.flannel.base
 linux.nfs.v3
 linux.nfs.v4
 linux.ntp
+sysext.custom-docker.sysext
 sysext.disable-containerd
 sysext.disable-docker
 sysext.simple
