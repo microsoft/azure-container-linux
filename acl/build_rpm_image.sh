@@ -19,7 +19,9 @@
 #   --boot-timeout=SECS                  Timeout waiting for VM boot (default: 180)
 #   --build-rpms                         Build custom RPM packages using Azure Linux toolkit (runs acl/build.sh)
 #   --build-sdk-container                Update/rebuild SDK container with RPM tools (can run standalone)
-#   --build-vm-image                     Build VM images after creating base image
+#   --build-standalone-sysexts           Build standalone sysexts as a separate step (not during VM image conversion)
+#   --build-test-image                   Build a test VM image (includes docker sysext) for kola testing
+#   --build-vm-image                     Build VM images after creating base image (no docker sysext)
 #   --clean                              Clean staging and build RPM directories before download
 #   --console-password=PASS              Serial console login password (empty for passwordless)
 #   --console-user=USER                  Serial console login user (default: root)
@@ -132,6 +134,7 @@ REUSE_IMAGE=false  # Reuse the latest published gallery image (skip VHD upload)
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
 BUILD_STANDALONE_SYSEXTS=false  # Build standalone sysexts as a separate step (not during VM image conversion)
+BUILD_TEST_IMAGE=false  # Build a test VM image with docker sysext for kola testing
 AZ_VM_ARGS="${AZ_VM_ARGS:-}"  # Additional arguments to pass to start azure VM
 
 # Standalone sysext definitions — maintained in a YAML config for easy extension.
@@ -289,6 +292,10 @@ parse_args() {
                 ;;
             --build-vm-image)
                 BUILD_VM_IMAGE=true
+                shift
+                ;;
+            --build-test-image)
+                BUILD_TEST_IMAGE=true
                 shift
                 ;;
             --vm-type=*)
@@ -1039,11 +1046,14 @@ build_image() {
     info "Using ${rpm_count} pre-downloaded RPM packages"
 
     # Build arguments for build_image
+    # Docker is built as a standalone sysext (not baked into the rootfs), so
+    # override --base_sysexts to include only containerd.
     local build_args=(
         "--image_compression_formats=none"
         "--nogenerate_update"
         "--board=${BOARD}"
         "--group=${GROUP}"
+        "--base_sysexts=containerd-flatcar|app-containers/containerd"
         "--disk_layout=${DISK_LAYOUT}"
         "--image_name=${IMG_NAME}_image.bin"
     )
@@ -1228,7 +1238,6 @@ build_vm_image() {
         error "${vm_type} VM image generation failed"
         exit 1
     fi
-    info "${vm_type} VM image ready at: ${vm_image_path}"
 }
 
 # Print size summary of built images
@@ -1299,11 +1308,21 @@ print_summary() {
     fi
 
     if [[ "$BUILD_VM_IMAGE" == "true" ]]; then
-        echo "  Build Azure Container Linux VM image"
+        echo "  Build Azure Container Linux VM image (no docker sysext)"
         echo "  VM Type: ${VM_TYPE}"
         echo "  Base Image: ${IMG_NAME}_${VM_TYPE}_uefi_image.img"
-        echo "  Start VM after build: ${START_VM}"
-        echo "  VM Name: ${VM_NAME}"
+        echo
+    fi
+
+    if [[ "$BUILD_TEST_IMAGE" == "true" ]]; then
+        echo "  Build Azure Container Linux test VM image (with docker sysext)"
+        echo "  VM Type: ${VM_TYPE}"
+        if [[ "$VM_TYPE" == "azure" ]]; then
+            echo "  Test Image: ${IMG_NAME}_azure_test_image.vhd"
+        else
+            echo "  Test Image: ${IMG_NAME}_qemu_uefi_test_image.img"
+        fi
+
         echo
     fi
 
@@ -1421,7 +1440,28 @@ main() {
         print_size_summary
     fi
 
-    # Step 4: Build VM image (if requested)
+    # Step 4: Build test VM image (if requested)
+    if [[ "$BUILD_TEST_IMAGE" == "true" ]]; then
+        local vm_image_path test_vm_image_path
+        case "$VM_TYPE" in
+            qemu)
+                vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_qemu_uefi_image.img"
+                test_vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_qemu_uefi_test_image.img"
+                ;;
+            azure)
+                vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_azure_image.vhd"
+                test_vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_azure_test_image.vhd"
+                ;;
+        esac
+        section "Building Test VM Image at ${test_vm_image_path}"
+        info "Converting base image to ${VM_TYPE} test VM format (with docker sysext)..."
+        export INJECT_DOCKER_SYSEXT=true
+        build_vm_image "$VM_TYPE" "$vm_image_path"
+        mv "${vm_image_path}" "${test_vm_image_path}"
+        info "Test VM image ready at: ${test_vm_image_path}"
+    fi
+
+    # Step 4a: Build VM image (if requested)
     if [[ "$BUILD_VM_IMAGE" == "true" ]]; then
         local vm_image_path
         case "$VM_TYPE" in
@@ -1430,7 +1470,9 @@ main() {
         esac
         section "Building VM Image at ${vm_image_path}"
         info "Converting base image to ${VM_TYPE} VM format..."
+        export INJECT_DOCKER_SYSEXT=false
         build_vm_image "$VM_TYPE" "$vm_image_path"
+        info "VM image ready at: ${vm_image_path}"
     fi
 
     # Step 4b: Build standalone sysexts (if requested)

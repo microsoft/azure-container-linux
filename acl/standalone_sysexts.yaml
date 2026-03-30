@@ -25,6 +25,13 @@
 # validation) is fully data-driven and picks up new entries automatically.
 
 sysexts:
+  # --- scenario-specific sysexts -----------------------------------------
+  - name: docker-flatcar
+    packages:
+      - app-containers/docker
+      - app-containers/docker-cli
+      - app-containers/docker-buildx
+  
   # --- GPU / hardware sysexts -------------------------------------------
   - name: nvidia-driver-cuda-open
     packages:

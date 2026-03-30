@@ -58,8 +58,15 @@ function set_vars() {
 
   # Read by the mantle container.
   # The local directory ("pwd") will be mounted to /work/ in the container.
+  # RPM/ACL mode uses the OEM qcow2 test image (with docker sysext);
+  # PORTAGE mode uses the raw .bin image.
+  local img_name="${img_prefix}_image.bin"
+  if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    img_name="${img_prefix}_qemu_uefi_test_image.img"
+  fi
+
   cat > sdk_container/.env <<EOF
-export QEMU_IMAGE_NAME=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_image.bin
+export QEMU_IMAGE_NAME=/work/__build__/images/images/${arch@Q}-usr/latest/${img_name@Q}
 export QEMU_UEFI_FIRMWARE=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_efi_code.qcow2
 export QEMU_UEFI_OVMF_VARS=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_efi_vars.qcow2
 export QEMU_UEFI_SECURE_FIRMWARE=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_secure_efi_code.qcow2

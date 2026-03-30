@@ -104,6 +104,9 @@ fi
 if [[ -n "${IMAGE_BUILD_ID:-}" ]]; then
     echo "export IMAGE_BUILD_ID='${IMAGE_BUILD_ID}'" >> /home/sdk/.bashrc
 fi
+# Forward docker sysext injection flag for test image builds
+sed -i -e '/export INJECT_DOCKER_SYSEXT=/d' /home/sdk/.bashrc 2>/dev/null || true
+echo "export INJECT_DOCKER_SYSEXT='${INJECT_DOCKER_SYSEXT:-false}'" >> /home/sdk/.bashrc
 
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"
