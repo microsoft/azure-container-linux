@@ -25,3 +25,7 @@ __build__/
 __TESTS__/
 sdk_container/.cache
 sdk_container/.config
+
+# Test files
+results-*
+results.*
