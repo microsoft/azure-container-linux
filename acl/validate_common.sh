@@ -732,6 +732,9 @@ parse_validate_args() {
             --az-vm-args=*)
                 AZ_VM_ARGS="${1#*=}"
                 shift ;;
+            --no-secure-boot)
+                SECURE_BOOT_ENABLED=false
+                shift ;;
             --help)
                 echo "Usage: $0 [options]"
                 echo ""

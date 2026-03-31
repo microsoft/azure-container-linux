@@ -1512,6 +1512,7 @@ main() {
         [[ "$RUN_KOLA_TESTS" == "true" ]]       && validate_args+=("--run-kola-tests")
         [[ "$USE_SERIAL_CONSOLE" == "true" ]]   && validate_args+=("--use-serial")
         [[ "$USE_SERIAL_CONSOLE" == "false" ]]  && validate_args+=("--use-ssh")
+        [[ "$SECURE_BOOT_ENABLED" == "false" ]] && validate_args+=("--no-secure-boot")
 
         [[ "$VM_TYPE" == "azure" ]] && [[ -n "$AZ_VM_ARGS" ]] && validate_args+=("--az-vm-args=${AZ_VM_ARGS}")
 
