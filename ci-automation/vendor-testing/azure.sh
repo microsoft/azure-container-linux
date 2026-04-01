@@ -16,7 +16,12 @@ board="${CIA_ARCH}-usr"
 basename="ci-${CIA_VERNUM//+/-}-${CIA_ARCH}"
 azure_instance_type_var="AZURE_${CIA_ARCH}_MACHINE_SIZE"
 azure_instance_type="${!azure_instance_type_var}"
-azure_vnet_subnet_name="jenkins-vnet-${AZURE_LOCATION}"
+# Use the override if explicitly set (even if empty), otherwise default to location-based name.
+if [[ -v AZURE_VNET_SUBNET_NAME ]]; then
+    azure_vnet_subnet_name="${AZURE_VNET_SUBNET_NAME}"
+else
+    azure_vnet_subnet_name="jenkins-vnet-${AZURE_LOCATION}"
+fi
 
 # Fetch the Azure image if not present
 if [ -f "${AZURE_IMAGE_NAME}" ] ; then

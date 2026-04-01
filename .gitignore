@@ -29,3 +29,5 @@ sdk_container/.config
 # Test files
 results-*
 results.*
+
+.azure-config/
