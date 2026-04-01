@@ -7,7 +7,7 @@
 
 Name:           rust-%{crate}
 Version:        5.8.2
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Simple cloud provider agent
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
@@ -87,15 +87,9 @@ replace-with = "vendored-sources"
 [source.vendored-sources]
 directory = "vendor"
 EOF
-# afterburn-sshkeys@.service is by default enabled for the 'core' user in
-# CoreOS.
-# Based on https://github.com/coreos/afterburn/blob/master/Makefile.
-sed -e 's,@DEFAULT_INSTANCE@,core,' < \
-  systemd/afterburn-sshkeys@.service.in > \
-  systemd/afterburn-sshkeys@.service
 
 %build
-cargo build --release --offline
+cargo build --features cl-legacy --release --offline 
 
 %install
 %make_install
@@ -143,6 +137,6 @@ make test
 %{dracutmodulesdir}/30afterburn/
 
 %changelog
-* Thu Jan 22 2026 Sumit Jena <v-sumitjena@microsoft.com> - 5.8.2-2
+* Thu Jan 22 2026 Sumit Jena <v-sumitjena@microsoft.com> - 5.8.2-3
 - Initial Azure Linux import from the source project (license: same as "License" tag).
 - License verified.

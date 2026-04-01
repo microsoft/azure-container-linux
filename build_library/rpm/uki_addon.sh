@@ -93,7 +93,7 @@ fi
 # OEM ID: use ADDON_OEM_ID if set, otherwise the USE flag itself.
 oem_id="${ADDON_OEM_ID:-${OEM_USE}}"
 
-addon_cmdline="flatcar.oem.id=${oem_id} ignition.platform.id=${oem_id}"
+addon_cmdline="flatcar.oem.id=${oem_id}"
 
 # Console args: pick the architecture-appropriate set.
 case "${ARCH}" in
