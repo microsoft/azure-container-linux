@@ -574,7 +574,11 @@ check_prerequisites() {
     local missing=()
 
     # Check for required commands
-    for cmd in docker; do
+    local required_cmds=(docker)
+    if [[ "$BUILD_STANDALONE_SYSEXTS" == "true" ]]; then
+        required_cmds+=(yq)
+    fi
+    for cmd in "${required_cmds[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             missing+=("$cmd")
         fi
@@ -1329,7 +1333,12 @@ print_summary() {
     if [[ "$BUILD_STANDALONE_SYSEXTS" == "true" ]]; then
         echo "  Build standalone sysexts (separate from VM image)"
         local _sysext_names
-        _sysext_names=$(yq eval -r '.sysexts[].name' "${STANDALONE_SYSEXTS_YAML}" 2>/dev/null | tr '\n' ' ')
+        _sysext_names=$(yq eval -r '.sysexts[].name' "${STANDALONE_SYSEXTS_YAML}" | tr '\n' ' ') || {
+            error "Failed to parse ${STANDALONE_SYSEXTS_YAML} with yq."
+            error "  version: $(yq --version 2>&1 || echo unknown)"
+            error "Check the YAML syntax or ensure yq v4+ is installed."
+            exit 1
+        }
         echo "  Sysexts: ${_sysext_names:-<none>}"
         echo
     fi
