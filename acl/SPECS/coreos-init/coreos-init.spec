@@ -63,6 +63,7 @@ install -d %{buildroot}%{_sysconfdir}/systemd/system/rpcbind.target.wants
 ln -sf %{_unitdir}/rpcbind.service %{buildroot}%{_sysconfdir}/systemd/system/rpcbind.target.wants/rpcbind.service
 
 rm %{buildroot}/usr/lib/systemd/system/ignition-delete-config.service
+rm -f %{buildroot}/usr/lib/systemd/system/sysinit.target.wants/ignition-delete-config.service
 rm %{buildroot}/usr/lib/systemd/system/sshd-keygen.service
 rm -rf  %{buildroot}/etc/issue
 # Generate file manifest automatically (avoids missing files when upstream changes)

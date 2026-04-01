@@ -212,6 +212,44 @@ remove_denylist_rpm_packages() {
     info "RPM mode: Package cleanup complete"
 }
 
+# Remove perl scripts and modules orphaned by force-removing the perl denylist.
+# groff and git-core depend on perl, but perl is removed via --nodeps in
+# remove_denylist_rpm_packages. The scripts below are non-functional without
+# the perl interpreter and must be deleted explicitly.
+remove_orphaned_perl_scripts() {
+    local root_fs_dir="$1"
+
+    info "RPM mode: Removing orphaned perl scripts and modules"
+
+    # Perl module tree
+    sudo rm -rf "${root_fs_dir}/usr/share/perl5"
+
+    # groff perl scripts
+    sudo rm -f "${root_fs_dir}/usr/bin/afmtodit"
+    sudo rm -f "${root_fs_dir}/usr/bin/chem"
+    sudo rm -f "${root_fs_dir}/usr/bin/glilypond"
+    sudo rm -f "${root_fs_dir}/usr/bin/gp-display-html"
+    sudo rm -f "${root_fs_dir}/usr/bin/gperl"
+    sudo rm -f "${root_fs_dir}/usr/bin/gpinyin"
+    sudo rm -f "${root_fs_dir}/usr/bin/grog"
+    sudo rm -f "${root_fs_dir}/usr/bin/gropdf"
+    sudo rm -f "${root_fs_dir}/usr/bin/mmroff"
+    sudo rm -f "${root_fs_dir}/usr/bin/pdfmom"
+
+    # git-core perl scripts
+    sudo rm -f "${root_fs_dir}/usr/bin/git-cvsserver"
+    sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-archimport"
+    sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-cvsexportcommit"
+    sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-cvsimport"
+    sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-cvsserver"
+    sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-send-email"
+    sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-svn"
+    sudo rm -f "${root_fs_dir}/usr/share/git-core/templates/hooks/fsmonitor-watchman.sample"
+
+    # gitweb (perl CGI)
+    sudo rm -rf "${root_fs_dir}/usr/share/gitweb"
+}
+
 # Check whether a package name is available in the configured RPM repos.
 # Uses dnf5 repoquery which is fast and doesn't modify the system.
 # Returns 0 if found, 1 otherwise.
@@ -297,6 +335,8 @@ rpm_install_package() {
 
     remove_denylist_rpm_packages "${root_fs_dir}"
 
+    remove_orphaned_perl_scripts "${root_fs_dir}"
+
     # Remove documentation and locale directories that Portage mode excludes via INSTALL_MASK (see make.defaults)
     info "RPM mode: Removing documentation and locale directories (INSTALL_MASK parity)"
     sudo rm -rf "${root_fs_dir}/usr/share/doc"
@@ -307,9 +347,24 @@ rpm_install_package() {
     sudo rm -rf "${root_fs_dir}/usr/share/zsh"
     sudo rm -rf "${root_fs_dir}/usr/share/locale"
 
+    # Remove /var/log/README symlink and patch legacy.conf so systemd-tmpfiles
+    # won't recreate it at boot. The target (usr/share/doc/systemd/README.logs)
+    # was removed above with /usr/share/doc
+    sudo rm -f "${root_fs_dir}/var/log/README"
+    if [[ -f "${root_fs_dir}/usr/lib/tmpfiles.d/legacy.conf" ]]; then
+        sudo sed -i '\|/var/log/README|d' "${root_fs_dir}/usr/lib/tmpfiles.d/legacy.conf"
+    fi
+
     # Remove debug info
     info "RPM mode: Removing debug info files"
     sudo rm -rf "${root_fs_dir}/usr/lib/debug"
+
+    # Create /usr/bin/python symlink to python3 since ACL ships a single Python version
+    # Note: Updated the kola cl.filesystem/blacklist test to allow this path
+    if [[ ! -e "${root_fs_dir}/usr/bin/python" && -e "${root_fs_dir}/usr/bin/python3" ]]; then
+        info "RPM mode: Creating /usr/bin/python -> python3 symlink (python-exec equivalent)"
+        sudo ln -sf python3 "${root_fs_dir}/usr/bin/python"
+    fi
 
     info "Successfully installed ${#packages[@]} RPM packages"
 

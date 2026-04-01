@@ -51,7 +51,6 @@ test_image_content() {
   fi
 
   # Check that there are no #! lines pointing to non-existant locations
-  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
   if ! ROOT="$root" "$check_root" shebang; then
     warn "test_image_content: Failed #! check"
     # Only a warning for now. We still have to actually remove all of the
@@ -59,23 +58,10 @@ test_image_content() {
     #error "test_image_content: Failed #! check"
     #returncode=1
   fi
-  else
-    # Reenablement tracked by https://dev.azure.com/mariner-org/ACL/_sprints/taskboard/ACL%20Team/ACL/MMM/Kr/CYC2?workitem=17546
-    # Skip this check in HYBRID mode - Azure Linux uses /bin as symlink to usr/bin
-    # which causes false positives for scripts with /bin/sh or /bin/bash shebangs
-    warn "test_image_content: Skipping shebang check in HYBRID mode"
-  fi
 
-  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
   if ! sudo ROOT="$root" "$check_root" symlink; then
     error "test_image_content: Failed symlink check"
     returncode=1
-    fi
-  else
-    # Reenablement tracked by https://dev.azure.com/mariner-org/ACL/_sprints/taskboard/ACL%20Team/ACL/MMM/Kr/CYC2?workitem=17546
-    # Skip symlink check in HYBRID mode - Azure Linux packages may have symlinks
-    # pointing to files that are optional or configured at runtime (e.g., /etc/sysconfig/grub -> /etc/default/grub)
-    warn "test_image_content: Skipping symlink check in HYBRID mode"
   fi
 
   if ! ROOT="$root" glsa_image; then

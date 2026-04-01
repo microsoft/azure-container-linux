@@ -132,9 +132,15 @@ for arg in "$@"; do
 done
 
 # Check that the build root is sane.
-if [[ ${skip_test_build_root} -ne 1 ]]; then
-  info "Checking build root"
-  test_image_content "${BOARD_ROOT}"
+# Skip in RPM mode: the Portage sysroot has scripts with /bin/sh shebangs but
+# no RPM-provided interpreters. The image rootfs is checked in prod_image_util.sh.
+if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+  if [[ ${skip_test_build_root} -ne 1 ]]; then
+    info "Checking build root"
+    test_image_content "${BOARD_ROOT}"
+  fi
+else
+  info "Skipping build root check in ${PACKAGE_SOURCE_MODE} mode (will check image rootfs instead)"
 fi
 
 # Handle existing directory.

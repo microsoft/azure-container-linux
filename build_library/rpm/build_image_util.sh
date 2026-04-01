@@ -523,15 +523,6 @@ SSHD_KEYGEN_DROPIN
         fi
     done
 
-    # Remove dead links
-    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/ignition-delete-config.service"
-
-    # Remove the /var/log/README symlink rule from legacy.conf — the target
-    # (/usr/share/doc/systemd/README.logs) doesn't exist because Azure Linux
-    # builds systemd with create-log-dirs disabled. A build-time rm is not
-    # enough because systemd-tmpfiles recreates the symlink at every boot.
-    sudo sed -i '\|/var/log/README|d' "${root_fs_dir}/usr/lib/tmpfiles.d/legacy.conf"
-
     # Enable systemd-repart + systemd-growfs for rootfs auto-grow
     # The ROOT partition uses the DPS (Discoverable Partitions Spec) root type GUID,
     # resolved at build time by disk_util from the "dps-root" placeholder in disk_layout.json
