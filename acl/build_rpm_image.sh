@@ -1449,7 +1449,12 @@ main() {
         print_size_summary
     fi
 
-    # Step 4: Build test VM image (if requested)
+    # Step 4: Build standalone sysexts (if requested)
+    if [[ "$BUILD_STANDALONE_SYSEXTS" == "true" ]]; then
+        build_standalone_sysexts
+    fi
+
+    # Step 5a: Build test VM image (if requested)
     if [[ "$BUILD_TEST_IMAGE" == "true" ]]; then
         local vm_image_path test_vm_image_path
         case "$VM_TYPE" in
@@ -1470,7 +1475,7 @@ main() {
         info "Test VM image ready at: ${test_vm_image_path}"
     fi
 
-    # Step 4a: Build VM image (if requested)
+    # Step 5b: Build VM image (if requested)
     if [[ "$BUILD_VM_IMAGE" == "true" ]]; then
         local vm_image_path
         case "$VM_TYPE" in
@@ -1484,12 +1489,7 @@ main() {
         info "VM image ready at: ${vm_image_path}"
     fi
 
-    # Step 4b: Build standalone sysexts (if requested)
-    if [[ "$BUILD_STANDALONE_SYSEXTS" == "true" ]]; then
-        build_standalone_sysexts
-    fi
-
-    # Step 5: VM lifecycle & kola tests — delegate to validate_rpm_image.sh
+    # Step 6: VM lifecycle & kola tests — delegate to validate_rpm_image.sh
     if [[ "$START_VM" == "true" ]] || [[ "$RUN_KOLA_TESTS" == "true" ]]; then
         local validate_args=()
         validate_args+=("--board=${BOARD}")
