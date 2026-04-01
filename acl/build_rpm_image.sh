@@ -50,6 +50,7 @@
 #                                        Can be a file path or inline command. Implies --start-vm
 #   --run-kola-tests                     Run kola tests using run_local_tests.sh after building
 #   --ssh-authorized-keys=KEYS           SSH public keys for VM access (file path or key string)
+#   --skip-standalone-sysexts            Skip building standalone sysexts (to speed up rebuilds)
 #   --ssh-key=PATH                       SSH private key for VM access
 #   --ssh-timeout=SECS                   Timeout waiting for SSH (default: 120)
 #   --ssh-user=USER                      SSH user for VM scripts (default: core)
@@ -471,6 +472,10 @@ parse_args() {
                 ;;
             --build-standalone-sysexts)
                 BUILD_STANDALONE_SYSEXTS=true
+                shift
+                ;;
+            --skip-standalone-sysexts)
+                BUILD_STANDALONE_SYSEXTS=false
                 shift
                 ;;
             --keep-vm)
