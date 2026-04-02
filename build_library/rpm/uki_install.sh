@@ -222,9 +222,27 @@ OSREL
     sudo cp "${sd_boot_efi}" "${ESP_DIR}/EFI/BOOT/grub${EFI_ARCH}.efi"
     info "UKI/RPM: Installed systemd-boot → EFI/BOOT/grub${EFI_ARCH}.efi"
 
+    # The kernel and initramfs are now embedded inside the UKI. Remove them from
+    # the ESP to reclaim space.
+    info "UKI/RPM: Cleaning up pre-UKI files from ESP"
+    sudo rm -f "${ESP_DIR}"/flatcar/vmlinuz-a
+    sudo rm -f "${ESP_DIR}"/flatcar/initramfs-a.img
+    sudo rm -f "${ESP_DIR}"/boot/vmlinuz-* "${ESP_DIR}"/boot/System.map-* \
+               "${ESP_DIR}"/boot/config-* "${ESP_DIR}"/boot/.vmlinuz-*.hmac 2>/dev/null || true
+    # Also try top-level (kernel RPM installs to /boot/ which is the ESP mount root)
+    sudo rm -f "${ESP_DIR}"/vmlinuz-* "${ESP_DIR}"/System.map-* \
+               "${ESP_DIR}"/config-* "${ESP_DIR}"/.vmlinuz-*.hmac 2>/dev/null || true
+
     sudo mkdir -p "${ESP_DIR}/EFI/Linux"
     sudo cp "${uki_output}" "${ESP_DIR}/EFI/Linux/acl.efi"
     info "UKI/RPM: Installed UKI → EFI/Linux/acl.efi"
+
+    # Stash the EFI stub on the ESP so uki_addon.sh can find it when
+    # building OEM addons in a separate SDK container (the VM image build
+    # runs in a fresh container where BOARD_ROOT has no RPMs installed).
+    sudo mkdir -p "${ESP_DIR}/EFI/Linux/.build"
+    sudo cp "${efi_stub}" "${ESP_DIR}/EFI/Linux/.build/linux${EFI_ARCH}.efi.stub"
+    info "UKI/RPM: Stashed EFI stub → EFI/Linux/.build/linux${EFI_ARCH}.efi.stub"
 
     sudo mkdir -p "${ESP_DIR}/loader"
     sudo tee "${ESP_DIR}/loader/loader.conf" > /dev/null <<-EOF

@@ -126,6 +126,19 @@ finish_image_rpm() {
       info "RPM mode: Kernel version is ${kernel_version}"
 
       generate_initramfs_dracut "${root_fs_dir}" "${kernel_version}" "${BOOT_FC_PATH}"
+
+      # The kernel RPM creates a symlink /usr/lib/modules/<version>/vmlinuz ->
+      # /boot/vmlinuz-<version> In UKI mode, uki_install.sh later removes
+      # /boot/vmlinuz-* from the ESP (the kernel is embedded in the UKI),
+      # leaving a dead symlink that fails the cl.filesystem/deadlinks test.
+      # Remove it now while the rootfs is still mounted.
+      if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
+          local modules_vmlinuz="${root_fs_dir}/usr/lib/modules/${kernel_version}/vmlinuz"
+          if [[ -L "${modules_vmlinuz}" ]]; then
+              info "RPM mode: Removing kernel symlink ${modules_vmlinuz} (UKI embeds kernel)"
+              sudo rm -f "${modules_vmlinuz}"
+          fi
+      fi
     else
       die "RPM mode: No kernel found in ${root_fs_dir}/boot/"
     fi

@@ -717,14 +717,18 @@ install_uki_oem_addon() {
 
     # The EFI stub (linuxx64.efi.stub) is a build-time artifact in the
     # board sysroot, not shipped in the image's /usr partition.
-    # image_to_vm.sh reuses the same SDK container as build_image, so
-    # BOARD_ROOT (/build/amd64-usr) still has systemd-boot installed.
+    # uki_install.sh stashes a copy on the ESP at EFI/Linux/.build/ so
+    # uki_addon.sh can find it even in a fresh SDK container.
     "${BUILD_LIBRARY_DIR}/rpm/uki_addon.sh" \
         "${esp_dir}" \
         "${oem_use}" \
         "${ARCH}" \
         "${BOARD_ROOT}" \
         "${oem_files_dir}"
+
+    # Remove the build-time EFI stub stash from the ESP — it's no longer
+    # needed and should not ship in the final image.
+    sudo rm -rf "${esp_dir}/EFI/Linux/.build"
 }
 
 # Any other tweaks required?

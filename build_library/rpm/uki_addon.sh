@@ -58,10 +58,12 @@ case "${ARCH}" in
     *)      die "UKI addon: Unsupported architecture: ${ARCH}" ;;
 esac
 
-# Locate the EFI stub (same one used by uki_install.sh for the main UKI)
-EFI_STUB="/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub"
+# Locate the EFI stub stashed on the ESP by uki_install.sh.
+# The VM image build runs in a fresh SDK container (--rm) where BOARD_ROOT
+# has no RPMs installed, so the stub must come from the ESP stash.
+EFI_STUB="${ESP_DIR}/EFI/Linux/.build/linux${EFI_ARCH}.efi.stub"
 if [[ ! -f "${EFI_STUB}" ]]; then
-    die "UKI addon: EFI stub not found at ${EFI_STUB}"
+    die "UKI addon: EFI stub not found at ${EFI_STUB}. Was uki_install.sh run?"
 fi
 
 # Verify the main UKI exists on the ESP
