@@ -40,7 +40,7 @@ VM_CONSOLE_PASSWORD="${VM_CONSOLE_PASSWORD:-}"  # Console login password (empty 
 VM_BOOT_TIMEOUT="${VM_BOOT_TIMEOUT:-180}"  # Seconds to wait for VM boot
 PARITY=""  # Path to os-diff directory for parity data collection and reporting
 SECURE_BOOT_ENABLED="${SECURE_BOOT_ENABLED:-true}"  # Enable secure boot
-RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
+RUN_KOLA_TESTS=false  # Run kola tests (qemu via run_local_tests.sh, azure via run_azure_tests.sh)
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID
 REUSE_IMAGE=false  # Reuse the latest published gallery image (skip VHD upload)
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
@@ -543,8 +543,8 @@ check_vm_prerequisites() {
         fi
     fi
 
-    # Check Azure CLI when starting an Azure VM
-    if [[ "$START_VM" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
+    # Check Azure CLI when starting an Azure VM or running azure kola tests
+    if [[ "$VM_TYPE" == "azure" ]] && ([[ "$START_VM" == "true" ]] || [[ "$RUN_KOLA_TESTS" == "true" ]]); then
         if ! check_azure_prereqs; then
             error "Azure prerequisites not met"
             exit 1
@@ -957,19 +957,25 @@ validate_main() {
 
     # Run kola tests if requested
     if [[ "$RUN_KOLA_TESTS" == "true" ]]; then
-        if [[ "$VM_TYPE" == "azure" ]]; then
-            error "Running kola tests not yet supported on Azure VMs"
-            exit 1
-        fi
         section "Running Kola Tests"
         cleanup_containers "name=flatcar-tests-"
         local kola_arch="${BOARD%%-*}"  # arm64-usr → arm64, amd64-usr → amd64
-        info "Running kola tests via run_local_tests.sh (arch=${kola_arch})..."
-        if "${SCRIPT_DIR}/run_local_tests.sh" "${kola_arch}"; then
-            info "Kola tests completed successfully!"
+        if [[ "$VM_TYPE" == "azure" ]]; then
+            info "Running kola tests via run_azure_tests.sh (arch=${kola_arch})..."
+            if "${SCRIPT_DIR}/run_azure_tests.sh" "${kola_arch}"; then
+                info "Azure kola tests completed successfully!"
+            else
+                error "Azure kola tests failed"
+                exit 1
+            fi
         else
-            error "Kola tests failed"
-            exit 1
+            info "Running kola tests via run_local_tests.sh (arch=${kola_arch})..."
+            if "${SCRIPT_DIR}/run_local_tests.sh" "${kola_arch}"; then
+                info "Kola tests completed successfully!"
+            else
+                error "Kola tests failed"
+                exit 1
+            fi
         fi
     fi
 }

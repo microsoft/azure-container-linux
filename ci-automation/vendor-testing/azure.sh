@@ -78,7 +78,8 @@ query_kola_tests() {
 }
 
 other_instance_types=()
-if [[ "${CIA_ARCH}" = 'amd64' ]]; then
+# RPM/ACL mode: no Gen1 support and no GPU quota, skip extra instance types.
+if [[ "${CIA_ARCH}" = 'amd64' ]] && [[ "${PACKAGE_SOURCE_MODE:-PORTAGE}" != 'RPM' ]]; then
     other_instance_types+=('V1' 'Standard_NC6s_v3')
 fi
 

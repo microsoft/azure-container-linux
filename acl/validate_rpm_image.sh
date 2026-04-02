@@ -30,7 +30,7 @@
 #   --no-cleanup                         Skip cleanup of existing VM resource groups
 #   --parity[=DIR]                       Run parity data collection and comparison
 #   --reuse-vm                           Reuse an already-running VM
-#   --run-kola-tests                     Run kola tests using run_local_tests.sh
+#   --run-kola-tests                     Run kola tests (qemu or azure, based on --vm-type)
 #   --run-script=PATH                    Run script on VM after boot (can specify multiple)
 #   --ssh-authorized-keys=KEYS           SSH public keys for VM access
 #   --ssh-key=PATH                       SSH private key for VM access

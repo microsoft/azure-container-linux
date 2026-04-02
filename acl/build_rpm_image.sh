@@ -48,7 +48,7 @@
 #                                        run-systemd-health-test.sh, run-dmesg-io-error-test.sh)
 #   --run-script=PATH                    Run script on VM after boot (can specify multiple times)
 #                                        Can be a file path or inline command. Implies --start-vm
-#   --run-kola-tests                     Run kola tests using run_local_tests.sh after building
+#   --run-kola-tests                     Run kola tests after building (qemu or azure, based on --vm-type)
 #   --ssh-authorized-keys=KEYS           SSH public keys for VM access (file path or key string)
 #   --skip-standalone-sysexts            Skip building standalone sysexts (to speed up rebuilds)
 #   --ssh-key=PATH                       SSH private key for VM access
@@ -129,7 +129,7 @@ VM_CONSOLE_USER="${VM_CONSOLE_USER:-root}"  # Console login user
 VM_CONSOLE_PASSWORD="${VM_CONSOLE_PASSWORD:-}"  # Console login password (empty for no password)
 VM_BOOT_TIMEOUT="${VM_BOOT_TIMEOUT:-180}"  # Seconds to wait for VM boot
 PARITY=""  # Path to os-diff directory for parity data collection and reporting
-RUN_KOLA_TESTS=false  # Run kola tests via run_local_tests.sh on a QEMU VM
+RUN_KOLA_TESTS=false  # Run kola tests (qemu via run_local_tests.sh, azure via run_azure_tests.sh)
 ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version resource ID (bypasses VHD upload)
 REUSE_IMAGE=false  # Reuse the latest published gallery image (skip VHD upload)
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
