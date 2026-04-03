@@ -25,14 +25,13 @@
 # validation) is fully data-driven and picks up new entries automatically.
 
 sysexts:
-  # --- scenario-specific sysexts -----------------------------------------
+ # --- scenario-specific sysexts -----------------------------------------
   - name: docker-flatcar
     packages:
       - app-containers/docker
       - app-containers/docker-cli
-      - app-containers/docker-buildx
-  
-  # --- GPU / hardware sysexts -------------------------------------------
+      - app-containers/docker-buildx  
+ # --- GPU / hardware sysexts -------------------------------------------
   - name: nvidia-driver-cuda-open
     packages:
       - cuda-open
@@ -58,3 +57,50 @@ sysexts:
   - name: nvidia-fabric-manager
     packages:
       - nvidia-fabric-manager
+
+  # --- Testing framework sysexts ----------------------------------------
+  - name: lisa-testing
+    packages:
+      - autoconf
+      - automake
+      - binutils
+      - bison
+      - cmake
+      - curl
+      - dhcpcd
+      - dnsmasq
+      - elfutils-devel
+      - fio
+      - firewalld
+      - flex
+      - gcc
+      - gcc-c++
+      - gdb
+      - git
+      - glibc-devel
+      - golang
+      - gzip
+      - iperf3
+      - iptables
+      - kernel-headers
+      - libibverbs
+      - librdmacm
+      - libtool
+      - libvirt
+      - ltrace
+      - make
+      - ninja-build
+      - openssl-devel
+      - patch
+      - pkgconf
+      - python3-devel
+      - python3-pip
+      - qemu-img
+      - qemu-kvm
+      - rdma-core
+      - strace
+      - stress-ng
+      - sysstat
+      - tar
+      - wget
+      - which
