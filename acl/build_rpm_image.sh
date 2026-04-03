@@ -983,6 +983,7 @@ build_rpms() {
         "ignition"
         "rust-afterburn"
         "sdnotify-proxy"
+        "systemd"
         "update-ssh-keys"
         "WALinuxAgent"
     )
@@ -997,6 +998,23 @@ build_rpms() {
     if ! "$build_script" "${package_list[@]}"; then
         error "RPM build failed"
         exit 1
+    fi
+
+    # Remove custom-built systemd-boot RPMs from staging so the stock
+    # Microsoft-signed systemd-boot is used instead. The systemd spec produces
+    # systemd-boot as a sub-package, but on Trusted Launch VMs shim verifies the
+    # bootloader signature, only the PMC-published systemd-boot is signed by
+    # Microsoft, so our locally-built copy would fail Secure Boot verification
+    # and prevent the VM from booting.
+    local removed_boot=0
+    for f in "${STAGING_DIR}"/systemd-boot-*.rpm; do
+        [[ -e "$f" ]] || continue
+        info "Removing custom-built $(basename "$f") from staging (using stock Microsoft-signed version)"
+        rm -f "$f"
+        removed_boot=$((removed_boot + 1))
+    done
+    if (( removed_boot > 0 )); then
+        info "  Removed ${removed_boot} systemd-boot RPM(s) — stock version from PMC will be used"
     fi
 
     # Count built RPMs
