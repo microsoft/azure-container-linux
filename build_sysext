@@ -157,6 +157,7 @@ cleanup() {
   rm -rf "${BUILD_DIR}/img-pkginfo"
   # Remove RPM package log (created by rpm_install_package, root-owned)
   rm -f "${BUILD_DIR}/.rpm-packages-explicit"
+  rm -f "${BUILD_DIR}/.rpm-base-manifest.tmp" "${BUILD_DIR}/.rpm-all-manifest.tmp" "${BUILD_DIR}/.rpm-sysext-manifest.tmp"
 }
 
 # Set up trap to execute cleanup() on script exit
@@ -240,6 +241,7 @@ info "Building '${SYSEXTNAME}' squashfs with (meta-)packages '${@}' in '${BUILD_
 # base + new packages. Snapshot here to diff later.
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]] && [[ -d "${BUILD_DIR}/${FLAGS_install_root_basename}/var/lib/rpm" ]]; then
   rpm --root="${BUILD_DIR}/${FLAGS_install_root_basename}" -qa 2>/dev/null | sort > "${BUILD_DIR}/.rpm-base.tmp"
+  rpm_query_manifest "${BUILD_DIR}/${FLAGS_install_root_basename}" | sort > "${BUILD_DIR}/.rpm-base-manifest.tmp"
 fi
 
 for package; do
@@ -323,9 +325,12 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
   # Diff against pre-install snapshot to list only sysext-added packages.
   if [[ -d "${BUILD_DIR}/${FLAGS_install_root_basename}/var/lib/rpm" ]]; then
     rpm --root="${BUILD_DIR}/${FLAGS_install_root_basename}" -qa 2>/dev/null | sort > "${BUILD_DIR}/.rpm-all.tmp"
+    rpm_query_manifest "${BUILD_DIR}/${FLAGS_install_root_basename}" | sort > "${BUILD_DIR}/.rpm-all-manifest.tmp"
     # comm -13: output lines unique to the right file (i.e. newly installed packages only)
     comm -13 "${BUILD_DIR}/.rpm-base.tmp" "${BUILD_DIR}/.rpm-all.tmp" > "${BUILD_DIR}/${SYSEXTNAME}_packages.txt"
+    comm -13 "${BUILD_DIR}/.rpm-base-manifest.tmp" "${BUILD_DIR}/.rpm-all-manifest.tmp" > "${BUILD_DIR}/.rpm-sysext-manifest.tmp"
     rm -f "${BUILD_DIR}/.rpm-base.tmp" "${BUILD_DIR}/.rpm-all.tmp"
+    rm -f "${BUILD_DIR}/.rpm-base-manifest.tmp" "${BUILD_DIR}/.rpm-all-manifest.tmp"
   else
     warn "No RPM database found for ${SYSEXTNAME}; ${SYSEXTNAME}_packages.txt will be empty"
   fi
@@ -378,6 +383,11 @@ rm -rf "${BUILD_DIR}"/{fs-root,"${FLAGS_install_root_basename}",workdir}
 # Generate reports
 mkdir "${BUILD_DIR}/img-rootfs"
 mount -rt squashfs -o loop,nodev "${BUILD_DIR}/${SYSEXTNAME}.raw" "${BUILD_DIR}/img-rootfs"
+sysext_rpm_manifest=""
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && -s "${BUILD_DIR}/.rpm-sysext-manifest.tmp" ]]; then
+  sysext_rpm_manifest="${BUILD_DIR}/.rpm-sysext-manifest.tmp"
+fi
+write_sysext_sbom "${BUILD_DIR}/img-rootfs" "${BUILD_DIR}/${SYSEXTNAME}_sbom.json" "${sysext_rpm_manifest}"
 write_contents "${BUILD_DIR}/img-rootfs" "${BUILD_DIR}/${SYSEXTNAME}_contents.txt"
 write_contents_with_technical_details "${BUILD_DIR}/img-rootfs" "${BUILD_DIR}/${SYSEXTNAME}_contents_wtd.txt"
 write_disk_space_usage_in_paths "${BUILD_DIR}/img-rootfs" "${BUILD_DIR}/${SYSEXTNAME}_disk_usage.txt"

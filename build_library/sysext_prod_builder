@@ -87,7 +87,9 @@ create_prod_sysext() {
             "${name}" "${grp_pkg[@]}"
 
   sudo mv "${workdir}/sysext-build/${name}.raw" "${workdir}/sysext-build/${name}_pkginfo.raw" \
-                              "${workdir}/sysext-build/${name}"_*.txt "${output_dir}"
+                              "${workdir}/sysext-build/${name}"_*.txt \
+                              "${workdir}/sysext-build/${name}_sbom.json" \
+                              "${output_dir}"
 
   sudo mkdir -p "${install_root}"/usr/share/flatcar/sysext
   sudo install -m 0644 -D "${output_dir}/${name}.raw" "${install_root}"/usr/share/flatcar/sysext/

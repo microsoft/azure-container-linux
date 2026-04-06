@@ -31,6 +31,21 @@ rpm_get_staging_dir() {
     echo "${rpm_staging}"
 }
 
+RPM_MANIFEST_QUERY_FORMAT='%{NAME}\t%{VERSION}-%{RELEASE}\t%{INSTALLTIME}\t%{BUILDTIME}\t%{VENDOR}\t%{EPOCH}\t%{SIZE}\t%{ARCH}\t%{EPOCHNUM}\t%{SOURCERPM}\n'
+
+# Emit a Syft-compatible RPM manifest for the installed packages in a rootfs.
+rpm_query_manifest() {
+    local root_fs_dir="$1"
+    local dbpath="${root_fs_dir}/var/lib/rpm"
+
+    if [[ ! -f "${dbpath}/rpmdb.sqlite" ]]; then
+        error "RPM manifest query failed: RPM database not found at ${dbpath}/rpmdb.sqlite"
+        return 1
+    fi
+
+    sudo rpm --dbpath="${dbpath}" -qa --queryformat "${RPM_MANIFEST_QUERY_FORMAT}"
+}
+
 # Initialize RPM database in target rootfs
 rpm_init_database() {
     local root_fs_dir="$1"
