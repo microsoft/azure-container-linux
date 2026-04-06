@@ -14,7 +14,12 @@
 #                  category/package names (e.g. "app-containers/docker").
 #                  In RPM mode, each name is first checked against the RPM repos;
 #                  if not found, it falls back to the portage-to-RPM catalog.
-#      archs     — (optional) list of boards to build for: [amd64-usr], [arm64-usr],
+#                  Each entry can be a plain string or an object with 'name' and
+#                  'archs' fields for per-package architecture filtering:
+#                    - qemu-img              # installed on all architectures
+#                    - name: qemu-kvm        # installed only on amd64
+#                      archs: [amd64]
+#      archs     — (optional) list of architectures to build for: [amd64], [arm64],
 #                  or both.  Omit to build for all architectures.
 #
 # 2. (Optional) Create a mangle script: build_library/sysext_mangle_<name>
@@ -36,19 +41,19 @@ sysexts:
     packages:
       - cuda-open
     archs:
-      - amd64-usr
+      - amd64
 
   - name: nvidia-driver-cuda
     packages:
       - cuda
     archs:
-      - amd64-usr
+      - amd64
 
   - name: nvidia-driver-vgpu
     packages:
       - nvidia-vgpu-guest-driver
     archs:
-      - amd64-usr
+      - amd64
 
   - name: nvidia-container-toolkit
     packages:
@@ -96,7 +101,8 @@ sysexts:
       - python3-devel
       - python3-pip
       - qemu-img
-      - qemu-kvm
+      - name: qemu-kvm
+        archs: [amd64]
       - rdma-core
       - strace
       - stress-ng

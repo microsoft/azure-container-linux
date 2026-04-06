@@ -24,6 +24,9 @@
 # Usage:
 #   spec=$(parse_standalone_sysexts_yaml "/path/to/standalone_sysexts.yaml" "amd64-usr")
 #
+# The board name (e.g. "amd64-usr") is mapped to an arch (e.g. "amd64")
+# to match the 'archs' values in the YAML.
+#
 # Output format (one token per sysext, space-separated):
 #   name|pkg1&pkg2
 #
@@ -35,6 +38,8 @@
 parse_standalone_sysexts_yaml() {
     local yaml_file="$1"
     local board="$2"
+    # Map board name to arch: "amd64-usr" → "amd64", "arm64-usr" → "arm64"
+    local arch="${board%%-*}"
 
     if [[ ! -f "${yaml_file}" ]]; then
         echo ""
@@ -42,11 +47,16 @@ parse_standalone_sysexts_yaml() {
     fi
 
     # For each sysext entry: if .archs is null (omitted) or contains the
-    # board, emit "name|pkg1&pkg2".  yq handles the filtering natively.
+    # arch, emit "name|pkg1&pkg2".  yq handles the filtering natively.
+    # Package entries can be plain strings or objects with 'name' and 'archs'
+    # fields for per-package architecture filtering.
     yq eval -r "
         .sysexts[]
-        | select(.archs == null or (.archs[] | select(. == \"${board}\")))
-        | .name + \"|\" + ([.packages[]] | join(\"&\"))
+        | select(.archs == null or (.archs[] | select(. == \"${arch}\")))
+        | .name + \"|\" + ([.packages[]
+            | select(tag == \"!!str\" or .archs == null or (.archs[] | select(. == \"${arch}\")))
+            | (select(tag == \"!!str\") // .name)]
+            | join(\"&\"))
     " "${yaml_file}" | tr '\n' ' '
 }
 
