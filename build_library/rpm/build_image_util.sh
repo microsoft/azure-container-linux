@@ -138,6 +138,15 @@ finish_image_rpm() {
               info "RPM mode: Removing kernel symlink ${modules_vmlinuz} (UKI embeds kernel)"
               sudo rm -f "${modules_vmlinuz}"
           fi
+
+          # Copy it to /usr/lib/modules/<version>/config (on the rootfs) so
+          # tools like kubeadm can still find the kernel config at runtime.
+          local boot_config="${root_fs_dir}/boot/config-${kernel_version}"
+          local modules_config="${root_fs_dir}/usr/lib/modules/${kernel_version}/config"
+          if [[ -f "${boot_config}" ]]; then
+              info "RPM mode: Copying kernel config to ${modules_config}"
+              sudo cp "${boot_config}" "${modules_config}"
+          fi
       fi
     else
       die "RPM mode: No kernel found in ${root_fs_dir}/boot/"
