@@ -231,6 +231,22 @@ Convert the production image to a VM-ready format. The script supports building 
 ./acl/build_rpm_image.sh --build-vm-image --vm-type=azure
 ```
 
+
+#### Build Test VM Image (Optional)
+
+The `--build-test-image` flag builds a test VM image that includes the docker sysext, which is required for running kola tests.
+
+```bash
+# Build a QEMU test VM image
+./acl/build_rpm_image.sh --build-test-image --vm-type=qemu
+
+# Build an Azure VHD test VM image
+./acl/build_rpm_image.sh --build-test-image --vm-type=azure
+
+# When --vm-type is not specified, QEMU is used by default
+./acl/build_rpm_image.sh --build-test-image
+```
+
 #### VM Image Output
 
 - QEMU:
@@ -243,6 +259,18 @@ __build__/images/images/amd64-usr/latest/acl_production_qemu_uefi_image.img
 
 ```bash
 __build__/images/images/amd64-usr/latest/acl_production_azure_image.vhd
+```
+
+- QEMU Test Image:
+
+```bash
+__build__/images/images/amd64-usr/latest/acl_production_qemu_uefi_test_image.img
+```
+
+- Azure Test Image:
+
+```bash
+__build__/images/images/amd64-usr/latest/acl_production_azure_test_image.vhd
 ```
 
 ### Phase 5: Start VM and Run Tests
