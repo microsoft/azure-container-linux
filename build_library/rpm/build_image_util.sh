@@ -314,9 +314,9 @@ finish_image_selinux_rpm() {
     # Use the targeted policy file_contexts to label the filesystem
     local file_contexts="${root_fs_dir}/etc/selinux/targeted/contexts/files/file_contexts"
     info "RPM mode: Labeling filesystem with targeted SELinux policy"
-    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}" >/dev/null
+    #sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}" >/dev/null
     sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/etc" >/dev/null
-    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/usr" >/dev/null
+    #sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/usr" >/dev/null
 }
 
 finish_image_tmpfiles_rpm() {

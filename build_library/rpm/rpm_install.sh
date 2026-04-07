@@ -449,7 +449,7 @@ rpm_install_local_packages() {
 # This handles: database init, repository setup
 rpm_install_init() {
     local root_fs_dir="$1"; shift
-    
+
     # Initialize RPM database if needed
     rpm_init_database "${root_fs_dir}" || return 1
 
@@ -489,9 +489,9 @@ rpm_get_metadata() {
         ARCH) format="%{ARCH}" ;;
         SUMMARY) format="%{SUMMARY}" ;;
         DESCRIPTION) format="%{DESCRIPTION}" ;;
-        CONTENTS) 
+        CONTENTS)
             # For RPM, list files in the package
-            sudo rpm --dbpath="${dbpath}" -ql "${package}" 2>/dev/null | sed 's/^/obj /' 
+            sudo rpm --dbpath="${dbpath}" -ql "${package}" 2>/dev/null | sed 's/^/obj /'
             return
             ;;
         SRC_URI)
@@ -685,7 +685,7 @@ rpm_install_package_using_portage_name() {
     if [[ ${#portage_pkgs[@]} -gt 0 ]]; then
         die "Installation of Portage packages is disabled. Extend the package catalog accordingly."
     fi
-    
+
     # Step 3: Install RPM packages (base layer)
     if [[ ${#rpm_pkgs[@]} -gt 0 ]]; then
         info "Step 3: Installing RPM packages..."
@@ -697,7 +697,7 @@ rpm_install_package_using_portage_name() {
             error "Attempted to install: ${unique_rpm_pkgs[*]}"
             return 1
         }
-        
+
         # Backup the installed RPM package list for later use by write_packages
         # This is needed because the RPM database may be in a different location
         # or inaccessible when write_packages runs
@@ -805,6 +805,154 @@ sslverify=1
 EOF
 }
 
+rpm_configure_selinux() {
+    local root_fs_dir="$1"
+
+    info "RPM mode: Setting SELinux policy Booleans"
+    # Semanage is not in the image, so this must be done manually by writing to the local
+    # booleans file; therefore, it won't take effect until the policy is rebuilt by
+    # semodule (below) or 'semodule -B'.
+    sudo tee "${root_fs_dir}/var/lib/selinux/targeted/active/booleans.local" > /dev/null << EOF
+container_mounton_non_security=1
+container_use_host_all_caps=1
+cron_read_generic_user_content=1
+tmpfiles_manage_all_non_security=1
+user_all_users_send_syslog=1
+EOF
+
+    info "RPM mode: Installing SELinux policy hotfixes."
+    local policy_hotfix="/tmp/hotfix.cil"
+    sudo tee "${root_fs_dir}/${policy_hotfix}" > /dev/null << EOF
+(allow kernel_t unlabeled_t (service (status start stop)))
+(allow kernel_t node_t (icmp_socket (node_bind)))
+(allow kernel_t self (perf_event (kernel open cpu read)))
+(allow kernel_t file_type (service (start status stop)))
+
+;
+; Ported Flatcar rules
+;
+(allow corenet_unconfined_type node_t (icmp_socket (node_bind)))
+(allow kernel_t container_domain (process2 (nnp_transition nosuid_transition)))
+(typetransition kernel_t etc_t dir "cni" container_file_t)
+(allow kernel_t kernel_t (capability2 (audit_read)))
+(allow kernel_t kernel_t (perf_event (open cpu kernel read)))
+(allow kernel_t unlabeled_t (system (module_load)))
+(typetransition kernel_t var_run_t dir "flannel" container_file_t)
+(allow local_login_t local_login_t (process (setpgid)))
+(allow ping_t node_t (icmp_socket (node_bind)))
+(allow traceroute_t node_t (icmp_socket (node_bind)))
+(filecon "/usr/share/containerd(/.*)?" any (system_u object_r container_config_t ((s0)(s0))))
+
+(allow container_domain self (bpf (map_create))) ; kubeadm.v<VERSION>.cilium.base
+(allow container_domain container_file_t (file (mounton)))
+(allow container_domain container_file_t (chr_file (append create getattr ioctl link lock open read rename setattr unlink write)))
+(allow container_domain devpts_t (chr_file (setattr)))
+(allow container_domain etc_t (file (watch))) ; kubeadm.v<VERSION>.<CNI>.base
+(allow container_domain kernel_t (fd (use)))
+(allow container_domain kernel_t (process (sigchld)))
+(allow container_domain kernel_t (fifo_file (getattr ioctl read write open append)))
+(allow container_domain kernel_t (system (module_request)))
+(allow container_domain proc_kmsg_t (file (getattr read open)))
+(allow container_domain tmp_t (file (read))) ; docker.base, docker.network and docker.userns
+(allow container_domain tmpfs_t (dir (add_name create ioctl link lock read remove_name rename reparent rmdir setattr unlink write)))
+(allow container_domain tmpfs_t (file (append create getattr ioctl link lock open read rename setattr unlink write)))
+(allow container_domain tmpfs_t (lnk_file (append create getattr ioctl link lock open read rename setattr unlink write)))
+(allow container_domain tmpfs_t (chr_file (append create getattr ioctl link lock open read rename setattr unlink write)))
+(allow container_domain tmpfs_t (fifo_file (append create getattr ioctl link lock open read rename setattr unlink write)))
+(allow container_domain tmpfs_t (filesystem (remount)))
+(allow container_domain tty_device_t (chr_file (append getattr ioctl link lock open read write)))
+(allow container_domain usr_t (file (watch execute execute_no_trans map))) ; kubeadm.v<VERSION>.calico.base, kubeadm.v<VERSION>.<CNI>.base
+(allow container_domain var_lib_t (file (getattr ioctl open read entrypoint execute execute_no_trans)))
+(allow container_domain var_lib_t (lnk_file (getattr ioctl read)))
+
+;
+; Container backports and hotfixes:
+;
+(typeattributeset container_engine_system_domain kernel_t)
+(allow container_domain self (netlink_netfilter_socket (create read write setopt bind getattr)))
+(allow container_domain container_runtime_t (dir (add_name create ioctl link lock read remove_name rename reparent rmdir setattr unlink write)))
+(allow container_domain container_runtime_t (file (append create getattr ioctl link lock map open read rename setattr unlink write)))
+(allow container_domain container_runtime_t (lnk_file (append create getattr ioctl link lock map open read rename setattr unlink write)))
+(allow container_domain container_var_lib_t (dir (add_name create ioctl link lock read remove_name rename reparent rmdir setattr unlink write)))
+(allow container_domain container_var_lib_t (file (append create getattr ioctl link lock map open read rename setattr unlink write)))
+(allow container_domain container_var_lib_t (lnk_file (append create getattr ioctl link lock map open read rename setattr unlink write)))
+(allow container_domain proc_psi_t (file (read getattr open)))
+(allow container_domain sysctl_vm_t (file (read getattr open)))
+(allow spc_t self (perf_event (write)))
+(allow spc_t file_type (service (start status stop reload)))
+(allow spc_t unlabeled_t (service (start status stop reload)))
+
+; /etc/cni/net.d/10-flannel.conflist:
+(allow container_domain unlabeled_t (dir (add_name search write)))
+(allow container_domain unlabeled_t (file (watch getattr write open read create)))
+; /opt/cni/bin/flannel:
+(allow container_domain usr_t (dir (watch add_name write)))
+(allow container_domain usr_t (file (create write)))
+EOF
+    sudo chroot "${root_fs_dir}" semodule -X 200 -i "${policy_hotfix}"
+    sudo rm -f "${root_fs_dir}/${policy_hotfix}"
+
+    # Remove unnecessary SELinux policy modules (minimize the policy)
+    info "RPM mode: Minimizing SELinux policy".
+    sudo chroot "${root_fs_dir}" semodule -X 100 -r \
+        abrt accountsd acct acpi afs aide aisexec alsa amanda amavis amtu anaconda \
+        apache apcupsd apt aptcacher arpwatch asterisk auditadm automount avahi \
+        awstats backup bacula bind bird bitlbee blueman bluetooth boinc brctl \
+        bugzilla cachefilesd calamaris canna cdrecord certbot certmaster certmonger \
+        certwatch cfengine cgmanager cgroup chkrootkit chromium chronyd clamav \
+        cloudinit cobbler cockpit collectd colord comsat condor consolesetup \
+        container_compat corosync couchdb courier cpucontrol cpufreqselector crio \
+        cryfs ctdb cups cvs cyphesis cyrus daemontools dante dbadm dbskk ddclient \
+        devicekit dhcp dictd dirmngr distcc djbdns dkim dmidecode dnsmasq docker \
+        dovecot dphysswapfile dpkg drbd eg25manager entropyd evolution exim fail2ban \
+        fakehwclock fapolicyd fcoe fetchmail finger firewalld firstboot fprintd ftp \
+        games gatekeeper gdomap geoclue git gitosis glance glusterfs gnome gnomeclock \
+        gpg gpm gpsd gssproxy guest hadoop haproxy hddtemp hostapd hwloc hypervkvp \
+        i18n_input icecast ifplugd iiosensorproxy inetd inn iodine ipsec irc ircd \
+        irqbalance iscsi isns jabber java kdump kerberos kerneloops keystone kismet \
+        knot ksmtuned kubernetes l2tp ldap libmtp lightsquid likewise lircd livecd \
+        lldpad loadkeys logadm logrotate logwatch lowmemorymonitor lpd lsm mailman \
+        man2html mandb matrixd mcelog mediawiki memcached memlockd milter minidlna \
+        minissdpd modemmanager mojomojo mon mongodb monit mono monop mozilla mpd \
+        mplayer mrtg munin mysql nagios ncftool nessus netlabel networkmanager nis \
+        node_exporter nsd nslcd ntop ntp numad nut nx obex obfs4proxy oddjob oident \
+        openarc openca openct openhpi openoffice opensm openvpn openvswitch pacemaker pads \
+        passenger pcscd pegasus perdition pingd pkcs pki plymouthd podman portmap \
+        portreserve portslave postfix postfixpolicyd postgresql postgrey \
+        powerprofiles ppp prelink prelude privoxy procmail psad publicfile \
+        pulseaudio puppet pwauth pxe pyzor qemu qmail qpid quantum quota rabbitmq \
+        radius radvd rasdaemon razor rdisc realmd redis remotelogin resmgr rhsmcertd \
+        rkhunter rlogin rngd rootlesskit rpc rpcbind rpm rshd rssh rtkit rwho samba \
+        samhain sanlock sasl sblim screen secadm sendmail sensord setroubleshoot \
+        seunshare shibboleth shorewall shutdown sigrok slocate slpd slrnpull smartmon \
+        smokeping smstools snmp snort sosreport soundserver spamassassin squid stubby \
+        stunnel sudo svnserve switcheroo sxid sympa syncthing sysstat systemtap \
+        tboot tcpd tcsd telepathy telnet tftp tgtd thunderbird thunderbolt timidity \
+        tmpreaper tomcat tor tpm2 transproxy tripwire tuned tvtime tzdata ucspitcp \
+        ulogd uml updfstab uptime usbguard usbmodules usbmuxd userhelper usernetctl \
+        uucp uuidd uwimap varnishd vbetool vdagent vhostmd virt vlock vmware vnstatd \
+        vpn watchdog wdmd webadm webalizer wine wireguard wireshark wm xen xfs \
+        xguest xscreensaver xserver zabbix zarafa zebra zfs zosremote \
+        > /dev/null
+
+    info "RPM mode: Adding SELinux policy compatibility fixes"
+    # Add policy name compatibility symlink.  The Gentoo MCS policy is
+    # equivalent to the RHEL/CentOS/AzureLinux targeted policy.
+    sudo ln -sf targeted "${root_fs_dir}/etc/selinux/mcs"
+
+    # Add temporary workaround for host processes running in kernel_t:
+    sudo tee -a "${root_fs_dir}/etc/selinux/targeted/contexts/default_contexts" > /dev/null << EOF
+system_r:kernel_t:s0		system_r:kernel_t:s0
+EOF
+
+    sudo tee "${root_fs_dir}/etc/selinux/targeted/seusers" > /dev/null << EOF
+__default__:system_u:s0
+EOF
+
+    info "RPM mode: Setting SELinux to enforcing"
+    sudo sed -r -i -e '/^SELINUX=/s/permissive/enforcing/' "${root_fs_dir}/etc/selinux/config"
+}
+
 # Unmount any pseudo-filesystems under BUILD_DIR before rm -rf.
 # Call this before removing build output directories to avoid
 # "Device or resource busy" errors from stale /dev bind-mounts.
@@ -833,3 +981,4 @@ export -f rpm_download_packages
 export -f rpm_use_official_repos
 export -f rpm_cleanup_build_dir
 export -f rpm_umount_pseudofs
+export -f rpm_configure_selinux

@@ -986,6 +986,7 @@ build_rpms() {
         "systemd"
         "update-ssh-keys"
         "WALinuxAgent"
+        "selinux-policy"
     )
 
     info "Running RPM build script..."
