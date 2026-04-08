@@ -621,6 +621,26 @@ EOF
         | sudo tee "${sb_dropin_dir}/condition-secureboot.conf" > /dev/null
     sudo chmod 0644 "${sb_dropin_dir}/condition-secureboot.conf"
 
+    # Restrict pcrlock to SHA-256 only. Azure's arm64 vTPM allocates only sha256
+    # PCR banks, but the firmware event log still contains sha1 and sha384
+    # digest entries. systemd-pcrlock discovers all three algorithms from the
+    # event log, tries to replay them all against the TPM, and fails.
+    local pcrlock_services=(
+        systemd-pcrlock-firmware-code.service
+        systemd-pcrlock-firmware-config.service
+        systemd-pcrlock-make-policy.service
+        systemd-pcrlock-secureboot-authority.service
+        systemd-pcrlock-secureboot-policy.service
+    )
+    info "RPM mode: Restricting pcrlock services to SHA-256 algorithm only"
+    for svc in "${pcrlock_services[@]}"; do
+        local dropin_dir="${root_fs_dir}/etc/systemd/system/${svc}.d"
+        sudo install -d -m 0755 "${dropin_dir}"
+        printf '[Service]\nEnvironment=SYSTEMD_TPM2_HASH_ALGORITHMS=sha256\n' \
+            | sudo tee "${dropin_dir}/sha256-only.conf" > /dev/null
+        sudo chmod 0644 "${dropin_dir}/sha256-only.conf"
+    done
+
     # Remove etcd server and etcdutl binaries - we only need etcdctl from the etcd RPM.
     # The etcd server runs inside a Docker container via etcd-wrapper, not natively.
     if [[ -f "${root_fs_dir}/usr/bin/etcd" ]]; then
