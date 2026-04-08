@@ -761,17 +761,6 @@ SYSUSERS_EOF
     sudo rm -f "${root_fs_dir}/etc/resolv.conf"
     sudo ln -sf /run/systemd/resolve/stub-resolv.conf "${root_fs_dir}/etc/resolv.conf"
 
-    # Create /etc/fstab with /boot and /oem mount points
-    # Using Type=auto for /oem allows Ignition to reformat it to different filesystems
-    info "RPM mode: Creating /etc/fstab with /boot and /oem mount points"
-    sudo tee "${root_fs_dir}/etc/fstab" > /dev/null <<'FSTAB_EOF'
-# /etc/fstab: static file system information
-# <device>      <mount point>   <type>  <options>       <dump>  <pass>
-LABEL=EFI-SYSTEM /boot          vfat    umask=077       0       2
-LABEL=OEM        /oem           auto    nodev           0       2
-FSTAB_EOF
-    sudo chmod 644 "${root_fs_dir}/etc/fstab"
-
     # Enable serial-getty (autologin is controlled by generator based on cmdline)
     # arm64 uses ttyAMA0 (PL011 UART), x86_64 uses ttyS0 (8250 UART)
     local serial_tty="ttyS0"
