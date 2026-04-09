@@ -1076,7 +1076,7 @@ build_image() {
         "--nogenerate_update"
         "--board=${BOARD}"
         "--group=${GROUP}"
-        "--base_sysexts=containerd-flatcar|app-containers/containerd"
+        "--base_sysexts=containerd|app-containers/containerd"
         "--disk_layout=${DISK_LAYOUT}"
         "--image_name=${IMG_NAME}_image.bin"
     )

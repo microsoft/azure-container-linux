@@ -316,7 +316,7 @@ if [[ -n "${FLAGS_manglefs_script}" ]]; then
 fi
 
 # In RPM mode, write packages.txt after manglefs so that packages removed
-# by mangle scripts (e.g. containerd2/runc from docker-flatcar) are excluded.
+# by mangle scripts (e.g. containerd2/runc from docker) are excluded.
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
   info "Writing ${SYSEXTNAME}_packages.txt"
   # Create the file unconditionally; the diff below will overwrite it with

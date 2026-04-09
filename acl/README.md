@@ -36,7 +36,7 @@ ACL uses **systemd-sysext** squashfs images to deliver optional functionality on
 
 **Base sysexts** — baked into the rootfs during `build_image`:
 
-- `containerd-flatcar` — containerd runtime
+- `containerd` — containerd runtime
 
 **Standalone sysexts** — built and shipped alongside the disk image:
 
@@ -47,7 +47,7 @@ ACL uses **systemd-sysext** squashfs images to deliver optional functionality on
   - `nvidia-container-toolkit`
   - `nvidia-fabric-manager`
 - **Scenario-specific**:
-  - `docker-flatcar`
+  - `docker`
 - **OEM**:
   - `oem-azure`
   - `oem-qemu`

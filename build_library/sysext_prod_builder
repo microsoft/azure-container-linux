@@ -48,10 +48,16 @@ create_prod_sysext() {
     build_sysext_opts+=( "--base_pkginfo=${output_dir}/${pkginfo}" )
   fi
 
-  # Include FS mangle script if present
+  # Include FS mangle script if present (try exact name, then legacy -flatcar suffix)
+  local mangle_script=""
   if [[ -x "${BUILD_LIBRARY_DIR}/sysext_mangle_${name}" ]] ; then
-    build_sysext_opts+=( "--manglefs_script=${BUILD_LIBRARY_DIR}/sysext_mangle_${name}" )
-    msg="${msg}, FS mangle script 'sysext_mangle_${name}'"
+    mangle_script="${BUILD_LIBRARY_DIR}/sysext_mangle_${name}"
+  elif [[ -x "${BUILD_LIBRARY_DIR}/sysext_mangle_${name}-flatcar" ]] ; then
+    mangle_script="${BUILD_LIBRARY_DIR}/sysext_mangle_${name}-flatcar"
+  fi
+  if [[ -n "${mangle_script}" ]] ; then
+    build_sysext_opts+=( "--manglefs_script=${mangle_script}" )
+    msg="${msg}, FS mangle script '${mangle_script##*/}'"
   fi
 
   info "${msg}."

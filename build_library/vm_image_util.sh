@@ -679,8 +679,8 @@ install_oem_sysext() {
     if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${INJECT_DOCKER_SYSEXT:-false}" == "true" ]]; then
         # Inject the docker sysext into oem partition for testing, since
         # docker is built as a standalone sysext and not in base image.
-        local built_docker_sysext_path="${upload_dir}/docker-flatcar.raw"
-        local installed_docker_sysext_abspath="${installed_sysext_oem_dir}/docker-flatcar.raw"
+        local built_docker_sysext_path="${upload_dir}/docker.raw"
+        local installed_docker_sysext_abspath="${installed_sysext_oem_dir}/docker.raw"
 
         info "RPM mode: Injecting docker sysext into OEM partition for testing"
         sudo install -Dpm 0644 \

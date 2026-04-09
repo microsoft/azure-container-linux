@@ -114,8 +114,14 @@ build_standalone_sysext_images() {
         )
 
         # Use mangle script if one exists under build_library/
-        local mangle_fs="${BUILD_LIBRARY_DIR}/sysext_mangle_${name}"
-        if [[ -x "${mangle_fs}" ]]; then
+        # (try exact name, then legacy -flatcar suffix)
+        local mangle_fs=""
+        if [[ -x "${BUILD_LIBRARY_DIR}/sysext_mangle_${name}" ]]; then
+            mangle_fs="${BUILD_LIBRARY_DIR}/sysext_mangle_${name}"
+        elif [[ -x "${BUILD_LIBRARY_DIR}/sysext_mangle_${name}-flatcar" ]]; then
+            mangle_fs="${BUILD_LIBRARY_DIR}/sysext_mangle_${name}-flatcar"
+        fi
+        if [[ -n "${mangle_fs}" ]]; then
             sysext_flags+=(
                 --manglefs_script="${mangle_fs}"
             )

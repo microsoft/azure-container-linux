@@ -5,8 +5,8 @@ Generate a consolidated list of all RPM packages across the ACL image components
 This script combines packages from:
 - Base production image (acl_production_image_packages.txt)
 - OEM Azure layer (oem-azure_packages.txt)
-- Containerd sysext (containerd-flatcar_packages.txt)
-- Docker sysext (docker-flatcar_packages.txt)
+- Containerd sysext (containerd_packages.txt)
+- Docker sysext (docker_packages.txt)
 
 Usage:
     ./list_all_rpm_packages.py [--build-dir PATH] [--format FORMAT] [--output FILE]
@@ -34,8 +34,8 @@ from pathlib import Path
 PACKAGE_FILES = {
     'base': 'acl_production_image_packages.txt',
     'oem-azure': 'oem-azure_packages.txt',
-    'containerd': 'rootfs-included-sysexts/containerd-flatcar_packages.txt',
-    'docker': 'rootfs-included-sysexts/docker-flatcar_packages.txt',
+    'containerd': 'rootfs-included-sysexts/containerd_packages.txt',
+    'docker': 'rootfs-included-sysexts/docker_packages.txt',
 }
 
 # Friendly names for components

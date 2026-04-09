@@ -35,8 +35,8 @@ from pathlib import Path
 PACKAGE_FILES = {
     'base': 'acl_production_image_packages.txt',
     'oem-azure': 'oem-azure_packages.txt',
-    'containerd': 'rootfs-included-sysexts/containerd-flatcar_packages.txt',
-    'docker': 'rootfs-included-sysexts/docker-flatcar_packages.txt',
+    'containerd': 'rootfs-included-sysexts/containerd_packages.txt',
+    'docker': 'rootfs-included-sysexts/docker_packages.txt',
 }
 
 # File listing packages explicitly requested via dnf install
