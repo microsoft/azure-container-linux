@@ -122,18 +122,18 @@ OSREL
     info "UKI/RPM: Using ukify from $(command -v ukify)"
 
     # Read partition UUID and compute verity hash offset from the
-    # canonical disk layout so the values never drift from the source.
-    local disk_layout_file="${BUILD_LIBRARY_DIR}/disk_layout.json"
+    # canonical UKI disk layout so the values never drift from the source.
+    local disk_layout_file="${BUILD_LIBRARY_DIR}/disk_layout_uki.json"
     if [[ ! -f "${disk_layout_file}" ]]; then
-        die "UKI/RPM: disk_layout.json not found at ${disk_layout_file}"
+        die "UKI/RPM: disk_layout_uki.json not found at ${disk_layout_file}"
     fi
 
     local usr_a_uuid
-    usr_a_uuid=$(jq -r '.layouts.base["3"].uuid' "${disk_layout_file}")
+    usr_a_uuid=$(jq -r '.layouts.base["2"].uuid' "${disk_layout_file}")
 
     local verity_hash_offset
     verity_hash_offset=$(jq -r \
-        '(.layouts.base["3"].fs_blocks | tonumber) as $b | (.metadata.fs_block_size | tonumber) as $s | ($b * $s)' \
+        '(.layouts.base["2"].fs_blocks | tonumber) as $b | (.metadata.fs_block_size | tonumber) as $s | ($b * $s)' \
         "${disk_layout_file}")
 
     info "UKI/RPM: USR-A uuid=${usr_a_uuid}  verity hash-offset=${verity_hash_offset}"

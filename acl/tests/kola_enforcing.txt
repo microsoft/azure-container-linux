@@ -9,10 +9,10 @@ bpf.local-gadget
 cl.cloudinit.basic
 cl.cloudinit.multipart-mime
 cl.cloudinit.script
-cl.disk.raid0.data
-cl.disk.raid0.root
-cl.disk.raid1.data
-cl.disk.raid1.root
+acl.disk.raid0.data
+acl.disk.raid0.root
+acl.disk.raid1.data
+acl.disk.raid1.root
 cl.etcd-member.etcdctlv3
 cl.etcd-member.v2-backup-restore
 cl.filesystem

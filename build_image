@@ -170,6 +170,11 @@ fi
 DISK_LAYOUT="${FLAGS_disk_layout:-base}"
 CONTAINER_LAYOUT="${FLAGS_disk_layout:-container}"
 
+# UKI mode uses a dedicated disk layout without BIOS and unused partitions
+if [[ "${BOOTLOADER_MODE:-}" == "uki" ]]; then
+  export DISK_LAYOUT_FILE="${BUILD_LIBRARY_DIR}/disk_layout_uki.json"
+fi
+
 if [[ -n "${FLAGS_developer_data}" ]]; then
   if [[ ! -f "${FLAGS_developer_data}" ]]; then
     die_notrace "Developer data is not a file: ${FLAGS_developer_data}"

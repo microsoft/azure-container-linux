@@ -22,6 +22,11 @@ assert_not_root_user
 . "${BUILD_LIBRARY_DIR}/vm_image_util.sh" || exit 1
 . "${BUILD_LIBRARY_DIR}/cros_vm_constants.sh" || exit 1
 
+# UKI mode uses a dedicated disk layout without BIOS and unused partitions
+if [[ "${BOOTLOADER_MODE:-}" == "uki" ]]; then
+  export DISK_LAYOUT_FILE="${BUILD_LIBRARY_DIR}/disk_layout_uki.json"
+fi
+
 # Flags
 DEFINE_string board "${DEFAULT_BOARD}" \
   "Board for which the image was built"
