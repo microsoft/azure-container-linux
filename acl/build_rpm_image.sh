@@ -976,17 +976,12 @@ build_rpms() {
 
     # Default package list — build.sh receives this as positional args
     local -a package_list=(
-        "azure-vm-utils"
-        "bootengine"
-        "coreos-cloudinit"
-        "coreos-init"
         "ignition"
         "rust-afterburn"
         "sdnotify-proxy"
-        "systemd"
-        "update-ssh-keys"
-        "WALinuxAgent"
         "selinux-policy"
+        "systemd"
+        "WALinuxAgent"
     )
 
     info "Running RPM build script..."

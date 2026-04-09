@@ -381,6 +381,10 @@ rpm_install_package() {
         sudo ln -sf python3 "${root_fs_dir}/usr/bin/python"
     fi
 
+    # Remove dangling ignition-delete-config.service symlink from sysinit.target.wants.
+    # The coreos-init RPM installs this symlink but the target unit doesn't exist.
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/ignition-delete-config.service"
+
     info "Successfully installed ${#packages[@]} RPM packages"
 
     # Append explicitly installed packages to build log
