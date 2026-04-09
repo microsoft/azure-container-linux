@@ -84,7 +84,7 @@ start_image_rpm() {
 
     # Install azurelinux-repos, azurelinux-repos-cloud-native, and azurelinux-repos-extended to get the official
     # repository definitions and GPG keys shipped by Azure Linux.
-    rpm_install_package "${root_fs_dir}" azurelinux-repos azurelinux-repos-extended azurelinux-repos-cloud-native || {
+    rpm_install_package "${root_fs_dir}" azurelinux-repos azurelinux-repos-extended azurelinux-repos-cloud-native azurelinux-release || {
         error "Failed to install azurelinux-repos packages"
         return 1
     }
@@ -469,6 +469,14 @@ EOF
     info "RPM mode: Disabling ntpdate.service via preset (using systemd-timesyncd instead)"
     sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system-preset"
     echo "disable ntpdate.service" | sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-ntp.preset" > /dev/null
+
+    # Re-enable systemd-timesyncd.service via direct symlink.
+    # azurelinux-release's 90-default.preset explicitly disables systemd-timesyncd.
+    # Before azurelinux-release, preset-all with no presets defaulted to enable.
+    # The linux.ntp and acl.basic/ServicesActive test expects timesyncd to be active.
+    info "RPM mode: Re-enabling systemd-timesyncd.service"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants"
+    sudo ln -sf ../systemd-timesyncd.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/systemd-timesyncd.service"
 
     # Disable rsyncd.service - should not run by default (security: listens on port 873)
     info "RPM mode: Disabling rsyncd.service via preset"
