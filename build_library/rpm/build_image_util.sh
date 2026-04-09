@@ -608,6 +608,11 @@ EOF
     info "RPM mode: Masking nftables.service"
     sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/nftables.service"
 
+    # Mask systemd-boot-update.service - ACL manages the bootloader at image
+    # build time via grub_install.sh / uki_install.sh, not at runtime.
+    info "RPM mode: Masking systemd-boot-update.service (bootloader managed at build time)"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/systemd-boot-update.service"
+
     # Mask mdmonitor-oneshot timer and service - mdadm --monitor is only
     # meaningful for redundant RAID levels (1/4/5/6/10) where arrays can
     # degrade. azure-vm-utils uses mdadm solely for RAID-0 (NVMe striping),
@@ -616,6 +621,16 @@ EOF
     info "RPM mode: Masking mdmonitor-oneshot (not useful for RAID-0)"
     sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/mdmonitor-oneshot.timer"
     sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/mdmonitor-oneshot.service"
+
+    # Mask systemd-firstboot.service - ACL uses Ignition for first-boot provisioning
+    info "RPM mode: Masking systemd-firstboot.service"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/systemd-firstboot.service"
+
+    # Mask systemd-homed and systemd-homed-activate services - ACL uses
+    # bootengine for this setup.
+    info "RPM mode: Masking systemd-homed services (not used, core user managed by initramfs)"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/systemd-homed.service"
+    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/systemd-homed-activate.service"
 
     # Add drop-in for systemd-pcrlock-secureboot-policy.service to skip cleanly
     # when Secure Boot is not available. The upstream unit only gates on
