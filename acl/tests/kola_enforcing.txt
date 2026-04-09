@@ -45,7 +45,6 @@ cl.network.iptables
 cl.network.listeners
 cl.network.nftables
 cl.network.wireguard
-cl.osreset.ignition-rerun
 cl.swap_activation
 cl.sysext.boot
 cl.users.shells
