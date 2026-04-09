@@ -190,13 +190,17 @@ rpm_umount_pseudofs() {
 }
 
 # Denylist to force remove RPM packages.
-# Uses --nodeps to avoid removing packages that depend on these (e.g., git depends on perl)
+# Uses --nodeps to avoid removing packages that depend on these (e.g., git depends on perl and python3)
 # MAY BREAK DEPENDENT PACKAGES - use with caution
 remove_denylist_rpm_packages() {
     local root_fs_dir="$1"
     local dbpath_fs="${root_fs_dir}/var/lib/rpm"
     local dbpath_root="/var/lib/rpm"
-    local denylist_globs=("perl*" "ncurses-term" "texinfo" "rpm" "rpm-libs" "libarchive")
+    local -a denylist_globs=("perl*" "ncurses-term" "texinfo" "rpm" "rpm-libs" "libarchive")
+
+    if [[ "${RPM_PRESERVE_PYTHON:-0}" != "1" ]]; then
+        denylist_globs+=("python3" "python3-*")
+    fi
 
     info "RPM mode: Removing denylisted rpm packages"
     if [[ ! -d "${dbpath_fs}" ]]; then
@@ -261,8 +265,51 @@ remove_orphaned_perl_scripts() {
     sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-svn"
     sudo rm -f "${root_fs_dir}/usr/share/git-core/templates/hooks/fsmonitor-watchman.sample"
 
-    # gitweb (perl CGI)
+    # gitweb (perl CGI) and its launcher
+    sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-instaweb"
     sudo rm -rf "${root_fs_dir}/usr/share/gitweb"
+}
+
+# Remove Python scripts orphaned by force-removing the python denylist.
+# Several packages ship optional helper scripts that depend on python3, but
+# python3 is removed via --nodeps in remove_denylist_rpm_packages for the base
+# image. The scripts below are non-functional without the python interpreter and
+# must be deleted explicitly.
+remove_orphaned_python_scripts() {
+    local root_fs_dir="$1"
+    info "RPM mode: Removing optional python helper scripts"
+
+    # nfs-utils helpers that are not required for core NFS client/server usage.
+    sudo rm -f "${root_fs_dir}/usr/sbin/rpcctl"
+    sudo rm -f "${root_fs_dir}/usr/sbin/nfsiostat"
+    sudo rm -f "${root_fs_dir}/usr/sbin/nfsdclnts"
+    sudo rm -f "${root_fs_dir}/usr/sbin/nfsdclddb"
+    sudo rm -f "${root_fs_dir}/usr/sbin/mountstats"
+
+    # git helper that is not required for core git usage.
+    sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-p4"
+
+    # cifs-utils helpers; core CIFS mount support remains via mount.cifs/mount.smb3.
+    sudo rm -f "${root_fs_dir}/usr/bin/smb2-quota"
+    sudo rm -f "${root_fs_dir}/usr/bin/smbinfo"
+
+    # usbutils upstream drops this when Python support is disabled.
+    sudo rm -f "${root_fs_dir}/usr/bin/lsusb.py"
+
+    # xfsprogs periodic scrub wrapper and its cron hook are optional helpers.
+    sudo rm -f "${root_fs_dir}/usr/sbin/xfs_scrub_all"
+    sudo rm -f "${root_fs_dir}/usr/share/xfsprogs/xfs_scrub_all.cron"
+
+    # nghttp2 helper script; not required for the shipped runtime/library usage.
+    sudo rm -f "${root_fs_dir}/usr/share/nghttp2/fetch-ocsp-response"
+
+    # ACL keeps glib-devel as dependency because Azure Linux puts some required GLib
+    # binaries there, remove these python helpers that are not required.
+    # TODO: https://dev.azure.com/mariner-org/ACL/_workitems/edit/18558/
+    sudo rm -f "${root_fs_dir}/usr/bin/gdbus-codegen"
+    sudo rm -f "${root_fs_dir}/usr/bin/glib-genmarshal"
+    sudo rm -f "${root_fs_dir}/usr/bin/glib-mkenums"
+    sudo rm -f "${root_fs_dir}/usr/bin/gtester-report"
 }
 
 # Check whether a package name is available in the configured RPM repos.
@@ -352,6 +399,8 @@ rpm_install_package() {
 
     remove_orphaned_perl_scripts "${root_fs_dir}"
 
+    remove_orphaned_python_scripts "${root_fs_dir}"
+
     # Remove documentation and locale directories that Portage mode excludes via INSTALL_MASK (see make.defaults)
     info "RPM mode: Removing documentation and locale directories (INSTALL_MASK parity)"
     sudo rm -rf "${root_fs_dir}/usr/share/doc"
@@ -373,13 +422,6 @@ rpm_install_package() {
     # Remove debug info
     info "RPM mode: Removing debug info files"
     sudo rm -rf "${root_fs_dir}/usr/lib/debug"
-
-    # Create /usr/bin/python symlink to python3 since ACL ships a single Python version
-    # Note: Updated the kola cl.filesystem/blacklist test to allow this path
-    if [[ ! -e "${root_fs_dir}/usr/bin/python" && -e "${root_fs_dir}/usr/bin/python3" ]]; then
-        info "RPM mode: Creating /usr/bin/python -> python3 symlink (python-exec equivalent)"
-        sudo ln -sf python3 "${root_fs_dir}/usr/bin/python"
-    fi
 
     # Remove dangling ignition-delete-config.service symlink from sysinit.target.wants.
     # The coreos-init RPM installs this symlink but the target unit doesn't exist.

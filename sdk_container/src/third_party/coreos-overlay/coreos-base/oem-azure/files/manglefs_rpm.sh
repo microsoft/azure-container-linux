@@ -87,3 +87,9 @@ if [[ -f "${os_release}" ]]; then
     echo "  Removing ${os_release}"
     rm -f "${os_release}"
 fi
+
+# OEM sysexts preserve python3 for Azure guest tooling, so create the
+# compatibility symlink for python since it only ships with python3.
+if [[ -x "${rootfs}/usr/bin/python3" && ! -e "${rootfs}/usr/bin/python" ]]; then
+    ln -sf python3 "${rootfs}/usr/bin/python"
+fi

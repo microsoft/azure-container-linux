@@ -626,7 +626,8 @@ install_oem_sysext() {
     fi
 
     local -a build_sysext_env=()
-    # For RPM mode, set environment variables to pass to build_sysext
+    # For RPM mode, set environment variables to pass to build_sysext.
+    # Only oem-azure currently needs Python preserved for its dependency closure.
     if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
         build_sysext_env+=(
             "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE}"
@@ -635,6 +636,9 @@ install_oem_sysext() {
             "IMAGE_VERSION_ID=${IMAGE_VERSION_ID:-}"
             "IMAGE_BUILD_ID=${IMAGE_BUILD_ID:-}"
         )
+        if [[ "${oem_sysext}" == "oem-azure" ]]; then
+            build_sysext_env+=("RPM_PRESERVE_PYTHON=1")
+        fi
         info "RPM mode: Set environment variables:"
         # Print environment variables for debugging
         for var in "${build_sysext_env[@]}"; do
