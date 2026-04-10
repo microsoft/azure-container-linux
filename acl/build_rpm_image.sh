@@ -57,6 +57,7 @@
 #   --start-vm                           Start the VM after building (implies --build-vm-image)
 #   --use-serial                         Use serial console for script execution (no SSH/ignition needed)
 #   --use-ssh                            Use SSH for script execution (default, requires working ignition/SSH keys)
+#   --use-test-image                     Boot the test VM image (with docker sysext) instead of the regular image
 #   --vm-name=NAME                       Name for the VM (default: acl)
 #   --vm-type=TYPE                       VM type when building VM images: azure|qemu (default: qemu)
 #   --az-vm-args=ARGS                    Additional arguments to pass to vm start command, esp azure vms
@@ -136,6 +137,7 @@ KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
 BUILD_STANDALONE_SYSEXTS=false  # Build standalone sysexts as a separate step (not during VM image conversion)
 BUILD_TEST_IMAGE=false  # Build a test VM image with docker sysext for kola testing
+USE_TEST_IMAGE=false  # Boot the test VM image instead of the regular image
 AZ_VM_ARGS="${AZ_VM_ARGS:-}"  # Additional arguments to pass to start azure VM
 
 # Standalone sysext definitions — maintained in a YAML config for easy extension.
@@ -297,6 +299,10 @@ parse_args() {
                 ;;
             --build-test-image)
                 BUILD_TEST_IMAGE=true
+                shift
+                ;;
+            --use-test-image)
+                USE_TEST_IMAGE=true
                 shift
                 ;;
             --vm-type=*)
@@ -1491,6 +1497,20 @@ main() {
         export INJECT_DOCKER_SYSEXT=true
         build_vm_image "$VM_TYPE" "$vm_image_path"
         mv "${vm_image_path}" "${test_vm_image_path}"
+
+        # Preserve the secure boot firmware alongside the test image so that a
+        # subsequent --build-vm-image (step 5b) can overwrite the shared firmware
+        # files without breaking the test image's secure boot chain.
+        if [[ "$VM_TYPE" == "qemu" ]]; then
+            local fw_base="__build__/images/images/${BOARD}/latest/${IMG_NAME}_qemu_uefi"
+            local test_fw_base="${fw_base}_test"
+            for suffix in _secure_efi_code.qcow2 _secure_efi_vars.qcow2; do
+                if [[ -f "${fw_base}${suffix}" ]]; then
+                    cp "${fw_base}${suffix}" "${test_fw_base}${suffix}"
+                fi
+            done
+        fi
+
         info "Test VM image ready at: ${test_vm_image_path}"
     fi
 
@@ -1532,6 +1552,7 @@ main() {
         [[ -n "$ACG_IMAGE_VERSION_ID" ]]    && validate_args+=("--acg-image-version-id=${ACG_IMAGE_VERSION_ID}")
         [[ -n "$PARITY" ]]                  && validate_args+=("--parity=${PARITY}")
 
+        [[ "$USE_TEST_IMAGE" == "true" ]]       && validate_args+=("--use-test-image")
         [[ "$START_VM" == "true" ]]             && validate_args+=("--start-vm")
         [[ "$KEEP_VM" == "true" ]]              && validate_args+=("--keep-vm")
         [[ "$REUSE_VM" == "true" ]]             && validate_args+=("--reuse-vm")

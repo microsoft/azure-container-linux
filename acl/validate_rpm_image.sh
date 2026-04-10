@@ -40,6 +40,7 @@
 #   --tag=KEY=VALUE                      Add a resource tag to Azure VMs/RGs
 #   --use-serial                         Use serial console for script execution
 #   --use-ssh                            Use SSH for script execution
+#   --use-test-image                     Boot the test VM image (with docker sysext) instead of the regular image
 #   --vm-name=NAME                       Name for the VM (default: acl)
 #   --vm-type=TYPE                       VM type: azure|qemu (default: qemu)
 #   --vm-image-path=PATH                 Path to VM image (auto-detected if not set)

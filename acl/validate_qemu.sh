@@ -122,6 +122,45 @@ generate_ignition_config() {
         ssh_keys_json+="]"
     fi
 
+    # When booting the test image, inject a systemd unit that symlinks the
+    # docker sysext from the OEM partition into /etc/extensions/ so that
+    # systemd-sysext picks it up.  This mirrors what mantle's NeedsDocker
+    # logic does for kola tests.
+    local systemd_section=""
+    if [[ "${USE_TEST_IMAGE}" == "true" ]]; then
+        info "Test image: injecting docker sysext symlink service into Ignition"
+        # Escape the unit content for JSON embedding
+        local sysext_link_unit
+        sysext_link_unit=$(cat <<'UNIT'
+[Unit]\nDescription=Create symlink for docker sysext\nDefaultDependencies=no\nBefore=systemd-sysext.service\nAfter=local-fs.target\n\n[Service]\nType=oneshot\nRemainAfterExit=true\nExecStart=/usr/bin/ln -sf /oem/sysext/docker.raw /etc/extensions/docker.raw\n\n[Install]\nWantedBy=sysinit.target
+UNIT
+)
+        local sysext_dropin
+        sysext_dropin=$(cat <<'DROPIN'
+[Unit]\nWants=sysext-docker-link.service\nAfter=sysext-docker-link.service
+DROPIN
+)
+        systemd_section=',
+  "systemd": {
+    "units": [
+      {
+        "name": "sysext-docker-link.service",
+        "enabled": true,
+        "contents": "'"${sysext_link_unit}"'"
+      },
+      {
+        "name": "systemd-sysext.service",
+        "dropins": [
+          {
+            "name": "10-wait-for-docker-link.conf",
+            "contents": "'"${sysext_dropin}"'"
+          }
+        ]
+      }
+    ]
+  }'
+    fi
+
     cat > "${config_path}" <<EOF
 {
   "ignition": {
@@ -148,7 +187,7 @@ generate_ignition_config() {
         }
       }
     ]
-  }
+  }${systemd_section}
 }
 EOF
     chmod 644 "${config_path}"
@@ -409,6 +448,13 @@ start_vm_qemu() {
     local image_dir
     image_dir="$(dirname "${abs_disk_path}")"
 
+    # Derive per-image firmware paths from the image filename.
+    # E.g. for "acl_production_qemu_uefi_test_image.img" the base is
+    # "acl_production_qemu_uefi_test" → firmware: *_test_secure_efi_code.qcow2
+    local img_basename
+    img_basename="$(basename "${vm_image_path}")"
+    local img_fw_base="${image_dir}/${img_basename%_image.*}"
+
     local ovmf_code="" ovmf_vars_template="" secure_attr="" smm_feature=""
 
     if [[ "${board}" == "arm64-usr" ]]; then
@@ -419,6 +465,7 @@ start_vm_qemu() {
             "/usr/share/AAVMF/AAVMF_CODE.fd" \
             "/usr/share/edk2/aarch64/QEMU_EFI-pflash.raw" \
             "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd" \
+            "${img_fw_base}_efi_code.qcow2" \
             "${image_dir}/acl_production_qemu_uefi_efi_code.qcow2"; do
             if [[ -f "$code_file" ]]; then
                 ovmf_code="$code_file"
@@ -429,6 +476,7 @@ start_vm_qemu() {
             "/usr/share/AAVMF/AAVMF_VARS.fd" \
             "/usr/share/edk2/aarch64/vars-template-pflash.raw" \
             "/usr/share/qemu-efi-aarch64/QEMU_VARS.fd" \
+            "${img_fw_base}_efi_vars.qcow2" \
             "${image_dir}/acl_production_qemu_uefi_efi_vars.qcow2"; do
             if [[ -f "$vars_file" ]]; then
                 ovmf_vars_template="$vars_file"
@@ -462,6 +510,7 @@ start_vm_qemu() {
         smm_feature=""
     else
         for code_file in \
+            "${img_fw_base}_secure_efi_code.qcow2" \
             "${image_dir}/acl_production_qemu_uefi_secure_efi_code.qcow2" \
             "/usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd" \
             "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd" \
@@ -475,6 +524,7 @@ start_vm_qemu() {
             fi
         done
         for vars_file in \
+            "${img_fw_base}_secure_efi_vars.qcow2" \
             "${image_dir}/acl_production_qemu_uefi_secure_efi_vars.qcow2" \
             "/usr/share/edk2/x64/OVMF_VARS.ms.4m.fd" \
             "/usr/share/OVMF/OVMF_VARS_4M.ms.fd" \

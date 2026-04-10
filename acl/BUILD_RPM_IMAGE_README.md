@@ -291,6 +291,9 @@ The script automatically configures libvirt (default network, URI) on Azure Linu
 # Start VM without secure boot (e.g. for UKI bootloader mode)
 ./acl/build_rpm_image.sh --start-vm --no-secure-boot
 
+# Boot the test image (with docker sysext) instead of the regular image
+./acl/build_rpm_image.sh --start-vm --use-test-image
+
 # Start VM and run inline command via SSH
 ./acl/build_rpm_image.sh --start-vm \
   --run-script="cat /etc/os-release"

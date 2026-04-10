@@ -47,6 +47,7 @@ KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
 VM_STATE_FILE="${SCRIPT_DIR}/.vm-state.env"  # State file for VM reuse between invocations
 VM_IMAGE_PATH=""  # Explicit VM image path (auto-detected if empty)
+USE_TEST_IMAGE=false  # Boot the test VM image instead of the regular image
 AZ_VM_ARGS="${AZ_VM_ARGS:-}"  # Additional arguments to pass when starting Azure VMs (e.g., for user-data)
 export BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
 
@@ -603,6 +604,23 @@ check_vm_prerequisites() {
     info "✓ VM prerequisites met"
 }
 
+# ── VM image path resolution ─────────────────────────────────────
+
+# Resolve the VM image path from VM_IMAGE_PATH, USE_TEST_IMAGE, and VM_TYPE.
+# Prints the resolved path to stdout.
+resolve_vm_image_path() {
+    if [[ -n "$VM_IMAGE_PATH" ]]; then
+        echo "$VM_IMAGE_PATH"
+        return
+    fi
+    local suffix="image"
+    [[ "$USE_TEST_IMAGE" == "true" ]] && suffix="test_image"
+    case "$VM_TYPE" in
+        qemu)  echo "__build__/images/images/${BOARD}/latest/${IMG_NAME}_qemu_uefi_${suffix}.img" ;;
+        azure) echo "__build__/images/images/${BOARD}/latest/${IMG_NAME}_azure_${suffix}.vhd" ;;
+    esac
+}
+
 # ── Argument parsing ──────────────────────────────────────────────
 
 parse_validate_args() {
@@ -629,6 +647,9 @@ parse_validate_args() {
                 shift ;;
             --vm-image-path=*)
                 VM_IMAGE_PATH="${1#*=}"
+                shift ;;
+            --use-test-image)
+                USE_TEST_IMAGE=true
                 shift ;;
             --run-script=*)
                 RUN_SCRIPTS+=("${1#*=}")
@@ -762,6 +783,7 @@ parse_validate_args() {
                 echo "  --tag=KEY=VALUE            Add a resource tag"
                 echo "  --use-serial               Use serial console"
                 echo "  --use-ssh                  Use SSH"
+                echo "  --use-test-image           Boot the test VM image (with docker sysext)"
                 echo "  --vm-image-path=PATH       Path to VM image"
                 echo "  --az-vm-args=ARGS          Additional arguments to pass when starting Azure VMs"
                 echo "  --vm-name=NAME             VM name (default: acl)"
@@ -776,13 +798,8 @@ parse_validate_args() {
     done
 
     if [[ "$START_VM" == "true" ]] && [[ "$REUSE_VM" != "true" ]]; then
-        local auto_vm_path="${VM_IMAGE_PATH}"
-        if [[ -z "$auto_vm_path" ]]; then
-            case "$VM_TYPE" in
-                qemu)  auto_vm_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_qemu_uefi_image.img" ;;
-                azure) auto_vm_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_azure_image.vhd" ;;
-            esac
-        fi
+        local auto_vm_path
+        auto_vm_path="$(resolve_vm_image_path)"
         # Don't auto-build if image already exists or using ACG image
         if [[ -n "${ACG_IMAGE_VERSION_ID}" ]] || [[ "${REUSE_IMAGE}" == "true" ]] || [[ -f "$auto_vm_path" ]]; then
             : # Image exists or using gallery image, no need to build
@@ -801,13 +818,8 @@ validate_main() {
     check_vm_prerequisites
 
     # Resolve VM image path
-    local vm_image_path="${VM_IMAGE_PATH}"
-    if [[ -z "$vm_image_path" ]]; then
-        case "$VM_TYPE" in
-            qemu)  vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_qemu_uefi_image.img" ;;
-            azure) vm_image_path="__build__/images/images/${BOARD}/latest/${IMG_NAME}_azure_image.vhd" ;;
-        esac
-    fi
+    local vm_image_path
+    vm_image_path="$(resolve_vm_image_path)"
 
     # Start VM and run scripts / connect interactively
     if [[ "$START_VM" == "true" ]]; then
