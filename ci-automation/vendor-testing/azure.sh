@@ -50,8 +50,14 @@ run_kola_tests() {
     fi
 
     # Align timeout with ore azure gc --duration parameter
+    debug_flag=""
+    if [[ "${KOLA_DEBUG:-}" == "true" ]]; then
+        debug_flag="--debug"
+    fi
+
     timeout --signal=SIGQUIT 6h \
       kola run \
+      ${debug_flag} \
       ${distro_flag:-} \
       --board="${board}" \
       --basename="${basename}" \

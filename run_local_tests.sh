@@ -73,6 +73,7 @@ export QEMU_UEFI_SECURE_FIRMWARE=/work/__build__/images/images/${arch@Q}-usr/lat
 export QEMU_UEFI_SECURE_OVMF_VARS=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_secure_efi_vars.qcow2
 export QEMU_UPDATE_PAYLOAD=/work/__build__/images/images/${arch@Q}-usr/latest/flatcar_test_update.gz
 export PARALLEL_TESTS=${parallel@Q}
+export KOLA_DEBUG=${KOLA_DEBUG:-}
 EOF
 
   export MAX_RETRIES=${MAX_RUNS:-1}

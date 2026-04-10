@@ -403,7 +403,9 @@ Run the full Flatcar E2E test suite against the built QEMU VM image:
 ./acl/build_rpm_image.sh --run-kola-tests
 ```
 
-At the moment, the full run takes about 4 hours. To add retries for flaky tests, set `MAX_RUNS` to number higher than 1.
+At the moment, the full run takes about 4 hours. To add retries for flaky tests, set `MAX_RUNS` to number higher than 1. 
+
+To enable verbose kola debug output, set `KOLA_DEBUG=true`.
 
 To produce results MD summary with grouping of failures, you can use `./acl/parse_tap_results.py`:
 
