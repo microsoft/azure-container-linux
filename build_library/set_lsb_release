@@ -57,7 +57,10 @@ fi
 FLATCAR_APPID="{e96281a6-d1af-4bde-9a0a-97b76e56dc57}"
 
 # DISTRIB_* are the standard lsb-release names
-sudo mkdir -p "${ROOT_FS_DIR}/usr/share/flatcar" "${ROOT_FS_DIR}/etc/flatcar"
+sudo mkdir -p "${ROOT_FS_DIR}/usr/share/flatcar"
+if [[ "${PACKAGE_SOURCE_MODE}" != "RPM" ]]; then
+  sudo mkdir -p "${ROOT_FS_DIR}/etc/flatcar"
+fi
 # For RPM mode, use IMAGE_VERSION for OS identity; for Portage, use FLATCAR_VERSION
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
   _OS_VERSION="${IMAGE_VERSION}"
