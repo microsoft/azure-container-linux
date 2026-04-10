@@ -150,6 +150,7 @@ HYDRATE_BUILD_ID=""  # Specific build ID for hydrate (empty = latest)
 HYDRATE_ORG="https://dev.azure.com/mariner-org"
 HYDRATE_PROJECT="ACL"
 HYDRATE_PIPELINE_ID="5304"
+HYDRATE_ACR="acldevel.azurecr.io"
 
 # Set envi var-s required for RPM mode
 export PACKAGE_SOURCE_MODE=RPM
@@ -640,6 +641,13 @@ hydrate() {
     local pipeline_id="${HYDRATE_PIPELINE_ID}"
     local temp_dir="${SCRIPT_DIR}/__build__/.hydrate-temp"
 
+    # Derive arch suffix from BOARD for architecture-specific artifact lookups.
+    local artifact_arch
+    case "${BOARD}" in
+        arm64-usr) artifact_arch="arm64" ;;
+        *)         artifact_arch="amd64" ;;
+    esac
+
     # Verify az cli is installed
     if ! command -v az &>/dev/null; then
         error "Azure CLI (az) not found, required for hydrate"
@@ -674,25 +682,49 @@ hydrate() {
         exit 1
     fi
 
-    # Resolve build ID (latest successful aclmain run if not specified)
+    # Resolve build ID (latest successful run if not specified)
+    # Iterates recent builds to find one that has the finalize artifact for
+    # the requested architecture.  Builds may be amd64-only, arm64-only,
+    # or both — we need one that actually produced our target arch.
     if [[ -z "${build_id}" ]]; then
-        info "Querying latest successful build from pipeline ${pipeline_id}..."
-        build_id=$(az pipelines runs list \
+        info "Querying recent successful builds from pipeline ${pipeline_id} (looking for ${artifact_arch})..."
+        local candidate_ids
+        candidate_ids=$(az pipelines runs list \
             --pipeline-ids "${pipeline_id}" \
             --branch "main" \
             --status completed \
             --result succeeded \
-            --top 1 \
-            --query '[0].id' \
+            --top 30 \
+            --query '[].id' \
             -o tsv \
             --org "${org}" \
             --project "${project}" 2>/dev/null)
 
-        if [[ -z "${build_id}" || "${build_id}" == "None" ]]; then
+        if [[ -z "${candidate_ids}" ]]; then
             error "No successful builds found for pipeline ${pipeline_id}"
             exit 1
         fi
-        info "Latest successful build: ${build_id}"
+
+        local finalize_artifact="drop_publish_final_${artifact_arch}_finalize"
+        for cid in ${candidate_ids}; do
+            # Check if this build has the arch-specific finalize artifact
+            if az pipelines runs artifact list \
+                --run-id "${cid}" \
+                --org "${org}" \
+                --project "${project}" \
+                --query "[?name=='${finalize_artifact}'].name" \
+                -o tsv 2>/dev/null | grep -q "${finalize_artifact}"; then
+                build_id="${cid}"
+                break
+            fi
+        done
+
+        if [[ -z "${build_id}" ]]; then
+            error "No recent successful build found with ${artifact_arch} artifacts"
+            error "Checked $(echo "${candidate_ids}" | wc -w) builds from pipeline ${pipeline_id}"
+            exit 1
+        fi
+        info "Found build with ${artifact_arch} artifacts: ${build_id}"
     else
         info "Using specified build: ${build_id}"
     fi
@@ -702,12 +734,6 @@ hydrate() {
     mkdir -p "${temp_dir}"
 
     # Download published_artifacts.json
-    # Derive arch suffix from BOARD for the per-architecture artifact name.
-    local artifact_arch
-    case "${BOARD}" in
-        arm64-usr) artifact_arch="arm64" ;;
-        *)         artifact_arch="amd64" ;;
-    esac
     info "Downloading published artifacts manifest (arch: ${artifact_arch})..."
     if ! az pipelines runs artifact download \
         --artifact-name "drop_publish_final_${artifact_arch}_finalize" \
@@ -780,8 +806,18 @@ print(f'rpms_tarball={rpms_tarball}')
         fi
         info "✓ SDK container pulled"
     else
-        warn "No SDK container in build artifacts — skipping"
-        skipped+=("SDK container")
+        # Manifest didn't record an SDK (e.g. older build before this fix).
+        # Fall back to the latest SDK in ACR.
+        local acr="${HYDRATE_ACR}"
+        local fallback_sdk="${acr}/flatcar-sdk-all:latest"
+        warn "No SDK container in manifest — falling back to ${fallback_sdk}"
+        if docker pull "${fallback_sdk}" 2>/dev/null; then
+            sdk_image="${fallback_sdk}"
+            info "✓ SDK container pulled (ACR latest)"
+        else
+            warn "Could not pull ${fallback_sdk} — skipping SDK"
+            skipped+=("SDK container")
+        fi
     fi
 
     # Pull mantle container
@@ -800,8 +836,20 @@ print(f'rpms_tarball={rpms_tarball}')
         info "✓ Mantle container pulled"
         info "  Updated ${mantle_file}"
     else
-        warn "No mantle container in build artifacts — skipping"
-        skipped+=("mantle container")
+        # Fall back to the latest mantle in ACR
+        local acr="${HYDRATE_ACR}"
+        local fallback_mantle="${acr}/mantle:latest"
+        warn "No mantle container in manifest — falling back to ${fallback_mantle}"
+        if docker pull "${fallback_mantle}" 2>/dev/null; then
+            mantle_image="${fallback_mantle}"
+            local mantle_file="${SCRIPT_DIR}/sdk_container/.repo/manifests/mantle-container"
+            echo "${mantle_image}" > "${mantle_file}"
+            info "✓ Mantle container pulled (ACR latest)"
+            info "  Updated ${mantle_file}"
+        else
+            warn "Could not pull ${fallback_mantle} — skipping mantle"
+            skipped+=("mantle container")
+        fi
     fi
 
     # Download and extract RPM staging
