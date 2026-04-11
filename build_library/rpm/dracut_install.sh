@@ -197,6 +197,29 @@ _dracut_patch_bootengine_modules() {
         info "RPM mode: Installing network-cleanup.service on real root for post-switch-root stop"
         sudo cp "${network_cleanup_svc}" "${root_fs_dir}/usr/lib/systemd/system/network-cleanup.service"
     fi
+
+    # Patch initrd-setup-root-after-ignition for ACL:
+    # - Tolerate missing FLATCAR_BOARD (ACL os-release doesn't include it, script uses set -u)
+    # - Remove download_and_verify function and all download logic (ACL doesn't use Flatcar's
+    #   update server for sysext downloads)
+    # - Keep the enabled-sysext.conf loop for symlink management, just remove download fallback
+    local setup_root_after="${root_fs_dir}/usr/lib/dracut/modules.d/99setup-root/initrd-setup-root-after-ignition"
+    if [[ -f "${setup_root_after}" ]]; then
+        info "RPM mode: Patching initrd-setup-root-after-ignition for ACL"
+        # Fix unbound FLATCAR_BOARD variable
+        sudo sed -i 's/echo "${FLATCAR_BOARD}"/echo "${FLATCAR_BOARD:-}"/' "${setup_root_after}"
+        # Remove the download_and_verify function definition and its usage comment
+        sudo sed -i '/^function download_and_verify()/,/^}$/d' "${setup_root_after}"
+        sudo sed -i '/^# Note: don.t use as.*download_and_verify/d' "${setup_root_after}"
+        # Remove the OEM sysext download fallback (else branch that calls download_and_verify)
+        sudo sed -i '/echo "Did not find.*nor.*downloading"/,/^    fi$/d' "${setup_root_after}"
+        # Clean up the now-empty else: if "  else" is immediately followed by "  fi", drop the else
+        sudo sed -i '/^  else$/{N;/\n  fi$/s/^  else\n//}' "${setup_root_after}"
+        # Remove the download fallback inside the enabled-sysext.conf loop (keep symlink management)
+        sudo sed -i '/if \[ ! -e "\/sysroot\/\${ACTIVE_EXT}" \]/,/^  fi$/d' "${setup_root_after}"
+        # Remove any remaining systemctl network start lines (only used for download)
+        sudo sed -i '/systemctl start --quiet systemd-networkd systemd-resolved/d' "${setup_root_after}"
+    fi
 }
 
 # Install new initramfs assets that dracut will pick up.

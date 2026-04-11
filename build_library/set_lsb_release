@@ -97,9 +97,12 @@ ANSI_COLOR="$ANSI_COLOR"
 HOME_URL="$HOME_URL"
 BUG_REPORT_URL="$BUG_REPORT_URL"
 SUPPORT_URL="$SUPPORT_URL"
-FLATCAR_BOARD="$FLAGS_board"
 CPE_NAME="cpe:2.3:o:$CPE_ORG:$CPE_DISTRO:${_OS_VERSION}:*:*:*:*:*:*:*"
 EOF
+# FLATCAR_BOARD is only relevant for Portage/Flatcar CL builds.
+if [[ "${PACKAGE_SOURCE_MODE}" != "RPM" ]] && [[ -n "${FLAGS_board}" ]]; then
+  echo "FLATCAR_BOARD=\"${FLAGS_board}\"" | sudo tee -a "${ROOT_FS_DIR}/usr/lib/os-release" > /dev/null
+fi
 sudo ln -sf "../usr/lib/os-release" "${ROOT_FS_DIR}/etc/os-release"
 sudo mkdir -p "${ROOT_FS_DIR}/usr/share/flatcar"
 sudo ln -sf "../../lib/os-release" "${ROOT_FS_DIR}/usr/share/flatcar/os-release"
