@@ -779,6 +779,17 @@ SYSUSERS_EOF
     info "RPM mode: Creating profile.d directory"
     sudo mkdir -p "${root_fs_dir}/etc/profile.d"
 
+    # Workaround hanging issue when connecting via SAC/OneSAC serial console.
+    # The console-login-helper-messages package's serial-console.sh uses
+    # "read -sd" which blocks forever on non-interactive consoles (OneSAC,
+    # DCM Explorer, QEMU text-file redirect). Adding a 1s timeout prevents
+    # the hang. See AZL Bug 59925731, ACL Bug 18531.
+    if [[ -f "${root_fs_dir}/etc/profile.d/serial-console.sh" ]]; then
+        info "RPM mode: Fixing serial-console.sh read timeout"
+        sudo sed -i 's/read -sd/read -t 1 -sd/g' \
+            "${root_fs_dir}/etc/profile.d/serial-console.sh"
+    fi
+
     # Ensure /root home directory exists with proper permissions
     sudo mkdir -p "${root_fs_dir}/root"
     sudo chmod 700 "${root_fs_dir}/root"
