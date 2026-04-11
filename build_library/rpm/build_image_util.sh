@@ -464,25 +464,12 @@ d /var/lib/nfs/v4root 0755 root root -
 d /var/lib/nfs/rpc_pipefs 0755 root root -
 EOF
 
-    # Disable ntpdate.service - systemd-timesyncd is preferred for time sync
-    # Use a preset file to disable ntpdate and remove existing symlinks
-    info "RPM mode: Disabling ntpdate.service via preset (using systemd-timesyncd instead)"
-    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system-preset"
-    echo "disable ntpdate.service" | sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-ntp.preset" > /dev/null
-
     # Re-enable systemd-timesyncd.service via direct symlink.
-    # azurelinux-release's 90-default.preset explicitly disables systemd-timesyncd.
-    # Before azurelinux-release, preset-all with no presets defaulted to enable.
-    # The linux.ntp and acl.basic/ServicesActive test expects timesyncd to be active.
+    # azurelinux-release's 90-default.preset explicitly disables systemd-timesyncd,
+    # but the linux.ntp and acl.basic/ServicesActive tests expect timesyncd to be active.
     info "RPM mode: Re-enabling systemd-timesyncd.service"
     sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants"
     sudo ln -sf ../systemd-timesyncd.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/systemd-timesyncd.service"
-
-    # Disable rsyncd.service - should not run by default (security: listens on port 873)
-    info "RPM mode: Disabling rsyncd.service via preset"
-    echo "disable rsyncd.service" | sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-rsyncd.preset" > /dev/null
-    sudo rm -f "${root_fs_dir}/usr/share/flatcar/etc/systemd/system/multi-user.target.wants/ntpdate.service"
-    sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/ntpdate.service"
 
     # Switch sshd to socket activation (matching Flatcar behavior)
     # The Azure Linux openssh RPM only ships sshd.service (traditional daemon).
@@ -684,12 +671,6 @@ EOF
     # Remove etcd config file (native etcd.service config, not used with etcd-wrapper)
     sudo rm -f "${root_fs_dir}/etc/etcd/etcd-default-conf.yml"
 
-    # Disable etcd-member.service by default via preset.
-    # It should only start when explicitly enabled via CLC/Ignition (etcd: section).
-    # Without this, systemd-firstboot preset-all enables it because no preset matches,
-    # causing crashes on systems without Docker (e.g. sysext.disable-containerd test).
-    echo "disable etcd-member.service" | sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-etcd-member.preset" > /dev/null
-
     # Install etcd-wrapper - runs etcd in a Docker container with sdnotify-proxy.
     # These files come from the Flatcar etcd-wrapper package in sdk_container.
     local etcd_wrapper_src="${BUILD_LIBRARY_DIR}/../sdk_container/src/third_party/coreos-overlay/app-admin/etcd-wrapper/files"
@@ -763,30 +744,6 @@ SYSUSERS_EOF
     # networkd configs for flannel interfaces
     sudo cp "${flannel_wrapper_src}/50-flannel.network" "${root_fs_dir}/usr/lib/systemd/network/50-flannel.network"
     sudo cp "${flannel_wrapper_src}/50-flannel.link" "${root_fs_dir}/usr/lib/systemd/network/50-flannel.link"
-
-    # Disable flanneld.service and flannel-docker-opts.service by default via preset.
-    # They should only start when explicitly enabled via CLC/Ignition (flannel section).
-    # Without this, systemd-firstboot preset-all enables them because no preset matches.
-    echo "disable flanneld.service" | sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-flannel.preset" > /dev/null
-    echo "disable flannel-docker-opts.service" | sudo tee -a "${root_fs_dir}/usr/lib/systemd/system-preset/50-flannel.preset" > /dev/null
-
-    # Disable coreos-metadata.service and coreos-metadata-sshkeys@.service by default.
-    # These services require afterburn (coreos-metadata) which handles cloud provider metadata.
-    # They should only start when explicitly needed, not on every boot.
-    # NOTE: The preset must use the template name (coreos-metadata-sshkeys@.service) not
-    # the instance name (@core), because systemctl preset-all matches installed unit files
-    # which are templates, not instances.
-    info "RPM mode: Disabling coreos-metadata and coreos-metadata-sshkeys@ via preset"
-    printf "disable coreos-metadata.service\ndisable coreos-metadata-sshkeys@.service\n" | \
-        sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-coreos-metadata.preset" > /dev/null
-
-    # Disable azure-ephemeral-disk-setup.service by default, in line with Flatcar.
-    # This service is only needed for Azure ephemeral disk setup, and should not run
-    # on non-Azure platforms during boot.
-    # It can be enabled via Ignition when needed.
-    info "RPM mode: Disabling azure-ephemeral-disk-setup via preset"
-    printf "disable azure-ephemeral-disk-setup.service\n" | \
-        sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-azure-ephemeral-disk-setup.preset" > /dev/null
 
     # Placeholder audit-rules.service - Azure Linux doesn't provide this but kola tests expect it as a common dependency
     if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service" ]]; then
