@@ -244,12 +244,12 @@ SYSUSERS_ADMIN
 
     # core user - primary user for Flatcar/ACL (UID/GID 500)
     # This is the default non-root user for SSH access and container operations
+    # Note: core gets NOPASSWD sudo via explicit sudoers entry, not via sudo group
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/core.conf" > /dev/null <<'SYSUSERS_CORE'
 # Core user - primary administrative user
 g core 500 -
 u core 500:500 "ACL Admin" /home/core /bin/bash
 m core wheel
-m core sudo
 m core docker
 m core systemd-journal
 SYSUSERS_CORE
@@ -361,13 +361,27 @@ SSHD_CONFIG_EOF
         info "RPM mode: sshd_config already has Include directive"
     fi
 
-    # Configure sudo for wheel group (passwordless)
-    info "RPM mode: Configuring passwordless sudo for wheel group"
+    # Configure sudo to match Flatcar's sudoers policy:
+    # - wheel group requires password
+    # - sudo group gets NOPASSWD (override base sudoers password-required rule)
+    # - core user gets explicit NOPASSWD (matches Flatcar's /usr/share/baselayout/sudoers)
+    # - LESSCHARSET preserved for systemd commands that call less
+    info "RPM mode: Configuring sudoers drop-in for Flatcar parity"
     sudo mkdir -p "${root_fs_dir}/etc/sudoers.d"
-    sudo tee "${root_fs_dir}/etc/sudoers.d/wheel-nopasswd" > /dev/null <<'SUDOERS_EOF'
-%wheel ALL=(ALL:ALL) NOPASSWD: ALL
+    sudo tee "${root_fs_dir}/etc/sudoers.d/flatcar-compat" > /dev/null <<'SUDOERS_EOF'
+## Flatcar-compatible sudo policy for ACL
+## See: https://github.com/flatcar/baselayout/blob/dda76ffe75112a6e9150c925e4d969950d048711/share/baselayout/sudoers
+
+## Pass LESSCHARSET through for systemd commands run through sudo that call less.
+Defaults env_keep += "LESSCHARSET"
+
+## enable passwordless access for sudo group
+%sudo ALL=(ALL) NOPASSWD: ALL
+
+## the core user has no password by default
+core ALL=(ALL) NOPASSWD: ALL
 SUDOERS_EOF
-    sudo chmod 440 "${root_fs_dir}/etc/sudoers.d/wheel-nopasswd"
+    sudo chmod 440 "${root_fs_dir}/etc/sudoers.d/flatcar-compat"
 
     # Enable systemd-networkd service
     info "RPM mode: Enabling systemd-networkd.service"

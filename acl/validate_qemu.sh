@@ -171,8 +171,8 @@ DROPIN
       {
         "name": "${VM_SSH_USER}",
         "sshAuthorizedKeys": ${ssh_keys_json}$(if [[ -n "$password_hash" ]]; then echo ",
-        \"passwordHash\": \"${password_hash}\""; fi),
-        "groups": ["wheel"]
+        \"passwordHash\": \"${password_hash}\""; fi)$(if [[ "${VM_SSH_USER}" != "core" ]]; then echo ",
+        \"groups\": [\"sudo\"]"; fi)
       }
     ]
   },
