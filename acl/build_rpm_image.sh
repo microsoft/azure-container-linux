@@ -473,6 +473,14 @@ parse_args() {
                 AZ_VM_SIZE="$2"
                 shift 2
                 ;;
+            --az-backup-regions=*)
+                AZ_BACKUP_REGIONS="${1#*=}"
+                shift
+                ;;
+            --az-backup-regions)
+                AZ_BACKUP_REGIONS="$2"
+                shift 2
+                ;;
             --no-cleanup)
                 NO_CLEANUP=true
                 shift
@@ -1592,6 +1600,7 @@ main() {
         [[ -n "${AZ_STORAGE_ACC:-}" ]] && validate_args+=("--az-storage-account=${AZ_STORAGE_ACC}")
         [[ -n "${AZ_ACG:-}" ]] && validate_args+=("--acg-gallery-name=${AZ_ACG}")
         [[ -n "${AZ_VM_SIZE:-}" ]] && validate_args+=("--az-vm-size=${AZ_VM_SIZE}")
+        [[ -n "${AZ_BACKUP_REGIONS:-}" ]] && validate_args+=("--az-backup-regions=${AZ_BACKUP_REGIONS}")
         [[ -n "$BUILD_ID" ]]                  && validate_args+=("--build-id=${BUILD_ID}")
 
         [[ -n "$VM_SSH_KEY" ]]              && validate_args+=("--ssh-key=${VM_SSH_KEY}")

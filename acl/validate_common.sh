@@ -735,6 +735,9 @@ parse_validate_args() {
             --az-vm-size=*)
                 AZ_VM_SIZE="${1#*=}"
                 shift ;;
+            --az-backup-regions=*)
+                AZ_BACKUP_REGIONS="${1#*=}"
+                shift ;;
             --az-storage-rg=*)
                 AZ_STORAGE_RG="${1#*=}"
                 shift ;;
