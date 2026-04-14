@@ -378,14 +378,6 @@ SUDOERS_EOF
     info "RPM mode: Enabling systemd-resolved.service"
     sudo ln -sf ../systemd-resolved.service "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/systemd-resolved.service"
 
-    # Fix ntpdate-wrapper - Azure Linux has ntpdate at /usr/bin but wrapper
-    # script expects /usr/sbin
-    # Tracked by https://dev.azure.com/mariner-org/ACL/_workitems/edit/17804
-    if [[ -f "${root_fs_dir}/usr/libexec/ntpdate-wrapper" ]]; then
-        info "RPM mode: Patching ntpdate-wrapper to use /usr/bin/ntpdate"
-        sudo sed -i 's|/usr/sbin/ntpdate|/usr/bin/ntpdate|g' "${root_fs_dir}/usr/libexec/ntpdate-wrapper"
-    fi
-
     # Add drop-in for ntpdate.service to ensure DNS is ready before running
     # The service has After=nss-lookup.target but DNS servers may not be configured yet
     # We add retries to handle the race between DHCP configuring DNS and ntpdate running
