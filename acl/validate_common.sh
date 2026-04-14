@@ -29,7 +29,7 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-__build__}"
 RUN_SCRIPTS=()  # Scripts to run on VM after boot
 SCRIPT_RESULTS_NAMES=()   # Names of scripts that were executed
 SCRIPT_RESULTS_STATUS=()  # Exit status per script: 0=pass, non-zero=fail
-VM_SSH_USER="${VM_SSH_USER:-core}"
+VM_SSH_USER="${VM_SSH_USER:-azureuser}"
 VM_SSH_KEY="${VM_SSH_KEY:-}"
 VM_SSH_TIMEOUT="${VM_SSH_TIMEOUT:-120}"  # Seconds to wait for SSH
 VM_SSH_AUTHORIZED_KEYS="${VM_SSH_AUTHORIZED_KEYS:-}"  # SSH public keys to inject (file or string)
