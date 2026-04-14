@@ -279,7 +279,6 @@ parse_args() {
                 FORCE_REBUILD=true
                 BUILD_IMAGE=true
                 BUILD_VM_IMAGE=true
-                BUILD_STANDALONE_SYSEXTS=true
                 # Passthrough
                 ;&
             --run-tests)
