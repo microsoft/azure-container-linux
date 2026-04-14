@@ -225,7 +225,11 @@ fi
 
 if [[ -n "${FLAGS_metapkgs}" ]]; then
   mapfile -t metapkgs < <(tr ',' '\n' <<<"${FLAGS_metapkgs}")
-  "emerge-${FLAGS_board}" --nodeps --buildpkgonly --usepkg n --verbose "${metapkgs[@]}"
+  # In RPM mode the metapkg ebuild is not needed — packages are resolved
+  # via the RPM catalog.  Only build the portage binpkg in portage mode.
+  if [[ "${PACKAGE_SOURCE_MODE}" != "RPM" ]]; then
+    "emerge-${FLAGS_board}" --nodeps --buildpkgonly --usepkg n --verbose "${metapkgs[@]}"
+  fi
   set -- "${metapkgs[@]}" "${@}"
 fi
 

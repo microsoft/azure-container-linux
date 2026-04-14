@@ -534,6 +534,34 @@ install_oem_package() {
     local oem_pkg=$(_get_vm_opt OEM_PACKAGE)
     local oem_use=$(_get_vm_opt OEM_USE)
 
+    if [[ -z "${oem_pkg}" ]] && [[ -z "${oem_use}" ]]; then
+        return 0
+    fi
+
+    # RPM mode: generate OEM files directly without portage.
+    if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+        if [[ -z "${oem_use}" ]]; then
+            return 0
+        fi
+        local oem_files_dir="${SCRIPT_ROOT}/sdk_container/src/third_party/coreos-overlay/coreos-base/common-oem-files/files"
+        local version="${IMAGE_VERSION:-${FLATCAR_VERSION}}"
+        "${BUILD_LIBRARY_DIR}/rpm/oem_files.sh" \
+            "${oem_use}" \
+            "${version}" \
+            "${VM_TMP_ROOT}/oem" \
+            "${BOOTLOADER_MODE}" \
+            "${oem_files_dir}"
+        if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
+            install_uki_oem_addon
+        fi
+        return 0
+    fi
+
+    # Portage mode: build and install common-oem-files via emerge.
+    if [[ -z "${oem_pkg}" ]]; then
+        return 0
+    fi
+
     # In UKI mode, tell the ebuild to skip installing grub.cfg (OEM cmdline
     # args are delivered via a UKI addon instead).
     if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
@@ -543,10 +571,6 @@ install_oem_package() {
     # important - it is used to determine the package target in
     # coreos/base/profile.bashrc
     local oem_tmp="${VM_TMP_DIR}/${VM_IMG_TYPE}-oem-image-rootfs"
-
-    if [[ -z "${oem_pkg}" ]]; then
-        return 0
-    fi
 
     # Split into two steps because we want to always install $oem_pkg from
     # the ebuild (build_packages doesn't handle it) *but* we never want to
