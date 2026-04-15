@@ -383,14 +383,8 @@ core ALL=(ALL) NOPASSWD: ALL
 SUDOERS_EOF
     sudo chmod 440 "${root_fs_dir}/etc/sudoers.d/flatcar-compat"
 
-    # Enable systemd-networkd service
-    info "RPM mode: Enabling systemd-networkd.service"
-    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants"
-    sudo ln -sf ../systemd-networkd.service "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/systemd-networkd.service"
-
-    # Enable systemd-resolved service (for DNS)
-    info "RPM mode: Enabling systemd-resolved.service"
-    sudo ln -sf ../systemd-resolved.service "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/systemd-resolved.service"
+    # Note: systemd-networkd.service and systemd-resolved.service are enabled
+    # by azurelinux-release's 90-default.preset — no manual symlinks needed.
 
     # Add drop-in for ntpdate.service to ensure DNS is ready before running
     # The service has After=nss-lookup.target but DNS servers may not be configured yet
@@ -512,7 +506,7 @@ SSHD_AT_SERVICE
 Wants=sshd-keygen.service
 After=sshd-keygen.service
 SSHD_KEYGEN_DROPIN
-    # Disable traditional sshd.service, enable sshd.socket instead
+    # Disable sshd.service (enabled by 90-default.preset) and enable sshd.socket instead
     printf "disable sshd.service\nenable sshd.socket\n" | \
     sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-sshd.preset" > /dev/null
     # Remove any existing sshd.service enable symlinks from the RPM
