@@ -457,7 +457,9 @@ collect_parity_data() {
     [[ ! -x "$collector_bin" ]] && collector_bin="${os_diff_dir}/os-data-collector-static"
     if [[ ! -x "$collector_bin" ]]; then
         error "os-data-collector not found in $os_diff_dir"
-        error "Build it with: cd $os_diff_dir && make build static"
+        error "Build it with:"
+        error "dynamic bin: cd $os_diff_dir && make build"
+        error "static bin:  cd $os_diff_dir && make build static"
         exit 1
     fi
 
@@ -466,7 +468,7 @@ collect_parity_data() {
         exit 1
     fi
 
-    local collect_output_dir="${SCRIPT_DIR}/__build__/data-collection"
+    local collect_output_dir="${SCRIPT_DIR}/__build__/data-collection/${BOARD}"
     mkdir -p "$collect_output_dir"
     local timestamp
     timestamp=$(date +%Y%m%d-%H%M%S)
@@ -487,7 +489,7 @@ collect_parity_data() {
     tmp_file=$(mktemp)
     jq --argjson size "$compressed_size" '.os_info.compressed_image_size = $size' "$collected_file" > "$tmp_file" && mv "$tmp_file" "$collected_file"
 
-    local upstream_data="${SCRIPT_DIR}/acl/upstream-fc-comparison-data.json"
+    local upstream_data="${SCRIPT_DIR}/acl/upstream-fc-${BOARD%%-*}-comparison-data.json"
     local reporter="${os_diff_dir}/os-comparison-reporter"
     [[ ! -x "$reporter" ]] && reporter="${os_diff_dir}/os-comparison-reporter-static"
     if [[ ! -x "$reporter" ]]; then
