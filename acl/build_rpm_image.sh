@@ -39,6 +39,10 @@
 #   --tag=KEY=VALUE                      Add a resource tag to Azure VMs/RGs (can specify multiple times)
 #                                        Default tag: createdBy=<current user>
 #   --rebuild                            Force rebuild even if image exists
+#   --retry=N                            Retry build steps up to N times with exponential backoff
+#                                        (default backoff: 15s initial, 5min max). Clears intermediate
+#                                        build caches between retries but preserves toolchain, azurelinux
+#                                        clone, and rpm-staging.
 #   --parity[=DIR]                       Run parity data collection and comparison report.
 #                                        Requires os-diff repo (default DIR: ../os-diff)
 #   --rebuild-and-test                   Rebuild image and run smoke tests (equivalent to
@@ -100,6 +104,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
+
+# shellcheck source=../build_library/retry_with_backoff.sh
+source "${SCRIPT_DIR}/build_library/retry_with_backoff.sh"
 cd "${SCRIPT_DIR}"
 
 # Default configuration
@@ -143,6 +150,7 @@ AZ_VM_ARGS="${AZ_VM_ARGS:-}"  # Additional arguments to pass to start azure VM
 # Standalone sysext definitions — maintained in a YAML config for easy extension.
 # See acl/standalone_sysexts.yaml for schema, arch support, and how-to-add.
 STANDALONE_SYSEXTS_YAML="${SCRIPT_DIR}/acl/standalone_sysexts.yaml"
+RETRY_ATTEMPTS=0  # Number of retry attempts (0 = no retry)
 HYDRATE=false  # Hydrate local environment from CI pipeline build
 HYDRATE_BUILD_ID=""  # Specific build ID for hydrate (empty = latest)
 
@@ -268,6 +276,18 @@ parse_args() {
                 ;;
             --clean)
                 CLEAN_DIRS=true
+                shift
+                ;;
+            --retry)
+                if [[ $# -lt 2 ]]; then
+                    error "--retry requires a value (number of attempts)"
+                    exit 1
+                fi
+                RETRY_ATTEMPTS="$2"
+                shift 2
+                ;;
+            --retry=*)
+                RETRY_ATTEMPTS="${1#*=}"
                 shift
                 ;;
             --rebuild)
@@ -547,6 +567,18 @@ parse_args() {
                 ;;
         esac
     done
+
+    # Validate --retry value
+    if [[ "$RETRY_ATTEMPTS" != "0" ]]; then
+        if ! [[ "$RETRY_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+            error "--retry requires a positive integer, got: '$RETRY_ATTEMPTS'"
+            exit 1
+        fi
+        if [[ "$RETRY_ATTEMPTS" -gt 10 ]]; then
+            error "--retry value too large (max 10), got: '$RETRY_ATTEMPTS'"
+            exit 1
+        fi
+    fi
 
     # Normalize group name
     case "$GROUP" in
@@ -1454,6 +1486,47 @@ cleanup_rpm_directories() {
     fi
 }
 
+# Cleans intermediate RPM build caches between retry attempts.
+# Preserves the azurelinux git clone, toolchain RPMs, and rpm-staging
+# (which contains cross-project RPMs from upstream pipeline artifacts).
+# Only clears the caches that are likely stale after a transient failure:
+#   - rpm_cache:    graphpkgfetcher download cache (tdnf repo metadata)
+#   - pkg_artifacts: intermediate build artifacts including tdnf worker caches
+#   - worker:       worker chroot (may have stale tdnf state)
+#   - make_status:  make status flags (so make re-runs targets)
+#   - rpms_out_dir: build outputs (need fresh generation)
+clean_rpm_build_caches() {
+    local build_dir="${SCRIPT_DIR}/__build__/rpms_build_dir"
+    local out_dir="${SCRIPT_DIR}/__build__/rpms_out_dir"
+
+    warn "Cleaning intermediate build caches for retry..."
+    for subdir in rpm_cache pkg_artifacts worker make_status; do
+        if [[ -d "${build_dir}/${subdir}" ]]; then
+            warn "  Removing: ${build_dir}/${subdir}"
+            sudo rm -rf "${build_dir}/${subdir}"
+        fi
+    done
+    if [[ -d "$out_dir" ]]; then
+        warn "  Removing: $out_dir"
+        sudo rm -rf "$out_dir"
+    fi
+    info "  ✓ Intermediate caches cleared (azurelinux clone, toolchain, and rpm-staging preserved)"
+}
+
+# Runs a build function with retry if RETRY_ATTEMPTS > 0, otherwise runs directly.
+# Centralizes the retry policy (backoff timing, cleanup function) so call sites
+# don't duplicate the retry_with_backoff invocation.
+run_with_retry() {
+    if [[ "$RETRY_ATTEMPTS" -gt 0 ]]; then
+        retry_with_backoff \
+            --max-attempts "$RETRY_ATTEMPTS" --initial-wait 15 --max-backoff 300 \
+            --clean-cmd clean_rpm_build_caches \
+            -- "$@"
+    else
+        "$@"
+    fi
+}
+
 # Main entry point
 main() {
     parse_args "$@"
@@ -1485,12 +1558,12 @@ main() {
 
     # Step 2: Build custom RPM packages (if requested)
     if [[ "$BUILD_RPMS" == "true" ]]; then
-        build_rpms
+        run_with_retry build_rpms
     fi
 
     # Step 2b: Build QEMU RPM package (if requested)
     if [[ "$BUILD_RPMS_QEMU" == "true" ]]; then
-        build_rpms_qemu
+        run_with_retry build_rpms_qemu
     fi
 
     # Step 3: Build image (if requested)
