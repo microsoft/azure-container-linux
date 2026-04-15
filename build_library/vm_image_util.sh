@@ -520,12 +520,14 @@ setup_disk_image() {
     # but io will start throwing errors so that clearly isn't sufficient.
     sudo mount -o remount,ro "${VM_TMP_ROOT}"
 
-    VM_GROUP=$(grep --no-messages --no-filename ^GROUP= \
-        "${VM_TMP_ROOT}/usr/share/flatcar/update.conf" \
-        "${VM_TMP_ROOT}/etc/flatcar/update.conf" | \
-        tail -n 1 | sed -e 's/^GROUP=//')
-    if [[ -z "${VM_GROUP}" ]]; then
+    if [ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]; then
+      VM_GROUP=$(grep --no-messages --no-filename ^GROUP= \
+          "${VM_TMP_ROOT}${DISTRO_SHARE_DIR}/update.conf" \
+          "${VM_TMP_ROOT}/etc/flatcar/update.conf" | \
+          tail -n 1 | sed -e 's/^GROUP=//')
+      if [[ -z "${VM_GROUP}" ]]; then
         die "Unable to determine update group for this image."
+      fi
     fi
 }
 

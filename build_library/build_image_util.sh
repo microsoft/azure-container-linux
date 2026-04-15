@@ -214,6 +214,11 @@ systemd_enable() {
   sudo ln -sf "../${unit_file}" "${wants_dir}/${unit_alias}"
 }
 
+# Escape a filesystem path for use as a systemd instantiated unit name.
+systemd_escape_path() {
+  systemd-escape --path "$1"
+}
+
 # "equery list" a potentially uninstalled board package
 query_available_package() {
     local pkg="$1"
@@ -726,8 +731,8 @@ EOF
   fi
 
   if [[ -n "${FLAGS_developer_data}" ]]; then
-    local data_path="/usr/share/flatcar/developer_data"
-    local unit_path="usr-share-flatcar-developer_data"
+    local data_path="${DISTRO_SHARE_DIR}/developer_data"
+    local unit_path="$(systemd_escape_path "${data_path}")"
     sudo cp "${FLAGS_developer_data}" "${root_fs_dir}/${data_path}"
     systemd_enable "${root_fs_dir}" system-config.target \
         "system-cloudinit@.service" "system-cloudinit@${unit_path}.service"
@@ -750,12 +755,12 @@ EOF
   fi
 
   # Run tmpfiles once to make sure that /etc has everything in place before
-  # we freeze it in /usr/share/flatcar/etc as lowerdir in the overlayfs.
+  # we freeze it in ${DISTRO_SHARE_DIR}/etc as lowerdir in the overlayfs.
 
   # But first, to successfully run tmpfiles, we need to have all users/groups
   # in /etc/passwd, and afterwards we can recreate the files for the dev
   # container with flatcar-tmpfiles (not really needed but maybe nice to have
-  # as it also lands as reference in /usr/share/flatcar/etc).
+  # as it also lands as reference in ${DISTRO_SHARE_DIR}/etc).
   local dbfile
   if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
     # Portage mode: copy from baselayout
@@ -782,16 +787,16 @@ EOF
   # the L, d, D, and C entries cause upcopies. Also filter out rules with ! or - but no other modifiers
   # like + or = which explicitly recreate files.
   # But before filtering, first store rules that would recreate missing files
-  # to /usr/share/flatcar/etc-no-whiteouts so that we can ensure that
+  # to ${DISTRO_SHARE_DIR}/etc-no-whiteouts so that we can ensure that
   # no overlayfs whiteouts exist for these files (example: /etc/resolv.conf).
   # These rules are combined with the + modifier in addition.
   # Other rules like w, e, x, do not create files that don't exist.
   # Note: '-' must come first in the modifier pattern.
-  grep -Ph '^[fcCdDLvqQpb][-=~^!+]*[ \t]*/etc' "${root_fs_dir}"/usr/lib/tmpfiles.d/* | grep -oP '/etc[^ \t]*' | sudo_clobber "${root_fs_dir}"/usr/share/flatcar/etc-no-whiteouts
+  grep -Ph '^[fcCdDLvqQpb][-=~^!+]*[ \t]*/etc' "${root_fs_dir}"/usr/lib/tmpfiles.d/* | grep -oP '/etc[^ \t]*' | sudo_clobber "${root_fs_dir}${DISTRO_SHARE_DIR}/etc-no-whiteouts"
   sudo sed -i '/^[CdDL][-=~^!]*[ \t]*\/etc\//d' "${root_fs_dir}"/usr/lib/tmpfiles.d/*
 
   # SELinux: Label the root filesystem for using 'file_contexts'.
-  # The labeling has to be done before moving /etc to /usr/share/flatcar/etc to prevent wrong labels for these files and as
+  # The labeling has to be done before moving /etc to ${DISTRO_SHARE_DIR}/etc to prevent wrong labels for these files and as
   # the relabeling on boot would cause upcopies in the overlay.
   # Skip in RPM mode - Azure Linux handles SELinux differently
   if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]] && pkg_use_enabled coreos-base/coreos selinux; then
@@ -807,20 +812,20 @@ EOF
     finish_image_selinux_rpm "${root_fs_dir}"
   fi
 
-  # Backup the /etc contents to /usr/share/flatcar/etc to serve as
+  # Backup the /etc contents to ${DISTRO_SHARE_DIR}/etc to serve as
   # source for creating missing files. Make sure that the preexisting
-  # /usr/share/flatcar/etc does not have any meaningful (non-empty)
+  # ${DISTRO_SHARE_DIR}/etc does not have any meaningful (non-empty)
   # files, so we remove nothing important. There shouldn't be any
   # symlinks either. Add "! -type d" to exclude directories as "stat"
   # usually returns a size of a directory being 4096 or so.
   if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
-    if [[ $(sudo find "${root_fs_dir}/usr/share/flatcar/etc" -size +0 ! -type d 2>/dev/null | wc -l) -gt 0 ]]; then
-      die "Unexpected non-empty files in ${root_fs_dir}/usr/share/flatcar/etc"
+    if [[ $(sudo find "${root_fs_dir}${DISTRO_SHARE_DIR}/etc" -size +0 ! -type d 2>/dev/null | wc -l) -gt 0 ]]; then
+      die "Unexpected non-empty files in ${root_fs_dir}${DISTRO_SHARE_DIR}/etc"
     fi
-    sudo rm -rf "${root_fs_dir}/usr/share/flatcar/etc"
-    sudo cp -a "${root_fs_dir}/etc" "${root_fs_dir}/usr/share/flatcar/etc"
+    sudo rm -rf "${root_fs_dir}${DISTRO_SHARE_DIR}/etc"
+    sudo cp -a "${root_fs_dir}/etc" "${root_fs_dir}${DISTRO_SHARE_DIR}/etc"
   else
-    # Skip this check in RPM mode - we intentionally populate /usr/share/flatcar/etc earlier
+    # Skip this check in RPM mode - we intentionally populate ${DISTRO_SHARE_DIR}/etc earlier
     finish_image_backup_etc_rpm "${root_fs_dir}"
   fi
 

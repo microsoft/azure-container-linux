@@ -373,6 +373,13 @@ FLATCAR_VERSION_STRING="${FLATCAR_VERSION}"
 # *before* sourcing common.sh.
 PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-PORTAGE}"
 
+# Distribution share directory: where distro-specific data lives under /usr/share.
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+  DISTRO_SHARE_DIR="/usr/share/distro"
+else
+  DISTRO_SHARE_DIR="/usr/share/flatcar"
+fi
+
 # Bootloader mode: 'uki' (default, systemd-boot + UKI) or 'grub'.
 # Scripts that need grub mode should export BOOTLOADER_MODE=grub
 # *before* sourcing common.sh.

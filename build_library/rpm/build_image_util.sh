@@ -110,6 +110,11 @@ finish_image_rpm() {
     sudo mkdir -p "${root_fs_dir}/usr/share"
     sudo ln -sfT ../../oem "${root_fs_dir}/usr/share/oem"
 
+    # Remove legacy coreos compat symlinks — ACL uses /usr/share/distro,
+    # not /usr/share/flatcar, so these would be dead.
+    sudo rm -f "${root_fs_dir}/usr/share/coreos"
+    sudo rm -f "${root_fs_dir}/etc/coreos"
+
     # In RPM mode, the kernel is installed by Azure Linux RPM to /boot/vmlinuz-*.
     # Find and copy it to the expected location for grub.cfg
     local kernel_file
@@ -694,9 +699,6 @@ EOF
     # CLC transpiler generates ExecStart=/usr/lib/coreos/etcd-wrapper
     # Create compat symlink so /usr/lib/coreos -> flatcar resolves
     sudo ln -sfT flatcar "${root_fs_dir}/usr/lib/coreos"
-    # Additional coreos -> flatcar compat symlinks expected by tests and tooling
-    sudo ln -sfT flatcar "${root_fs_dir}/etc/coreos"
-    sudo ln -sfT flatcar "${root_fs_dir}/usr/share/coreos"
     # etcd-member.service -> /usr/lib/systemd/system/ (substitute image tag)
     sudo sed "s|@ETCD_IMAGE_TAG@|v${etcd_version}|g" \
         "${etcd_wrapper_src}/etcd-member.service" \
@@ -799,13 +801,13 @@ SYSUSERS_EOF
 
 finish_image_backup_etc_rpm() {
     local root_fs_dir="$1"
-    local FLATCAR_SHARE="${root_fs_dir}/usr/share/flatcar"
-    local ETC_FULL_PATH="${FLATCAR_SHARE}/etc"
+    local DISTRO_SHARE="${root_fs_dir}${DISTRO_SHARE_DIR}"
+    local ETC_FULL_PATH="${DISTRO_SHARE}/etc"
 
-    # Bulk-copy all of /etc to /usr/share/flatcar/etc.
+    # Bulk-copy all of /etc to ${DISTRO_SHARE_DIR}/etc.
     # This is the overlay lowerdir — at boot, /etc is a tmpfs overlay
     # whose lower layer is this directory.  Mirrors the Portage-mode
-    # "sudo cp -a /etc /usr/share/flatcar/etc" in build_image_util.sh.
+    # "sudo cp -a /etc ${DISTRO_SHARE_DIR}/etc" in build_image_util.sh.
     info "RPM mode: Copying /etc to ${ETC_FULL_PATH} for overlay lowerdir"
     sudo rm -rf "${ETC_FULL_PATH}"
     sudo cp -a "${root_fs_dir}/etc" "${ETC_FULL_PATH}"
@@ -815,22 +817,22 @@ finish_image_backup_etc_rpm() {
     # (character devices with major:minor 0:0 that represent deletions)
     # For now, create an empty file - Azure Linux doesn't have pre-existing whiteouts
     info "RPM mode: Creating etc-no-whiteouts for bootengine compatibility"
-    sudo mkdir -p "${FLATCAR_SHARE}"
-    sudo touch "${FLATCAR_SHARE}/etc-no-whiteouts"
+    sudo mkdir -p "${DISTRO_SHARE}"
+    sudo touch "${DISTRO_SHARE}/etc-no-whiteouts"
 
     # NOTE: flatcar-tmpfiles is created earlier in finish_image_rpm() before dracut runs
     # so it gets included in the initramfs
 
     # IMPORTANT: For first-boot detection with bootengine's /etc overlay:
     # - The rootfs upperdir (/etc) should NOT contain machine-id - it will be deleted with the rest of /etc
-    # - The lowerdir (/usr/share/flatcar/etc) must NOT have machine-id either
+    # - The lowerdir (${DISTRO_SHARE_DIR}/etc) must NOT have machine-id either
     # After overlay mount, no /etc/machine-id exists, so systemd triggers first-boot logic.
     # bootengine's initrd-setup-root handles both cases:
     # 1. If machine-id exists with COREOS_BLANK_MACHINE_ID placeholder -> removes it
     # 2. If machine-id doesn't exist -> that's fine, no action needed
     # Either way, after overlay mount systemd sees no /etc/machine-id and first boot is detected.
-    info "Removing machine-id from /usr/share/flatcar/etc (overlay lowerdir) for first-boot detection"
-    sudo rm -f "${FLATCAR_SHARE}/etc/machine-id"
+    info "Removing machine-id from ${DISTRO_SHARE_DIR}/etc (overlay lowerdir) for first-boot detection"
+    sudo rm -f "${DISTRO_SHARE}/etc/machine-id"
 }
 
 # Escape a string for JSON - handles quotes, backslashes, and control characters

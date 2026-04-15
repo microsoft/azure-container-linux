@@ -220,6 +220,16 @@ _dracut_patch_bootengine_modules() {
         # Remove any remaining systemctl network start lines (only used for download)
         sudo sed -i '/systemctl start --quiet systemd-networkd systemd-resolved/d' "${setup_root_after}"
     fi
+    
+    # Patch bootengine's 99setup-root scripts to use the distribution share directory
+    # instead of the Flatcar-specific /usr/share/flatcar path
+    local setup_root_dir="${root_fs_dir}/usr/lib/dracut/modules.d/99setup-root"
+    for script in initrd-setup-root initrd-setup-root-after-ignition; do
+        if [[ -f "${setup_root_dir}/${script}" ]]; then
+            info "RPM mode: Patching ${script} - replacing /usr/share/flatcar with ${DISTRO_SHARE_DIR}"
+            sudo sed -i "s|/usr/share/flatcar|${DISTRO_SHARE_DIR}|g" "${setup_root_dir}/${script}"
+        fi
+    done
 }
 
 # Install new initramfs assets that dracut will pick up.
@@ -280,18 +290,18 @@ SETUP_EOF
     # Must be created before dracut so it gets included in initramfs
     info "RPM mode: Creating flatcar-tmpfiles stub for bootengine compatibility"
     sudo mkdir -p "${root_fs_dir}/usr/sbin"
-    cat <<'EOF' | sudo tee "${root_fs_dir}/usr/sbin/flatcar-tmpfiles" > /dev/null
+    cat <<EOF | sudo tee "${root_fs_dir}/usr/sbin/flatcar-tmpfiles" > /dev/null
 #!/bin/bash
 # Stub for flatcar-tmpfiles - Azure Linux handles user/group creation differently
 # This script is called by bootengine's initrd-setup-root to initialize shadow database
 # In Azure Linux, the shadow database is pre-populated by RPM packages
-SYSROOT="${1:-/sysroot}"
+SYSROOT="\${1:-/sysroot}"
 # Ensure essential directories exist
-mkdir -p "${SYSROOT}/etc"
+mkdir -p "\${SYSROOT}/etc"
 # Ensure basic shadow files exist (if not already present)
 for f in passwd group shadow gshadow; do
-    if [[ ! -f "${SYSROOT}/etc/${f}" ]] && [[ -f "${SYSROOT}/usr/share/flatcar/etc/${f}" ]]; then
-        cp "${SYSROOT}/usr/share/flatcar/etc/${f}" "${SYSROOT}/etc/${f}"
+    if [[ ! -f "\${SYSROOT}/etc/\${f}" ]] && [[ -f "\${SYSROOT}${DISTRO_SHARE_DIR}/etc/\${f}" ]]; then
+        cp "\${SYSROOT}${DISTRO_SHARE_DIR}/etc/\${f}" "\${SYSROOT}/etc/\${f}"
     fi
 done
 exit 0

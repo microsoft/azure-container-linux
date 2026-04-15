@@ -11,7 +11,6 @@ ACL currently tracks **Flatcar Linux stable** as its upstream base.
 ACL preserves a high degree of parity with Flatcar Linux:
 
 - The SDK container, board setup, and image build pipeline reuse the Flatcar `build_library` infrastructure.
-- Key filesystem paths are preserved for compatibility, including `/usr/share/flatcar/etc` (the lower directory for the `/etc` overlay) and `/boot/flatcar` (kernel, initramfs, and bootloader files).
 - The Flatcar update model, partition layout (USR-A/USR-B A/B scheme, OEM, ROOT), and OEM package model are retained.
 - Test collateral runs against the same `kola` harness (from the Mantle project) used by upstream Flatcar.
 
@@ -108,7 +107,7 @@ The A/B partition scheme (USR-A / USR-B) enables safe updates: the inactive slot
 
 `/etc` is mounted as an **overlayfs** with:
 
-- **Lower (read-only)**: `/usr/share/flatcar/etc` — defaults shipped in the image.
+- **Lower (read-only)**: `/usr/share/distro/etc` — defaults shipped in the image.
 - **Upper (writable)**: persisted on the ROOT partition.
 
 This allows `/usr` to remain fully immutable and verity-protected while giving services and users a writable `/etc`. The overlay is configured early in boot by Flatcar's BootEngine.
