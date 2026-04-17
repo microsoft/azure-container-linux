@@ -246,7 +246,7 @@ OSREL
 
     sudo mkdir -p "${ESP_DIR}/loader"
     sudo tee "${ESP_DIR}/loader/loader.conf" > /dev/null <<-EOF
-		timeout 3
+		timeout 0
 		default acl.efi
 	EOF
     info "UKI/RPM: Wrote loader/loader.conf"
