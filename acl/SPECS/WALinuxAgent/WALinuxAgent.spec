@@ -1,7 +1,7 @@
 Summary:        The Windows Azure Linux Agent
 Name:           WALinuxAgent
 Version:        2.11.1.4
-Release:        5%{?dist}
+Release:        6%{?dist}
 License:        ASL 2.0
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
@@ -62,7 +62,7 @@ images that are built to run in the Windows Azure environment.
 python3 setup.py build -b py3
 
 %install
-python3 -tt setup.py build -b py3 install --prefix=%{_prefix} --lnx-distro='mariner' --lnx-distro-variant-id='azurecontainerlinux' --root=%{buildroot} --force
+python3 -tt setup.py build -b py3 install --prefix=%{_prefix} --lnx-distro='azurecontainerlinux' --root=%{buildroot} --force
 mkdir -p  %{buildroot}/%{_localstatedir}/log
 mkdir -p -m 0700 %{buildroot}/%{_sharedstatedir}/waagent
 mkdir -p %{buildroot}/%{_localstatedir}/log
@@ -113,6 +113,9 @@ python3 setup.py check && python3 setup.py test
 
 
 %changelog
+* Tue Apr 14 2026 Mayank Singh <mayansingh@microsoft.com> - 2.11.1.4-6
+- In sync with upstream
+
 * Fri Mar 27 2026 Mayank Singh <mayansingh@microsoft.com> - 2.11.1.4-5
 - Bump version for the restart_ssh_service fix to pickup latest
 
