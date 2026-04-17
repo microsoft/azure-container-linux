@@ -525,6 +525,22 @@ SSHD_KEYGEN_DROPIN
     sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/extend-filesystems.service"
     sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/extend-filesystems.service"
 
+    # Remove flatcar-update/flatcar-install - ACL uses a different update mechanism
+    info "RPM mode: Removing flatcar-update and flatcar-install (not used by ACL)"
+    sudo rm -f "${root_fs_dir}/usr/lib/tmpfiles.d/flatcar-update.conf"
+    sudo rm -f "${root_fs_dir}/usr/bin/flatcar-update"
+    sudo rm -f "${root_fs_dir}/usr/bin/flatcar-install"
+    sudo rm -f "${root_fs_dir}/usr/bin/coreos-install"
+    sudo rm -f "${root_fs_dir}/etc/flatcar/update.conf"
+
+    # Remove motdgen - watches /etc/flatcar/update.conf
+    info "RPM mode: Removing motdgen (depends on flatcar update.conf)"
+    sudo rm -f "${root_fs_dir}/usr/lib/flatcar/motdgen"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/motdgen.path"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/motdgen.service"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/motdgen.path"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/motdgen.service"
+
     # Note: /etc/issue cleanup was moved to finish_image_rpm() to run before systemd-tmpfiles --create
 
     # Remove flatcar-setup-environment.service - requires /oem/bin/flatcar-setup-environment
