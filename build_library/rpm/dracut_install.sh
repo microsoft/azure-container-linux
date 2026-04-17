@@ -328,6 +328,13 @@ d /oem 0755 root root -
 d /media 0755 root root -
 EOF
 
+    # baselayout-etc.conf - Flatcar ships this in its baselayout package.
+    # The "d /etc" rule causes systemd-tmpfiles label_fix_full() on /etc,
+    # writing the correct etc_t label to the overlay upper dir.
+    cat <<'EOF' | sudo tee "${tmpfiles_dir}/baselayout-etc.conf" > /dev/null
+d   /etc                              -   -   -   -   -
+EOF
+
     # baselayout-usr.conf - required by bootengine's initrd-setup-root which
     # explicitly runs: systemd-tmpfiles --create baselayout-usr.conf
     # Empty because /usr/local dirs are created at build time and /usr is read-only,
