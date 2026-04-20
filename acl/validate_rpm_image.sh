@@ -53,7 +53,8 @@
 #   ./validate_rpm_image.sh --start-vm \
 #       --run-script=./acl/tests/run-container-test.sh \
 #       --run-script=./acl/tests/run-systemd-health-test.sh \
-#       --run-script=./acl/tests/run-dmesg-io-error-test.sh
+#       --run-script=./acl/tests/run-dmesg-io-error-test.sh \
+#       --run-script=./acl/tests/run-selinux-avc-test.sh
 #
 #   # Reuse a running VM
 #   ./validate_rpm_image.sh --reuse-vm --run-script="cat /etc/os-release"

@@ -49,7 +49,8 @@
 #                                        --rebuild --build-vm-image --run-tests)
 #   --run-tests                          Start a VM and run a series of predefined tests on the VM after boot
 #                                        (includes run-secureboot-test.sh, run-container-test.sh,
-#                                        run-systemd-health-test.sh, run-dmesg-io-error-test.sh)
+#                                        run-systemd-health-test.sh, run-dmesg-io-error-test.sh,
+#                                        run-selinux-avc-test.sh)
 #   --run-script=PATH                    Run script on VM after boot (can specify multiple times)
 #                                        Can be a file path or inline command. Implies --start-vm
 #   --run-kola-tests                     Run kola tests after building (qemu or azure, based on --vm-type)
@@ -307,6 +308,7 @@ parse_args() {
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-systemd-health-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-dmesg-io-error-test.sh")
+                RUN_SCRIPTS+=("./acl/tests/run-selinux-avc-test.sh")
                 shift
                 ;;
             --build-image)

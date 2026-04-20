@@ -90,6 +90,7 @@ Additional ACL-specific tests live in `acl/tests/`:
 - systemd service health (`run-systemd-health-test.sh`)
 - Disk I/O error detection (`run-dmesg-io-error-test.sh`)
 - Container runtime smoke tests (`run-container-test.sh`)
+- SELinux AVC check (`run-selinux-avc-test.sh`)
 
 ## Feature Set
 
