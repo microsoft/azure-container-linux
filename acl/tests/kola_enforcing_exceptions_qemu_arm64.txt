@@ -14,3 +14,6 @@ kubeadm.v1.33.0.cilium.base
 kubeadm.v1.32.4.flannel.base
 kubeadm.v1.33.0.flannel.base
 kubeadm.v1.34.1.flannel.base
+
+# acl.internet requires real network connectivity (Azure only)
+acl.internet

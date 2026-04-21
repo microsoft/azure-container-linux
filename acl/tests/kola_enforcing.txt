@@ -2,6 +2,7 @@ acl.basic
 acl.etcd-member.discovery
 acl.flannel.udp
 acl.flannel.vxlan
+acl.internet
 acl.ignition.v1.users
 acl.ignition.v2.users
 bpf.execsnoop
