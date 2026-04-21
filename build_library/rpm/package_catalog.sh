@@ -224,7 +224,7 @@ declare -gA PACKAGE_CATALOG=(
 
     # Dependencies of oem-azure for Azure image building
     # oras is not sent through the catalog (used to pull sysexts)
-    ["app-emulation/wa-linux-agent"]="WALinuxAgent oras fuse fuse3-libs"
+    ["app-emulation/wa-linux-agent"]="WALinuxAgent oras fuse fuse3-libs blobfuse2"
     ["app-emulation/hv-daemons"]="hyperv-daemons"
     ["net-misc/chrony"]="chrony"
     ["dev-python/urllib3"]="python3-urllib3 python-setuptools"
