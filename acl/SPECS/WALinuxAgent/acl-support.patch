@@ -7,22 +7,24 @@ Subject: [PATCH] add support for Azure Container Linux
   Azure-Linux changes do not inadvertently affect the immutable ACL image.
 - Override get_systemd_unit_file_install_path() to /etc/systemd/system
   to fix read-only filesystem error on sysext overlay.
-- Add ACL elif branch in setup.py for ACL-specific packaging.
 - Add retry logic in mount_resource_disk() for VMBus storage race.
 - Add ACL-specific waagent.conf, waagent.service, and sysext drop-in.
 - Document the sysext drop-in (10-waagent-sysext.conf).
+- Patch persist_firewall_rules.py service template to add After=systemd-sysext.service
+  so the dynamically-created waagent-network-setup.service waits for sysext merge.
 - Add ACL owner entry in CODEOWNERS.
 ---
  CODEOWNERS                               |  7 +++
  azurelinuxagent/common/osutil/acl.py     | 79 ++++++++++++++++++++++++
  azurelinuxagent/common/osutil/factory.py |  4 ++
  azurelinuxagent/common/version.py        |  8 +++
+ azurelinuxagent/ga/persist_firewall_rules.py |  1 +
  config/acl/waagent.conf                  | 37 +++++++++++
  init/acl/10-waagent-sysext.conf          | 13 ++++
  init/acl/waagent.service                 | 18 ++++++
  setup.py                                 | 10 +++
  tests/common/osutil/test_factory.py      |  9 +++
- 9 files changed, 185 insertions(+)
+ 10 files changed, 176 insertions(+)
  create mode 100644 azurelinuxagent/common/osutil/acl.py
  create mode 100644 config/acl/waagent.conf
  create mode 100644 init/acl/10-waagent-sysext.conf
@@ -172,6 +174,17 @@ index b4e93e8..2d96c62 100644
      # The platform.py lib has issue with detecting BIG-IP linux distribution.
      # Merge the following patch provided by F5.
      if os.path.exists("/shared/vadc"):
+diff --git a/azurelinuxagent/ga/persist_firewall_rules.py b/azurelinuxagent/ga/persist_firewall_rules.py
+index e7c8373..d93c984 100644
+--- a/azurelinuxagent/ga/persist_firewall_rules.py
++++ b/azurelinuxagent/ga/persist_firewall_rules.py
+@@ -36,5 +36,6 @@ class PersistFirewallRulesHandler(object):
+ [Unit]
+ Description=Setup network rules for WALinuxAgent 
++After=systemd-sysext.service
+ Before=network-pre.target
+ Wants=network-pre.target
+ DefaultDependencies=no
 diff --git a/config/acl/waagent.conf b/config/acl/waagent.conf
 new file mode 100644
 index 0000000..497bd43
