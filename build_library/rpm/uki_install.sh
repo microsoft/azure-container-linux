@@ -253,6 +253,7 @@ OSREL
 
     # Build and install the firstboot addon
     _uki_build_firstboot_addon "${ESP_DIR}"
+    _uki_build_fips_addon "${ESP_DIR}"
 
     # Clean up
     rm -rf "${uki_temp_dir}"
@@ -298,6 +299,39 @@ _uki_build_firstboot_addon() {
     info "UKI/RPM: Saved firstboot addon template → acl/uki-addons/firstboot.addon.efi"
 
     rm -rf "${fb_temp_dir}"
+}
+
+# Build a reusable FIPS addon template for UKI systems.
+_uki_build_fips_addon() {
+    local esp_dir="$1"
+
+    info "UKI/RPM: Building FIPS addon template"
+
+    local template_dir="${esp_dir}/acl/uki-addons"
+    sudo mkdir -p "${template_dir}"
+
+    local fips_cmdline="fips=1"
+
+    local fips_temp_dir
+    fips_temp_dir=$(mktemp -d)
+
+    echo "${fips_cmdline}" > "${fips_temp_dir}/fips-cmdline.txt"
+
+    local efi_stub="${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub"
+
+    sudo ukify build \
+        --cmdline=@"${fips_temp_dir}/fips-cmdline.txt" \
+        --stub="${efi_stub}" \
+        --output="${fips_temp_dir}/fips.addon.efi"
+
+    if [[ ! -f "${fips_temp_dir}/fips.addon.efi" ]]; then
+        die "UKI/RPM: ukify failed to produce fips.addon.efi"
+    fi
+
+    sudo cp "${fips_temp_dir}/fips.addon.efi" "${template_dir}/fips.addon.efi"
+    info "UKI/RPM: Saved FIPS addon template -> acl/uki-addons/fips.addon.efi"
+
+    rm -rf "${fips_temp_dir}"
 }
 
 info "Installing UKI packages for target ${FLAGS_target}"

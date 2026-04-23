@@ -375,7 +375,6 @@ EOF
 # Disable job timeout to allow verity setup to wait for slow device enumeration
 JobRunningTimeoutSec=infinity
 EOF
-
 }
 
 # Generate initramfs using dracut inside the root filesystem chroot.
@@ -405,6 +404,7 @@ generate_initramfs_dracut() {
     # We rely on standard systemd-udevd module to include libudev.so
     sudo mkdir -p "${root_fs_dir}/etc/dracut.conf.d"
     sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/99-hybrid-build.conf" "${root_fs_dir}/etc/dracut.conf.d/99-hybrid-build.conf"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/99-fips.conf" "${root_fs_dir}/etc/dracut.conf.d/99-fips.conf"
 
     # Create a wrapper script that sets up the environment properly for dracut
     sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/run-dracut.sh" "${root_fs_dir}/tmp/run-dracut.sh"

@@ -26,6 +26,25 @@ CERT_NAME="uki-signing-ca.pem"
 info()  { echo "[sign_uki_ephemeral] $*"; }
 error() { echo "[sign_uki_ephemeral] ERROR: $*" >&2; }
 
+sign_efi_file() {
+    local efi_file="$1"
+    local local_name
+    local signed_tmp
+
+    local_name=$(basename "${efi_file}")
+    info "  Signing: ${local_name}"
+
+    signed_tmp="${WORK_DIR}/${local_name}.signed"
+
+    sbsign \
+        --key "${KEY_FILE}" \
+        --cert "${CERT_FILE}" \
+        --output "${signed_tmp}" \
+        "${efi_file}"
+
+    sudo mv "${signed_tmp}" "${efi_file}"
+}
+
 if [[ ! -d "${ESP_DIR}" ]]; then
     error "ESP directory does not exist: ${ESP_DIR}"
     exit 1
@@ -60,20 +79,22 @@ openssl req -x509 \
 
 info "Certificate: ${CERT_FILE}"
 
-# Discover EFI files to sign
+# Sign every UKI EFI binary on the ESP in place:
+#   EFI/Linux/acl.efi              - main UKI
+#   EFI/Linux/acl.efi.extra.d/*    - active addons (e.g. firstboot, oem)
+#   acl/uki-addons/*               - addon templates restored/activated at
+#                                    runtime (e.g. flatcar-reset, FIPS opt-in)
+# Active and template copies are independent files, so each is signed directly.
 declare -a efi_files=()
 
-# Main UKI
-if [[ -f "${ESP_DIR}/EFI/Linux/acl.efi" ]]; then
-    efi_files+=("${ESP_DIR}/EFI/Linux/acl.efi")
-fi
-
-# UKI addons (firstboot, oem, etc.)
-if [[ -d "${ESP_DIR}/EFI/Linux/acl.efi.extra.d" ]]; then
-    while IFS= read -r -d '' addon; do
-        efi_files+=("${addon}")
-    done < <(find "${ESP_DIR}/EFI/Linux/acl.efi.extra.d" -name '*.efi' -print0 2>/dev/null)
-fi
+while IFS= read -r -d '' efi_file; do
+    efi_files+=("${efi_file}")
+done < <(
+    find \
+        "${ESP_DIR}/EFI/Linux" \
+        "${ESP_DIR}/acl/uki-addons" \
+        -name '*.efi' -type f -print0 2>/dev/null
+)
 
 if [[ ${#efi_files[@]} -eq 0 ]]; then
     error "No EFI files found to sign"
@@ -82,20 +103,8 @@ fi
 
 info "Found ${#efi_files[@]} EFI file(s) to sign"
 
-# Sign each EFI file
 for efi_file in "${efi_files[@]}"; do
-    local_name=$(basename "${efi_file}")
-    info "  Signing: ${local_name}"
-
-    signed_tmp="${WORK_DIR}/${local_name}.signed"
-
-    sbsign \
-        --key "${KEY_FILE}" \
-        --cert "${CERT_FILE}" \
-        --output "${signed_tmp}" \
-        "${efi_file}"
-
-    sudo mv "${signed_tmp}" "${efi_file}"
+    sign_efi_file "${efi_file}"
 done
 
 # Private key is in WORK_DIR which is cleaned up by the trap.
