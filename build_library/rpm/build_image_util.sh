@@ -526,12 +526,14 @@ SSHD_KEYGEN_DROPIN
     sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/extend-filesystems.service"
 
     # Remove flatcar-update/flatcar-install - ACL uses a different update mechanism
-    info "RPM mode: Removing flatcar-update and flatcar-install (not used by ACL)"
+    info "RPM mode: Removing flatcar-update, flatcar-install, and flatcar-reset (not used by ACL)"
     sudo rm -f "${root_fs_dir}/usr/lib/tmpfiles.d/flatcar-update.conf"
     sudo rm -f "${root_fs_dir}/usr/bin/flatcar-update"
     sudo rm -f "${root_fs_dir}/usr/bin/flatcar-install"
     sudo rm -f "${root_fs_dir}/usr/bin/coreos-install"
     sudo rm -f "${root_fs_dir}/etc/flatcar/update.conf"
+    # removing flatcar-reset for GA, let's revisit whether we want to support this on ACL
+    sudo rm -f "${root_fs_dir}/usr/bin/flatcar-reset"
 
     # Remove motdgen - watches /etc/flatcar/update.conf
     info "RPM mode: Removing motdgen (depends on flatcar update.conf)"
