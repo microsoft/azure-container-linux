@@ -110,7 +110,7 @@ The fastest way to set up a local build environment is to pull pre-built
 containers and RPMs from the CI pipeline. This avoids rebuilding the SDK
 container, downloading RPMs, and building custom RPMs locally.
 
-### Prerequisites
+### Prerequisites for Hydration
 
 - **Azure CLI** with the **azure-devops** extension
 - **Docker** (for pulling containers)
@@ -230,7 +230,6 @@ Convert the production image to a VM-ready format. The script supports building 
 # Build an Azure VHD image
 ./acl/build_rpm_image.sh --build-vm-image --vm-type=azure
 ```
-
 
 #### Build Test VM Image (Optional)
 
@@ -398,34 +397,13 @@ By default, before starting a new Azure VM, all the pre-existing resource groups
 
 - For kernel config comparison, use `acl/kconfig_diff.sh` with two comparison-data.json files (requires diffconfig from kernel-headers)
 
-### Phase 6: Run Flatcar E2E Tests (Optional)
+### Phase 6: Run Kola E2E Tests (Optional)
 
-Run the full Flatcar E2E test suite against the built QEMU VM image:
+Run the Flatcar/ACL kola E2E test suite against QEMU or Azure images.
 
-```bash
-# Run Flatcar E2E tests
-./acl/build_rpm_image.sh --run-kola-tests
-```
+#### Kola Prerequisites
 
-At the moment, the full run takes about 4 hours. To add retries for flaky tests, set `MAX_RUNS` to number higher than 1. 
-
-To enable verbose kola debug output, set `KOLA_DEBUG=true`.
-
-To produce results MD summary with grouping of failures, you can use `./acl/parse_tap_results.py`:
-
-```bash
-./acl/parse_tap_results.py __TESTS__/qemu-uefi/results-run-*.tap
-```
-
-Additional results are also produced at the root of the repo: `results-qemu_uefi*`.
-
-To run a specific test (e.g. `cl.sysext.fallbackdownload`), you can use `run_local_tests.sh` directly:
-
-```bash
-PACKAGE_SOURCE_MOD=RPM ./run_local_tests.sh amd64 2 cl.sysext.fallbackdownload
-```
-
-The prerequisites for running Kola tests is to build customized `mantle` container. You need to checkout the `mantle` repository next to the `acl-scripts` repository:
+The prerequisite for running kola tests is to build the customized `mantle` container. Clone the `mantle` repository next to the `acl-scripts` repository:
 
 ```bash
 git clone https://mariner-org@dev.azure.com/mariner-org/ACL/_git/mantle
@@ -434,8 +412,90 @@ git clone https://mariner-org@dev.azure.com/mariner-org/ACL/_git/mantle
 Then build the `mantle` container with ACL support:
 
 ```bash
-docker build -t mantle .
+cd mantle && docker build -t mantle .
 ```
+
+#### Environment Variables
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `PACKAGE_SOURCE_MODE` | Set to `RPM` for ACL images | `PORTAGE` |
+| `MAX_RUNS` | Number of retry attempts for flaky tests | `1` |
+| `KOLA_DEBUG` | Set to `true` for verbose kola output | (unset) |
+
+#### Running QEMU Kola Tests
+
+Requires: QEMU test image built (`--build-test-image --vm-type=qemu`, see Phase 4).
+
+```bash
+# Run the full E2E test suite (~4 hours)
+./acl/build_rpm_image.sh --run-kola-tests
+
+# Run a specific test
+PACKAGE_SOURCE_MODE=RPM ./run_local_tests.sh amd64 2 cl.sysext.fallbackdownload
+```
+
+**Output:**
+
+- `results-qemu_uefi.md`, `results-qemu_uefi.tap` — summary
+- `results-qemu_uefi-detailed.md`, `results-qemu_uefi-detailed.tap` — detailed
+- `__TESTS__/qemu-uefi/` — per-run TAP files and logs
+
+To produce a results MD summary with grouping of failures:
+
+```bash
+./acl/parse_tap_results.py __TESTS__/qemu-uefi/results-run-*.tap
+```
+
+#### Running Azure Kola Tests
+
+Requires:
+
+- Azure VHD test image built (`--build-test-image --vm-type=azure`, see Phase 4)
+- Azure CLI installed and logged in (`az login`)
+- An Azure subscription with available quota
+- `AZURE_TOKEN_CREDENTIALS=AzureCLICredential` set (required on most devboxes)
+
+```bash
+# Run specific tests on Azure
+PACKAGE_SOURCE_MODE=RPM \
+AZURE_SUBSCRIPTION_ID="<your-subscription-id>" \
+AZURE_TOKEN_CREDENTIALS=AzureCLICredential \
+  ./run_azure_tests.sh amd64 2 cl.ignition.v1.once coreos.ignition.once
+```
+
+**Arguments:**
+
+- `amd64` or `arm64` — target architecture
+- `2` — number of parallel test instances
+- Remaining args — kola test patterns to run (e.g., `cl.ignition.v1.once`, `docker.base`)
+
+**Azure-specific environment variables:**
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription to use for test resources | Default az subscription |
+| `AZURE_TOKEN_CREDENTIALS` | Set to `AzureCLICredential` to use az CLI auth | (SDK default) |
+| `AZURE_LOCATION` | Azure region for test VMs | `westus2` |
+| `AZURE_amd64_MACHINE_SIZE` | VM size for amd64 tests | `Standard_D2s_v6` |
+| `AZURE_arm64_MACHINE_SIZE` | VM size for arm64 tests | (default) |
+
+**Output:**
+
+- `results-azure.md`, `results-azure.tap` — summary
+- `results-azure-detailed.md`, `results-azure-detailed.tap` — detailed
+- `__TESTS__/azure/` — per-run TAP files and logs
+
+To produce a results MD summary with grouping of failures:
+
+```bash
+./acl/parse_tap_results.py __TESTS__/azure/results-run-*.tap
+```
+
+#### Kola Troubleshooting
+
+- **`preferred subscription ... is not a part of available subscriptions`**: Set `export AZURE_TOKEN_CREDENTIALS=AzureCLICredential` before running. This ensures kola uses your Azure CLI credentials rather than SDK defaults.
+- **Multiple subscriptions**: Explicitly set `AZURE_SUBSCRIPTION_ID` to the subscription ID (not name) you want to use.
 
 ## Common Workflows
 
