@@ -338,6 +338,13 @@ TMPFILES_SSHD
     # Remove umask.sh installed by Azure Linux bash RPM to align with upstream Flatcar behavior
     sudo rm -f "${root_fs_dir}/etc/profile.d/umask.sh"
 
+    # Blacklist cfg80211 (wireless) — the Azure Linux kernel ships it as a
+    # module but no WiFi hardware exists on cloud/VM targets, and the
+    # regulatory.db firmware file is not present.
+    sudo install -d -m 0755 "${root_fs_dir}/usr/lib/modprobe.d"
+    echo "blacklist cfg80211" | sudo_clobber "${root_fs_dir}/usr/lib/modprobe.d/no-wifi.conf"
+    sudo chmod 0644 "${root_fs_dir}/usr/lib/modprobe.d/no-wifi.conf"
+
     # Configure sshd to look for authorized_keys in the ignition location
     # Ignition places SSH keys in ~/.ssh/authorized_keys.d/ignition
     info "RPM mode: Configuring sshd AuthorizedKeysFile for Ignition"
