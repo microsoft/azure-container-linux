@@ -268,15 +268,15 @@ g wheel 10 -
 g sudo 150 -
 SYSUSERS_ADMIN
 
-    # core user - primary user for Flatcar/ACL (UID/GID 500)
-    # This is the default non-root user for SSH access and container operations
-    # Note: core gets NOPASSWD sudo via explicit sudoers entry, not via sudo group
+    # core user - retained for Flatcar/ACL compatibility (UID/GID 500)
+    # Phase 1 hardening: core keeps /bin/bash and wheel but is removed from
+    # the docker group (docker socket access is root-equivalent; users must
+    # 'sudo docker' which is now gated by a password — see sudoers below).
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/core.conf" > /dev/null <<'SYSUSERS_CORE'
 # Core user - primary administrative user
 g core 500 -
 u core 500:500 "ACL Admin" /home/core /bin/bash
 m core wheel
-m core docker
 m core systemd-journal
 SYSUSERS_CORE
 
@@ -377,6 +377,20 @@ AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys.d/ignition
 SSHD_CONF
     sudo chmod 644 "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf"
 
+    # Phase 1 hardening: disable SSH password authentication at build time.
+    # Closes the window between boot and WALinuxAgent provisioning where
+    # PasswordAuthentication defaults to 'yes'. Key-based login is unaffected.
+    # Also disable KbdInteractiveAuthentication and ChallengeResponseAuthentication
+    # to prevent password-based logins via keyboard-interactive/PAM.
+    # Consistent with Flatcar's 80-flatcar-walinuxagent.conf behaviour.
+    info "RPM mode: Disabling SSH password authentication"
+    sudo tee "${ssh_config_dir}/sshd_config.d/50-acl-no-password-auth.conf" > /dev/null <<'SSHD_NOPASSWD'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+SSHD_NOPASSWD
+    sudo chmod 644 "${ssh_config_dir}/sshd_config.d/50-acl-no-password-auth.conf"
+
     # Ensure sshd_config includes the .d directory
     local sshd_config="${ssh_config_dir}/sshd_config"
     if [[ ! -f "${sshd_config}" ]]; then
@@ -411,8 +425,11 @@ Defaults env_keep += "LESSCHARSET"
 ## enable passwordless access for sudo group
 %sudo ALL=(ALL) NOPASSWD: ALL
 
-## the core user has no password by default
-core ALL=(ALL) NOPASSWD: ALL
+## core can sudo but requires a password (none is set by default,
+## so sudo is effectively blocked unless a password is provisioned
+## via Ignition or WALinuxAgent). The Azure-provisioned admin user
+## gets its own NOPASSWD entry and is unaffected.
+core ALL=(ALL) ALL
 SUDOERS_EOF
     sudo chmod 440 "${root_fs_dir}/etc/sudoers.d/flatcar-compat"
 
