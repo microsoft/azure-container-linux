@@ -132,7 +132,8 @@ The alpha image is available as part of the v20260402 AKS RP release.
 
 See [all available regions here](https://releases.aks.azure.com/AKSRelease).
 
-Choose to provision either an **amd64 (1a)** or **arm64 (1b)** ACL node on AKS.
+Choose to provision either an **amd64 (1a)** or **arm64 (1b)** ACL node on AKS. Please note, ACL on Arm64 requires Cobalt-based (v6) SKUs to enable Trusted Launch compatibility.
+
 
 1a. Create an AKS Cluster (amd64)
 ```bash
@@ -187,8 +188,7 @@ az aks nodepool add \
     --cluster-name "acl-cluster" \
     --name "azurelinux" \
     --node-count 1 \
-    --os-sku AzureLinux \
-    --node-vm-size Standard_D8ads_v6
+    --os-sku AzureLinux 
 ```
 
 ### 2. Verify Mixed Node Pool Deployment
@@ -227,8 +227,8 @@ az aks nodepool update \
     --cluster-name "acl-cluster" \
     --name "azurelinux" \
     --os-sku "AzureContainerLinux" \
-    --enable-secure-boot true \
-    --enable-vtpm true
+    --enable-secure-boot \
+    --enable-vtpm 
 ```
 
 ### 2. Verify Migration Completion
@@ -348,7 +348,7 @@ In scenario A we will deploy a new ACL cluster on AKS.
 -   eastus
 -   westus2
 
-Choose to provision either an **amd64 (1a)** or **arm64 (1b)** ACL node on AKS.
+Choose to provision either an **amd64 (1a)** or **arm64 (1b)** ACL node on AKS. Please note, ACL on Arm64 requires Cobalt-based (v6) SKUs to enable Trusted Launch compatibility.
 
 1a. Create an AKS Cluster (amd64)
 ```bash
