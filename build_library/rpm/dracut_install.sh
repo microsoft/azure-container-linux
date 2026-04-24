@@ -283,6 +283,22 @@ install() {
 SETUP_EOF
     sudo chmod +x "${sysroot_oem_dracut_module}/module-setup.sh"
 
+    # Install acl-selinux-toggle dracut module.
+    # Queries Azure IMDS for a selinux tag and applies the mode (permissive
+    # or enforcing) before switch-root so SELinux is set before real-root
+    # services start.
+    info "RPM mode: Creating acl-selinux-toggle dracut module for IMDS SELinux toggling"
+    local selinux_toggle_module="${root_fs_dir}/usr/lib/dracut/modules.d/99acl-selinux-toggle"
+    sudo mkdir -p "${selinux_toggle_module}"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-selinux-toggle/module-setup.sh" \
+        "${selinux_toggle_module}/module-setup.sh"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-selinux-toggle/acl-selinux-toggle.sh" \
+        "${selinux_toggle_module}/acl-selinux-toggle.sh"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-selinux-toggle/acl-selinux-toggle.service" \
+        "${selinux_toggle_module}/acl-selinux-toggle.service"
+    sudo chmod +x "${selinux_toggle_module}/module-setup.sh"
+    sudo chmod +x "${selinux_toggle_module}/acl-selinux-toggle.sh"
+
     # NOTE: /etc overlay is handled by bootengine's 99setup-root/initrd-setup-root
     # We need to create the required files BEFORE dracut runs so they get included in initramfs
 
