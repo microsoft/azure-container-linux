@@ -497,6 +497,37 @@ d /var/lib/nfs/v4root 0755 root root -
 d /var/lib/nfs/rpc_pipefs 0755 root root -
 EOF
 
+    # Generating hwdb.bin in /usr/lib/udev during image build.
+    # During image build, post install scripts in systemd-udevd package generates
+    # /etc/udev/hwdb.bin.
+    # When systemd detects that /etc needs to be updated for ex during first boot, systemd-hwdb-update
+    # service runs and regenerates this binary hardware db in /etc/udev itself.
+    # Regenerating this file during image build, we are
+    # - making the hwdb db immutable, since it lies in /usr
+    # - avoids situations when systemd-hwdb-update service can fail due to low space on medium backing
+    #   the writeable /etc upper dir in overlayfs (for ex service runs before systemd has performed the resize)
+    if [ -d "${root_fs_dir}/usr/lib/udev/hwdb.d" ]; then
+        info "RPM mode: generating hwdb.bin in /usr"
+        if [ -f "${root_fs_dir}/usr/bin/systemd-hwdb" ]; then
+            info "RPM mode: /usr/bin/systemd-hwdb is present, running update"
+            local -a build_args
+            if [[ "${BOARD}" == "arm64-usr" ]]; then
+                build_args+=(QEMU_LD_PREFIX="${root_fs_dir}")
+            else
+                build_args+=("${root_fs_dir}/usr/lib/ld-linux-x86-64.so.2" \
+                                "--library-path" "${root_fs_dir}/usr/lib/systemd:${root_fs_dir}/usr/lib")
+            fi
+            if sudo "${build_args[@]}" "${root_fs_dir}/usr/bin/systemd-hwdb" --usr --root="${root_fs_dir}" update; then
+                if [ -f "${root_fs_dir}/etc/udev/hwdb.bin" ]; then
+                    info "RPM mode: removing /etc/udev/hwdb.bin"
+                    sudo rm -f "${root_fs_dir}/etc/udev/hwdb.bin"
+                fi
+            else
+                error "RPM mode: Failed to generate hwdb.bin in /usr"
+            fi
+        fi
+    fi
+
     # Re-enable systemd-timesyncd.service via direct symlink.
     # azurelinux-release's 90-default.preset explicitly disables systemd-timesyncd,
     # but the linux.ntp and acl.basic/ServicesActive tests expect timesyncd to be active.
