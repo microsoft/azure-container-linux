@@ -915,6 +915,7 @@ EOF
 ; Container backports and hotfixes:
 ;
 (typeattributeset container_engine_system_domain kernel_t)
+(dontaudit container_domain self (io_uring (override_creds sqpoll cmd)))
 (allow container_domain self (netlink_netfilter_socket (create read write setopt bind getattr)))
 (allow container_domain container_runtime_t (dir (add_name create ioctl link lock read remove_name rename reparent rmdir setattr unlink write)))
 (allow container_domain container_runtime_t (file (append create getattr ioctl link lock map open read rename setattr unlink write)))
@@ -924,6 +925,7 @@ EOF
 (allow container_domain container_var_lib_t (lnk_file (append create getattr ioctl link lock map open read rename setattr unlink write)))
 (allow container_domain proc_psi_t (file (read getattr open)))
 (allow container_domain sysctl_vm_t (file (read getattr open)))
+(allow spc_t self (capability2 (checkpoint_restore)))
 (allow spc_t self (perf_event (write)))
 (allow spc_t file_type (service (start status stop reload)))
 (allow spc_t unlabeled_t (service (start status stop reload)))
@@ -934,6 +936,9 @@ EOF
 ; /opt/cni/bin/flannel:
 (allow container_domain usr_t (dir (watch add_name write)))
 (allow container_domain usr_t (file (create write)))
+
+; AKS fixes
+(allow unconfined_domain_type domain (io_uring (override_creds sqpoll cmd)))
 EOF
     sudo chroot "${root_fs_dir}" semodule -X 200 -i "${policy_hotfix}"
     sudo rm -f "${root_fs_dir}/${policy_hotfix}"
