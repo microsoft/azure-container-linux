@@ -929,6 +929,7 @@ EOF
 (allow spc_t self (perf_event (write)))
 (allow spc_t file_type (service (start status stop reload)))
 (allow spc_t unlabeled_t (service (start status stop reload)))
+(allow spc_t unlabeled_t (system (module_load)))
 
 ; /etc/cni/net.d/10-flannel.conflist:
 (allow container_domain unlabeled_t (dir (add_name search write)))
