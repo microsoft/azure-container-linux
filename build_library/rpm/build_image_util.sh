@@ -891,6 +891,19 @@ SYSUSERS_EOF
     # Ensure /root home directory exists with proper permissions
     sudo mkdir -p "${root_fs_dir}/root"
     sudo chmod 700 "${root_fs_dir}/root"
+
+    # Disable read-ahead on squashfs-backed loop devices to prevent I/O errors.
+    # The kernel's block-layer read-ahead can overshoot the end of
+    # loop-backed squashfs files (sysext .raw images), producing:
+    #   "I/O error, dev loopN, sector XXXX op 0x0:(READ)"
+    # Setting read_ahead_kb=0 on squashfs loop devices avoids the overshoot.
+    info "RPM mode: Adding udev rule to disable loop device read-ahead for sysext squashfs"
+    sudo mkdir -p "${root_fs_dir}/etc/udev/rules.d"
+    sudo tee "${root_fs_dir}/etc/udev/rules.d/60-loop-read-ahead.rules" > /dev/null <<'UDEV_LOOP'
+# Prevent I/O errors from read-ahead overshooting loop-backed squashfs files
+SUBSYSTEM=="block", KERNEL=="loop*", ENV{ID_FS_TYPE}=="squashfs", ATTR{queue/read_ahead_kb}="0"
+UDEV_LOOP
+    sudo chmod 644 "${root_fs_dir}/etc/udev/rules.d/60-loop-read-ahead.rules"
 }
 
 finish_image_backup_etc_rpm() {

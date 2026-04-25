@@ -1086,3 +1086,32 @@ clean_qemu_static() {
     *) die "Unsupported arch" ;;
   esac
 }
+
+# Pad a squashfs image so the kernel's block-layer read-ahead never
+# overshoots the loop device backing file.  Without padding, the last
+# read-ahead window can extend past EOF, producing:
+#   "I/O error, dev loopN, sector XXXX op 0x0:(READ)"
+#
+# The pad size equals the kernel's default read_ahead_kb for block devices
+# (128 KB / 131072 bytes), set in block/blk-settings.c at device creation.
+# This is the value used by Azure Linux kernel today.
+# Should a future kernel change the default, update LOOP_READ_AHEAD_BYTES below.
+# At runtime the actual value is visible at /sys/block/loopN/queue/read_ahead_kb.
+#
+# See ACL Bug 17844.
+# Usage: pad_squashfs_for_loopdev <file> [sudo]
+#   Pass "sudo" as the second arg when running as a non-root user.
+LOOP_READ_AHEAD_BYTES=131072  # 128 KB — must match kernel default read_ahead_kb
+
+pad_squashfs_for_loopdev() {
+    local file="$1"
+    local run_as="${2:-}"
+    local file_size pad_bytes original_mtime
+    file_size=$(stat -c '%s' "${file}")
+    pad_bytes=$(( (LOOP_READ_AHEAD_BYTES - (file_size % LOOP_READ_AHEAD_BYTES)) % LOOP_READ_AHEAD_BYTES ))
+    if (( pad_bytes > 0 )); then
+        original_mtime=$(stat -c '%y' "${file}")
+        ${run_as} truncate -s "+${pad_bytes}" "${file}"
+        ${run_as} touch -d "${original_mtime}" "${file}"
+    fi
+}

@@ -288,6 +288,7 @@ if [[ "$FLAGS_generate_pkginfo" = "${FLAGS_TRUE}" ]] ; then
   
   mksquashfs "${BUILD_DIR}/img-pkginfo" "${BUILD_DIR}/${SYSEXTNAME}_pkginfo.raw" \
               -noappend -xattrs-exclude '^btrfs.' -comp "${FLAGS_compression}" ${FLAGS_mksquashfs_opts}
+  pad_squashfs_for_loopdev "${BUILD_DIR}/${SYSEXTNAME}_pkginfo.raw"
 fi
 
 if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
@@ -382,6 +383,7 @@ fi
 
 mksquashfs "${BUILD_DIR}/${FLAGS_install_root_basename}" "${BUILD_DIR}/${SYSEXTNAME}.raw" \
                -noappend -xattrs-exclude '^btrfs.' -comp "${FLAGS_compression}" ${FLAGS_mksquashfs_opts}
+pad_squashfs_for_loopdev "${BUILD_DIR}/${SYSEXTNAME}.raw"
 rm -rf "${BUILD_DIR}"/{fs-root,"${FLAGS_install_root_basename}",workdir}
 
 # Generate reports
