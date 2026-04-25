@@ -96,7 +96,6 @@
 #   VM_CONSOLE_USER         Serial console login user (default: root)
 #   VM_CONSOLE_PASSWORD     Serial console login password
 #   VM_BOOT_TIMEOUT         Boot timeout in seconds (default: 180)
-#   VM_SSH_USER             SSH user for VM (default: core)
 #   VM_SSH_KEY              SSH private key path
 #   VM_SSH_TIMEOUT          SSH connection timeout in seconds (default: 120)
 #
@@ -128,7 +127,6 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-__build__}"
 STAGING_DIR="${SCRIPT_DIR}/__build__/rpm-staging"
 DISK_LAYOUT="${DISK_LAYOUT:-vm}"  # Use 'vm' layout for larger ROOT partition (needed for RPM mode)
 RUN_SCRIPTS=()  # Scripts to run on VM after boot
-VM_SSH_USER="${VM_SSH_USER:-core}"
 VM_SSH_KEY="${VM_SSH_KEY:-}"
 VM_SSH_TIMEOUT="${VM_SSH_TIMEOUT:-120}"  # Seconds to wait for SSH
 VM_SSH_AUTHORIZED_KEYS="${VM_SSH_AUTHORIZED_KEYS:-}"  # SSH public keys to inject (file or string)
@@ -378,7 +376,7 @@ parse_args() {
                 shift 2
                 ;;
             --ssh-user=*)
-                VM_SSH_USER="${1#*=}"
+                export VM_SSH_USER="${1#*=}"
                 shift
                 ;;
             --ssh-key=*)
@@ -1665,7 +1663,6 @@ main() {
         validate_args+=("--img-name=${IMG_NAME}")
         validate_args+=("--vm-type=${VM_TYPE}")
         validate_args+=("--vm-name=${VM_NAME}")
-        validate_args+=("--ssh-user=${VM_SSH_USER}")
         validate_args+=("--ssh-timeout=${VM_SSH_TIMEOUT}")
         validate_args+=("--boot-timeout=${VM_BOOT_TIMEOUT}")
         validate_args+=("--console-user=${VM_CONSOLE_USER}")
