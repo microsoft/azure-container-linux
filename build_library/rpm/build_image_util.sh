@@ -166,13 +166,16 @@ finish_image_rpm() {
     #     with existing static units (e.g. oem.mount).
     #   - There is no /etc/fstab visible at runtime (matching Flatcar behavior).
     #   - IC searches for this path during offline partition discovery.
+    #
+    # /usr uses /dev/mapper/usr so that IC's verity detection recognizes it as a
+    # dm-verity device.
     info "RPM mode: Generating /usr/share/ic/etc/fstab for Image Customizer"
     sudo mkdir -p "${root_fs_dir}/usr/share/ic/etc"
     sudo tee "${root_fs_dir}/usr/share/ic/etc/fstab" > /dev/null <<'FSTAB'
 # ACL partition table — consumed by Image Customizer for offline customization.
 # This file is NOT visible at runtime (/etc/fstab does not exist).
 # It lives at /usr/share/ic/etc/fstab on the USR-A partition.
-PARTUUID=7130c94a-213a-4e5a-8e26-6cce9662f132  /usr   btrfs  ro,compress=zstd   0  0
+/dev/mapper/usr                                /usr   btrfs  ro,compress=zstd   0  0
 LABEL=ROOT                                     /      ext4   rw                 0  1
 LABEL=EFI-SYSTEM                               /boot  vfat   rw                 0  2
 LABEL=OEM                                      /oem   btrfs  rw,compress=zlib   0  0
