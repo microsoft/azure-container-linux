@@ -235,6 +235,9 @@ Convert the production image to a VM-ready format. The script supports building 
 
 The `--build-test-image` flag builds a test VM image that includes the docker sysext, which is required for running kola tests.
 
+> **Note:** The test image expects `kola`-tagged standalone sysexts to be already
+> built. Run `--build-standalone-sysexts=kola` before (or alongside) `--build-test-image`.
+
 ```bash
 # Build a QEMU test VM image
 ./acl/build_rpm_image.sh --build-test-image --vm-type=qemu
@@ -245,6 +248,42 @@ The `--build-test-image` flag builds a test VM image that includes the docker sy
 # When --vm-type is not specified, QEMU is used by default
 ./acl/build_rpm_image.sh --build-test-image
 ```
+
+#### Build Standalone Sysexts (Optional)
+
+Standalone sysexts are squashfs images (`.raw`) activated at runtime via `systemd-sysext`.
+They are defined in `acl/standalone_sysexts.yaml` and built alongside the ACL image.
+
+```bash
+# Build all standalone sysexts
+./acl/build_rpm_image.sh --build-standalone-sysexts
+
+# Build only sysexts tagged "kola" (e.g., docker)
+./acl/build_rpm_image.sh --build-standalone-sysexts=kola
+
+# Build sysexts matching any of several tags (OR logic)
+./acl/build_rpm_image.sh --build-standalone-sysexts=kola,gpu
+
+# Build only GPU-related sysexts
+./acl/build_rpm_image.sh --build-standalone-sysexts=gpu
+
+# Build only the LISA testing sysext
+./acl/build_rpm_image.sh --build-standalone-sysexts=lisa
+```
+
+Sysext `.raw` files are written to:
+
+```
+__build__/images/images/amd64-usr/latest/<name>.raw
+```
+
+Available tags (see `acl/standalone_sysexts.yaml` for the full list):
+
+| Tag    | Sysexts                                                                      |
+|--------|------------------------------------------------------------------------------|
+| `kola` | docker                                                                       |
+| `gpu`  | nvidia-driver-cuda-open, nvidia-driver-cuda, nvidia-driver-vgpu, nvidia-container-toolkit, nvidia-fabric-manager |
+| `lisa` | lisa-testing                                                                 |
 
 #### VM Image Output
 

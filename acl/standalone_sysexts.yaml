@@ -21,6 +21,12 @@
 #                      archs: [amd64]
 #      archs     — (optional) list of architectures to build for: [amd64], [arm64],
 #                  or both.  Omit to build for all architectures.
+#      tags      — (optional) list of string tags for filtering.
+#                  Use --build-standalone-sysexts=TAG to build only sysexts
+#                  that carry the given tag.  Multiple tags can be specified
+#                  as a comma-separated list (--build-standalone-sysexts=TAG1,TAG2)
+#                  and a sysext is included if it matches any of the given tags.
+#                  Omit to include in all builds.
 #
 # 2. (Optional) Create a mangle script: build_library/sysext_mangle_<name>
 #    Needed when the RPM installs files outside /usr (e.g. /etc, /bin, /lib).
@@ -35,36 +41,50 @@ sysexts:
     packages:
       - app-containers/docker
       - app-containers/docker-cli
-      - app-containers/docker-buildx  
+      - app-containers/docker-buildx
+    tags:
+      - kola
  # --- GPU / hardware sysexts -------------------------------------------
   - name: nvidia-driver-cuda-open
     packages:
       - cuda-open
     archs:
       - amd64
+    tags:
+      - gpu
 
   - name: nvidia-driver-cuda
     packages:
       - cuda
     archs:
       - amd64
+    tags:
+      - gpu
 
   - name: nvidia-driver-vgpu
     packages:
       - nvidia-vgpu-guest-driver
     archs:
       - amd64
+    tags:
+      - gpu
 
   - name: nvidia-container-toolkit
     packages:
       - nvidia-container-toolkit
+    tags:
+      - gpu
 
   - name: nvidia-fabric-manager
     packages:
       - nvidia-fabric-manager
+    tags:
+      - gpu
 
   # --- Testing framework sysexts ----------------------------------------
   - name: lisa-testing
+    tags:
+      - lisa
     packages:
       - autoconf
       - automake

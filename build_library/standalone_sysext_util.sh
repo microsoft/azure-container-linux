@@ -18,11 +18,15 @@
 #   RPM_STAGING_DIR, IMAGE_VERSION, IMAGE_VERSION_ID, IMAGE_BUILD_ID
 
 # Parse standalone_sysexts.yaml and emit a space-separated STANDALONE_SYSEXTS_SPEC
-# string filtered for the given board.  Entries without an 'archs' key are
-# included for every board.
+# string filtered for the given board and optional tag(s).  Entries without an
+# 'archs' key are included for every board.  When a tag filter is given,
+# only entries whose 'tags' list contains at least one of the given tags are
+# emitted; entries without a 'tags' key are skipped.
 #
 # Usage:
 #   spec=$(parse_standalone_sysexts_yaml "/path/to/standalone_sysexts.yaml" "amd64-usr")
+#   spec=$(parse_standalone_sysexts_yaml "/path/to/standalone_sysexts.yaml" "amd64-usr" "kola")
+#   spec=$(parse_standalone_sysexts_yaml "/path/to/standalone_sysexts.yaml" "amd64-usr" "kola,gpu")
 #
 # The board name (e.g. "amd64-usr") is mapped to an arch (e.g. "amd64")
 # to match the 'archs' values in the YAML.
@@ -38,6 +42,7 @@
 parse_standalone_sysexts_yaml() {
     local yaml_file="$1"
     local board="$2"
+    local tag_filter="${3:-}"
     # Map board name to arch: "amd64-usr" → "amd64", "arm64-usr" → "arm64"
     local arch="${board%%-*}"
 
@@ -46,15 +51,34 @@ parse_standalone_sysexts_yaml() {
         return 0
     fi
 
+    # Build the tag filter clause for yq.
+    # When tag(s) are specified, only include entries whose .tags list contains
+    # at least one of the requested tags (OR logic).  Comma-separated tags are
+    # split into a TAGVALS env var (newline-separated) for yq to iterate.
+    # When no tag is specified, include all entries (no tag filtering).
+    # Values are passed via environment variables and accessed with env() to
+    # avoid yq expression injection.  env() is supported in all yq v4 versions
+    # (unlike --arg which requires v4.46+).
+    # Note: we use ARCHVAL / TAGVALS to avoid shadowing yq's built-in "tag" function.
+    local tag_select=""
+    local tag_vals=""
+    if [[ -n "${tag_filter}" ]]; then
+        # Convert comma-separated tags to newline-separated for yq split()
+        tag_vals="${tag_filter//,/$'\n'}"
+        tag_select='| select(.tags != null and any(.tags[]; . as $t | env(TAGVALS) | split("\n") | .[] | select(. == $t)))'
+    fi
+
     # For each sysext entry: if .archs is null (omitted) or contains the
     # arch, emit "name|pkg1&pkg2".  yq handles the filtering natively.
     # Package entries can be plain strings or objects with 'name' and 'archs'
     # fields for per-package architecture filtering.
+    ARCHVAL="${arch}" TAGVALS="${tag_vals}" \
     yq eval -r "
         .sysexts[]
-        | select(.archs == null or (.archs[] | select(. == \"${arch}\")))
+        | select(.archs == null or (.archs[] | select(. == env(ARCHVAL))))
+        ${tag_select}
         | .name + \"|\" + ([.packages[]
-            | select(tag == \"!!str\" or .archs == null or (.archs[] | select(. == \"${arch}\")))
+            | select(tag == \"!!str\" or .archs == null or (.archs[] | select(. == env(ARCHVAL))))
             | (select(tag == \"!!str\") // .name)]
             | join(\"&\"))
     " "${yaml_file}" | tr '\n' ' '

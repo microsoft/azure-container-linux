@@ -19,7 +19,7 @@
 #   --boot-timeout=SECS                  Timeout waiting for VM boot (default: 180)
 #   --build-rpms                         Build custom RPM packages using Azure Linux toolkit (runs acl/build.sh)
 #   --build-sdk-container                Update/rebuild SDK container with RPM tools (can run standalone)
-#   --build-standalone-sysexts           Build standalone sysexts as a separate step (not during VM image conversion)
+#   --build-standalone-sysexts[=TAG,...]  Build standalone sysexts (all, or only those matching any given tag)
 #   --build-test-image                   Build a test VM image (includes docker sysext) for kola testing
 #   --build-vm-image                     Build VM images after creating base image (no docker sysext)
 #   --clean                              Clean staging and build RPM directories before download
@@ -141,7 +141,8 @@ ACG_IMAGE_VERSION_ID=""  # Pre-existing Azure Compute Gallery image version reso
 REUSE_IMAGE=false  # Reuse the latest published gallery image (skip VHD upload)
 KEEP_VM=false  # Keep VM running after scripts complete (write state file)
 REUSE_VM=false  # Reuse an already-running VM (read state file)
-BUILD_STANDALONE_SYSEXTS=false  # Build standalone sysexts as a separate step (not during VM image conversion)
+BUILD_STANDALONE_SYSEXTS=false  # Build standalone sysexts: false, true (all), or comma-separated tags to filter
+STANDALONE_SYSEXTS_TAG=""      # Optional tag filter for --build-standalone-sysexts=TAG,TAG,...
 BUILD_TEST_IMAGE=false  # Build a test VM image with docker sysext for kola testing
 USE_TEST_IMAGE=false  # Boot the test VM image instead of the regular image
 AZ_VM_ARGS="${AZ_VM_ARGS:-}"  # Additional arguments to pass to start azure VM
@@ -506,6 +507,11 @@ parse_args() {
                 ;;
             --build-standalone-sysexts)
                 BUILD_STANDALONE_SYSEXTS=true
+                shift
+                ;;
+            --build-standalone-sysexts=*)
+                BUILD_STANDALONE_SYSEXTS=true
+                STANDALONE_SYSEXTS_TAG="${1#*=}"
                 shift
                 ;;
             --skip-standalone-sysexts)
@@ -1249,9 +1255,9 @@ build_standalone_sysexts() {
     # Source the YAML parser from the shared utility
     source "${SCRIPT_DIR}/build_library/standalone_sysext_util.sh"
 
-    # Parse YAML config — arch filtering is handled by the YAML schema
+    # Parse YAML config — arch and optional tag filtering is handled by the parser
     local sysext_spec_str
-    sysext_spec_str=$(parse_standalone_sysexts_yaml "${STANDALONE_SYSEXTS_YAML}" "${BOARD}")
+    sysext_spec_str=$(parse_standalone_sysexts_yaml "${STANDALONE_SYSEXTS_YAML}" "${BOARD}" "${STANDALONE_SYSEXTS_TAG}")
 
     if [[ -z "${sysext_spec_str// /}" ]]; then
         info "No standalone sysexts to build for ${BOARD}"
@@ -1443,14 +1449,22 @@ print_summary() {
     fi
 
     if [[ "$BUILD_STANDALONE_SYSEXTS" == "true" ]]; then
-        echo "  Build standalone sysexts (separate from VM image)"
-        local _sysext_names
-        _sysext_names=$(yq eval -r '.sysexts[].name' "${STANDALONE_SYSEXTS_YAML}" | tr '\n' ' ') || {
+        local _tag_info=""
+        [[ -n "${STANDALONE_SYSEXTS_TAG}" ]] && _tag_info=" (tag: ${STANDALONE_SYSEXTS_TAG})"
+        echo "  Build standalone sysexts${_tag_info}"
+        # Reuse parse_standalone_sysexts_yaml to apply both tag and arch
+        # filtering, so the summary matches what will actually be built.
+        source "${SCRIPT_DIR}/build_library/standalone_sysext_util.sh"
+        local _sysext_spec
+        _sysext_spec=$(parse_standalone_sysexts_yaml "${STANDALONE_SYSEXTS_YAML}" "${BOARD}" "${STANDALONE_SYSEXTS_TAG}") || {
             error "Failed to parse ${STANDALONE_SYSEXTS_YAML} with yq."
             error "  version: $(yq --version 2>&1 || echo unknown)"
             error "Check the YAML syntax or ensure yq v4+ is installed."
             exit 1
         }
+        # Extract just the names (before the "|" delimiter) for display.
+        local _sysext_names
+        _sysext_names=$(echo "${_sysext_spec}" | tr ' ' '\n' | cut -d'|' -f1 | tr '\n' ' ')
         echo "  Sysexts: ${_sysext_names:-<none>}"
         echo
     fi
