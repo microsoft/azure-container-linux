@@ -85,7 +85,7 @@ declare -gA PACKAGE_CATALOG=(
     ["sys-block/open-iscsi"]="iscsi-initiator-utils"
 
     # Container runtime
-    ["app-containers/docker"]="moby-engine"
+    ["app-containers/docker"]="moby-engine sdnotify-proxy"
     ["app-emulation/docker"]="moby-engine"  # Alternative package name
     ["app-containers/docker-cli"]="docker-cli"
     ["app-containers/docker-buildx"]="docker-buildx"
@@ -237,7 +237,7 @@ declare -gA PACKAGE_CATALOG=(
     ["app-admin/flannel-wrapper"]="SKIP"
     ["app-admin/locksmith"]="SKIP"
     ["app-admin/mayday"]="SKIP"
-    ["app-admin/sdnotify-proxy"]="sdnotify-proxy"
+    ["app-admin/sdnotify-proxy"]="SKIP"
     ["coreos-base/coreos"]="SKIP"
     ["coreos-base/coreos-au-key"]="SKIP"
     ["coreos-base/coreos-cloudinit"]="coreos-cloudinit"

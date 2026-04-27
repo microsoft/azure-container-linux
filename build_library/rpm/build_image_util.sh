@@ -345,26 +345,28 @@ finish_image_selinux_rpm() {
     #sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/usr" >/dev/null
 }
 
-finish_image_tmpfiles_rpm() {
+# ── Machine-id: remove for first-boot detection ──────────────────────────────
+_remove_machine_id_rpm() {
     local root_fs_dir="$1"
 
-    sudo "${root_fs_dir}"/usr/sbin/flatcar-tmpfiles "${root_fs_dir}"
+    # Remove /etc/machine-id so that the later bulk-copy of /etc to the
+    # overlay lowerdir naturally excludes it.  Without machine-id in the
+    # lowerdir, systemd sees a missing file after overlay mount and triggers
+    # first-boot logic (ConditionFirstBoot=yes, systemd-firstboot, etc.).
+    # Nothing between here and the cp -a recreates the file.
+    info "RPM mode: Removing /etc/machine-id for first-boot detection"
+    sudo rm -f "${root_fs_dir}/etc/machine-id"
+}
+
+# ── SSH: config, authorized_keys, socket activation ──────────────────────────
+_configure_ssh_rpm() {
+    local root_fs_dir="$1"
 
     # sshd privilege separation directory
     sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/sshd.conf" > /dev/null <<'TMPFILES_SSHD'
 # SSH privilege separation directory
 d /var/lib/sshd 0755 root root - -
 TMPFILES_SSHD
-
-    # Remove umask.sh installed by Azure Linux bash RPM to align with upstream Flatcar behavior
-    sudo rm -f "${root_fs_dir}/etc/profile.d/umask.sh"
-
-    # Blacklist cfg80211 (wireless) — the Azure Linux kernel ships it as a
-    # module but no WiFi hardware exists on cloud/VM targets, and the
-    # regulatory.db firmware file is not present.
-    sudo install -d -m 0755 "${root_fs_dir}/usr/lib/modprobe.d"
-    echo "blacklist cfg80211" | sudo_clobber "${root_fs_dir}/usr/lib/modprobe.d/no-wifi.conf"
-    sudo chmod 0644 "${root_fs_dir}/usr/lib/modprobe.d/no-wifi.conf"
 
     # Configure sshd to look for authorized_keys in the ignition location
     # Ignition places SSH keys in ~/.ssh/authorized_keys.d/ignition
@@ -408,6 +410,53 @@ SSHD_CONFIG_EOF
         info "RPM mode: sshd_config already has Include directive"
     fi
 
+    # Switch sshd to socket activation (matching Flatcar behavior)
+    # The Azure Linux openssh RPM only ships sshd.service (traditional daemon).
+    # Socket activation means systemd listens on port 22 and spawns sshd per-connection,
+    # which is more efficient and matches what Flatcar's cl.network.listeners test expects.
+    info "RPM mode: Setting up sshd socket activation"
+    # Create sshd.socket - systemd will listen on port 22
+    sudo tee "${root_fs_dir}/usr/lib/systemd/system/sshd.socket" > /dev/null <<'SSHD_SOCKET'
+[Unit]
+Description=OpenSSH Server Socket
+Conflicts=sshd.service
+
+[Socket]
+ListenStream=22
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
+SSHD_SOCKET
+    # Create sshd@.service - per-connection sshd instance (template)
+    sudo tee "${root_fs_dir}/usr/lib/systemd/system/sshd@.service" > /dev/null <<'SSHD_AT_SERVICE'
+[Unit]
+Description=OpenSSH per-connection server daemon
+
+[Service]
+ExecStart=-/usr/sbin/sshd -i -e
+StandardInput=socket
+StandardError=journal
+SSHD_AT_SERVICE
+    # Add drop-in to ensure host keys are generated before accepting connections
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sshd@.service.d"
+    sudo tee "${root_fs_dir}/usr/lib/systemd/system/sshd@.service.d/sshd-keygen.conf" > /dev/null <<'SSHD_KEYGEN_DROPIN'
+[Unit]
+Wants=sshd-keygen.service
+After=sshd-keygen.service
+SSHD_KEYGEN_DROPIN
+    # Disable sshd.service (enabled by 90-default.preset) and enable sshd.socket instead
+    printf "disable sshd.service\nenable sshd.socket\n" | \
+    sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-sshd.preset" > /dev/null
+    # Remove any existing sshd.service enable symlinks from the RPM
+    sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/sshd.service"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/sshd.service"
+}
+
+# ── Sudo: Flatcar-compatible sudoers policy ──────────────────────────────────
+_configure_sudo_rpm() {
+    local root_fs_dir="$1"
+
     # Configure sudo to match Flatcar's sudoers policy:
     # - wheel group requires password
     # - sudo group gets NOPASSWD (override base sudoers password-required rule)
@@ -432,9 +481,11 @@ Defaults env_keep += "LESSCHARSET"
 core ALL=(ALL) ALL
 SUDOERS_EOF
     sudo chmod 440 "${root_fs_dir}/etc/sudoers.d/flatcar-compat"
+}
 
-    # Note: systemd-networkd.service and systemd-resolved.service are enabled
-    # by azurelinux-release's 90-default.preset — no manual symlinks needed.
+# ── NTP / NFS / RPC service fixes ────────────────────────────────────────────
+_fix_ntp_nfs_services_rpm() {
+    local root_fs_dir="$1"
 
     # Add drop-in for ntpdate.service to ensure DNS is ready before running
     # The service has After=nss-lookup.target but DNS servers may not be configured yet
@@ -459,6 +510,13 @@ StartLimitInterval=60
 StartLimitBurst=5
 EOF
     fi
+
+    # Re-enable systemd-timesyncd.service via direct symlink.
+    # azurelinux-release's 90-default.preset explicitly disables systemd-timesyncd,
+    # but the linux.ntp and acl.basic/ServicesActive tests expect timesyncd to be active.
+    info "RPM mode: Re-enabling systemd-timesyncd.service"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants"
+    sudo ln -sf ../systemd-timesyncd.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/systemd-timesyncd.service"
 
     # TODO: reevaluate the approach, tracked by https://dev.azure.com/mariner-org/mariner/_workitems/edit/17500
     # Add drop-in for nfs-mountd.service to ensure rpcbind is ready before starting
@@ -513,6 +571,11 @@ d /var/lib/nfs/v4recovery 0755 root root -
 d /var/lib/nfs/v4root 0755 root root -
 d /var/lib/nfs/rpc_pipefs 0755 root root -
 EOF
+}
+
+# ── Generate hwdb.bin in /usr/lib/udev during image build ───────────────────────────────
+_generate_hwdb_rpm() {
+    local root_fs_dir="$1"
 
     # Generating hwdb.bin in /usr/lib/udev during image build.
     # During image build, post install scripts in systemd-udevd package generates
@@ -544,55 +607,11 @@ EOF
             fi
         fi
     fi
+}
 
-    # Re-enable systemd-timesyncd.service via direct symlink.
-    # azurelinux-release's 90-default.preset explicitly disables systemd-timesyncd,
-    # but the linux.ntp and acl.basic/ServicesActive tests expect timesyncd to be active.
-    info "RPM mode: Re-enabling systemd-timesyncd.service"
-    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants"
-    sudo ln -sf ../systemd-timesyncd.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/systemd-timesyncd.service"
-
-    # Switch sshd to socket activation (matching Flatcar behavior)
-    # The Azure Linux openssh RPM only ships sshd.service (traditional daemon).
-    # Socket activation means systemd listens on port 22 and spawns sshd per-connection,
-    # which is more efficient and matches what Flatcar's cl.network.listeners test expects.
-    info "RPM mode: Setting up sshd socket activation"
-    # Create sshd.socket - systemd will listen on port 22
-    sudo tee "${root_fs_dir}/usr/lib/systemd/system/sshd.socket" > /dev/null <<'SSHD_SOCKET'
-[Unit]
-Description=OpenSSH Server Socket
-Conflicts=sshd.service
-
-[Socket]
-ListenStream=22
-Accept=yes
-
-[Install]
-WantedBy=sockets.target
-SSHD_SOCKET
-    # Create sshd@.service - per-connection sshd instance (template)
-    sudo tee "${root_fs_dir}/usr/lib/systemd/system/sshd@.service" > /dev/null <<'SSHD_AT_SERVICE'
-[Unit]
-Description=OpenSSH per-connection server daemon
-
-[Service]
-ExecStart=-/usr/sbin/sshd -i -e
-StandardInput=socket
-StandardError=journal
-SSHD_AT_SERVICE
-    # Add drop-in to ensure host keys are generated before accepting connections
-    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sshd@.service.d"
-    sudo tee "${root_fs_dir}/usr/lib/systemd/system/sshd@.service.d/sshd-keygen.conf" > /dev/null <<'SSHD_KEYGEN_DROPIN'
-[Unit]
-Wants=sshd-keygen.service
-After=sshd-keygen.service
-SSHD_KEYGEN_DROPIN
-    # Disable sshd.service (enabled by 90-default.preset) and enable sshd.socket instead
-    printf "disable sshd.service\nenable sshd.socket\n" | \
-    sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-sshd.preset" > /dev/null
-    # Remove any existing sshd.service enable symlinks from the RPM
-    sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/sshd.service"
-    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/sshd.service"
+# ── Remove Flatcar components not used by ACL ────────────────────────────────
+_remove_unused_flatcar_components_rpm() {
+    local root_fs_dir="$1"
 
     # Remove extend-filesystems - uses cgpt (not available in Azure Linux) and
     # the coreos-resize GPT partition type which ACL does not use
@@ -638,6 +657,11 @@ SSHD_KEYGEN_DROPIN
             sudo sed -i '/flatcar-setup-environment\.service/d' "${unit_file}"
         fi
     done
+}
+
+# ── Disk auto-grow: systemd-repart + growfs ──────────────────────────────────
+_configure_disk_autogrow_rpm() {
+    local root_fs_dir="$1"
 
     # Enable systemd-repart + systemd-growfs for rootfs auto-grow
     # The ROOT partition uses the DPS (Discoverable Partitions Spec) root type GUID,
@@ -675,6 +699,11 @@ EOF
 
     # Enable systemd-growfs-root.service (grows filesystem after partition resize)
     sudo ln -sf ../systemd-growfs-root.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/systemd-growfs-root.service"
+}
+
+# ── Mask services not needed by ACL ──────────────────────────────────────────
+_mask_unused_services_rpm() {
+    local root_fs_dir="$1"
 
     # Mask kdump.service - requires crashkernel= kernel parameter which we don't set
     info "RPM mode: Masking kdump.service (no crash kernel memory reserved)"
@@ -717,6 +746,11 @@ EOF
     info "RPM mode: Masking systemd-homed services (not used, core user managed by initramfs)"
     sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/systemd-homed.service"
     sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/systemd-homed-activate.service"
+}
+
+# ── PCRlock: Secure Boot condition + arm64 SHA-256 restriction ───────────────
+_configure_pcrlock_rpm() {
+    local root_fs_dir="$1"
 
     # Add drop-in for systemd-pcrlock-secureboot-policy.service to skip cleanly
     # when Secure Boot is not available. The upstream unit only gates on
@@ -751,97 +785,21 @@ EOF
             sudo chmod 0644 "${dropin_dir}/sha256-only.conf"
         done
     fi
+}
 
-    # Remove etcd server and etcdutl binaries - we only need etcdctl from the etcd RPM.
-    # The etcd server runs inside a Docker container via etcd-wrapper, not natively.
-    if [[ -f "${root_fs_dir}/usr/bin/etcd" ]]; then
-        info "RPM mode: Removing /usr/bin/etcd (etcd server runs in Docker via etcd-wrapper)"
-        sudo rm -f "${root_fs_dir}/usr/bin/etcd"
-    fi
-    if [[ -f "${root_fs_dir}/usr/bin/etcdutl" ]]; then
-        info "RPM mode: Removing /usr/bin/etcdutl (not needed)"
-        sudo rm -f "${root_fs_dir}/usr/bin/etcdutl"
-    fi
-    # Also remove the native etcd.service - etcd-member.service (Docker-based) is used instead
-    if [[ -f "${root_fs_dir}/usr/lib/systemd/system/etcd.service" ]]; then
-        info "RPM mode: Removing native etcd.service (using etcd-member.service instead)"
-        sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/etcd.service"
-    fi
-    # Remove the etcd preset file (refers to the native etcd.service we just removed)
-    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system-preset/50-etcd.preset"
-    # Remove etcd config file (native etcd.service config, not used with etcd-wrapper)
-    sudo rm -f "${root_fs_dir}/etc/etcd/etcd-default-conf.yml"
+# ── Misc: kernel modules, resolv.conf, serial console, etc. ─────────────────
+_configure_misc_rpm() {
+    local root_fs_dir="$1"
 
-    # Install etcd-wrapper - runs etcd in a Docker container with sdnotify-proxy.
-    # These files come from the Flatcar etcd-wrapper package in sdk_container.
-    local etcd_wrapper_src="${BUILD_LIBRARY_DIR}/../sdk_container/src/third_party/coreos-overlay/app-admin/etcd-wrapper/files"
-    local etcd_version="3.5.16"
-    if [[ ! -d "${etcd_wrapper_src}" ]]; then
-        die "etcd-wrapper source not found at ${etcd_wrapper_src}"
-    fi
-    info "RPM mode: Installing etcd-wrapper from sdk_container sources"
-    # etcd-wrapper script -> /usr/lib/flatcar/etcd-wrapper
-    sudo mkdir -p "${root_fs_dir}/usr/lib/flatcar"
-    sudo cp "${etcd_wrapper_src}/etcd-wrapper" "${root_fs_dir}/usr/lib/flatcar/etcd-wrapper"
-    sudo chmod 0755 "${root_fs_dir}/usr/lib/flatcar/etcd-wrapper"
-    # Azure Linux symlinks /etc/ssl/certs -> /etc/pki/tls/certs -> /etc/pki/ca-trust/extracted/pem
-    # etcd-wrapper bind-mounts /etc/ssl/certs and /usr/share/ca-certificates into the
-    # Docker container, but the files are symlinks to /etc/pki/ca-trust/extracted/pem/... which
-    # doesn't exist in the container. Add an extra bind mount so the symlinks resolve.
-    sudo sed -i 's|-v ${ETCD_SSL_DIR}:/etc/ssl/certs:ro|-v /etc/pki/ca-trust/extracted/pem:/etc/pki/ca-trust/extracted/pem:ro -v ${ETCD_SSL_DIR}:/etc/ssl/certs:ro|' \
-        "${root_fs_dir}/usr/lib/flatcar/etcd-wrapper"
-    # CLC transpiler generates ExecStart=/usr/lib/coreos/etcd-wrapper
-    # Create compat symlink so /usr/lib/coreos -> flatcar resolves
-    sudo ln -sfT flatcar "${root_fs_dir}/usr/lib/coreos"
-    # etcd-member.service -> /usr/lib/systemd/system/ (substitute image tag)
-    sudo sed "s|@ETCD_IMAGE_TAG@|v${etcd_version}|g" \
-        "${etcd_wrapper_src}/etcd-member.service" \
-        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/etcd-member.service" > /dev/null
-    # etcd-wrapper.conf -> /usr/lib/tmpfiles.d/ (creates /var/lib/etcd 0700 etcd:etcd)
-    sudo cp "${etcd_wrapper_src}/etcd-wrapper.conf" "${root_fs_dir}/usr/lib/tmpfiles.d/etcd-wrapper.conf"
-    # sysusers.d config to create the etcd user/group (needed by etcd-wrapper)
-    # The etcd RPM doesn't create this user, but etcd-wrapper needs it for:
-    #   - chown etcd:etcd on the data directory
-    #   - id -u/-g to map the user into the Docker container
-    cat <<'SYSUSERS_EOF' | sudo tee "${root_fs_dir}/usr/lib/sysusers.d/etcd.conf" > /dev/null
-u etcd - "etcd user" /var/lib/etcd
-SYSUSERS_EOF
+    # Remove umask.sh installed by Azure Linux bash RPM to align with upstream Flatcar behavior
+    sudo rm -f "${root_fs_dir}/etc/profile.d/umask.sh"
 
-    # CA certificates compatibility for etcd-wrapper Docker mount.
-    # etcd-wrapper bind-mounts /usr/share/ca-certificates:/usr/share/ca-certificates:ro
-    # into the Docker container. On ACL this directory doesn't exist, and Docker
-    # tries to mkdir it on the read-only /usr partition, causing the container to
-    # fail with "mkdir /usr/share/ca-certificates: read-only file system".
-    # Fix: create the directory in the image with a symlink to the ACL CA bundle.
-    # Above we add a bind mount for /etc/pki/ca-trust/extracted/pem so the symlink resolves.
-    info "RPM mode: Creating /usr/share/ca-certificates for etcd-wrapper Docker mount"
-    sudo mkdir -p "${root_fs_dir}/usr/share/ca-certificates"
-    sudo ln -sf /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
-        "${root_fs_dir}/usr/share/ca-certificates/ca-certificates.crt"
-
-    # Install flannel-wrapper - runs flanneld in a Docker container (like etcd-wrapper).
-    # These files come from the Flatcar flannel-wrapper package in sdk_container.
-    local flannel_wrapper_src="${BUILD_LIBRARY_DIR}/../sdk_container/src/third_party/coreos-overlay/app-admin/flannel-wrapper/files"
-    local flannel_version="0.14.0"
-    if [[ ! -d "${flannel_wrapper_src}" ]]; then
-        die "flannel-wrapper source not found at ${flannel_wrapper_src}"
-    fi
-    info "RPM mode: Installing flannel-wrapper from sdk_container sources"
-    # flannel-wrapper script -> /usr/lib/flatcar/flannel-wrapper
-    # (resolves via /usr/lib/coreos -> flatcar symlink created above)
-    sudo cp "${flannel_wrapper_src}/flannel-wrapper" "${root_fs_dir}/usr/lib/flatcar/flannel-wrapper"
-    sudo chmod 0755 "${root_fs_dir}/usr/lib/flatcar/flannel-wrapper"
-    # flanneld.service -> /usr/lib/systemd/system/ (substitute image tag)
-    sudo sed "s|@FLANNEL_IMAGE_TAG@|v${flannel_version}|g" \
-        "${flannel_wrapper_src}/flanneld.service" \
-        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/flanneld.service" > /dev/null
-    # flannel-docker-opts.service -> /usr/lib/systemd/system/ (substitute image tag)
-    sudo sed "s|@FLANNEL_IMAGE_TAG@|v${flannel_version}|g" \
-        "${flannel_wrapper_src}/flannel-docker-opts.service" \
-        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/flannel-docker-opts.service" > /dev/null
-    # networkd configs for flannel interfaces
-    sudo cp "${flannel_wrapper_src}/50-flannel.network" "${root_fs_dir}/usr/lib/systemd/network/50-flannel.network"
-    sudo cp "${flannel_wrapper_src}/50-flannel.link" "${root_fs_dir}/usr/lib/systemd/network/50-flannel.link"
+    # Blacklist cfg80211 (wireless) — the Azure Linux kernel ships it as a
+    # module but no WiFi hardware exists on cloud/VM targets, and the
+    # regulatory.db firmware file is not present.
+    sudo install -d -m 0755 "${root_fs_dir}/usr/lib/modprobe.d"
+    echo "blacklist cfg80211" | sudo_clobber "${root_fs_dir}/usr/lib/modprobe.d/no-wifi.conf"
+    sudo chmod 0644 "${root_fs_dir}/usr/lib/modprobe.d/no-wifi.conf"
 
     # Placeholder audit-rules.service - Azure Linux doesn't provide this but kola tests expect it as a common dependency
     if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service" ]]; then
@@ -874,7 +832,6 @@ SYSUSERS_EOF
     sudo sed -i '/ImportCredential=/d' "${root_fs_dir}/usr/lib/systemd/system/serial-getty@.service" 2>/dev/null || true
 
     # Create /etc/profile.d directory for additional scripts
-    info "RPM mode: Creating profile.d directory"
     sudo mkdir -p "${root_fs_dir}/etc/profile.d"
 
     # Workaround hanging issue when connecting via SAC/OneSAC serial console.
@@ -904,6 +861,103 @@ SYSUSERS_EOF
 SUBSYSTEM=="block", KERNEL=="loop*", ENV{ID_FS_TYPE}=="squashfs", ATTR{queue/read_ahead_kb}="0"
 UDEV_LOOP
     sudo chmod 644 "${root_fs_dir}/etc/udev/rules.d/60-loop-read-ahead.rules"
+}
+
+# ── etcd: remove native server, keep etcdctl, prepare for Docker wrapper ─────
+_configure_etcd_rpm() {
+    local root_fs_dir="$1"
+
+    # Remove etcd server and etcdutl binaries - we only need etcdctl from the etcd RPM.
+    # The etcd server runs inside a Docker container via etcd-wrapper, not natively.
+    if [[ -f "${root_fs_dir}/usr/bin/etcd" ]]; then
+        info "RPM mode: Removing /usr/bin/etcd (etcd server runs in Docker via etcd-wrapper)"
+        sudo rm -f "${root_fs_dir}/usr/bin/etcd"
+    fi
+    if [[ -f "${root_fs_dir}/usr/bin/etcdutl" ]]; then
+        info "RPM mode: Removing /usr/bin/etcdutl (not needed)"
+        sudo rm -f "${root_fs_dir}/usr/bin/etcdutl"
+    fi
+    # Also remove the native etcd.service - etcd-member.service (Docker-based) is used instead
+    if [[ -f "${root_fs_dir}/usr/lib/systemd/system/etcd.service" ]]; then
+        info "RPM mode: Removing native etcd.service (using etcd-member.service instead)"
+        sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/etcd.service"
+    fi
+    # Remove the etcd preset file (refers to the native etcd.service we just removed)
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system-preset/50-etcd.preset"
+    # Remove etcd config file (native etcd.service config, not used with etcd-wrapper)
+    sudo rm -f "${root_fs_dir}/etc/etcd/etcd-default-conf.yml"
+
+    # sysusers.d config to create the etcd user/group (needed by etcd-wrapper).
+    # The etcd RPM doesn't create this user, but etcd-wrapper needs it for:
+    #   - chown etcd:etcd on the data directory
+    #   - id -u/-g to map the user into the Docker container
+    # This MUST be in the rootfs (not the sysext) so systemd-sysusers creates
+    # the user before the docker sysext is mounted.
+    cat <<'SYSUSERS_EOF' | sudo tee "${root_fs_dir}/usr/lib/sysusers.d/etcd.conf" > /dev/null
+u etcd - "etcd user" /var/lib/etcd
+SYSUSERS_EOF
+
+    # CLC transpiler generates ExecStart=/usr/lib/coreos/etcd-wrapper
+    # Create compat symlink so /usr/lib/coreos -> flatcar resolves
+    sudo ln -sfT flatcar "${root_fs_dir}/usr/lib/coreos"
+
+    # etcd-member.service and etcd-wrapper.conf MUST be in the rootfs (not the
+    # sysext) because Ignition runs before sysext merge. If the unit file only
+    # exists in the sysext, Ignition cannot read its [Install] WantedBy= section
+    # to create the multi-user.target.wants symlink, so the service never starts.
+    local etcd_wrapper_src="${SCRIPT_ROOT}/sdk_container/src/third_party/coreos-overlay/app-admin/etcd-wrapper/files"
+    local etcd_version="3.5.16"
+    if [[ ! -d "${etcd_wrapper_src}" ]]; then
+        die "etcd-wrapper source not found at ${etcd_wrapper_src}"
+    fi
+    # etcd-member.service (substitute image tag)
+    sed "s|@ETCD_IMAGE_TAG@|v${etcd_version}|g" \
+        "${etcd_wrapper_src}/etcd-member.service" \
+        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/etcd-member.service" > /dev/null
+    # etcd-wrapper.conf -> /usr/lib/tmpfiles.d/ (creates /var/lib/etcd 0700 etcd:etcd)
+    sudo cp "${etcd_wrapper_src}/etcd-wrapper.conf" "${root_fs_dir}/usr/lib/tmpfiles.d/etcd-wrapper.conf"
+}
+
+# Install flannel service units into the rootfs so Ignition can enable them.
+# Same rationale as etcd-member.service above: Ignition runs before sysext
+# merge, so it can't read [Install] sections from sysext-only unit files.
+# The flannel-wrapper binary stays in the docker sysext (it depends on Docker).
+_configure_flannel_services_rpm() {
+    local root_fs_dir="$1"
+
+    local flannel_wrapper_src="${SCRIPT_ROOT}/sdk_container/src/third_party/coreos-overlay/app-admin/flannel-wrapper/files"
+    local flannel_version="0.14.0"
+    if [[ ! -d "${flannel_wrapper_src}" ]]; then
+        die "flannel-wrapper source not found at ${flannel_wrapper_src}"
+    fi
+
+    info "RPM mode: Installing flannel service units into rootfs (Ignition visibility)"
+    # flanneld.service (substitute image tag)
+    sed "s|@FLANNEL_IMAGE_TAG@|v${flannel_version}|g" \
+        "${flannel_wrapper_src}/flanneld.service" \
+        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/flanneld.service" > /dev/null
+    # flannel-docker-opts.service (substitute image tag)
+    sed "s|@FLANNEL_IMAGE_TAG@|v${flannel_version}|g" \
+        "${flannel_wrapper_src}/flannel-docker-opts.service" \
+        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/flannel-docker-opts.service" > /dev/null
+}
+
+# ── Orchestrator: post-tmpfiles image customization ──────────────────────────
+finish_image_post_tmpfiles_rpm() {
+    local root_fs_dir="$1"
+
+    _remove_machine_id_rpm "${root_fs_dir}"
+    _configure_ssh_rpm "${root_fs_dir}"
+    _configure_sudo_rpm "${root_fs_dir}"
+    _fix_ntp_nfs_services_rpm "${root_fs_dir}"
+    _remove_unused_flatcar_components_rpm "${root_fs_dir}"
+    _configure_disk_autogrow_rpm "${root_fs_dir}"
+    _mask_unused_services_rpm "${root_fs_dir}"
+    _configure_pcrlock_rpm "${root_fs_dir}"
+    _configure_etcd_rpm "${root_fs_dir}"
+    _configure_flannel_services_rpm "${root_fs_dir}"
+    _configure_misc_rpm "${root_fs_dir}"
+    _generate_hwdb_rpm "${root_fs_dir}"
 }
 
 finish_image_backup_etc_rpm() {
@@ -941,28 +995,6 @@ finish_image_backup_etc_rpm() {
     info "RPM mode: Copying /etc to ${ETC_FULL_PATH} for overlay lowerdir"
     sudo rm -rf "${ETC_FULL_PATH}"
     sudo cp -a "${root_fs_dir}/etc" "${ETC_FULL_PATH}"
-
-    # Create etc-no-whiteouts file required by bootengine's initrd-setup-root
-    # This file lists /etc paths that should not be treated as overlay whiteouts
-    # (character devices with major:minor 0:0 that represent deletions)
-    # For now, create an empty file - Azure Linux doesn't have pre-existing whiteouts
-    info "RPM mode: Creating etc-no-whiteouts for bootengine compatibility"
-    sudo mkdir -p "${DISTRO_SHARE}"
-    sudo touch "${DISTRO_SHARE}/etc-no-whiteouts"
-
-    # NOTE: flatcar-tmpfiles is created earlier in finish_image_rpm() before dracut runs
-    # so it gets included in the initramfs
-
-    # IMPORTANT: For first-boot detection with bootengine's /etc overlay:
-    # - The rootfs upperdir (/etc) should NOT contain machine-id - it will be deleted with the rest of /etc
-    # - The lowerdir (${DISTRO_SHARE_DIR}/etc) must NOT have machine-id either
-    # After overlay mount, no /etc/machine-id exists, so systemd triggers first-boot logic.
-    # bootengine's initrd-setup-root handles both cases:
-    # 1. If machine-id exists with COREOS_BLANK_MACHINE_ID placeholder -> removes it
-    # 2. If machine-id doesn't exist -> that's fine, no action needed
-    # Either way, after overlay mount systemd sees no /etc/machine-id and first boot is detected.
-    info "Removing machine-id from ${DISTRO_SHARE_DIR}/etc (overlay lowerdir) for first-boot detection"
-    sudo rm -f "${DISTRO_SHARE}/etc/machine-id"
 }
 
 # Escape a string for JSON - handles quotes, backslashes, and control characters

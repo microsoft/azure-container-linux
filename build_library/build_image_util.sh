@@ -779,10 +779,13 @@ EOF
     for dbfile in passwd shadow group gshadow; do
       sudo rm -f "${root_fs_dir}"/etc/"${dbfile}"
     done
-    sudo "${root_fs_dir}"/usr/sbin/flatcar-tmpfiles "${root_fs_dir}"
-  elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
-    finish_image_tmpfiles_rpm "${root_fs_dir}"
   fi
+  sudo "${root_fs_dir}"/usr/sbin/flatcar-tmpfiles "${root_fs_dir}"
+
+  if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    finish_image_post_tmpfiles_rpm "${root_fs_dir}"
+  fi
+
   # Now that we used the tmpfiles for creating /etc we delete them because
   # the L, d, D, and C entries cause upcopies. Also filter out rules with ! or - but no other modifiers
   # like + or = which explicitly recreate files.
