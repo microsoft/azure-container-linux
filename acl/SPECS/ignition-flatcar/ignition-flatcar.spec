@@ -23,8 +23,8 @@ Version:                2.22.0
 %global godocs          README.md docs/
 %global dracutlibdir %{_prefix}/lib/dracut
 
-Name:           ignition
-Release:        3%{?dist}
+Name:           ignition-flatcar
+Release:        1%{?dist}
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
 Summary:        First boot installer and configuration tool
@@ -111,7 +111,7 @@ This package contains the grub2 config which is compatable with bootupd.
 %endif
 
 %prep
-%forgeautosetup -p1
+%autosetup -p1 -n ignition-%{version}
 
 %build
 export LDFLAGS="-X github.com/flatcar/ignition/v2/internal/version.Raw=%{version} -X github.com/flatcar/ignition/v2/internal/distro.selinuxRelabel=false "
@@ -168,8 +168,10 @@ install -p -m 0644 ./ignition-validate-* %{buildroot}%{_datadir}/ignition
 
 %if %{with check}
 %check
+# Removing the format issues as they don't affect the build
 sed -i '34d' ./test
 sed -i '/Checking gofmt/,+5d' ./test
+# Fixing the tests not to use go-rpm-macros since that package is only used in check section.
 sed -i '/Checking gofix.../,/Checking [a-zA-Z0-9_-]\+\.\.\./{ /Checking gofix.../d; /Checking [a-zA-Z0-9_-]\+\.\.\./!d }' ./test
 VERSION=%{version} GOARCH=%{goarch} ./test
 %endif
@@ -199,6 +201,6 @@ VERSION=%{version} GOARCH=%{goarch} ./test
 %endif
 
 %changelog
-* Fri Jan 16 2026 Sumit Jena <v-sumitjena@microsoft.com> - 2.22.0-3
+* Fri Jan 16 2026 Sumit Jena <v-sumitjena@microsoft.com> - 2.22.0-1
 - Initial Azure Linux import from the source project (license: same as "License" tag).
 - License verified.

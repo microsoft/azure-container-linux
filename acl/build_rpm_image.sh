@@ -1069,7 +1069,7 @@ build_rpms() {
 
     # Default package list — build.sh receives this as positional args
     local -a package_list=(
-        "ignition"
+        "ignition-flatcar"
         "rust-afterburn"
         "sdnotify-proxy"
         "selinux-policy"
