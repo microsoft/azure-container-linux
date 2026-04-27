@@ -911,6 +911,29 @@ finish_image_backup_etc_rpm() {
     local DISTRO_SHARE="${root_fs_dir}${DISTRO_SHARE_DIR}"
     local ETC_FULL_PATH="${DISTRO_SHARE}/etc"
 
+    # Uninstall repo definition packages — they are only needed during the
+    # build for package installs and bootloader downloads.  Sysext builds
+    # use the sysext base squashfs (created before this point) which still
+    # contains the repos, so they are unaffected.  Removing these avoids
+    # shipping internal build-infra details and trims the image.
+    # Flags:
+    #   --nodeps  — other packages may have weak dependencies on repos RPMs
+    #   --noscripts — skip %preun/%postun scriptlets; the repos-shared
+    #     scriptlet tries to run gpg-agent which fails in the chroot
+    #     (no /dev/null).  Safe because we wipe /etc/yum.repos.d next.
+    info "RPM mode: Uninstalling repo definition packages from image"
+    local repo_pkgs
+    repo_pkgs=$(sudo rpm --dbpath="${root_fs_dir}/var/lib/rpm" -qa "azurelinux-repos*" 2>/dev/null | sort -u)
+    if [[ -n "${repo_pkgs}" ]]; then
+        info "RPM mode: Removing repo packages: ${repo_pkgs//$'\n'/ }"
+        if ! sudo rpm --root="${root_fs_dir}" --dbpath="/var/lib/rpm" -e --nodeps --noscripts ${repo_pkgs}; then
+            error "RPM mode: Failed to remove some repo packages, aborting build"
+            exit 1
+        fi
+    fi
+    # Also remove the manually-created Nvidia repo file and any leftovers
+    sudo rm -rf "${root_fs_dir}/etc/yum.repos.d"
+
     # Bulk-copy all of /etc to ${DISTRO_SHARE_DIR}/etc.
     # This is the overlay lowerdir — at boot, /etc is a tmpfs overlay
     # whose lower layer is this directory.  Mirrors the Portage-mode
