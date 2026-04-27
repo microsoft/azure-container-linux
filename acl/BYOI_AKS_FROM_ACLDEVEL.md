@@ -29,7 +29,7 @@ acl-scripts branch ──► acldevel pipeline ──► aks-image-build (MAP) p
 
 1. Navigate to the [aks-image-build pipeline](https://dev.azure.com/mariner-org/mariner/_build?definitionId=3285) in the mariner project.
 2. Click **Run pipeline**.
-3. **Important:** Select the `aadagarwal/backport-dev` branch for the pipeline (this branch has support for consuming acldevel output).
+3. **Important:** Select the `main` branch for the pipeline.
 4. Configure the following parameters:
    - Under the **Build\*** options, select only **"Build Azure Container Linux"**.
    - Set **"(Optional) ACL upstream pipeline ID"** to `5303` (the acldevel pipeline definition ID).
