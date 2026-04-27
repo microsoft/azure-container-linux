@@ -53,8 +53,7 @@ function build_specs() {
         GOFLAGS="-buildvcs=false" \
         BUILD_DIR="$BUILD_DIR" \
         OUT_DIR="$OUT_DIR" \
-        LOG_LEVEL=info \
-        REPO_LIST=${BUILD_DIR}/azurelinux/SPECS/azurelinux-repos/azurelinux-extended.repo
+        LOG_LEVEL=info
     MAKE_STATUS=${PIPESTATUS[0]}
 
     if [ "$MAKE_STATUS" -ne 0 ]; then

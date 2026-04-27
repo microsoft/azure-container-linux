@@ -1075,10 +1075,19 @@ build_rpms() {
 
     # Default package list — build.sh receives this as positional args
     local -a package_list=(
+        "adcli"
         "ignition-flatcar"
+        "jose"
+        "Judy"
+        "libbsd"
+        "lksctp-tools"
+        "luksmeta"
+        "microcode_ctl"
+        "realmd"
         "rust-afterburn"
         "sdnotify-proxy"
         "selinux-policy"
+        "stress-ng"
         "systemd"
         "WALinuxAgent"
     )

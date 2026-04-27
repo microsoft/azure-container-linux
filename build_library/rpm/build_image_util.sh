@@ -82,9 +82,9 @@ start_image_rpm() {
         return 1
     }
 
-    # Install azurelinux-repos, azurelinux-repos-cloud-native, and azurelinux-repos-extended to get the official
+    # Install azurelinux-repos and azurelinux-repos-cloud-native to get the official
     # repository definitions and GPG keys shipped by Azure Linux.
-    rpm_install_package "${root_fs_dir}" azurelinux-repos azurelinux-repos-extended azurelinux-repos-cloud-native azurelinux-release || {
+    rpm_install_package "${root_fs_dir}" azurelinux-repos azurelinux-repos-cloud-native azurelinux-release || {
         error "Failed to install azurelinux-repos packages"
         return 1
     }
