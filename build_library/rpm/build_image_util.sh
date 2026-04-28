@@ -704,51 +704,34 @@ EOF
     sudo ln -sf ../systemd-growfs-root.service "${root_fs_dir}/usr/lib/systemd/system/sysinit.target.wants/systemd-growfs-root.service"
 }
 
-# ── Mask services not needed by ACL ──────────────────────────────────────────
-_mask_unused_services_rpm() {
+# ── Remove systemd components not built by Flatcar ──────────────────────────
+_remove_unused_systemd_components_rpm() {
     local root_fs_dir="$1"
 
-    # Mask kdump.service - requires crashkernel= kernel parameter which we don't set
-    info "RPM mode: Masking kdump.service (no crash kernel memory reserved)"
-    sudo ln -sf /dev/null "${root_fs_dir}/usr/lib/systemd/system/kdump.service"
+    # Remove systemd-homed — Flatcar does not build these (USE flag "homed" is
+    # off). Remove the service units, daemons, CLI tool, and PAM module shipped
+    # by the Azure Linux systemd-udev RPM to stay in parity.
+    info "RPM mode: Removing systemd-homed (not built by Flatcar)"
+    # /usr/lib64 -> lib, so only /usr/lib paths are needed.
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/systemd-homed.service"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/systemd-homed-activate.service"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/systemd-homed"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/systemd-homework"
+    sudo rm -f "${root_fs_dir}/usr/bin/homectl"
+    sudo rm -f "${root_fs_dir}/usr/lib/security/pam_systemd_home.so"
+    
+    # Also clean up /etc symlinks left by RPM presets — dangling links here
+    # cause "Link has been severed" and abort the entire preset population,
+    # which prevents sshd.socket (and others) from being enabled at first boot.
+    sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/systemd-homed.service"
+    sudo rm -f "${root_fs_dir}/etc/systemd/system/dbus-org.freedesktop.home1.service"
+    sudo rm -rf "${root_fs_dir}/etc/systemd/system/systemd-homed.service.wants"
 
-    # Mask iSCSI services and sockets - not needed for ACL and cause boot failures
-    # These were pulled in as Azure Linux RPM dependencies
-    info "RPM mode: Masking iSCSI services and sockets"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/iscsi-init.service"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/iscsid.service"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/iscsiuio.service"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/iscsi.service"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/iscsid.socket"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/iscsiuio.socket"
-
-    # Mask nftables.service - missing /etc/sysconfig/nftables.conf config file
-    info "RPM mode: Masking nftables.service"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/nftables.service"
-
-    # Mask systemd-boot-update.service - ACL manages the bootloader at image
-    # build time via grub_install.sh / uki_install.sh, not at runtime.
-    info "RPM mode: Masking systemd-boot-update.service (bootloader managed at build time)"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/systemd-boot-update.service"
-
-    # Mask mdmonitor-oneshot timer and service - mdadm --monitor is only
-    # meaningful for redundant RAID levels (1/4/5/6/10) where arrays can
-    # degrade. azure-vm-utils uses mdadm solely for RAID-0 (NVMe striping),
-    # which has no degraded state to monitor (see man mdadm, "Follow or
-    # Monitor" mode).
-    info "RPM mode: Masking mdmonitor-oneshot (not useful for RAID-0)"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/mdmonitor-oneshot.timer"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/mdmonitor-oneshot.service"
-
-    # Mask systemd-firstboot.service - ACL uses Ignition for first-boot provisioning
-    info "RPM mode: Masking systemd-firstboot.service"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/systemd-firstboot.service"
-
-    # Mask systemd-homed and systemd-homed-activate services - ACL uses
-    # bootengine for this setup.
-    info "RPM mode: Masking systemd-homed services (not used, core user managed by initramfs)"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/systemd-homed.service"
-    sudo ln -sf /dev/null "${root_fs_dir}/etc/systemd/system/systemd-homed-activate.service"
+    # Remove systemd-boot-update.service — Flatcar does not build this on the
+    # target image (USE flag "boot" is SDK-only). Keep bootctl binary (useful
+    # for inspecting the ESP).
+    info "RPM mode: Removing systemd-boot-update.service (not built by Flatcar)"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/systemd-boot-update.service"
 }
 
 # ── PCRlock: Secure Boot condition + arm64 SHA-256 restriction ───────────────
@@ -955,7 +938,7 @@ finish_image_post_tmpfiles_rpm() {
     _fix_ntp_nfs_services_rpm "${root_fs_dir}"
     _remove_unused_flatcar_components_rpm "${root_fs_dir}"
     _configure_disk_autogrow_rpm "${root_fs_dir}"
-    _mask_unused_services_rpm "${root_fs_dir}"
+    _remove_unused_systemd_components_rpm "${root_fs_dir}"
     _configure_pcrlock_rpm "${root_fs_dir}"
     _configure_etcd_rpm "${root_fs_dir}"
     _configure_flannel_services_rpm "${root_fs_dir}"
