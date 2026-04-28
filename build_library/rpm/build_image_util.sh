@@ -110,6 +110,11 @@ finish_image_rpm() {
     sudo mkdir -p "${root_fs_dir}/usr/share"
     sudo ln -sfT ../../oem "${root_fs_dir}/usr/share/oem"
 
+    # Preserve compatibility with agents that probe the Ubuntu CA anchor path.
+    # /usr is read-only at runtime, so kubelet cannot create this via hostPath
+    # DirectoryOrCreate after boot.
+    sudo install -d -m 0755 "${root_fs_dir}/usr/local/share/ca-certificates"
+
     # Remove legacy coreos compat symlinks — ACL uses /usr/share/distro,
     # not /usr/share/flatcar, so these would be dead.
     sudo rm -f "${root_fs_dir}/usr/share/coreos"
