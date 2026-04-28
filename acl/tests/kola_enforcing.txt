@@ -41,7 +41,6 @@ cl.ignition.v2_1.ext4checkexisting
 cl.ignition.v2_1.swap
 cl.ignition.v2_1.vfat
 cl.install.cloudinit
-cl.network.initramfs.second-boot
 cl.network.iptables
 cl.network.listeners
 cl.network.nftables
