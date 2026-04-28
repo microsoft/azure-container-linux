@@ -50,7 +50,7 @@ Version:        255
 # determine the build information from local checkout
 Version:        %(tools/meson-vcs-tag.sh . error | sed -r 's/-([0-9])/.^\1/; s/-g/_g/')
 %endif
-Release:        26.acl1%{?dist}
+Release:        27.acl1%{?dist}
 
 # FIXME - hardcode to 'stable' for now as that's what we have in our blobstore
 %global stable 1
@@ -155,6 +155,11 @@ Patch0908:      ipc-call-0004-core-validate-input-cgroup-path-more-prudently.pat
 # header declares. systemd v255 uses strict positional matching which fails;
 # this patch replaces it with a search loop. (upstream PR #31429, commit e90a255)
 Patch0909:      fix-pcrlock-hyperv-hash-algorithm-ordering.patch
+
+# ACL: Also check ID_NET_MANAGED_BY property on reconfigure, not just on uevent.
+# Without this, networkd reconfigures interfaces marked as managed by another
+# daemon when interface state changes. (upstream commit 78f8d5ed, fixes #36997)
+Patch0910:      fix-networkd-check-ID_NET_MANAGED_BY-on-reconfigure.patch
 
 %ifarch %{ix86} x86_64 aarch64
 %global want_bootloader 1
@@ -1240,6 +1245,10 @@ rm -f %{name}.lang
 # %autochangelog. So we need to continue manually maintaining the
 # changelog here.
 %changelog
+* Wed Apr 23 2026 Nikola Bojanic <nbojanic@microsoft.com> - 255-27
+- Add fix-networkd-check-ID_NET_MANAGED_BY-on-reconfigure.patch
+- networkd: also check ID_NET_MANAGED_BY on reconfigure, not just on uevent
+
 * Mon Mar 02 2026 Dan Streetman <ddstreet@ieee.org> - 255-26
 - Apply patches for ipc issue.
 
