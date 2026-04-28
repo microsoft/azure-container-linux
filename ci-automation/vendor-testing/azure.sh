@@ -74,6 +74,7 @@ run_kola_tests() {
       ${AZURE_KOLA_VNET:+--azure-kola-vnet=${AZURE_KOLA_VNET}} \
       ${azure_vnet_subnet_name:+--azure-vnet-subnet-name=${azure_vnet_subnet_name}} \
       ${AZURE_USE_PRIVATE_IPS:+--azure-use-private-ips=${AZURE_USE_PRIVATE_IPS}} \
+      ${AZURE_RESOURCE_GROUP_TAG:+--azure-resource-group-tag=${AZURE_RESOURCE_GROUP_TAG}} \
       --image-version "${CIA_VERNUM}" \
       "${@}"
 }

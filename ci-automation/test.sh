@@ -156,6 +156,11 @@ function _test_run_impl() {
     local tests_escaped=()
     __escape_multiple tests_escaped "${@}"
 
+    # Keep unescaped copy for the fallback in case test_update_reruns.sh
+    # fails. The escaped versions have printf-%q quoting (e.g. acl.\*)
+    # which kola's filepath.Match won't recognise as globs.
+    local tests_unescaped=("${@}")
+
     # Vendor tests may need to know if it is a first run or a rerun
     touch "${work_dir}/first_run"
     for retry in $(seq "${retries}"); do
@@ -206,9 +211,11 @@ function _test_run_impl() {
         if [[ ${update_reruns_rc} -ne 0 ]]; then
             echo "########### test_update_reruns.sh failed (exit code ${update_reruns_rc}). ###########"
             echo "Cannot determine which tests to re-run. Treating all as failed."
-            # Write all tests to the failfile so the retry loop continues
-            # with the full test set rather than silently giving up.
-            printf '%s\n' "${tests_escaped[@]}" > "${tests_dir}/${failfile}"
+            # Write the original unescaped test patterns to the failfile.
+            # Do NOT use tests_escaped here — its printf-%q quoting
+            # (e.g. acl.\*) turns glob wildcards into literals, causing
+            # kola's filepath.Match to match zero tests on the retry.
+            printf '%s\n' "${tests_unescaped[@]}" > "${tests_dir}/${failfile}"
         fi
 
         readarray -t failed_tests <"${tests_dir}/${failfile}"
