@@ -926,7 +926,7 @@ EOF
 (allow container_domain proc_psi_t (file (read getattr open)))
 (allow container_domain sysctl_vm_t (file (read getattr open)))
 (allow spc_t self (capability2 (checkpoint_restore)))
-(allow spc_t self (perf_event (write)))
+(allow spc_t self (perf_event (tracepoint write)))
 (allow spc_t file_type (service (start status stop reload)))
 (allow spc_t unlabeled_t (service (start status stop reload)))
 (allow spc_t unlabeled_t (system (module_load)))
