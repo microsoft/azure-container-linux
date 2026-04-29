@@ -649,7 +649,7 @@ check_prerequisites() {
 
     # Check for required commands
     local required_cmds=(docker)
-    if [[ "$BUILD_STANDALONE_SYSEXTS" == "true" ]]; then
+    if [[ "$BUILD_STANDALONE_SYSEXTS" == "true" ]] || [[ "$BUILD_RPMS" == "true" ]]; then
         required_cmds+=(yq)
     fi
     for cmd in "${required_cmds[@]}"; do
@@ -1090,25 +1090,19 @@ build_rpms() {
         exit 1
     fi
 
-    # Default package list — build.sh receives this as positional args
-    local -a package_list=(
-        "adcli"
-        "ignition-flatcar"
-        "jose"
-        "Judy"
-        "libbsd"
-        "lksctp-tools"
-        "luksmeta"
-        "microcode_ctl"
-        "realmd"
-        "rust-afterburn"
-        "sdnotify-proxy"
-        "selinux-policy"
-        "stress-ng"
-        "systemd"
-        "WALinuxAgent"
-    )
-
+    # Package list — build.sh receives these as positional args.
+    # Maintained in acl/packages.yaml.
+    local packages_file="${SCRIPT_DIR}/acl/packages.yaml"
+    if [[ ! -f "$packages_file" ]]; then
+        error "Package list not found: $packages_file"
+        exit 1
+    fi
+    local -a package_list=()
+    if ! mapfile -t package_list < <(yq -r '.packages[]' "$packages_file"); then
+        error "Failed to parse package list from $packages_file"
+        exit 1
+    fi
+    
     info "Running RPM build script..."
     info "  Build script: $build_script"
     info "  Package list: ${package_list[*]}"
