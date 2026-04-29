@@ -36,42 +36,9 @@ acl-scripts branch ──► acldevel pipeline ──► aks-image-build (MAP) p
    - Set **"(Optional) ACL upstream specific build ID (0 = latest)"** to your acldevel build ID from Step 1 (or `0` to use the latest successful acldevel build).
 5. Click **Next: Resources** and then **Run** to start the pipeline. Wait for the build to complete (~1 hour).
 
-> **Note — Image Replication Required:** The acldevel pipeline does **not**
-> replicate the image to additional regions. The "Replicate Gallery Image to
-> more regions" task in
-> [`acl-stages.yml`](https://dev.azure.com/mariner-org/ACL/_git/acl-pipelines?path=/pipelines/templates/acl-stages.yml)
-> is guarded by a condition that only runs for the official aclmain pipeline
-> (definition 5304):
->
-> ```yaml
-> condition: and(succeeded(), eq(variables['System.DefinitionId'], variables['officialDefinitionId']))
-> ```
->
-> The MAP pipeline requires the image in `westus3`. You have two options:
->
-> **Option A — Manual replication via the Azure portal:**
->
-> 1. Open the image version in the portal:
->    `Portal → Subscriptions → 035db282-… → Resource Groups → acl → Compute Galleries → acldevel → acldevel → <your image version>`
-> 2. Click **Update replication** and add **West US 3** as a target region.
-> 3. Wait for replication to complete before running the MAP pipeline.
->
-> **Option B — Modify the pipeline to replicate automatically:**
->
-> Create a branch in `acl-pipelines` and change the replication condition in
-> `pipelines/templates/acl-stages.yml` (around line 1531) to always run:
->
-> ```yaml
-> # Before (official-only):
-> condition: and(succeeded(), eq(variables['System.DefinitionId'], variables['officialDefinitionId']))
->
-> # After (always replicate):
-> condition: succeeded()
-> ```
->
-> Then run acldevel against your `acl-pipelines` branch. The task will
-> replicate the image to `westus2`, `westus3`, `eastus`, `westus`, and
-> `southcentralus` automatically.
+> **Note:** The MAP pipeline automatically replicates the acldevel image to
+> the required regions (including `westus3`) as part of its build. No manual
+> replication steps are needed.
 
 ## Step 3: Extract the Custom Header Payload
 
@@ -195,7 +162,6 @@ az group delete --name $DEFAULT_RG --yes --no-wait
 
 | Issue | Resolution |
 |---|---|
-| MAP pipeline fails with image replication error | The acldevel pipeline skips replication (only aclmain replicates automatically). Manually replicate the image to `westus3` via the Azure portal (see the note in Step 2), then retry. You may need PIM approval on the `EdgeOS_Mariner_Platform_AKS_test` subscription. |
 | "Next: Resources" button grayed out in pipeline UI | This can happen if pipeline variables are misconfigured. Check that all required parameters have valid defaults (e.g., version override should default to `none`). |
 | `InvalidOSSKU` / `AKSFlatcarPreview` errors on `az aks create` | Register the `Microsoft.ContainerService/AKSFlatcarPreview` feature on your subscription: `az feature register --namespace Microsoft.ContainerService --name AKSFlatcarPreview` |
 
