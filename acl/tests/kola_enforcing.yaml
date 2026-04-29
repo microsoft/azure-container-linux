@@ -1,0 +1,173 @@
+# kola_enforcing.yaml — Enforced kola tests with structured exception rules.
+#
+# This is the source of truth for which kola tests are enforced. The legacy
+# text files (kola_enforcing.txt, kola_enforcing_exceptions_*.txt) remain for
+# backward compatibility but should be generated from this file.
+#
+# Each entry is a test name prefix. Tests matching any prefix must pass
+# unless an exception rule applies to the current build context.
+#
+# Exception rules (all fields optional — omitted fields match anything):
+#   platforms:         [qemu, azure]
+#   architectures:     [amd64, aarch64]
+#   bootloader:        [grub, uki]
+#   reason:            human-readable explanation
+#
+# Logic:
+#   - Within a single rule, fields combine with AND (all must match).
+#   - Across rules, they combine with OR (any matching rule allows failure).
+#   - A test with no exceptions is always enforced.
+
+version: 1
+
+tests:
+  - name: acl.basic
+  - name: acl.etcd-member.discovery
+
+  - name: acl.flannel.udp
+  - name: acl.flannel.vxlan
+
+  - name: acl.internet
+    exceptions:
+      - platforms: [qemu]
+        reason: Requires real network connectivity (Azure only)
+
+  - name: acl.ignition.v1.users
+  - name: acl.ignition.v2.users
+
+  - name: bpf.execsnoop
+  - name: bpf.local-gadget
+
+  - name: cl.cloudinit.basic
+  - name: cl.cloudinit.multipart-mime
+  - name: cl.cloudinit.script
+
+  - name: acl.disk.raid0.data
+  - name: acl.disk.raid0.root
+    exceptions:
+      - bootloader: [grub]
+        reason: Mantle hardcodes UKI partition layout (part5); GRUB uses part9
+  - name: acl.disk.raid1.data
+  - name: acl.disk.raid1.root
+    exceptions:
+      - bootloader: [grub]
+        reason: Mantle hardcodes UKI partition layout (part5); GRUB uses part9
+
+  - name: cl.etcd-member.etcdctlv3
+  - name: cl.etcd-member.v2-backup-restore
+
+  - name: cl.filesystem
+
+  - name: cl.ignition.instantiated.enable-unit
+  - name: cl.ignition.luks
+  - name: cl.ignition.oem.indirect
+  - name: cl.ignition.oem.indirect.new
+  - name: cl.ignition.oem.regular
+  - name: cl.ignition.oem.regular.new
+  - name: cl.ignition.oem.reuse
+  - name: cl.ignition.oem.wipe
+  - name: cl.ignition.partition_on_boot_disk
+  - name: cl.ignition.symlink
+  - name: cl.ignition.translation
+  - name: cl.ignition.v1.btrfsroot
+  - name: cl.ignition.v1.ext4root
+  - name: cl.ignition.v1.groups
+  - name: cl.ignition.v1.once
+  - name: cl.ignition.v1.sethostname
+  - name: cl.ignition.v1.xfsroot
+  - name: cl.ignition.v2.btrfsroot
+  - name: cl.ignition.v2.ext4root
+  - name: cl.ignition.v2.xfsroot
+  - name: cl.ignition.v2_1.ext4checkexisting
+  - name: cl.ignition.v2_1.swap
+  - name: cl.ignition.v2_1.vfat
+
+  - name: cl.install.cloudinit
+
+  - name: cl.network.initramfs.second-boot
+  - name: cl.network.iptables
+  - name: cl.network.listeners
+  - name: cl.network.nftables
+  - name: cl.network.wireguard
+
+  - name: cl.swap_activation
+  - name: cl.sysext.boot
+  - name: cl.users.shells
+  - name: cl.verity
+
+  - name: coreos.auth.verify
+  - name: coreos.ignition.groups
+  - name: coreos.ignition.once
+  - name: coreos.ignition.resource.local
+  - name: coreos.ignition.resource.remote
+  - name: coreos.ignition.resource.s3.versioned
+  - name: coreos.ignition.security.tls
+  - name: coreos.ignition.sethostname
+  - name: coreos.ignition.systemd.enable-service
+  - name: coreos.selinux.boolean
+  - name: coreos.tls.fetch-urls
+
+  - name: docker.base
+  - name: docker.btrfs-storage
+  - name: docker.containerd-restart
+  - name: docker.enable-service.sysext
+  - name: docker.userns
+
+  - name: kubeadm.v1.32.4.calico.base
+    exceptions:
+      - platforms: [qemu]
+        architectures: [aarch64]
+        reason: kubectl wait timeouts on emulated arm64 QEMU
+  - name: kubeadm.v1.32.4.cilium.base
+    exceptions:
+      - platforms: [qemu]
+        architectures: [aarch64]
+        reason: kubectl wait timeouts on emulated arm64 QEMU
+  - name: kubeadm.v1.32.4.flannel.base
+    exceptions:
+      - platforms: [qemu]
+        architectures: [aarch64]
+        reason: kubectl wait timeouts on emulated arm64 QEMU
+  - name: kubeadm.v1.33.0.calico.base
+    exceptions:
+      - platforms: [qemu]
+        architectures: [aarch64]
+        reason: kubectl wait timeouts on emulated arm64 QEMU
+  - name: kubeadm.v1.33.0.cilium.base
+    exceptions:
+      - platforms: [qemu]
+        architectures: [aarch64]
+        reason: kubectl wait timeouts on emulated arm64 QEMU
+  - name: kubeadm.v1.33.0.flannel.base
+    exceptions:
+      - platforms: [qemu]
+        architectures: [aarch64]
+        reason: kubectl wait timeouts on emulated arm64 QEMU
+  - name: kubeadm.v1.34.1.calico.base
+    exceptions:
+      - platforms: [qemu]
+        architectures: [aarch64]
+        reason: kubectl wait timeouts on emulated arm64 QEMU
+  - name: kubeadm.v1.34.1.cilium.base
+    exceptions:
+      - platforms: [qemu]
+        architectures: [aarch64]
+        reason: kubectl wait timeouts on emulated arm64 QEMU
+  - name: kubeadm.v1.34.1.flannel.base
+    exceptions:
+      - platforms: [qemu]
+        architectures: [aarch64]
+        reason: kubectl wait timeouts on emulated arm64 QEMU
+
+  - name: linux.nfs.v3
+  - name: linux.nfs.v4
+  - name: linux.ntp
+
+  - name: sysext.custom-docker.sysext
+  - name: sysext.disable-containerd
+  - name: sysext.disable-docker
+  - name: sysext.simple
+
+  - name: systemd.journal.remote
+  - name: systemd.journal.user
+  - name: systemd.sysusers.gshadow
