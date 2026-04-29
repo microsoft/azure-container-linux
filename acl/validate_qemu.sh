@@ -625,7 +625,7 @@ ${smm_feature}
     </disk>
     <interface type='network'>
       <source network='default'/>
-      <model type='e1000'/>
+      <model type='virtio'/>
     </interface>
     <console type='pty'>
       <target type='serial'/>
