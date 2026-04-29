@@ -737,6 +737,19 @@ _remove_unused_systemd_components_rpm() {
     # for inspecting the ESP).
     info "RPM mode: Removing systemd-boot-update.service (not built by Flatcar)"
     sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/systemd-boot-update.service"
+
+    # Removing packet-phone-home.service. This service is NOT needed for ACL images.
+    # Reference: https://github.com/flatcar/init/pull/107 Needed for packet/equinix instances.
+    # For now, this is the ONLY service which pulls in coreos-metadata.service as dependency,
+    # and thus coreos-metadata (default disabled, even via preset) runs in every boot.
+    # The packet-phone-home service itself does not run due to unmet conditions (not packet instance/not first boot)
+    if [ -f "${root_fs_dir}/usr/lib/systemd/system/packet-phone-home.service" ]; then
+        info "RPM mode: Removing packet-phone-home.service (not needed for ACL)"
+        sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/packet-phone-home.service"
+        for target in "${root_fs_dir}/usr/lib/systemd/system" "${root_fs_dir}/etc/systemd/system"; do
+            sudo find "${target}" -type l -name "packet-phone-home.service" -exec rm -f {} \;
+        done
+    fi
 }
 
 # ── PCRlock: Secure Boot condition + arm64 SHA-256 restriction ───────────────
