@@ -127,6 +127,7 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-__build__}"
 STAGING_DIR="${SCRIPT_DIR}/__build__/rpm-staging"
 DISK_LAYOUT="${DISK_LAYOUT:-vm}"  # Use 'vm' layout for larger ROOT partition (needed for RPM mode)
 RUN_SCRIPTS=()  # Scripts to run on VM after boot
+RUN_HOST_SCRIPTS=()  # Scripts to run on the host (not inside the VM)
 VM_SSH_KEY="${VM_SSH_KEY:-}"
 VM_SSH_TIMEOUT="${VM_SSH_TIMEOUT:-120}"  # Seconds to wait for SSH
 VM_SSH_AUTHORIZED_KEYS="${VM_SSH_AUTHORIZED_KEYS:-}"  # SSH public keys to inject (file or string)
@@ -303,6 +304,7 @@ parse_args() {
                 ;&
             --run-tests)
                 START_VM=true
+                RUN_TESTS=true
                 RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-systemd-health-test.sh")
@@ -373,6 +375,16 @@ parse_args() {
                 ;;
             --run-script)
                 RUN_SCRIPTS+=("$2")
+                START_VM=true
+                shift 2
+                ;;
+            --run-host-script=*)
+                RUN_HOST_SCRIPTS+=("${1#*=}")
+                START_VM=true
+                shift
+                ;;
+            --run-host-script)
+                RUN_HOST_SCRIPTS+=("$2")
                 START_VM=true
                 shift 2
                 ;;
@@ -608,6 +620,11 @@ parse_args() {
                 exit 1
                 ;;
         esac
+    fi
+
+    # Add platform-specific host-side tests when --run-tests is used.
+    if [[ "${RUN_TESTS:-false}" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
+        RUN_HOST_SCRIPTS+=("./acl/tests/run-selinux-toggle-test.sh")
     fi
 
     if [[ "$REUSE_IMAGE" == "true" ]]; then
@@ -1718,6 +1735,10 @@ main() {
 
         for script in "${RUN_SCRIPTS[@]}"; do
             validate_args+=("--run-script=${script}")
+        done
+
+        for script in "${RUN_HOST_SCRIPTS[@]}"; do
+            validate_args+=("--run-host-script=${script}")
         done
 
         for tag in "${RESOURCE_TAGS[@]}"; do

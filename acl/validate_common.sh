@@ -27,6 +27,7 @@ START_VM=false
 VM_NAME="${VM_NAME:-acl}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-__build__}"
 RUN_SCRIPTS=()  # Scripts to run on VM after boot
+RUN_HOST_SCRIPTS=()  # Scripts to run on the host (not inside the VM)
 SCRIPT_RESULTS_NAMES=()   # Names of scripts that were executed
 SCRIPT_RESULTS_STATUS=()  # Exit status per script: 0=pass, non-zero=fail
 VM_SSH_USER="${VM_SSH_USER:-azureuser}"
@@ -661,6 +662,14 @@ parse_validate_args() {
                 RUN_SCRIPTS+=("$2")
                 START_VM=true
                 shift 2 ;;
+            --run-host-script=*)
+                RUN_HOST_SCRIPTS+=("${1#*=}")
+                START_VM=true
+                shift ;;
+            --run-host-script)
+                RUN_HOST_SCRIPTS+=("$2")
+                START_VM=true
+                shift 2 ;;
             --ssh-user=*)
                 VM_SSH_USER="${1#*=}"
                 shift ;;
@@ -781,6 +790,7 @@ parse_validate_args() {
                 echo "  --reuse-vm                 Reuse an already-running VM"
                 echo "  --run-kola-tests           Run kola tests"
                 echo "  --run-script=PATH          Run script on VM (can specify multiple)"
+                echo "  --run-host-script=PATH     Run script on the host with VM state (can specify multiple)"
                 echo "  --ssh-key=PATH             SSH private key for VM access"
                 echo "  --ssh-timeout=SECS         Timeout waiting for SSH (default: 120)"
                 echo "  --ssh-user=USER            SSH user (default: core)"
@@ -915,7 +925,51 @@ validate_main() {
                 curl --connect-timeout 10 --max-time 30 http://$VM_IP | grep "Thank you for using nginx."
             fi
             print_size_summary
-        else
+        fi
+
+        # Run host-side scripts (e.g. tests that need to orchestrate from outside the VM)
+        if [[ ${#RUN_HOST_SCRIPTS[@]} -gt 0 ]]; then
+            # Ensure state file exists so host scripts can read VM info.
+            # Write it temporarily if --keep-vm was not specified.
+            local _wrote_tmp_state=false
+            if [[ ! -f "$VM_STATE_FILE" ]]; then
+                write_vm_state
+                _wrote_tmp_state=true
+            fi
+
+            section "Running Host-Side Scripts"
+            local host_failed=0
+            for script in "${RUN_HOST_SCRIPTS[@]}"; do
+                info "Running host script: $script"
+                local host_args=("--vm-type=${VM_TYPE}" "--ssh-user=${VM_SSH_USER}")
+                [[ -n "${VM_SSH_KEY:-}" ]] && host_args+=("--ssh-key=${VM_SSH_KEY}")
+                if SCRIPT_DIR="${SCRIPT_DIR}" bash "$script" "${host_args[@]}"; then
+                    info "Host script completed: $script"
+                    SCRIPT_RESULTS_NAMES+=("$script")
+                    SCRIPT_RESULTS_STATUS+=(0)
+                else
+                    error "Host script failed: $script"
+                    SCRIPT_RESULTS_NAMES+=("$script")
+                    SCRIPT_RESULTS_STATUS+=(1)
+                    host_failed=1
+                fi
+            done
+
+            # Clean up temporary state file
+            if [[ "$_wrote_tmp_state" == "true" ]]; then
+                remove_vm_state
+            fi
+
+            if [[ $host_failed -ne 0 ]]; then
+                print_script_results_summary
+                error "One or more host scripts failed"
+                exit 1
+            fi
+            print_script_results_summary
+            info "All host scripts completed successfully!"
+        fi
+
+        if [[ ${#RUN_SCRIPTS[@]} -eq 0 ]] && [[ ${#RUN_HOST_SCRIPTS[@]} -eq 0 ]]; then
             # No scripts — interactive mode or parity
             if [[ "$VM_TYPE" == "qemu" ]]; then
                 echo
