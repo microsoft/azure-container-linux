@@ -830,6 +830,11 @@ validate_main() {
 
     section "Azure Container Linux Image Validator"
 
+    # Load VM state early so check_vm_prerequisites validates the correct VM_TYPE
+    if [[ "$REUSE_VM" == "true" ]]; then
+        read_vm_state
+    fi
+
     check_vm_prerequisites
 
     # Resolve VM image path
@@ -840,7 +845,27 @@ validate_main() {
     if [[ "$START_VM" == "true" ]]; then
 
         if [[ "$REUSE_VM" == "true" ]]; then
-            read_vm_state
+            # Re-fetch IP if state file had an empty IP (written before boot completed)
+            if [[ -z "${VM_IP:-}" ]] && [[ "$VM_TYPE" == "qemu" ]]; then
+                info "VM_IP empty in state file — re-fetching from libvirt..."
+                if wait_for_vm_ip_qemu "${VM_NAME}" 30; then
+                    info "Re-fetched VM IP: $VM_IP"
+                    write_vm_state
+                else
+                    error "Could not re-fetch VM IP. SSH execution requires a valid IP."
+                    exit 1
+                fi
+            fi
+            # Verify VM is still running before proceeding
+            if [[ "$VM_TYPE" == "qemu" ]]; then
+                local vm_state
+                vm_state=$(virsh domstate "${VM_NAME}" 2>/dev/null || echo "unknown")
+                if [[ "$vm_state" != "running" ]]; then
+                    error "VM '${VM_NAME}' is not running (state: $vm_state). Cannot reuse."
+                    exit 1
+                fi
+                info "VM '${VM_NAME}' is running — reusing"
+            fi
         else
             if [[ -n "${ACG_IMAGE_VERSION_ID}" ]] && [[ "$VM_TYPE" == "azure" ]]; then
                 info "Using pre-existing ACG image version — skipping local image check"
@@ -854,6 +879,7 @@ validate_main() {
 
             start_vm "${vm_image_path}" "${BOARD}"
 
+            # Write VM state for reuse by subsequent --reuse-vm invocations
             if [[ "$KEEP_VM" == "true" ]]; then
                 write_vm_state
             fi
@@ -866,7 +892,7 @@ validate_main() {
             if [[ "$USE_SERIAL_CONSOLE" == "true" ]]; then
                 info "Using serial console for script execution"
 
-                if [[ "$VM_TYPE" == "qemu" ]]; then
+                if [[ "$VM_TYPE" == "qemu" ]] && [[ "$REUSE_VM" != "true" ]]; then
                     info "Waiting for QEMU VM to boot..."
                     if ! wait_for_vm_boot_qemu "${VM_NAME}" "$VM_BOOT_TIMEOUT"; then
                         error "VM failed to boot within timeout"
@@ -885,7 +911,7 @@ validate_main() {
             else
                 info "Using SSH for script execution"
 
-                if [[ "$VM_TYPE" == "qemu" ]]; then
+                if [[ "$VM_TYPE" == "qemu" ]] && [[ "$REUSE_VM" != "true" ]]; then
                     info "Waiting for QEMU VM to boot..."
                     if ! wait_for_vm_boot_qemu "${VM_NAME}" "$VM_BOOT_TIMEOUT"; then
                         error "VM failed to boot within timeout"

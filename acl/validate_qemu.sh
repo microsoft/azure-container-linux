@@ -583,12 +583,24 @@ start_vm_qemu() {
 
 _start_vm_qemu_x86_64() {
     local abs_disk_path="$1" vm_vars_path="$2" vm_code_path="$3" ignition_config="$4"
+    local tpm_device=""
 
     if [[ "${SECURE_BOOT_ENABLED}" != "true" ]]; then
         info "Creating x86_64 VM definition WITHOUT secure boot..."
+        # TPM requires secure boot to be enabled; skip when it's disabled
+        info "Skipping TPM device (secure boot disabled)"
     else
         info "Creating x86_64 VM definition with secure boot..."
+        if command -v swtpm &>/dev/null && command -v swtpm_setup &>/dev/null; then
+            tpm_device="    <tpm model='tpm-crb'>
+                <backend type='emulator' version='2.0'/>
+                </tpm>"
+            info "swtpm found — adding TPM device to VM"
+        else
+            info "swtpm not found — skipping TPM device"
+        fi
     fi
+
     cat > /tmp/${VM_NAME}.xml <<EOF
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>${VM_NAME}</name>
@@ -630,9 +642,7 @@ ${smm_feature}
     <console type='pty'>
       <target type='serial'/>
     </console>
-    <tpm model='tpm-crb'>
-      <backend type='emulator' version='2.0'/>
-    </tpm>
+${tpm_device}
   </devices>
   <seclabel type='none'/>
   <qemu:commandline>
