@@ -18,7 +18,7 @@ Test execution is driven by `run_local_tests.sh` (local) and the Azure Pipelines
 
 ## Enforcing Tests
 
-**`kola_enforcing.txt`** — a curated allowlist of kola test names that must pass before any image is published.
+**`kola_enforcing.yaml`** — a structured allowlist of kola test names that must pass before any image is published, with per-platform exception rules.
 
 Results are emitted in TAP format and converted to Markdown summaries.
 

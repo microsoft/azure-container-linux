@@ -1,8 +1,7 @@
 # kola_enforcing.yaml — Enforced kola tests with structured exception rules.
 #
-# This is the source of truth for which kola tests are enforced. The legacy
-# text files (kola_enforcing.txt, kola_enforcing_exceptions_*.txt) remain for
-# backward compatibility but should be generated from this file.
+# This is the source of truth for which kola tests are enforced. It is consumed
+# directly by evaluate_test_results.sh with platform/arch/bootloader context.
 #
 # Each entry is a test name prefix. Tests matching any prefix must pass
 # unless an exception rule applies to the current build context.
@@ -59,6 +58,10 @@ tests:
   - name: cl.filesystem
 
   - name: cl.ignition.instantiated.enable-unit
+  - name: cl.ignition.kargs
+    exceptions:
+      - bootloader: [uki]
+        reason: Dynamic kargs writing is not supported with UKI's immutable bootloader configuration
   - name: cl.ignition.luks
   - name: cl.ignition.oem.indirect
   - name: cl.ignition.oem.indirect.new
@@ -85,10 +88,18 @@ tests:
   - name: cl.install.cloudinit
 
   - name: cl.network.initramfs.second-boot
+    exceptions:
+      - platforms: [azure]
+        reason: SELinux toggle reaches out to IMDS on second boot too
   - name: cl.network.iptables
   - name: cl.network.listeners
   - name: cl.network.nftables
   - name: cl.network.wireguard
+
+  - name: cl.osreset.ignition-rerun
+    exceptions:
+      - bootloader: [uki]
+        reason: Test requires writing of keep-machine-id to grub.cfg, and cannot be eaily adapted to work with UKI's immutable bootloader configuration
 
   - name: cl.swap_activation
   - name: cl.sysext.boot
