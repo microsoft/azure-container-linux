@@ -50,7 +50,7 @@ Version:        255
 # determine the build information from local checkout
 Version:        %(tools/meson-vcs-tag.sh . error | sed -r 's/-([0-9])/.^\1/; s/-g/_g/')
 %endif
-Release:        27.acl1%{?dist}
+Release:        28.acl1%{?dist}
 
 # FIXME - hardcode to 'stable' for now as that's what we have in our blobstore
 %global stable 1
@@ -160,6 +160,11 @@ Patch0909:      fix-pcrlock-hyperv-hash-algorithm-ordering.patch
 # Without this, networkd reconfigures interfaces marked as managed by another
 # daemon when interface state changes. (upstream commit 78f8d5ed, fixes #36997)
 Patch0910:      fix-networkd-check-ID_NET_MANAGED_BY-on-reconfigure.patch
+
+# ACL: Skip nftables table init when only setting up firewall context. Without this,
+# firewall_backend_probe triggered by DHCP address assignment tries to setup firewall
+# rules, which stalls networkd when nf_tables kernel module is not present.
+Patch0911:      networkd-address-skip-firewall-init.patch
 
 %ifarch %{ix86} x86_64 aarch64
 %global want_bootloader 1
@@ -1245,6 +1250,9 @@ rm -f %{name}.lang
 # %autochangelog. So we need to continue manually maintaining the
 # changelog here.
 %changelog
+* Thu Apr 30 2026 Nikola Bojanic <nbojanic@microsoft.com> - 255-28
+- Add networkd-address-skip-firewall-init.patch
+
 * Wed Apr 23 2026 Nikola Bojanic <nbojanic@microsoft.com> - 255-27
 - Add fix-networkd-check-ID_NET_MANAGED_BY-on-reconfigure.patch
 - networkd: also check ID_NET_MANAGED_BY on reconfigure, not just on uevent
