@@ -28,7 +28,7 @@ az group create --name "$DEFAULT_RG" --location "westus2"
 az vm create \
   --resource-group "$DEFAULT_RG" \
   --name "my-acl-vm" \
-  --image "/subscriptions/035db282-f1c8-4ce7-b78f-2a7265d5398c/resourceGroups/acl/providers/Microsoft.Compute/galleries/acldevel/images/acl/versions/latest" \
+  --image "/subscriptions/b3e01d89-bd55-414f-bbb4-cdfeb2628caa/resourceGroups/acl-images/providers/Microsoft.Compute/galleries/acl/images/acl/versions/3.0.20260401" \
   --location "westus2" \
   --size "Standard_D2s_v5" \
   --admin-username "azureuser" \
@@ -53,28 +53,18 @@ GPU sysexts (refer to the instruction below). GPU sysext images are published to
 ACR as OCI artifacts. Follow the instructions below to pull and install the GPU sysexts on the ACL VM.
 
 ```bash
-# Install oras (if not already present)
-VERSION="1.3.0"
-sudo mkdir -p /opt/oras-install/
-sudo curl -L -o /opt/oras-install/oras_${VERSION}_linux_amd64.tar.gz \
-  "https://github.com/oras-project/oras/releases/download/v${VERSION}/oras_${VERSION}_linux_amd64.tar.gz"
-
-sudo tar -zxf /opt/oras-install/oras_${VERSION}_*.tar.gz -C /opt/oras-install/
-export PATH="/opt/oras-install:$PATH"
-sudo rm /opt/oras-install/oras_${VERSION}_*.tar.gz
-
 # Pull GPU sysext images
-ACL_OS_VERSION="4459.2.2"
-ACL_GPU_REPO="maritimusstaging.azurecr.io/acl/nvidia-gpu"
+source /etc/os-release
+ACL_GPU_REPO="mcr.microsoft.com/azurelinux/3.0/azure-container-linux"
 
 # Mandatory: contains the NVIDIA GPU driver
-oras pull -o /tmp/sysext ${ACL_GPU_REPO}/nvidia-driver-cuda-open:${ACL_OS_VERSION}
+oras pull -o /tmp/sysext ${ACL_GPU_REPO}/nvidia-driver-cuda-open:${VERSION_ID}
 
 # Optional: required for GPU container usage
-oras pull -o /tmp/sysext ${ACL_GPU_REPO}/nvidia-container-toolkit:${ACL_OS_VERSION}
+oras pull -o /tmp/sysext ${ACL_GPU_REPO}/nvidia-container-toolkit:${VERSION_ID}
 
 # Optional: required for multi-GPU environments
-oras pull -o /tmp/sysext ${ACL_GPU_REPO}/nvidia-fabric-manager:${ACL_OS_VERSION}
+oras pull -o /tmp/sysext ${ACL_GPU_REPO}/nvidia-fabric-manager:${VERSION_ID}
 
 sudo find /tmp/sysext -name '*.raw' -exec mv {} /etc/extensions/ \;
 rm -rf /tmp/sysext
