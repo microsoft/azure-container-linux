@@ -10,7 +10,7 @@
 Summary:        SELinux policy
 Name:           selinux-policy
 Version:        %{refpolicy_major}.%{refpolicy_minor}
-Release:        7%{?dist}
+Release:        8%{?dist}
 License:        GPLv2
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
@@ -79,6 +79,7 @@ Patch55:        0055-systemd-Add-run-sysctl.d-support-for-systemd-sysctl.patch
 Patch56:        0056-cloudinit-Add-container-engine-admin-access.patch
 Patch57:        0057-cloudinit-Add-sys_admin-to-set-security.sehash.patch
 Patch58:        0058-sysnetwork-Silence-sys_admin-denials.patch
+Patch59:        0059-container-Drop-unqualified-etc-dir-filetrans-to-conta.patch
 BuildRequires:  bzip2
 BuildRequires:  checkpolicy >= %{CHECKPOLICYVER}
 BuildRequires:  m4
