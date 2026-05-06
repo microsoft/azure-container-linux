@@ -122,6 +122,7 @@ tests:
   - name: docker.btrfs-storage
   - name: docker.containerd-restart
   - name: docker.enable-service.sysext
+  - name: docker.selinux
   - name: docker.userns
 
   - name: kubeadm.v1.32.4.calico.base
