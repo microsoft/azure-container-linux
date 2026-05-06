@@ -24,7 +24,9 @@ else
 fi
 
 # Fetch the Azure image if not present
-if [ -f "${AZURE_IMAGE_NAME}" ] ; then
+if [[ -n "${AZURE_DISK_URI:-}" ]]; then
+    echo "++++ ${CIA_TESTSCRIPT}: Using gallery image via --azure-disk-uri (skipping VHD download) ++++"
+elif [ -f "${AZURE_IMAGE_NAME}" ] ; then
     echo "++++ ${CIA_TESTSCRIPT}: Using existing ${AZURE_IMAGE_NAME} for testing ${CIA_VERNUM} (${CIA_ARCH}) ++++"
 else
     echo "++++ ${CIA_TESTSCRIPT}: downloading ${AZURE_IMAGE_NAME} for ${CIA_VERNUM} (${CIA_ARCH}) ++++"
@@ -46,13 +48,27 @@ run_kola_tests() {
     else
         hyperv_gen="V2"
         sku="alpha-gen2"
-        set -- --azure-use-gallery "${@}"
+        # --azure-use-gallery is only consumed by mantle when it is creating a
+        # new image from a blob/file. On the --azure-disk-uri path mantle
+        # consumes the disk URI directly and ignores --azure-use-gallery, so
+        # skip the flag to keep the kola invocation honest.
+        if [[ -z "${AZURE_DISK_URI:-}" ]]; then
+            set -- --azure-use-gallery "${@}"
+        fi
     fi
 
     # Align timeout with ore azure gc --duration parameter
     debug_flag=""
     if [[ "${KOLA_DEBUG:-}" == "true" ]]; then
         debug_flag="--debug"
+    fi
+
+    # Determine image reference: gallery image via disk URI or local VHD
+    local image_arg
+    if [[ -n "${AZURE_DISK_URI:-}" ]]; then
+        image_arg="--azure-disk-uri=${AZURE_DISK_URI}"
+    else
+        image_arg="--azure-image-file=${AZURE_IMAGE_NAME}"
     fi
 
     timeout --signal=SIGQUIT 6h \
@@ -64,7 +80,7 @@ run_kola_tests() {
       --parallel="${AZURE_PARALLEL}" \
       --offering=basic \
       --platform=azure \
-      --azure-image-file="${AZURE_IMAGE_NAME}" \
+      ${image_arg} \
       --azure-location="${AZURE_LOCATION}" \
       --tapfile="${instance_tapfile}" \
       --azure-size="${instance_type}" \
@@ -87,7 +103,13 @@ query_kola_tests() {
 other_instance_types=()
 # RPM/ACL mode: no Gen1 support and no GPU quota, skip extra instance types.
 if [[ "${CIA_ARCH}" = 'amd64' ]] && [[ "${PACKAGE_SOURCE_MODE:-PORTAGE}" != 'RPM' ]]; then
-    other_instance_types+=('V1' 'Standard_NC6s_v3')
+    # Gen1 (V1) is incompatible with --azure-disk-uri: a gallery image-definition
+    # is locked to a single Hyper-V generation, and our *-test image-defs are
+    # Gen2-only. Skip the V1 run when running in disk-URI (gallery) mode.
+    if [[ -z "${AZURE_DISK_URI:-}" ]]; then
+        other_instance_types+=('V1')
+    fi
+    other_instance_types+=('Standard_NC6s_v3')
 fi
 
 run_kola_tests_on_instances \
