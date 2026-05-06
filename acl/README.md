@@ -17,3 +17,8 @@ See [`acl/docs/`](docs/) for detailed guides:
 - [AKS BYOI](docs/BYOI_AKS_FROM_ACLDEVEL.md) — using acldevel images with AKS
 - [Provision AKS Cluster](docs/PROVISION_ACL_AKS_CLUSTER.md) — full AKS cluster provisioning
 - [Bug Bash](docs/bugbash.md) — bug bash scenarios and test cases
+- [Azure Linux vs Azure Container Linux](docs/AZL_VS_ACL_AKS.md) — feature comparison for AKS
+- [Azure Linux OS Guard vs ACL](docs/OSGUARD_VS_ACL_AKS.md) — hardened immutable Azure Linux variant vs ACL
+- [Flatcar vs Azure Container Linux](docs/FLATCAR_VS_ACL_AKS.md) — upstream Flatcar vs ACL on AKS
+- [Ubuntu vs Azure Container Linux](docs/UBUNTU_VS_ACL_AKS.md) — general-purpose vs immutable container OS on AKS
+- [Flatcar vs Azure Container Linux](docs/FLATCAR_VS_ACL_AKS.md) — upstream Flatcar vs ACL on AKS
