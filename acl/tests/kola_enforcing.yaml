@@ -87,7 +87,7 @@ tests:
 
   - name: cl.install.cloudinit
 
-  - name: cl.network.initramfs.second-boot
+  - name: acl.network.initramfs.second-boot
     exceptions:
       - platforms: [azure]
         reason: SELinux toggle reaches out to IMDS on second boot too
