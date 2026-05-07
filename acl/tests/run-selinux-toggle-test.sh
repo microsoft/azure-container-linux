@@ -49,16 +49,33 @@ set_selinux_tag() {
     fi
 }
 
-# Reboot the VM and wait for SSH to come back.
+# Reboot the VM (in-guest via SSH) and wait for it to come back.
+# `sudo reboot` kills sshd before the session can return cleanly, so ssh
+# exits 255; ignore that and rely on wait_for_ssh to detect real failure.
 reboot_and_wait() {
-    info "Rebooting VM ${VM_NAME}..."
-    az vm restart --resource-group "$VM_RG" --name "$VM_NAME" --output none
+    info "Rebooting VM ${VM_NAME} via SSH..."
+    ssh_cmd "sudo reboot" || true
     info "Waiting for VM to come back up..."
     sleep 10
-    if ! wait_for_ssh "$VM_IP" "$VM_SSH_TIMEOUT"; then
-        error "VM did not come back after reboot"
-        return 1
+    if wait_for_ssh "$VM_IP" "$VM_SSH_TIMEOUT"; then
+        return 0
     fi
+    warn "SSH did not return after reboot — capturing VM diagnostics"
+
+    local diag_dir="${DIAGNOSTICS_DIR:-/tmp}"
+    mkdir -p "$diag_dir"
+    local prefix="${diag_dir}/$(date +%Y%m%d-%H%M%S)-${VM_NAME}"
+    az vm get-instance-view --resource-group "$VM_RG" --name "$VM_NAME" \
+        --query 'instanceView.{statuses:statuses,vmAgent:vmAgent.statuses}' \
+        -o json 2>&1 | tee "${prefix}-instance-view.json" || true
+    az vm boot-diagnostics get-boot-log --resource-group "$VM_RG" --name "$VM_NAME" 2>&1 \
+        | jq -r . > "${prefix}-serial.log" || true
+
+    info "Full serial log: ${prefix}-serial.log ($(wc -c <"${prefix}-serial.log") bytes); last 200 lines:"
+    tail -200 "${prefix}-serial.log" | sed 's/^/  [serial] /' || true
+    info "Diagnostics saved to ${prefix}-{instance-view.json,serial.log}"
+    error "VM did not come back after reboot"
+    return 1
 }
 
 # Assert that SELinux is in the expected mode.
