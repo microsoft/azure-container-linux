@@ -53,19 +53,19 @@ parse_standalone_sysexts_yaml() {
 
     # Build the tag filter clause for yq.
     # When tag(s) are specified, only include entries whose .tags list contains
-    # at least one of the requested tags (OR logic).  Comma-separated tags are
-    # split into a TAGVALS env var (newline-separated) for yq to iterate.
+    # at least one of the requested tags (OR logic).  The comma-separated tag
+    # string is passed directly via TAGVALS and split(",") inside yq.
     # When no tag is specified, include all entries (no tag filtering).
     # Values are passed via environment variables and accessed with env() to
     # avoid yq expression injection.  env() is supported in all yq v4 versions
     # (unlike --arg which requires v4.46+).
     # Note: we use ARCHVAL / TAGVALS to avoid shadowing yq's built-in "tag" function.
+    # Note: we avoid any(gen;cond) as it is not supported in all yq v4 versions.
     local tag_select=""
     local tag_vals=""
     if [[ -n "${tag_filter}" ]]; then
-        # Convert comma-separated tags to newline-separated for yq split()
-        tag_vals="${tag_filter//,/$'\n'}"
-        tag_select='| select(.tags != null and any(.tags[]; . as $t | env(TAGVALS) | split("\n") | .[] | select(. == $t)))'
+        tag_vals="${tag_filter}"
+        tag_select='| select(.tags != null and ([.tags[] | select(. as $t | env(TAGVALS) | split(",") | map(sub("^\\s+","") | sub("\\s+$","")) | .[] | select(. == $t))] | length > 0))'
     fi
 
     # For each sysext entry: if .archs is null (omitted) or contains the
