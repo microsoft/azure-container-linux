@@ -52,7 +52,28 @@ To enable GPU support on the immutable ACL image, you need to deploy one or more
 GPU sysexts (refer to the instruction below). GPU sysext images are published to
 ACR as OCI artifacts. Follow the instructions below to pull and install the GPU sysexts on the ACL VM.
 
+> **Tip:** For automated GPU smoke testing (including sysext delivery and verification),
+> see the [GPU Smoke Testing](BUILD_RPM_IMAGE_README.md#gpu-smoke-testing-azure-only) section
+> in the BUILD_RPM_IMAGE_README.
+
+> **Note:** The Azure GPU pipeline (`acl-pipelines`, stages `publish_sysexts` and
+> `test_kola_azure_gpu`) installs `oras` the same way — `tdnf install -y oras` on
+> the 1ES Azure Linux agent, with a retried-curl tarball fallback for non-AzL
+> agents. The manual instructions and the pipeline are deliberately aligned so
+> you can reproduce a pipeline failure locally by running the same steps.
+
 ```bash
+# Install oras (if not already present)
+# Option A: Azure Linux (tdnf) — matches what the pipeline does
+sudo tdnf install -y oras
+
+# Option B: Manual install (any Linux)
+ORAS_VERSION="1.3.0"
+curl -fsSL -o /tmp/oras.tar.gz \
+  "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+sudo tar -zxf /tmp/oras.tar.gz -C /usr/local/bin/ oras
+rm -f /tmp/oras.tar.gz
+
 # Pull GPU sysext images
 source /etc/os-release
 ACL_GPU_REPO="mcr.microsoft.com/azurelinux/3.0/azure-container-linux"

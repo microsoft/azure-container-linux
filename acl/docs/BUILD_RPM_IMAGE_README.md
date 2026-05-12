@@ -436,6 +436,107 @@ By default, before starting a new Azure VM, all the pre-existing resource groups
 
 - For kernel config comparison, use `acl/kconfig_diff.sh` with two comparison-data.json files (requires diffconfig from kernel-headers)
 
+#### GPU Smoke Testing (Azure Only)
+
+Test NVIDIA GPU sysexts on an Azure GPU VM. The script parameterizes the
+SKU and driver flavor so all three `nvidia-driver-*` sysexts shipped by ACL
+can be exercised. Requires Azure CLI authentication and quota in the
+selected region.
+
+| Driver flavor | Default SKU | Notes |
+| --- | --- | --- |
+| `cuda-open` | `Standard_NC24ads_A100_v4` (NC A100) | open-source kernel module |
+| `cuda` | `Standard_NC6s_v3` (NC V100) | proprietary kernel module |
+| `vgpu` | `Standard_NV6ads_A10_v5` (NV A10) | virtual-GPU kernel module |
+
+`nvidia-fabricmanager` start-up is only validated on multi-GPU NVLink SKUs
+(ND-series). On the single-GPU SKUs above, fabric-manager is install-validated
+only.
+
+**Default mode (ORAS/ACR)** — pulls sysexts from ACR using your Azure identity:
+
+```bash
+# Provision GPU VM, keep it running
+./acl/build_rpm_image.sh --start-vm --vm-type=azure \
+  --az-vm-size=Standard_NC24ads_A100_v4 --keep-vm
+
+# Run GPU smoke test (cuda-open / NC A100 — the default)
+./acl/tests/run-gpu-sysext-host.sh --ssh-key=~/.ssh/id_ed25519
+
+# Or test the proprietary cuda driver on a V100 VM
+./acl/build_rpm_image.sh --start-vm --vm-type=azure \
+  --az-vm-size=Standard_NC6s_v3 --keep-vm
+./acl/tests/run-gpu-sysext-host.sh --ssh-key=~/.ssh/id_ed25519 \
+  --gpu-driver-flavor=cuda
+
+# Or test the vGPU driver on an NV A10 VM
+./acl/build_rpm_image.sh --start-vm --vm-type=azure \
+  --az-vm-size=Standard_NV6ads_A10_v5 --keep-vm
+./acl/tests/run-gpu-sysext-host.sh --ssh-key=~/.ssh/id_ed25519 \
+  --gpu-driver-flavor=vgpu
+```
+
+Or end-to-end with `--run-host-script` (requires [PR #26999](https://dev.azure.com/mariner-org/ACL/_git/acl-scripts/pullrequest/26999)):
+
+```bash
+./acl/build_rpm_image.sh \
+  --start-vm --vm-type=azure \
+  --az-vm-size=Standard_NC24ads_A100_v4 \
+  --run-host-script=./acl/tests/run-gpu-sysext-host.sh
+```
+
+**SCP mode** — uploads locally-built sysext `.raw` files instead of pulling from ACR:
+
+```bash
+# Build sysexts first (Phase 4), then:
+SYSEXT_DIR=__build__/images/images/amd64-usr/latest \
+  ./acl/tests/run-gpu-sysext-host.sh --scp-sysexts --ssh-key=~/.ssh/id_ed25519 \
+    --gpu-driver-flavor=cuda-open
+```
+
+The test verifies:
+- `nvidia-smi` detects the GPU
+- `nvidia-modprobe -u -c0` loads kernel module and creates device nodes
+- `nvidia-ctk` (container toolkit) is available
+- `nvidia-fabricmanager` starts (multi-GPU VMs only)
+
+**Which sysexts does ORAS/ACR mode pull?**
+
+By default, the script pulls from `acldevel.azurecr.io` using the VM's OS version
+as the tag (e.g., `3.0.20260428`). The pipeline's `publish_sysexts` stage pushes
+GPU sysexts to ACR for every build, so after hydrating from a CI build, the
+matching sysexts are already available in ACR.
+
+- **Hydrate + test existing build:** Use the default ORAS/ACR mode. The sysexts
+  in ACR match your hydrated image.
+- **Rebuild + test local changes:** Use `--scp-sysexts` with
+  `SYSEXT_DIR=__build__/images/images/amd64-usr/latest` to test your locally-built
+  sysexts instead of what's in ACR.
+
+You can verify the exact ACR references from the build's `published_artifacts.json`:
+
+```bash
+# From a hydrated build (published_artifacts.json is in the prior_build directory):
+jq '.sysexts.acr' $(Pipeline.Workspace)/prior_build/published_artifacts.json
+
+# Or query a specific build's artifact:
+az pipelines runs artifact download --artifact-name drop_publish_final_amd64_finalize \
+  --run-id <BUILD_ID> --path /tmp/artifacts
+jq '.sysexts.acr' /tmp/artifacts/published_artifacts.json
+```
+
+To override the ACR repo or tag (e.g., testing against a different build):
+
+```bash
+ACL_GPU_REPO=acldevel.azurecr.io/azurelinux/3.0/azure-container-linux \
+  ./acl/tests/run-gpu-sysext-host.sh --ssh-key=~/.ssh/id_ed25519
+```
+
+Environment variables:
+- `ACL_GPU_REPO` — override sysext registry (default: `acldevel.azurecr.io/azurelinux/3.0/azure-container-linux`)
+- `ACR_REGISTRY` — ACR hostname for token generation (default: `acldevel.azurecr.io`)
+- `SYSEXT_DIR` — directory containing `.raw` files (required with `--scp-sysexts`)
+
 ### Phase 6: Run Kola E2E Tests (Optional)
 
 Run the Flatcar/ACL kola E2E test suite against QEMU or Azure images.
