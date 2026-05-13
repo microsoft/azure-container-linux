@@ -145,8 +145,13 @@ finish_image_rpm() {
       if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
           local modules_vmlinuz="${root_fs_dir}/usr/lib/modules/${kernel_version}/vmlinuz"
           if [[ -L "${modules_vmlinuz}" ]]; then
-              info "RPM mode: Removing kernel symlink ${modules_vmlinuz} (UKI embeds kernel)"
+              # UKI embeds the kernel, so /boot/vmlinuz-* will be removed from
+              # the ESP later by uki_install.sh.  Replace the dangling symlink
+              # with a real copy of the kernel so that kdumpctl/kexec can still
+              # find it at /usr/lib/modules/<version>/vmlinuz.
+              info "RPM mode: Replacing kernel symlink with real copy for kdump (UKI mode)"
               sudo rm -f "${modules_vmlinuz}"
+              sudo cp "${kernel_file}" "${modules_vmlinuz}"
           fi
 
           # Copy it to /usr/lib/modules/<version>/config (on the rootfs) so
@@ -791,6 +796,77 @@ _configure_pcrlock_rpm() {
     fi
 }
 
+# ── Kdump: enable crash dump collection ──────────────────────────────────────
+_configure_kdump_rpm() {
+    local root_fs_dir="$1"
+
+    # Enable kdump.service so the crash kernel is armed at boot.
+    # The crashkernel=256M kernel cmdline parameter reserves memory
+    # (delivered via grub.cfg for GRUB boot and a UKI addon for UKI boot);
+    # this preset ensures kexec loads the capture kernel on every boot.
+    printf "enable kdump.service\n" | \
+    sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-kdump.preset" > /dev/null
+
+    # Add a service drop-in that:
+    # 1. Sets DRACUT_NO_XATTR=1 -> dracut-install uses cp --preserve=xattr
+    #    which fails when copying files with btrfs.compression xattr to the
+    #    ext4 tmpdir.  DRACUT_NO_XATTR=1 skips xattr preservation.
+    # 2. Copies the kernel binary to /var/crash/ before kdumpctl starts.
+    #    /usr is read-only (dm-verity btrfs), so kdumpctl cannot write the
+    #    kdump initramfs there.  KDUMP_BOOTDIR is set to /var/crash (ext4,
+    #    writable) via /etc/sysconfig/kdump, so both the kernel and initramfs
+    #    live on writable storage.
+    info "RPM mode: Adding kdump.service drop-in for DRACUT_NO_XATTR and kernel copy"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/kdump.service.d"
+    sudo tee "${root_fs_dir}/usr/lib/systemd/system/kdump.service.d/10-acl-kdump.conf" > /dev/null <<'KDUMP_DROPIN'
+[Unit]
+ConditionKernelCommandLine=crashkernel
+
+[Service]
+Environment=DRACUT_NO_XATTR=1
+ExecStartPre=/bin/bash -c '/usr/bin/cp -f /usr/lib/modules/$(/usr/bin/uname -r)/vmlinuz /var/crash/vmlinuz-$(/usr/bin/uname -r)'
+KDUMP_DROPIN
+
+    # Create /var/crash directory for kdump to write vmcore dumps.
+    # On ACL's immutable rootfs, /var is stateful but directories must be
+    # created via tmpfiles.d so they persist across boots.
+    sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/kdump.conf" > /dev/null <<'TMPFILES_KDUMP'
+# kdump crash dump target directory
+d /var/crash 0755 root root -
+TMPFILES_KDUMP
+
+    # Ensure /etc/kdump.conf exists with a default config.
+    # kdumpctl expects this file to determine the dump target.
+    # dracut_args --tmpdir /var/crash: use ext4 ROOT partition for dracut's
+    #   scratch space instead of /tmp (tmpfs) to avoid tmpfs space pressure
+    #   when building the kdump initramfs.
+    sudo tee "${root_fs_dir}/etc/kdump.conf" > /dev/null <<'KDUMP_CONF'
+# kdump configuration for ACL
+# Dump to local filesystem
+path /var/crash
+core_collector makedumpfile -l --message-level 7 -d 31
+dracut_args --tmpdir /var/crash
+KDUMP_CONF
+
+    # kdumpctl constructs the kernel path as:
+    #   ${KDUMP_BOOTDIR}/${KDUMP_IMG}-${kver}
+    # and writes the initramfs to the same directory.
+    # /usr is read-only (dm-verity btrfs) and /boot is a vfat ESP (too
+    # small, no symlink support).  Point KDUMP_BOOTDIR to /var/crash
+    # (ext4, writable) where ExecStartPre copies the kernel at boot.
+    info "RPM mode: Configuring KDUMP_BOOTDIR/KDUMP_IMG via /etc/sysconfig/kdump"
+    sudo mkdir -p "${root_fs_dir}/etc/sysconfig"
+    sudo tee "${root_fs_dir}/etc/sysconfig/kdump" > /dev/null <<'KDUMP_SYSCONFIG'
+# ACL: /usr is read-only (dm-verity btrfs) and /boot is a vfat ESP
+# (too small for initramfs, no symlink support).  Use /var/crash on
+# the writable ext4 ROOT partition for both the kernel copy and the
+# kdump initramfs.
+# The kernel is copied here by the kdump.service ExecStartPre drop-in.
+KDUMP_BOOTDIR="/var/crash"
+KDUMP_IMG="vmlinuz"
+KDUMP_SYSCONFIG
+}
+
 # ── Misc: kernel modules, resolv.conf, serial console, etc. ─────────────────
 _configure_misc_rpm() {
     local root_fs_dir="$1"
@@ -960,6 +1036,7 @@ finish_image_post_tmpfiles_rpm() {
     _configure_pcrlock_rpm "${root_fs_dir}"
     _configure_etcd_rpm "${root_fs_dir}"
     _configure_flannel_services_rpm "${root_fs_dir}"
+    _configure_kdump_rpm "${root_fs_dir}"
     _configure_misc_rpm "${root_fs_dir}"
     _generate_hwdb_rpm "${root_fs_dir}"
 }

@@ -158,6 +158,10 @@ OSREL
     # Common base args — platform-agnostic, same for all image types.
     cmdline+=" root=LABEL=ROOT rootflags=rw"
     cmdline+=" consoleblank=0"
+    # NOTE: crashkernel=256M is delivered via a UKI addon (kdump.addon.efi)
+    # rather than baked into the main UKI cmdline.  This allows disabling
+    # kdump by removing the addon from the ESP without rebuilding the UKI.
+    # See _uki_build_kdump_addon() below.
     # OEM / platform identification (oem_id, ignition platform, console
     # settings, etc.) are NOT baked into the main UKI.  They are injected
     # via a per-platform UKI addon built during image_to_vm.sh so that
@@ -254,6 +258,7 @@ OSREL
     # Build and install the firstboot addon
     _uki_build_firstboot_addon "${ESP_DIR}"
     _uki_build_fips_addon "${ESP_DIR}"
+    _uki_build_kdump_addon "${ESP_DIR}"
 
     # Clean up
     rm -rf "${uki_temp_dir}"
@@ -332,6 +337,43 @@ _uki_build_fips_addon() {
     info "UKI/RPM: Saved FIPS addon template -> acl/uki-addons/fips.addon.efi"
 
     rm -rf "${fips_temp_dir}"
+}
+
+# Build a reusable kdump addon template for UKI systems.
+# NOT installed in the active .extra.d directory by default -> kdump
+# must be explicitly enabled by copying this addon into
+# EFI/Linux/acl.efi.extra.d/ on the ESP.
+_uki_build_kdump_addon() {
+    local esp_dir="$1"
+
+    info "UKI/RPM: Building kdump addon template"
+
+    local template_dir="${esp_dir}/acl/uki-addons"
+    sudo mkdir -p "${template_dir}"
+
+    local kdump_cmdline="crashkernel=256M"
+
+    local kdump_temp_dir
+    kdump_temp_dir=$(mktemp -d)
+
+    echo "${kdump_cmdline}" > "${kdump_temp_dir}/kdump-cmdline.txt"
+
+    local efi_stub="${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub"
+
+    sudo ukify build \
+        --cmdline=@"${kdump_temp_dir}/kdump-cmdline.txt" \
+        --stub="${efi_stub}" \
+        --output="${kdump_temp_dir}/kdump.addon.efi"
+
+    if [[ ! -f "${kdump_temp_dir}/kdump.addon.efi" ]]; then
+        die "UKI/RPM: ukify failed to produce kdump.addon.efi"
+    fi
+
+    sudo cp "${kdump_temp_dir}/kdump.addon.efi" "${template_dir}/kdump.addon.efi"
+    info "UKI/RPM: Saved kdump addon template -> acl/uki-addons/kdump.addon.efi"
+    info "UKI/RPM: To enable kdump, copy to EFI/Linux/acl.efi.extra.d/kdump.addon.efi"
+
+    rm -rf "${kdump_temp_dir}"
 }
 
 info "Installing UKI packages for target ${FLAGS_target}"
