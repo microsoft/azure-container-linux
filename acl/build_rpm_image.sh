@@ -115,6 +115,7 @@ GROUP="${GROUP:-production}"
 BUILD_SDK_CONTAINER=false
 BUILD_RPMS=false
 BUILD_RPMS_QEMU=false
+BUILD_RPMS_EDK2_AARCH64=false
 CLEAN_DIRS=false
 FORCE_REBUILD=false
 BUILD_IMAGE=false
@@ -270,7 +271,10 @@ parse_args() {
                 BUILD_RPMS_QEMU=true
                 shift
                 ;;
-
+            --build-rpms-edk2-aarch64)
+                BUILD_RPMS_EDK2_AARCH64=true
+                shift
+                ;;
             --download-rpms)
                 # no-op: kept for pipeline compatibility
                 shift
@@ -1171,6 +1175,55 @@ build_rpms_qemu() {
     create_repo
 }
 
+# Builds only the EDK2 RPM package to provide edk2-aarch64 rpm.
+# On Azure Linux 3, edk2 does not build arm64 VMF binaries.
+# This build requirement is for local testing of QEMU images.
+build_rpms_edk2_aarch64() {
+    section "Building EDK2-AARCH64 RPM Package"
+
+    local build_script="${SCRIPT_DIR}/acl/build.sh"
+
+    if [[ ! -f "$build_script" ]]; then
+        error "RPM build script not found: $build_script"
+        exit 1
+    fi
+
+    info "Running RPM build script for EDK2-AARCH64..."
+    info "  Build script: $build_script"
+    info "  Output dir:   ${STAGING_DIR}"
+    echo
+
+    if ! "$build_script" "edk2"; then
+        error "EDK2-AARCH64 RPM build failed"
+        exit 1
+    fi
+
+    local rpm_count=$(ls -1 "${STAGING_DIR}"/*.rpm 2>/dev/null | wc -l)
+    info "✓ EDK2-AARCH64 RPM build complete"
+    info "  Total RPMs in staging: ${rpm_count}"
+
+    create_repo
+}
+
+install_qemu_static_rpms() {
+    local -a qemu_rpms
+    # Copying cross project rpm artifacts for arm64-usr will also install aarch64 compiled qemu
+    # rpms to staging. Find only x86_64 compiled artifacts to install.
+    mapfile -t qemu_rpms < <(find "${STAGING_DIR}" -maxdepth 1 -name 'qemu*.x86_64.rpm' 2>/dev/null)
+    if [[ ${#qemu_rpms[@]} -gt 0 ]]; then
+        info "  Found ${#qemu_rpms[@]} QEMU RPMs in staging"
+        sudo tdnf install -y "${qemu_rpms[@]}" || {
+            error "Failed to install QEMU RPMs from staging"
+            exit 1
+        }
+    else
+        error "No QEMU RPMs found in ${STAGING_DIR}."
+        error "Run --build-rpms-qemu first, or ensure the pipeline restores the QEMU artifact."
+        exit 1
+    fi
+    info "✓ qemu-aarch64-static installed successfully"
+}
+
 # Builds the Azure Container Linux (ACL) image using SDK container.
 build_image() {
     section "Building Azure Container Linux Image"
@@ -1600,6 +1653,14 @@ main() {
         run_with_retry build_rpms_qemu
     fi
 
+    # Step 2c: Build EDK2-AARCH64 RPM package (if requested)
+    # Added a new flag for this to avoid building the edk2 package for non-smoke test runs
+    # since the build takes time. We need qemu-user-static for build purposes.
+    # But the edk2-aarch64 is not needed except for the smoke test runs.
+    if [[ "$BUILD_RPMS_EDK2_AARCH64" == "true" ]]; then
+        run_with_retry build_rpms_edk2_aarch64
+    fi
+
     # Step 3: Build image (if requested)
     if [[ "$BUILD_IMAGE" == "true" ]]; then
         # Install qemu-user-static-aarch64 for arm64 cross-builds.
@@ -1611,22 +1672,7 @@ main() {
         if [[ "$BOARD" == "arm64-usr" ]] && is_azure_linux_3 \
                 && ! command -v qemu-aarch64-static &>/dev/null; then
             info "Installing qemu-user-static-aarch64 for arm64 cross-build..."
-            local -a qemu_rpms
-            # Copying cross project rpm artifacts for arm64-usr will also install aarm64 compiled qemu
-            # rpms to staging. Find only x86_64 compiled artifacts to install.
-            mapfile -t qemu_rpms < <(find "${STAGING_DIR}" -maxdepth 1 -name 'qemu*.x86_64.rpm' 2>/dev/null)
-            if [[ ${#qemu_rpms[@]} -gt 0 ]]; then
-                info "  Found ${#qemu_rpms[@]} QEMU RPMs in staging"
-                sudo tdnf install -y "${qemu_rpms[@]}" || {
-                    error "Failed to install QEMU RPMs from staging"
-                    exit 1
-                }
-            else
-                error "No QEMU RPMs found in ${STAGING_DIR}."
-                error "Run --build-rpms-qemu first, or ensure the pipeline restores the QEMU artifact."
-                exit 1
-            fi
-            info "✓ qemu-aarch64-static installed successfully"
+            install_qemu_static_rpms
         fi
         # Reset cached image version so common.sh generates fresh values
         if [[ "$FORCE_REBUILD" == "true" ]]; then
@@ -1692,6 +1738,25 @@ main() {
 
     # Step 6: VM lifecycle & kola tests — delegate to validate_rpm_image.sh
     if [[ "$START_VM" == "true" ]] || [[ "$RUN_KOLA_TESTS" == "true" ]]; then
+        # Install edk2-aarch64 RPM only for arm64-usr when testing QEMU images.
+        if [[ "$START_VM" == "true" ]] && [[ "$BOARD" == "arm64-usr" ]] \
+                && is_azure_linux_3 && [[ $VM_TYPE == "qemu" ]]; then
+            info "Installing qemu-user-static-aarch64.."
+            install_qemu_static_rpms
+            info "Installing edk2-aarch64 rpm from ${STAGING_DIR} to provide AVM firmware binaries.."
+            local edk2_aarch64_rpm=$(find "${STAGING_DIR}" -maxdepth 1 -name 'edk2-aarch64-*.rpm' 2>/dev/null)
+            if [[ -f "$edk2_aarch64_rpm" ]]; then
+                info "Found $edk2_aarch64_rpm in Staging. Installing..."
+                sudo tdnf install -y "$edk2_aarch64_rpm" || {
+                    error "Failed to install edk2-aarch64 RPM from staging"
+                    exit 1
+                }
+                info "✓ edk2-aarch64 RPM installed successfully"
+            else
+                info "No edk2-aarch64 RPM found in ${STAGING_DIR}."
+            fi
+        fi
+
         local validate_args=()
         validate_args+=("--board=${BOARD}")
         validate_args+=("--img-name=${IMG_NAME}")
