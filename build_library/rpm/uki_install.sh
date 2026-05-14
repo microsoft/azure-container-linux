@@ -180,12 +180,36 @@ OSREL
     echo "${cmdline}" > "${uki_temp_dir}/cmdline.txt"
     info "UKI/RPM: cmdline = ${cmdline}"
 
+    # Determine kernel version for UAPI UKI naming (vmlinuz-<version>.efi).
+    local kernel_version
+    local -a kfiles=()
+    local kf
+    for kf in "${ESP_DIR}"/vmlinuz-* "${ESP_DIR}"/boot/vmlinuz-*; do
+        [[ -f "${kf}" ]] && kfiles+=("${kf}")
+    done
+    if [[ ${#kfiles[@]} -eq 0 ]]; then
+        die "UKI/RPM: No versioned vmlinuz-* found on ESP (${ESP_DIR})"
+    fi
+    if [[ ${#kfiles[@]} -ne 1 ]]; then
+        die "UKI/RPM: Expected exactly 1 vmlinuz-* on ESP, found ${#kfiles[@]}: ${kfiles[*]}"
+    fi
+    kernel_version="$(basename "${kfiles[0]}" | sed 's/^vmlinuz-//')"
+    if [[ ! "${kernel_version}" =~ ^[0-9]+\.[0-9]+ ]]; then
+        die "UKI/RPM: '${kernel_version}' does not look like a kernel version"
+    fi
+    info "UKI/RPM: Kernel version = ${kernel_version}"
+
+    local uki_name="vmlinuz-${kernel_version}.efi"
+    if [[ "$(basename "${kfiles[0]}")" != "vmlinuz-${kernel_version}" ]]; then
+        die "UKI/RPM: kernel version parse mismatch: source='$(basename "${kfiles[0]}")' reconstructed='vmlinuz-${kernel_version}'"
+    fi
+
     local efi_stub="${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub"
     if [[ ! -f "${efi_stub}" ]]; then
         die "UKI/RPM: EFI stub not found at ${efi_stub}"
     fi
 
-    local uki_output="${uki_temp_dir}/acl.efi"
+    local uki_output="${uki_temp_dir}/${uki_name}"
     info "UKI/RPM: Building UKI with ukify"
 
     sudo ukify build \
@@ -238,25 +262,18 @@ OSREL
                "${ESP_DIR}"/config-* "${ESP_DIR}"/.vmlinuz-*.hmac 2>/dev/null || true
 
     sudo mkdir -p "${ESP_DIR}/EFI/Linux"
-    sudo cp "${uki_output}" "${ESP_DIR}/EFI/Linux/acl.efi"
-    info "UKI/RPM: Installed UKI → EFI/Linux/acl.efi"
-
-    # Stash the EFI stub on the ESP so uki_addon.sh can find it when
-    # building OEM addons in a separate SDK container (the VM image build
-    # runs in a fresh container where BOARD_ROOT has no RPMs installed).
-    sudo mkdir -p "${ESP_DIR}/EFI/Linux/.build"
-    sudo cp "${efi_stub}" "${ESP_DIR}/EFI/Linux/.build/linux${EFI_ARCH}.efi.stub"
-    info "UKI/RPM: Stashed EFI stub → EFI/Linux/.build/linux${EFI_ARCH}.efi.stub"
+    sudo cp "${uki_output}" "${ESP_DIR}/EFI/Linux/${uki_name}"
+    info "UKI/RPM: Installed UKI → EFI/Linux/${uki_name}"
 
     sudo mkdir -p "${ESP_DIR}/loader"
     sudo tee "${ESP_DIR}/loader/loader.conf" > /dev/null <<-EOF
 		timeout 0
-		default acl.efi
+		default ${uki_name}
 	EOF
     info "UKI/RPM: Wrote loader/loader.conf"
 
     # Build and install the firstboot addon
-    _uki_build_firstboot_addon "${ESP_DIR}"
+    _uki_build_firstboot_addon "${ESP_DIR}" "${uki_name}"
     _uki_build_fips_addon "${ESP_DIR}"
     _uki_build_kdump_addon "${ESP_DIR}"
 
@@ -267,10 +284,11 @@ OSREL
 # Build a self-removing firstboot addon that triggers Ignition on first boot.
 _uki_build_firstboot_addon() {
     local esp_dir="$1"
+    local uki_name="$2"
 
     info "UKI/RPM: Building firstboot addon"
 
-    local addon_dir="${esp_dir}/EFI/Linux/acl.efi.extra.d"
+    local addon_dir="${esp_dir}/EFI/Linux/${uki_name}.extra.d"
     sudo mkdir -p "${addon_dir}"
 
     local firstboot_cmdline="flatcar.first_boot=detected"
@@ -293,7 +311,7 @@ _uki_build_firstboot_addon() {
     fi
 
     sudo cp "${fb_temp_dir}/firstboot.addon.efi" "${addon_dir}/firstboot.addon.efi"
-    info "UKI/RPM: Installed firstboot addon → EFI/Linux/acl.efi.extra.d/firstboot.addon.efi"
+    info "UKI/RPM: Installed firstboot addon → EFI/Linux/${uki_name}.extra.d/firstboot.addon.efi"
     info "UKI/RPM: firstboot cmdline = ${firstboot_cmdline}"
 
     # Keep a template copy outside the auto-discovery directory so that

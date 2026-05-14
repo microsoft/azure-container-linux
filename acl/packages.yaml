@@ -33,6 +33,7 @@ packages:
   - lksctp-tools        # SCTP user-space tools (stress-ng build dep)
 
   # --- ACL-patched system packages ----------------------------------------
+  - bootengine          # Flatcar bootengine (glob-based firstboot addon removal for UAPI UKI naming)
   - microcode_ctl       # CPU microcode updater (Fedora import)
   - selinux-policy      # SELinux reference policy (ACL-specific modules)
   - systemd             # System manager

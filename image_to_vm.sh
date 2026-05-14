@@ -138,7 +138,7 @@ run_fs_hook
 
 # Sign UKI EFI files with an ephemeral key for Secure Boot testing. At this
 # point the ESP is still mounted at ${VM_TMP_ROOT}/boot with all EFI files in
-# place (acl.efi + addons). The public certificate is written to the image
+# place (UKI + addons). The public certificate is written to the image
 # output directory so _write_qemu_uefi_secure_conf() can enroll it in the OVMF
 # Secure Boot db.
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]; then

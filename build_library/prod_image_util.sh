@@ -96,6 +96,12 @@ create_prod_image() {
   elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
     rpm_install_package_using_portage_name "${root_fs_dir}" "${base_pkg}"
 
+    if [[ "${BOOTLOADER_MODE:-}" == "uki" ]]; then
+        rpm_install_package "${root_fs_dir}" systemd-boot || \
+            die "RPM mode: Failed to install systemd-boot into image rootfs"
+        info "RPM mode: Installed systemd-boot RPM into image rootfs (stubs on /usr)"
+    fi
+
     test_image_content "${root_fs_dir}"
   fi
   

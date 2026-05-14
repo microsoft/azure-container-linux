@@ -25,7 +25,7 @@
 #   ADDON_APPEND           Extra kernel arguments
 #
 # Output:
-#   ${esp_dir}/EFI/Linux/acl.efi.extra.d/oem.addon.efi
+#   ${esp_dir}/EFI/Linux/<uki_name>.extra.d/oem.addon.efi
 
 set -euo pipefail
 
@@ -58,20 +58,23 @@ case "${ARCH}" in
     *)      die "UKI addon: Unsupported architecture: ${ARCH}" ;;
 esac
 
-# Locate the EFI stub stashed on the ESP by uki_install.sh.
-# The VM image build runs in a fresh SDK container (--rm) where BOARD_ROOT
-# has no RPMs installed, so the stub must come from the ESP stash.
-EFI_STUB="${ESP_DIR}/EFI/Linux/.build/linux${EFI_ARCH}.efi.stub"
+# Locate the EFI stub from the image's /usr partition.
+EFI_STUB="${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub"
 if [[ ! -f "${EFI_STUB}" ]]; then
-    die "UKI addon: EFI stub not found at ${EFI_STUB}. Was uki_install.sh run?"
+    die "UKI addon: EFI stub not found at ${EFI_STUB}. Is systemd-boot installed in the image?"
 fi
 
-# Verify the main UKI exists on the ESP
-UKI_NAME="acl.efi"
-UKI_PATH="${ESP_DIR}/EFI/Linux/${UKI_NAME}"
-if [[ ! -f "${UKI_PATH}" ]]; then
-    die "UKI addon: Main UKI not found at ${UKI_PATH}. Was uki_install.sh run?"
+# Detect the main UKI name from the ESP (UAPI-compliant: vmlinuz-<version>.efi)
+uki_files=()
+while IFS= read -r f; do uki_files+=("$f"); done < <(find "${ESP_DIR}/EFI/Linux/" -maxdepth 1 -name 'vmlinuz-*.efi' -printf '%f\n' | sort -V)
+if [[ ${#uki_files[@]} -eq 0 ]]; then
+    die "UKI addon: No UKI file (vmlinuz-*.efi) found in ${ESP_DIR}/EFI/Linux/. Was uki_install.sh run?"
 fi
+if [[ ${#uki_files[@]} -ne 1 ]]; then
+    die "UKI addon: Expected exactly 1 UKI file, found ${#uki_files[@]}: ${uki_files[*]}"
+fi
+UKI_NAME="${uki_files[0]}"
+UKI_PATH="${ESP_DIR}/EFI/Linux/${UKI_NAME}"
 
 # Source the platform's uki.cfg (if it exists)
 # Reset all ADDON_* variables so a missing uki.cfg gives clean defaults.

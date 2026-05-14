@@ -21,4 +21,3 @@ See [`acl/docs/`](docs/) for detailed guides:
 - [Azure Linux OS Guard vs ACL](docs/OSGUARD_VS_ACL_AKS.md) — hardened immutable Azure Linux variant vs ACL
 - [Flatcar vs Azure Container Linux](docs/FLATCAR_VS_ACL_AKS.md) — upstream Flatcar vs ACL on AKS
 - [Ubuntu vs Azure Container Linux](docs/UBUNTU_VS_ACL_AKS.md) — general-purpose vs immutable container OS on AKS
-- [Flatcar vs Azure Container Linux](docs/FLATCAR_VS_ACL_AKS.md) — upstream Flatcar vs ACL on AKS

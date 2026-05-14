@@ -80,8 +80,8 @@ openssl req -x509 \
 info "Certificate: ${CERT_FILE}"
 
 # Sign every UKI EFI binary on the ESP in place:
-#   EFI/Linux/acl.efi              - main UKI
-#   EFI/Linux/acl.efi.extra.d/*    - active addons (e.g. firstboot, oem)
+#   EFI/Linux/vmlinuz-<version>.efi              - main UKI
+#   EFI/Linux/vmlinuz-<version>.efi.extra.d/*    - active addons (e.g. firstboot, oem)
 #   acl/uki-addons/*               - addon templates restored/activated at
 #                                    runtime (e.g. flatcar-reset, FIPS opt-in)
 # Active and template copies are independent files, so each is signed directly.
