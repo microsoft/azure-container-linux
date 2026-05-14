@@ -29,7 +29,22 @@ get_selinux_mode() {
     ssh_cmd "sudo getenforce" 2>/dev/null | tr '[:upper:]' '[:lower:]'
 }
 
-# Set (or remove) the acl-node-security-profile tag on the Azure VM.
+# Read the acl-node-security-profile tag value as IMDS sees it from the VM.
+# Returns non-zero if the IMDS request fails or the response cannot be parsed.
+imds_tag() {
+    local raw
+    raw=$(ssh_cmd "curl -sf -H Metadata:true --noproxy '*' \
+        'http://169.254.169.254/metadata/instance/compute/tagsList?api-version=2021-02-01'" \
+        2>/dev/null) || return 1
+    jq -r '.[] | select(.name=="acl-node-security-profile") | .value' <<<"$raw"
+}
+
+# Read the kernel boot ID from the VM. Changes on every real boot.
+boot_id() {
+    ssh_cmd 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null
+}
+
+# Set (or remove) the tag on the VM, then wait for in-guest IMDS to converge
 set_selinux_tag() {
     local value="$1"
     if [[ -z "$value" ]]; then
@@ -38,7 +53,7 @@ set_selinux_tag() {
             --resource-group "$VM_RG" \
             --name "$VM_NAME" \
             --remove tags.acl-node-security-profile \
-            --output none 2>/dev/null || true
+            --output none
     else
         info "Setting acl-node-security-profile=${value}..."
         az vm update \
@@ -47,20 +62,32 @@ set_selinux_tag() {
             --set "tags.acl-node-security-profile=${value}" \
             --output none
     fi
+    info "Waiting for in-guest IMDS to report tag='${value:-<absent>}'..."
+    local deadline=$(( $(date +%s) + 60 )) seen
+    while (( $(date +%s) < deadline )); do
+        seen=$(imds_tag) && [[ "$seen" == "$value" ]] && return 0
+        sleep 2
+    done
+    error "IMDS did not converge to '${value:-<absent>}' within 60s"
+    return 1
 }
 
-# Reboot the VM (in-guest via SSH) and wait for it to come back.
-# `sudo reboot` kills sshd before the session can return cleanly, so ssh
-# exits 255; ignore that and rely on wait_for_ssh to detect real failure.
+# Reboot the VM and wait until the kernel boot_id changes — proves SSH is back
+# AND it's the new kernel (the old sshd can briefly answer mid-shutdown).
 reboot_and_wait() {
-    info "Rebooting VM ${VM_NAME} via SSH..."
+    local old new
+    old=$(boot_id) || { error "Cannot read boot_id — VM unreachable?"; return 1; }
+    info "Rebooting VM ${VM_NAME} via SSH (old boot_id=${old})..."
     ssh_cmd "sudo reboot" || true
-    info "Waiting for VM to come back up..."
-    sleep 10
-    if wait_for_ssh "$VM_IP" "$VM_SSH_TIMEOUT"; then
-        return 0
-    fi
-    warn "SSH did not return after reboot — capturing VM diagnostics"
+    local deadline=$(( $(date +%s) + VM_SSH_TIMEOUT ))
+    while (( $(date +%s) < deadline )); do
+        new=$(boot_id) && [[ "$new" != "$old" ]] && {
+            info "VM rebooted (new boot_id=${new})"
+            return 0
+        }
+        sleep 2
+    done
+    warn "VM did not come back after reboot within ${VM_SSH_TIMEOUT}s — capturing VM diagnostics"
 
     local diag_dir="${DIAGNOSTICS_DIR:-/tmp}"
     mkdir -p "$diag_dir"
