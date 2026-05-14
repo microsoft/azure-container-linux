@@ -15,6 +15,7 @@
 
 packages:
   # --- Ported from Flatcar ------------------------------------------------
+  - coreos-init         # Init scripts, systemd units, generators (autologin fix)
   - ignition-flatcar    # First boot config tool (coreos→flatcar patches)
   - rust-afterburn      # Cloud provider metadata agent
   - sdnotify-proxy      # sd_notify proxy for containerized services

@@ -282,15 +282,13 @@ g sudo 150 -
 SYSUSERS_ADMIN
 
     # core user - retained for Flatcar/ACL compatibility (UID/GID 500)
-    # Phase 1 hardening: core keeps /bin/bash and wheel but is removed from
-    # the docker group (docker socket access is root-equivalent; users must
-    # 'sudo docker' which is now gated by a password — see sudoers below).
+    # Phase 2: core is fully inert — /sbin/nologin shell, no wheel, no docker.
+    # The user exists only as an identity for file ownership.
+    # All interactive access goes through the Azure-provisioned admin user.
     sudo tee "${root_fs_dir}/usr/lib/sysusers.d/core.conf" > /dev/null <<'SYSUSERS_CORE'
-# Core user - primary administrative user
+# Core user - inert identity for file ownership
 g core 500 -
-u core 500:500 "ACL Admin" /home/core /bin/bash
-m core wheel
-m core systemd-journal
+u core 500:500 "Inert Identity" /home/core /sbin/nologin
 SYSUSERS_CORE
 
     # Run systemd-sysusers to create users in /etc/passwd and /etc/group
@@ -470,28 +468,20 @@ SSHD_KEYGEN_DROPIN
 _configure_sudo_rpm() {
     local root_fs_dir="$1"
 
-    # Configure sudo to match Flatcar's sudoers policy:
-    # - wheel group requires password
-    # - sudo group gets NOPASSWD (override base sudoers password-required rule)
-    # - core user gets explicit NOPASSWD (matches Flatcar's /usr/share/baselayout/sudoers)
+    # Configure sudo policy for ACL:
+    # - sudo group gets NOPASSWD (used by kola tests via Ignition)
+    # - Phase 2: core has NO sudoers entry (inert user, cannot sudo)
     # - LESSCHARSET preserved for systemd commands that call less
-    info "RPM mode: Configuring sudoers drop-in for Flatcar parity"
+    info "RPM mode: Configuring sudoers drop-in"
     sudo mkdir -p "${root_fs_dir}/etc/sudoers.d"
     sudo tee "${root_fs_dir}/etc/sudoers.d/flatcar-compat" > /dev/null <<'SUDOERS_EOF'
-## Flatcar-compatible sudo policy for ACL
-## See: https://github.com/flatcar/baselayout/blob/dda76ffe75112a6e9150c925e4d969950d048711/share/baselayout/sudoers
+## ACL sudo policy
 
 ## Pass LESSCHARSET through for systemd commands run through sudo that call less.
 Defaults env_keep += "LESSCHARSET"
 
 ## enable passwordless access for sudo group
 %sudo ALL=(ALL) NOPASSWD: ALL
-
-## core can sudo but requires a password (none is set by default,
-## so sudo is effectively blocked unless a password is provisioned
-## via Ignition or WALinuxAgent). The Azure-provisioned admin user
-## gets its own NOPASSWD entry and is unaffected.
-core ALL=(ALL) ALL
 SUDOERS_EOF
     sudo chmod 440 "${root_fs_dir}/etc/sudoers.d/flatcar-compat"
 }
