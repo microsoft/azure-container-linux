@@ -311,10 +311,12 @@ download_bootloader_packages_rpm() {
 finish_image_cleanup_issue_rpm() {
     local root_fs_dir="$1"
 
-    # Remove /etc/issue files and tmpfiles.d entries that conflict with bootengine's issuegen.conf.
-    # Azure Linux packages install /etc/issue and tmpfiles.d rules, but we want issuegen.conf
-    # to be the sole source for /etc/issue → ../run/issue symlink creation at boot.
-    info "RPM mode: Cleaning up /etc/issue conflicts (issuegen.conf will manage /etc/issue at boot)"
+    # Remove package-provided /etc/issue files and conflicting tmpfiles.d entries.
+    # Azure Linux packages install /etc/issue and tmpfiles.d rules that would
+    # interfere with systemd-tmpfiles --create. The CIS hardening function
+    # (_configure_cis_hardening_rpm) later writes the final CIS banner and
+    # removes issuegen entirely.
+    info "RPM mode: Cleaning up package-provided /etc/issue conflicts"
 
     # Remove physical files
     sudo rm -f "${root_fs_dir}/etc/issue" "${root_fs_dir}/etc/issue.net"
@@ -479,6 +481,11 @@ _configure_sudo_rpm() {
 
 ## Pass LESSCHARSET through for systemd commands run through sudo that call less.
 Defaults env_keep += "LESSCHARSET"
+
+## Reset umask to 022 on sudo — prevents the user's CIS-mandated umask 027
+## from leaking into root processes, which would make root-created files
+## unreadable by non-root (e.g., coreos-cloudinit drop-ins in /run).
+Defaults umask_override, umask=0022
 
 ## enable passwordless access for sudo group
 %sudo ALL=(ALL) NOPASSWD: ALL
@@ -1026,6 +1033,271 @@ _configure_flannel_services_rpm() {
         | sudo tee "${root_fs_dir}/usr/lib/systemd/system/flannel-docker-opts.service" > /dev/null
 }
 
+# CIS Level 1 hardening
+# Addresses CIS Azure Container Linux 4 Level 1 failures without affecting
+# network connectivity or core system operation. All settings are safe for
+# cloud/VM environments.
+_configure_cis_hardening_rpm() {
+    local root_fs_dir="$1"
+
+    info "RPM mode: Applying CIS Level 1 hardening"
+
+    # 1.1.1.1: Blacklist cramfs kernel module
+    sudo install -d -m 0755 "${root_fs_dir}/usr/lib/modprobe.d"
+    sudo tee "${root_fs_dir}/usr/lib/modprobe.d/cis-blacklist.conf" > /dev/null <<'MODPROBE_CIS'
+# CIS 1.1.1.1 - Ensure cramfs kernel module is not available
+install cramfs /bin/false
+blacklist cramfs
+MODPROBE_CIS
+    sudo chmod 0644 "${root_fs_dir}/usr/lib/modprobe.d/cis-blacklist.conf"
+
+    # NOT APPLICABLE to ACL
+    # 1.2.1.2 (gpgcheck) / 1.2.1.3 (TDNF gpgcheck globally activated):
+    #   ACL is an immutable OS with no package manager at runtime. There is no
+    #   tdnf, no /etc/yum.repos.d, and no ability to install packages on a
+    #   running system. These rules are false positives for ACL and should be
+    #   excluded from the CIS benchmark or marked as not-applicable in the MOF.
+    #
+    # 2.2.17 (mail transfer agent local-only mode):
+    #   Not implemented in the ComplianceEngine assessor. No MTA runs on ACL.
+    #
+    # 5.1.1 (cron daemon enabled):
+    #   ACL does not ship cronie. No cron daemon exists to enable. Should be
+    #   excluded from the ACL CIS benchmark.
+    #
+    # 5.5.2 (system accounts secured):
+    #   Requires SCE script execution which the assessor does not support yet.
+    #
+    # 6.1.3.1 (access to all logfiles configured):
+    #   Requires SCE script execution which the assessor does not support yet.
+
+    # 1.4.x / 3.2.x: Sysctl hardening (network + ASLR)
+    # Includes both IPv4 and IPv6 settings as required by the CIS benchmark.
+    sudo install -d -m 0755 "${root_fs_dir}/usr/lib/sysctl.d"
+    sudo tee "${root_fs_dir}/usr/lib/sysctl.d/90-cis-hardening.conf" > /dev/null <<'SYSCTL_CIS'
+# CIS Azure Container Linux 4 - Level 1 sysctl hardening
+#
+# 1.4.1 - Address space layout randomization
+kernel.randomize_va_space = 2
+
+# 3.2.1 - Disable packet redirect sending
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+
+# 3.2.2 - Ignore bogus ICMP error responses
+net.ipv4.icmp_ignore_bogus_error_responses = 1
+
+# 3.2.3 - Ignore broadcast ICMP requests
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+
+# 3.2.4 - Do not accept ICMP redirects (IPv4 + IPv6)
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+
+# 3.2.5 - Do not accept secure ICMP redirects
+net.ipv4.conf.all.secure_redirects = 0
+net.ipv4.conf.default.secure_redirects = 0
+
+# 3.2.6 - Enable reverse path filtering
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+
+# 3.2.7 - Do not accept source-routed packets (IPv4 + IPv6)
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv6.conf.default.accept_source_route = 0
+
+# 3.2.8 - Log suspicious (martian) packets
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
+
+# 3.2.9 - Enable TCP SYN cookies
+net.ipv4.tcp_syncookies = 1
+
+# 3.2.10 - Do not accept IPv6 router advertisements
+net.ipv6.conf.all.accept_ra = 0
+net.ipv6.conf.default.accept_ra = 0
+SYSCTL_CIS
+    sudo chmod 0644 "${root_fs_dir}/usr/lib/sysctl.d/90-cis-hardening.conf"
+
+    # 1.4.3/1.4.4/1.4.5: Core dump hardening
+    sudo install -d -m 0755 "${root_fs_dir}/etc/systemd/coredump.conf.d"
+    sudo tee "${root_fs_dir}/etc/systemd/coredump.conf.d/cis.conf" > /dev/null <<'COREDUMP_CIS'
+# CIS 1.4.4 / 1.4.5 - Disable core dump backtraces and storage
+[Coredump]
+Storage=none
+ProcessSizeMax=0
+COREDUMP_CIS
+    sudo chmod 0644 "${root_fs_dir}/etc/systemd/coredump.conf.d/cis.conf"
+
+    # CIS 1.4.3 - Limit core file size via limits.d
+    sudo install -d -m 0755 "${root_fs_dir}/etc/security/limits.d"
+    sudo tee "${root_fs_dir}/etc/security/limits.d/cis-core.conf" > /dev/null <<'LIMITS_CIS'
+# CIS 1.4.3 - Ensure core file size is configured
+* hard core 0
+LIMITS_CIS
+    sudo chmod 0644 "${root_fs_dir}/etc/security/limits.d/cis-core.conf"
+
+    # 1.5.1/1.5.2: Login warning banners
+    # The banner must NOT contain \v, \s, \m, \r or OS names (CIS regex check).
+    # Disable issuegen completely so it doesn't overwrite /etc/issue at boot.
+    # Note: finish_image_cleanup_issue_rpm() already removed package-provided
+    # /etc/issue files and tmpfiles.d conflicts before systemd-tmpfiles ran.
+    local banner_text="Authorized uses only. All activity may be monitored and reported."
+    # Remove any residual symlink (issuegen.conf may have recreated it via tmpfiles).
+    sudo rm -f "${root_fs_dir}/etc/issue" "${root_fs_dir}/etc/issue.net"
+    echo "${banner_text}" | sudo tee "${root_fs_dir}/etc/issue" > /dev/null
+    echo "${banner_text}" | sudo tee "${root_fs_dir}/etc/issue.net" > /dev/null
+    sudo chmod 0644 "${root_fs_dir}/etc/issue" "${root_fs_dir}/etc/issue.net"
+    # Remove issuegen so it doesn't regenerate /etc/issue at boot with OS info
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/issuegen.service"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/issuegen.path"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/issuegen.service"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/issuegen.path"
+    sudo rm -f "${root_fs_dir}/usr/lib/flatcar/issuegen"
+    sudo rm -f "${root_fs_dir}/usr/lib/udev/rules.d/90-issuegen.rules"
+    # Remove issuegen tmpfiles.d config that creates /etc/issue → ../run/issue symlink
+    sudo rm -f "${root_fs_dir}/usr/lib/tmpfiles.d/issuegen.conf"
+
+    # 5.1.1: cron daemon — see NOT APPLICABLE section above
+
+    # 5.4.1/5.4.2/5.4.3/5.4.4: PAM configuration
+    # The CIS assessor checks BOTH /etc/pam.d/system-auth AND /etc/pam.d/system-password.
+    # Azure Linux only ships system-auth; system-password does not exist.  Create it
+    # so the assessor finds the expected PAM modules in both files.
+    # NOTE: This is purely to satisfy CIS audit logic. The security posture is
+    # unchanged -> PAM falls back to system-auth when system-password is absent,
+    # so authentication is already correctly configured without this file.
+    sudo install -d -m 0755 "${root_fs_dir}/etc/pam.d"
+
+    # If system-password doesn't exist, create it as a copy of system-auth
+    # so the PAM edits below apply to both files.
+    if [[ ! -f "${root_fs_dir}/etc/pam.d/system-password" ]] && [[ -f "${root_fs_dir}/etc/pam.d/system-auth" ]]; then
+        sudo cp "${root_fs_dir}/etc/pam.d/system-auth" "${root_fs_dir}/etc/pam.d/system-password"
+    fi
+
+    for pam_file in system-auth system-password; do
+        local pam_path="${root_fs_dir}/etc/pam.d/${pam_file}"
+        if [[ -f "${pam_path}" ]]; then
+            # 5.4.1: Add pam_pwquality.so with retry=3 before pam_unix password line
+            if ! sudo grep -q "pam_pwquality" "${pam_path}"; then
+                sudo sed -i '/^password.*pam_unix.so/i password    requisite     pam_pwquality.so retry=3' \
+                    "${pam_path}"
+                sudo grep -q "pam_pwquality" "${pam_path}" \
+                    || die "Failed to add pam_pwquality to ${pam_file} (anchor pattern '^password.*pam_unix.so' may have changed)"
+            fi
+            # 5.4.4: Add pam_pwhistory.so with remember=5 before pam_unix password line
+            if ! sudo grep -q "pam_pwhistory" "${pam_path}"; then
+                sudo sed -i '/^password.*pam_unix.so/i password    required      pam_pwhistory.so remember=5 use_authtok' \
+                    "${pam_path}"
+                sudo grep -q "pam_pwhistory" "${pam_path}" \
+                    || die "Failed to add pam_pwhistory to ${pam_file} (anchor pattern '^password.*pam_unix.so' may have changed)"
+            fi
+            # 5.4.3: Ensure pam_unix.so has sha512
+            if ! sudo grep -q "pam_unix.so.*sha512" "${pam_path}"; then
+                sudo sed -i 's/\(^password.*pam_unix.so.*\)/\1 sha512/' "${pam_path}"
+                sudo grep -q "pam_unix.so.*sha512" "${pam_path}" \
+                    || die "Failed to add sha512 to pam_unix.so in ${pam_file}"
+            fi
+            # 5.4.2: Add pam_faillock.so auth lines if missing
+            if ! sudo grep -q "pam_faillock" "${pam_path}"; then
+                sudo sed -i '/^auth.*pam_unix.so/i auth        required      pam_faillock.so preauth deny=5 unlock_time=900' \
+                    "${pam_path}"
+                sudo sed -i '/^auth.*pam_unix.so/a auth        [default=die] pam_faillock.so authfail deny=5 unlock_time=900' \
+                    "${pam_path}"
+                # Add account line for faillock
+                if ! sudo grep -q "account.*pam_faillock" "${pam_path}"; then
+                    sudo sed -i '/^account.*pam_unix.so/i account     required      pam_faillock.so' \
+                        "${pam_path}"
+                fi
+                sudo grep -q "pam_faillock.so preauth" "${pam_path}" \
+                    || die "Failed to add pam_faillock to ${pam_file} (anchor pattern '^auth.*pam_unix.so' may have changed)"
+            fi
+        fi
+    done
+
+    # 5.4.1: Password creation requirements (pwquality)
+    sudo install -d -m 0755 "${root_fs_dir}/etc/security"
+    sudo tee "${root_fs_dir}/etc/security/pwquality.conf" > /dev/null <<'PWQUALITY_CIS'
+# CIS 5.4.1 - Password creation requirements
+minlen = 14
+dcredit = -1
+ucredit = -1
+ocredit = -1
+lcredit = -1
+PWQUALITY_CIS
+    sudo chmod 0644 "${root_fs_dir}/etc/security/pwquality.conf"
+
+    # 5.4.2: Account lockout config (faillock.conf)
+    sudo tee "${root_fs_dir}/etc/security/faillock.conf" > /dev/null <<'FAILLOCK_CIS'
+# CIS 5.4.2 - Lockout for failed password attempts
+deny = 5
+unlock_time = 900
+FAILLOCK_CIS
+    sudo chmod 0644 "${root_fs_dir}/etc/security/faillock.conf"
+
+    # 5.5.1.1: Password expiration
+    if [[ -f "${root_fs_dir}/etc/login.defs" ]]; then
+        sudo sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS   365/' "${root_fs_dir}/etc/login.defs"
+        sudo sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS   1/' "${root_fs_dir}/etc/login.defs"
+    fi
+
+    # 5.5.1.4: Inactive password lock via /etc/default/useradd
+    # The CIS assessor checks /etc/default/useradd (NOT login.defs) for INACTIVE.
+    sudo install -d -m 0755 "${root_fs_dir}/etc/default"
+    if [[ -f "${root_fs_dir}/etc/default/useradd" ]]; then
+        if sudo grep -q "^INACTIVE" "${root_fs_dir}/etc/default/useradd"; then
+            sudo sed -i 's/^INACTIVE.*/INACTIVE=30/' "${root_fs_dir}/etc/default/useradd"
+        else
+            echo "INACTIVE=30" | sudo tee -a "${root_fs_dir}/etc/default/useradd" > /dev/null
+        fi
+    else
+        sudo tee "${root_fs_dir}/etc/default/useradd" > /dev/null <<'USERADD_CIS'
+# CIS 5.5.1.4 - Inactive password lock
+INACTIVE=30
+USERADD_CIS
+    fi
+    sudo chmod 0644 "${root_fs_dir}/etc/default/useradd"
+
+    # 5.5.4: Default umask 027
+    # Set in both login.defs (pam_umask) and profile.d (shell login).
+    # Also configure sudo to reset umask to 022 so root-created files via sudo
+    # remain world-readable (prevents kola tests from breaking when they read
+    # files created by 'sudo coreos-cloudinit' etc.).
+    sudo tee "${root_fs_dir}/etc/profile.d/cis-umask.sh" > /dev/null <<'UMASK_CIS'
+# CIS 5.5.4 - Ensure default user umask is 027 or more restrictive
+umask 027
+UMASK_CIS
+    sudo chmod 0644 "${root_fs_dir}/etc/profile.d/cis-umask.sh"
+    if [[ -f "${root_fs_dir}/etc/login.defs" ]]; then
+        sudo sed -i 's/^UMASK.*/UMASK           027/' "${root_fs_dir}/etc/login.defs"
+    fi
+
+    # 6.1.1.1.3/5/6: Journald configuration
+    # The CIS assessor runs "systemd-analyze cat-config systemd/journald.conf"
+    # and searches for uncommented parameters. Use a drop-in to override defaults.
+    # 6.1.1.1.3: ForwardToSyslog — ACL has no rsyslog, so set to "no".
+    sudo install -d -m 0755 "${root_fs_dir}/etc/systemd/journald.conf.d"
+    cat <<'JOURNALD_CIS' | sudo tee "${root_fs_dir}/etc/systemd/journald.conf.d/cis.conf" > /dev/null
+[Journal]
+ForwardToSyslog=no
+Storage=persistent
+Compress=yes
+JOURNALD_CIS
+    sudo chmod 0644 "${root_fs_dir}/etc/systemd/journald.conf.d/cis.conf"
+
+    # 7.2.8: Home directory permissions
+    sudo chmod 0700 "${root_fs_dir}/root"
+    if [[ -d "${root_fs_dir}/home" ]]; then
+        sudo find "${root_fs_dir}/home" -maxdepth 1 -mindepth 1 -type d -exec chmod 0750 {} \;
+    fi
+
+    info "RPM mode: CIS Level 1 hardening complete"
+}
+
 # ── Orchestrator: post-tmpfiles image customization ──────────────────────────
 finish_image_post_tmpfiles_rpm() {
     local root_fs_dir="$1"
@@ -1042,6 +1314,7 @@ finish_image_post_tmpfiles_rpm() {
     _configure_flannel_services_rpm "${root_fs_dir}"
     _configure_kdump_rpm "${root_fs_dir}"
     _configure_misc_rpm "${root_fs_dir}"
+    _configure_cis_hardening_rpm "${root_fs_dir}"
     _generate_hwdb_rpm "${root_fs_dir}"
     _mask_core_sshkeys_rpm "${root_fs_dir}"
 }

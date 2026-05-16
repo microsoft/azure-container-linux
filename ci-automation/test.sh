@@ -186,6 +186,7 @@ function _test_run_impl() {
         docker run --pull "${pull_policy}" --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
           -w /work -v "$PWD":/work \
           -e distro_flag="${distro_flag}" \
+          ${AZURE_DISK_URI:+-e AZURE_DISK_URI="${AZURE_DISK_URI}"} \
           "${mantle_ref}" \
          bash -c "git config --global --add safe.directory /work && \
                   source sdk_container/.env && \
