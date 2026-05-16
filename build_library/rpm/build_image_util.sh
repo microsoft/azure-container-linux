@@ -612,6 +612,20 @@ _generate_hwdb_rpm() {
     fi
 }
 
+# ── Mask afterburn SSH-key injection for inert core user ─────────────────────
+_mask_core_sshkeys_rpm() {
+    local root_fs_dir="$1"
+
+    # Phase 3: coreos-metadata-sshkeys@core.service writes SSH public keys
+    # from Azure IMDS into ~core/.ssh/authorized_keys. With core fully inert
+    # (/sbin/nologin, no sudoers), injecting keys is pointless and leaves a
+    # stale authorized_keys file. The admin user's keys are handled by
+    # WALinuxAgent. Masking (symlink to /dev/null) takes precedence over
+    # the DefaultInstance=core enable symlink created by %systemd_post.
+    info "RPM mode: Masking coreos-metadata-sshkeys@core.service (Phase 3)"
+    sudo ln -sfT /dev/null "${root_fs_dir}/etc/systemd/system/coreos-metadata-sshkeys@core.service"
+}
+
 # ── Remove Flatcar components not used by ACL ────────────────────────────────
 _remove_unused_flatcar_components_rpm() {
     local root_fs_dir="$1"
@@ -1029,6 +1043,7 @@ finish_image_post_tmpfiles_rpm() {
     _configure_kdump_rpm "${root_fs_dir}"
     _configure_misc_rpm "${root_fs_dir}"
     _generate_hwdb_rpm "${root_fs_dir}"
+    _mask_core_sshkeys_rpm "${root_fs_dir}"
 }
 
 finish_image_backup_etc_rpm() {
