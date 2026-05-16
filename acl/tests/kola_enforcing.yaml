@@ -24,6 +24,9 @@ tests:
   - name: acl.etcd-member.discovery
 
   - name: acl.flannel.udp
+    exceptions:
+      - architectures: [aarch64]
+        reason: Flannel UDP coverage is registered only for amd64
   - name: acl.flannel.vxlan
 
   - name: acl.internet
@@ -42,13 +45,23 @@ tests:
   - name: cl.cloudinit.script
 
   - name: acl.disk.raid0.data
+    exceptions:
+      - platforms: [azure]
+        reason: ACL data RAID coverage uses a secondary disk, which this Kola test only provisions on QEMU
   - name: acl.disk.raid0.root
     exceptions:
+      - platforms: [azure]
+        reason: Root RAID coverage requires an additional disk, which this Kola test only provisions on QEMU
       - bootloader: [grub]
         reason: Mantle hardcodes UKI partition layout (part5); GRUB uses part9
   - name: acl.disk.raid1.data
+    exceptions:
+      - platforms: [azure]
+        reason: ACL data RAID coverage uses a secondary disk, which this Kola test only provisions on QEMU
   - name: acl.disk.raid1.root
     exceptions:
+      - platforms: [azure]
+        reason: Root RAID coverage requires an additional disk, which this Kola test only provisions on QEMU
       - bootloader: [grub]
         reason: Mantle hardcodes UKI partition layout (part5); GRUB uses part9
 
@@ -56,20 +69,47 @@ tests:
   - name: cl.etcd-member.v2-backup-restore
 
   - name: cl.filesystem
+    exceptions:
+      - platforms: [azure]
+        reason: Filesystem audit is not cloud-environment coverage and is limited to QEMU contexts
 
   - name: cl.ignition.instantiated.enable-unit
+    exceptions:
+      - platforms: [azure]
+        reason: Instantiated unit enablement coverage is not cloud-environment coverage and is limited to QEMU contexts
   - name: cl.ignition.kargs
     exceptions:
       - bootloader: [uki]
         reason: Dynamic kargs writing is not supported with UKI's immutable bootloader configuration
   - name: cl.ignition.luks
   - name: cl.ignition.oem.indirect
+    exceptions:
+      - platforms: [azure]
+        reason: Test rewrites OEM grub.cfg, which does not survive cloud-platform reboot semantics
   - name: cl.ignition.oem.indirect.new
+    exceptions:
+      - platforms: [azure]
+        reason: Test rewrites OEM grub.cfg, which does not survive cloud-platform reboot semantics
   - name: cl.ignition.oem.regular
+    exceptions:
+      - platforms: [azure]
+        reason: Test rewrites OEM grub.cfg, which does not survive cloud-platform reboot semantics
   - name: cl.ignition.oem.regular.new
+    exceptions:
+      - platforms: [azure]
+        reason: Test rewrites OEM grub.cfg, which does not survive cloud-platform reboot semantics
   - name: cl.ignition.oem.reuse
+    exceptions:
+      - platforms: [azure]
+        reason: Test rewrites OEM grub.cfg, which does not survive cloud-platform reboot semantics
   - name: cl.ignition.oem.wipe
+    exceptions:
+      - platforms: [azure]
+        reason: Wiping the OEM filesystem can prevent non-QEMU platforms from booting after reboot
   - name: cl.ignition.partition_on_boot_disk
+    exceptions:
+      - platforms: [azure]
+        reason: Test repartitions the boot disk and is limited to QEMU disk-layout coverage
   - name: cl.ignition.symlink
   - name: cl.ignition.translation
   - name: cl.ignition.v1.btrfsroot
@@ -77,6 +117,9 @@ tests:
   - name: cl.ignition.v1.groups
   - name: cl.ignition.v1.once
   - name: cl.ignition.v1.sethostname
+    exceptions:
+      - platforms: [azure]
+        reason: Azure requires hostname at instance creation and waagent can overwrite Ignition-set hostnames after boot
   - name: cl.ignition.v1.xfsroot
   - name: cl.ignition.v2.btrfsroot
   - name: cl.ignition.v2.ext4root
@@ -86,6 +129,9 @@ tests:
   - name: cl.ignition.v2_1.vfat
 
   - name: cl.install.cloudinit
+    exceptions:
+      - platforms: [azure]
+        reason: Test expects installer-written cloud-config to own hostname, which conflicts with Azure hostname handling
 
   - name: acl.network.initramfs.second-boot
     exceptions:
@@ -93,16 +139,17 @@ tests:
         reason: SELinux toggle reaches out to IMDS on second boot too
   - name: cl.network.iptables
   - name: cl.network.listeners
+    exceptions:
+      - platforms: [azure]
+        reason: Listener audit is not cloud-environment coverage unless OEM tools unexpectedly open ports
   - name: cl.network.nftables
   - name: cl.network.wireguard
 
-  - name: cl.osreset.ignition-rerun
-    exceptions:
-      - bootloader: [uki]
-        reason: Test requires writing of keep-machine-id to grub.cfg, and cannot be eaily adapted to work with UKI's immutable bootloader configuration
-
   - name: cl.swap_activation
   - name: cl.sysext.boot
+    exceptions:
+      - platforms: [azure]
+        reason: Test uses custom OEM files and should not run on cloud platforms
   - name: cl.users.shells
   - name: cl.verity
 
@@ -112,8 +159,14 @@ tests:
   - name: coreos.ignition.resource.local
   - name: coreos.ignition.resource.remote
   - name: coreos.ignition.resource.s3.versioned
+    exceptions:
+      - platforms: [azure]
+        reason: Versioned S3 resource coverage is a special case of remote-resource ignition coverage and is limited to QEMU
   - name: coreos.ignition.security.tls
   - name: coreos.ignition.sethostname
+    exceptions:
+      - platforms: [azure]
+        reason: Azure requires hostname at instance creation and waagent can overwrite Ignition-set hostnames after boot
   - name: coreos.ignition.systemd.enable-service
   - name: coreos.selinux.boolean
   - name: coreos.tls.fetch-urls
@@ -172,8 +225,17 @@ tests:
         reason: kubectl wait timeouts on emulated arm64 QEMU
 
   - name: linux.nfs.v3
+    exceptions:
+      - platforms: [azure]
+        reason: Test requires hostname control that conflicts with Azure instance-level hostname handling
   - name: linux.nfs.v4
+    exceptions:
+      - platforms: [azure]
+        reason: Test requires hostname control that conflicts with Azure instance-level hostname handling
   - name: linux.ntp
+    exceptions:
+      - platforms: [azure]
+        reason: Test starts a local NTP server, so it is not cloud-environment coverage
 
   - name: sysext.custom-docker.sysext
   - name: sysext.disable-containerd
@@ -181,5 +243,8 @@ tests:
   - name: sysext.simple
 
   - name: systemd.journal.remote
+    exceptions:
+      - platforms: [azure]
+        reason: Test requires instance-level hostname control, which conflicts with Azure hostname handling
   - name: systemd.journal.user
   - name: systemd.sysusers.gshadow
