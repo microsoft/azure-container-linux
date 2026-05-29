@@ -94,6 +94,7 @@ function _test_run_impl() {
     fi
 
     local retries="${MAX_RETRIES:-20}"
+    echo "[DEBUG] ci-automation/test.sh _test_run_impl(): MAX_RETRIES=${MAX_RETRIES:-<not set>}, retries=${retries}"
     local skip_copy_to_bincache=${SKIP_COPY_TO_BINCACHE:-0}
 
     source ci-automation/tapfile_helper_lib.sh
@@ -139,24 +140,42 @@ function _test_run_impl() {
     local stdin=""
     [[ ! -t 0 ]] && stdin=$(< /dev/stdin)
 
+    # Keep unescaped copy for the fallback in case test_update_reruns.sh
+    # fails. The escaped versions have printf-%q quoting (e.g. acl.\*)
+    # which kola's filepath.Match won't recognise as globs.
+    local tests_unescaped=("${@}")
+
     # Vendor tests may need to know if it is a first run or a rerun
     touch "${work_dir}/first_run"
     for retry in $(seq "${retries}"); do
         local tapfile="results-run-${retry}.tap"
         local failfile="failed-run-${retry}.txt"
 
+        # Determine pull policy based on image reference
+        # Local images (no registry prefix or localhost/) should use --pull never
+        local pull_policy="always"
+        if [[ ! "${MANTLE_REF}" == *"/"* ]] || [[ "${MANTLE_REF}" == "localhost/"* ]]; then
+            pull_policy="never"
+        fi
+
+        local distro_flag=""
+        [[ "${PACKAGE_SOURCE_MODE:-}" == "RPM" ]] && distro_flag="--distro=acl"
+
         # Ignore retcode since tests are flaky. We'll re-run failed tests and
         #  determine success based on test results (tapfile).
-        docker run --pull always --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
-          -w /work -v "$PWD":/work --env-file="sdk_lib/env_mantle.txt" -i "${MANTLE_REF}" bash -ec \
+        set +e
+        docker run --pull "${pull_policy}" --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
+          -w /work -v "$PWD":/work --env-file="sdk_lib/env_mantle.txt" -e "distro_flag=${distro_flag}" -i "${MANTLE_REF}" bash -ec \
             'git config --global --add safe.directory /work
             source /dev/stdin
             ci-automation/vendor-testing/"${1}".sh "${@:2}"' \
-            -- "${image}" "${common_test_args[@]}" "${tapfile}" "${@}" <<< "${stdin}" || :
+            -- "${image}" "${common_test_args[@]}" "${tapfile}" "${@}" <<< "${stdin}"
+        set -e
         rm -f "${work_dir}/first_run"
 
+        set +e
         # Note: git safe.directory is not set in this run as it does not use git
-        docker run --pull always --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
+        docker run --pull "${pull_policy}" --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
           -w /work -v "$PWD":/work "${MANTLE_REF}" \
             ci-automation/test_update_reruns.sh \
                 "${arch}" "${vernum}" "${image}" "${retry}" \
@@ -164,6 +183,18 @@ function _test_run_impl() {
                 "${tests_dir}/${failfile}" \
                 "${tap_merged_summary}" \
                 "${tap_merged_detailed}"
+        local update_reruns_rc=$?
+        set -e
+
+        if [[ ${update_reruns_rc} -ne 0 ]]; then
+            echo "########### test_update_reruns.sh failed (exit code ${update_reruns_rc}). ###########"
+            echo "Cannot determine which tests to re-run. Treating all as failed."
+            # Write the original unescaped test patterns to the failfile.
+            # Do NOT use tests_escaped here — its printf-%q quoting
+            # (e.g. acl.\*) turns glob wildcards into literals, causing
+            # kola's filepath.Match to match zero tests on the retry.
+            printf '%s\n' "${tests_unescaped[@]}" > "${tests_dir}/${failfile}"
+        fi
 
         readarray -t failed_tests <"${tests_dir}/${failfile}"
         if [ "${#failed_tests[@]}" -eq 0 ] ; then

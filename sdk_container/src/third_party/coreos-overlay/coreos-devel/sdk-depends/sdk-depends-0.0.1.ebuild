@@ -17,6 +17,8 @@ DEPEND="
 	app-admin/sudo
 	app-admin/updateservicectl
 	app-arch/pbzip2
+	app-arch/rpm
+	>=app-arch/dnf5-5.2.6.0
 	app-crypt/azure-keyvault-pkcs11
 	app-crypt/p11-kit
 	app-crypt/sbsigntools
@@ -42,6 +44,7 @@ DEPEND="
 	sys-apps/iproute2
 	amd64? ( sys-apps/iucode_tool )
 	sys-apps/seismograph
+	sys-apps/systemd[boot,ukify]
 	sys-boot/grub
 	sys-firmware/edk2-bin
 	sys-fs/btrfs-progs

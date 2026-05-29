@@ -71,7 +71,7 @@
       "9":{
         "label":"ROOT",
         "fs_label":"ROOT",
-        "type":"flatcar-resize",
+        "type":"dps-root",
         "blocks":"3653632",
         "fs_type":"ext4",
         "mount":"/"

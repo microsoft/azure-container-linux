@@ -1,9 +1,9 @@
-# Code of Conduct
+# Microsoft Open Source Code of Conduct
 
-The Flatcar project follows the [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md).
+This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
 
-For details on how we uphold community standards across all Flatcar repositories, please see the [main Flatcar Code of Conduct](https://github.com/flatcar/Flatcar/blob/main/CODE_OF_CONDUCT.md).
+Resources:
 
-## Reporting
-
-If you experience or witness unacceptable behavior, please report it following the process outlined in the [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md).
+- [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/)
+- [Microsoft Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/)
+- Contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with questions or concerns
