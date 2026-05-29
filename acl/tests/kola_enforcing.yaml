@@ -10,17 +10,37 @@
 #   platforms:         [qemu, azure]
 #   architectures:     [amd64, aarch64]
 #   bootloader:        [grub, uki]
+#   imageVariants:     [acl, acl-t]
 #   reason:            human-readable explanation
 #
 # Logic:
 #   - Within a single rule, fields combine with AND (all must match).
 #   - Across rules, they combine with OR (any matching rule allows failure).
 #   - A test with no exceptions is always enforced.
+#
+# imageVariants notes:
+#   - Callers that don't pass an --image-variant to evaluate_test_results.sh
+#     get "acl" as the default (matches the stock acl build). acl-t stages
+#     pass "acl-t" so the acl-t-only exceptions below apply.
+#   - acl-t removes the docker CLI (moby-containerd RPM ships containerd/ctr
+#     only) and drops both sysexts (containerd + oem-azure), so docker.* and
+#     sysext.* tests have no viable target on acl-t.
 
 version: 1
 
 tests:
   - name: acl.basic
+  - name: acl.basic/ServicesActive
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: |
+          Safety net until the mantle container rebuild propagates.
+          mantle kola/tests/coretest/core.go TestServicesActiveACL was
+          patched to only require docker.socket when its unit file exists
+          on disk — acl-t swaps the docker sysext for the containerd RPM
+          and ships no docker.socket, so is-active returned exit 4.
+          Remove this exception once the deployed mantle image contains
+          the fix. Other acl.basic subtests remain enforced on acl-t.
   - name: acl.etcd-member.discovery
     exceptions:
       - platforms: [qemu]
@@ -28,6 +48,8 @@ tests:
         reason: 3-node etcd cluster on TCG-emulated arm64 races systemd's DefaultDeviceTimeoutSec for /dev/disk/by-label/OEM; tracked by the OEM fsck conditional dropin work
       - platforms: [azure]
         reason: Azure version depends on discovery.etcd.io, which is unmaintained.
+      - imageVariants: [acl-t]
+        reason: etcd-member ships as a sysext on stock acl; acl-t drops the containerd/oem sysexts and does not ship etcd-member as an RPM. No viable target.
 
   - name: acl.flannel.udp
     exceptions:
@@ -35,6 +57,8 @@ tests:
         reason: Flannel UDP coverage is registered only for amd64
       - platforms: [azure]
         reason: Azure version depends on discovery.etcd.io, which is unmaintained.
+      - imageVariants: [acl-t]
+        reason: flannel-docker sysext removed on acl-t (moby-containerd RPM replaces containerd sysext but ships no flannel bits).
   - name: acl.flannel.vxlan
     exceptions:
       - platforms: [qemu]
@@ -42,6 +66,8 @@ tests:
         reason: Flakiness on TCG-emulated arm64 in aclmain, failures due to slow device enumeration.
       - platforms: [azure]
         reason: Azure version depends on discovery.etcd.io, which is unmaintained.
+      - imageVariants: [acl-t]
+        reason: flannel-docker sysext removed on acl-t (moby-containerd RPM replaces containerd sysext but ships no flannel bits).
 
   - name: acl.internet
     exceptions:
@@ -53,6 +79,12 @@ tests:
           have a Public IP (mantle PR 27413), and Azure default outbound access
           does not SNAT ICMP. Revert once mantle/infra restores outbound ICMP
           (NSG-on-NIC keeping the PIP, or a NAT Gateway on the kola subnet).
+      - imageVariants: [acl-t]
+        reason: |
+          All three subtests are non-viable on acl-t: DockerPing/DockerEcho
+          need the docker CLI (moby-containerd ships containerd/ctr only),
+          and NTPDate needs ntpdate (chrony is acl-t's time daemon; same
+          reason as linux.ntp).
 
   # TEMPORARY (AB#22249): acl.kdump and acl.kdump.grub are disabled on the ACL
   # distro in mantle (ExcludeDistros: [acl]), so kola never selects them and the
@@ -74,7 +106,13 @@ tests:
   - name: acl.ignition.v2.users
 
   - name: bpf.execsnoop
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: bpf/local-gadget tooling ships in a sysext on stock acl; acl-t drops sysexts and does not package it as an RPM. local-gadget.service fails-to-start.
   - name: bpf.local-gadget
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: local-gadget.service ships in a sysext on stock acl; acl-t drops sysexts and does not package it as an RPM.
 
   - name: cl.cloudinit.basic
   - name: cl.cloudinit.multipart-mime
@@ -114,10 +152,15 @@ tests:
         reason: Flakiness on TCG-emulated arm64, failures due to slow device enumeration.
 
   - name: cl.etcd-member.etcdctlv3
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: etcd-member ships as a sysext on stock acl; acl-t drops sysexts and does not package etcd-member as an RPM.
   - name: cl.etcd-member.v2-backup-restore
     exceptions:
       - platforms: [azure]
         reason: Azure version depends on discovery.etcd.io, which is unmaintained.
+      - imageVariants: [acl-t]
+        reason: etcd-member ships as a sysext on stock acl; acl-t drops sysexts and does not package etcd-member as an RPM.
 
   - name: cl.filesystem
     exceptions:
@@ -205,6 +248,8 @@ tests:
     exceptions:
       - platforms: [azure]
         reason: Test uses custom OEM files and should not run on cloud platforms
+      - imageVariants: [acl-t]
+        reason: acl-t ships no sysexts (containerd + oem-azure are replaced by first-class RPMs); the sysext-boot smoke has no viable target.
   - name: cl.users.shells
   - name: cl.verity
 
@@ -231,6 +276,16 @@ tests:
       - platforms: [azure]
         reason: Azure requires hostname at instance creation and waagent can overwrite Ignition-set hostnames after boot
   - name: coreos.ignition.systemd.enable-service
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: |
+          Test exercises ignition's systemd.enable-service feature by
+          enabling nfs-server.service + rpc-statd.service in the ignition
+          config, rebooting, then checking they started. acl-t drops
+          nfs-utils / rpcbind from the RPM set (same reason linux.nfs.v3/v4
+          are exempted), so those units load but fail to start. The
+          feature under test is unaffected — only the test's chosen
+          guinea-pig service is missing.
   - name: coreos.selinux.boolean
   - name: coreos.tls.fetch-urls
 
@@ -239,79 +294,131 @@ tests:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: Flakiness on TCG-emulated arm64, failures due to slow device enumeration.
+      - imageVariants: [acl-t]
+        reason: acl-t replaces the containerd sysext with the moby-containerd RPM, which ships containerd/ctr but no docker CLI/daemon.
   - name: docker.btrfs-storage
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: acl-t has no docker CLI/daemon (moby-containerd RPM only ships containerd/ctr).
   - name: docker.containerd-restart
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: acl-t has no docker CLI/daemon (moby-containerd RPM only ships containerd/ctr).
   - name: docker.enable-service.sysext
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: acl-t has no docker sysext to enable — containerd is a first-class RPM, not a sysext.
   - name: docker.selinux
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: Slow emulation causes this test to hit the duplicate journal entry bug (azure coverage doesn't exhibit this)
+      - imageVariants: [acl-t]
+        reason: acl-t has no docker CLI/daemon (moby-containerd RPM only ships containerd/ctr).
   - name: docker.userns
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: acl-t has no docker CLI/daemon (moby-containerd RPM only ships containerd/ctr).
 
   - name: kubeadm.v1.32.4.calico.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
+      - imageVariants: [acl-t]
+        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
   - name: kubeadm.v1.32.4.cilium.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
+      - imageVariants: [acl-t]
+        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
   - name: kubeadm.v1.32.4.flannel.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
+      - imageVariants: [acl-t]
+        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
   - name: kubeadm.v1.33.0.calico.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
+      - imageVariants: [acl-t]
+        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
   - name: kubeadm.v1.33.0.cilium.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
+      - imageVariants: [acl-t]
+        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
   - name: kubeadm.v1.33.0.flannel.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
+      - imageVariants: [acl-t]
+        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
   - name: kubeadm.v1.34.1.calico.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
+      - imageVariants: [acl-t]
+        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
   - name: kubeadm.v1.34.1.cilium.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
+      - imageVariants: [acl-t]
+        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
   - name: kubeadm.v1.34.1.flannel.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
+      - imageVariants: [acl-t]
+        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
 
   - name: linux.nfs.v3
     exceptions:
       - platforms: [azure]
         reason: Test requires hostname control that conflicts with Azure instance-level hostname handling
+      - imageVariants: [acl-t]
+        reason: nfs-utils / rpcbind not in the acl-t RPM set. nfs-server.service and rpcbind.service fail-to-start.
   - name: linux.nfs.v4
     exceptions:
       - platforms: [azure]
         reason: Test requires hostname control that conflicts with Azure instance-level hostname handling
+      - imageVariants: [acl-t]
+        reason: nfs-utils / rpcbind not in the acl-t RPM set. nfs-server.service and rpcbind.service fail-to-start.
   - name: linux.ntp
     exceptions:
       - platforms: [azure]
         reason: Test starts a local NTP server, so it is not cloud-environment coverage
+      - imageVariants: [acl-t]
+        reason: ntp/ntpd binaries not in the acl-t RPM set (chrony is the acl-t time daemon).
 
   - name: sysext.custom-docker.sysext
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: acl-t has no docker sysext infrastructure — containerd is a first-class RPM, so there is no docker sysext to customize.
   - name: sysext.disable-containerd
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: acl-t drops the containerd sysext (moby-containerd RPM replaces it); nothing to disable.
   - name: sysext.disable-docker
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: acl-t drops the docker/containerd sysexts (RPMs replace them); nothing to disable.
   - name: sysext.simple
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: acl-t ships no sysexts at all — containerd + oem-azure are replaced by first-class RPMs, so there is no sysext to exercise.
 
   - name: systemd.journal.remote
     exceptions:
