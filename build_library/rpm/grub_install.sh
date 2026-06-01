@@ -125,9 +125,31 @@ grub_provision_rpm() {
                     warn "RPM mode: Verity enabled but no hash file provided"
                     sed_cmds+=(-e 's/@@USRHASH@@//')
                 fi
+
+                # Inject filesystem and verity UUIDs for A/B agnostic boot
+                if [[ -n "${FLAGS_fs_uuid}" && -f "${FLAGS_fs_uuid}" ]]; then
+                    local grub_fs_uuid
+                    grub_fs_uuid=$(cat "${FLAGS_fs_uuid}")
+                    info "RPM mode: Injecting FS UUID ${grub_fs_uuid}"
+                    sed_cmds+=(-e "s/@@FSUUID@@/${grub_fs_uuid}/")
+                else
+                    warn "RPM mode: No FS UUID file provided"
+                    sed_cmds+=(-e 's/@@FSUUID@@//')
+                fi
+                if [[ -n "${FLAGS_verity_uuid}" && -f "${FLAGS_verity_uuid}" ]]; then
+                    local grub_verity_uuid
+                    grub_verity_uuid=$(cat "${FLAGS_verity_uuid}")
+                    info "RPM mode: Injecting verity UUID ${grub_verity_uuid}"
+                    sed_cmds+=(-e "s/@@VERITYUUID@@/${grub_verity_uuid}/")
+                else
+                    warn "RPM mode: No verity UUID file provided"
+                    sed_cmds+=(-e 's/@@VERITYUUID@@//')
+                fi
             else
                 sed_cmds+=(-e 's/@@MOUNTUSR@@/mount.usr/')
                 sed_cmds+=(-e 's/@@USRHASH@@//')
+                sed_cmds+=(-e 's/@@FSUUID@@//')
+                sed_cmds+=(-e 's/@@VERITYUUID@@//')
             fi
             if [[ -n "${kernel_name}" ]]; then
                 sed_cmds+=(-e "s|@@KERNEL@@|/flatcar/${kernel_name}|")

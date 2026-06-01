@@ -592,6 +592,11 @@ EOF
         sudo sed -i 's|/var/run/|/run/|g' "${root_fs_dir}/usr/lib/systemd/system/rpcbind.socket"
     fi
 
+    # Enable tridentd.socket - listens for trident API requests
+    info "RPM mode: Enabling tridentd.socket"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sockets.target.wants"
+    sudo ln -sf ../tridentd.socket "${root_fs_dir}/usr/lib/systemd/system/sockets.target.wants/tridentd.socket"
+
     # Create /var/lib/nfs directories needed by rpc-statd and NFS server via tmpfiles
     # The nfs-utils RPM only creates v4recovery; sm and sm.bak are missing from the package
     # /var is stateful so we use tmpfiles.d to create these at boot, not mkdir at build time
