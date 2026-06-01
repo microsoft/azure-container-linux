@@ -31,6 +31,7 @@ packages:
     - policycoreutils
     - ca-certificates
     - irqbalance
+    - trident
   sys-libs/systemd-libs: systemd-libs
   sys-apps/systemd-networkd: systemd-networkd
   net-misc/systemd-networkd: systemd-networkd
