@@ -53,8 +53,9 @@ ACL's primary boot path uses **systemd-boot** with **Unified Kernel Images (UKI)
 
 The `/usr` partition (USR-A) is a read-only btrfs filesystem with zstd compression. **dm-verity** provides block-level integrity verification:
 
-- The verity hash tree is appended to the USR partition data.
-- At boot, `systemd-veritysetup` activates the verity device using kernel command-line parameters embedded in the UKI: `systemd.verity_usr_data`, `systemd.verity_usr_hash`, and `systemd.verity_usr_options=hash-offset=<N>,panic-on-corruption`.
+- The verity hash tree is stored in a dedicated hash partition (HASH-A, immediately following USR-A on disk).
+- At boot, `systemd-veritysetup` activates the verity device using kernel command-line parameters embedded in the UKI: `systemd.verity_usr_data=UUID=<btrfs-uuid>`, `systemd.verity_usr_hash=UUID=<verity-uuid>`, and `systemd.verity_usr_options=panic-on-corruption`.
+- The UKI uses filesystem/verity UUIDs (not partition UUIDs) so the same UKI works for both A and B slots.
 - Any corruption of `/usr` causes an immediate kernel panic, preventing the system from running a tampered image.
 
 The A/B partition scheme (USR-A / USR-B) enables safe updates: the inactive slot is written, verified, and then atomically switched on reboot.
