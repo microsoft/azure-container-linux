@@ -486,30 +486,41 @@ _uki_build_verity_addons() {
         die "UKI/RPM: disk_layout_uki.json not found at ${disk_layout_file}"
     fi
 
-    # Look up partition UUIDs by label for robustness
-    local usr_a_uuid usr_b_uuid hash_a_uuid hash_b_uuid
-    usr_a_uuid=$(jq -r '[.layouts.base[] | select(.label == "USR-A")] | .[0].uuid' "${disk_layout_file}")
-    hash_a_uuid=$(jq -r '[.layouts.base[] | select(.label == "HASH-A")] | .[0].uuid' "${disk_layout_file}")
-    usr_b_uuid=$(jq -r '[.layouts.base[] | select(.label == "USR-B")] | .[0].uuid' "${disk_layout_file}")
-    hash_b_uuid=$(jq -r '[.layouts.base[] | select(.label == "HASH-B")] | .[0].uuid' "${disk_layout_file}")
+    # Validate JSON structure before extracting UUIDs
+    if ! jq -e '.layouts.base' "${disk_layout_file}" >/dev/null 2>&1; then
+        die "UKI/RPM: disk_layout_uki.json missing or malformed .layouts.base"
+    fi
 
-    if [[ -z "${usr_a_uuid}" || "${usr_a_uuid}" == "null" ]]; then
-        die "UKI/RPM: Could not find USR-A partition UUID in disk layout"
-    fi
-    if [[ -z "${hash_a_uuid}" || "${hash_a_uuid}" == "null" ]]; then
-        die "UKI/RPM: Could not find HASH-A partition UUID in disk layout"
-    fi
-    if [[ -z "${usr_b_uuid}" || "${usr_b_uuid}" == "null" ]]; then
-        die "UKI/RPM: Could not find USR-B partition UUID in disk layout"
-    fi
-    if [[ -z "${hash_b_uuid}" || "${hash_b_uuid}" == "null" ]]; then
-        die "UKI/RPM: Could not find HASH-B partition UUID in disk layout"
-    fi
+    # Helper: look up a partition UUID by label, dying on missing or duplicate
+    _lookup_partuuid() {
+        local label="$1"
+        local matches count uuid
+        matches=$(jq -r "[.layouts.base[] | select(.label == \"${label}\")] | length" "${disk_layout_file}")
+        if [[ "${matches}" -eq 0 ]]; then
+            die "UKI/RPM: No partition with label '${label}' in disk layout"
+        fi
+        if [[ "${matches}" -ne 1 ]]; then
+            die "UKI/RPM: Expected exactly 1 '${label}' partition, found ${matches}"
+        fi
+        uuid=$(jq -e -r "[.layouts.base[] | select(.label == \"${label}\")] | .[0].uuid" "${disk_layout_file}")
+        if [[ -z "${uuid}" || "${uuid}" == "null" ]]; then
+            die "UKI/RPM: Partition '${label}' has no uuid field"
+        fi
+        echo "${uuid}"
+    }
+
+    local usr_a_uuid usr_b_uuid hash_a_uuid hash_b_uuid
+    usr_a_uuid=$(_lookup_partuuid "USR-A")
+    hash_a_uuid=$(_lookup_partuuid "HASH-A")
+    usr_b_uuid=$(_lookup_partuuid "USR-B")
+    hash_b_uuid=$(_lookup_partuuid "HASH-B")
 
     info "UKI/RPM: Slot A: USR=${usr_a_uuid}  HASH=${hash_a_uuid}"
     info "UKI/RPM: Slot B: USR=${usr_b_uuid}  HASH=${hash_b_uuid}"
 
     local efi_stub="${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub"
+
+    # Create temp dir after validation so die paths above don't leak it
     local verity_temp_dir
     verity_temp_dir=$(mktemp -d)
 
@@ -559,6 +570,11 @@ _uki_build_verity_addons() {
     sudo mkdir -p "${addon_dir}"
     sudo cp "${template_dir}/verity-a.addon.efi" "${addon_dir}/verity.addon.efi"
     info "UKI/RPM: Activated slot A → EFI/Linux/${uki_name}.extra.d/verity.addon.efi"
+
+    # NOTE: Both slot templates are built with the same root hash at image
+    # build time.  Trident overwrites the active addon (and its root hash)
+    # when switching A/B slots at OS update time.  The templates in
+    # acl/uki-addons/ are starting points, not the final runtime state.
 
     rm -rf "${verity_temp_dir}"
 }
