@@ -142,16 +142,27 @@ OSREL
     # are not used by the UKI cmdline — slot identity is delivered via
     # verity addons using PARTUUID.  The UUID flags are retained because
     # they are still passed through to grub_install.sh for grub.cfg.
+    #
+    # grub_install.sh only warns on missing UUIDs (substitutes empty values
+    # into grub.cfg), so validate here to fail fast.
+    if [[ ${FLAGS_verity} -eq ${FLAGS_TRUE} ]]; then
+        if [[ -z "${FLAGS_fs_uuid}" || ! -f "${FLAGS_fs_uuid}" ]]; then
+            die "UKI/RPM: FLAGS_fs_uuid not set or file missing (required for grub.cfg)"
+        fi
+        if [[ -z "${FLAGS_verity_uuid}" || ! -f "${FLAGS_verity_uuid}" ]]; then
+            die "UKI/RPM: FLAGS_verity_uuid not set or file missing (required for grub.cfg)"
+        fi
+    fi
 
     local cmdline=""
     if [[ ${FLAGS_verity} -eq ${FLAGS_TRUE} ]]; then
-        # Verity slot-specific args (data partition, hash partition, root hash)
-        # are delivered via a UKI addon so that trident can swap A/B slots
-        # by replacing the active addon.  The main UKI only carries
-        # slot-independent args.
-        cmdline="mount.usrflags=ro"
+        # mount.usr is in the main UKI (not the addon) because it is
+        # slot-independent — the mapper device name is the same for both
+        # slots.  The addon supplies only the slot-specific PARTUUID and
+        # root hash.
+        cmdline="mount.usr=/dev/mapper/usr mount.usrflags=ro"
     else
-        cmdline="mount.usrflags=ro"
+        die "UKI/RPM: UKI without verity is not supported"
     fi
     # Common base args — platform-agnostic, same for all image types.
     cmdline+=" root=LABEL=ROOT rootflags=rw"
@@ -518,8 +529,8 @@ _uki_build_verity_addons() {
             hash_uuid="${hash_b_uuid}"
         fi
 
-        cmdline="mount.usr=/dev/mapper/usr"
-        cmdline+=" systemd.verity_usr_data=PARTUUID=${data_uuid}"
+        # mount.usr is in the main UKI; addon carries only slot-specific args
+        cmdline="systemd.verity_usr_data=PARTUUID=${data_uuid}"
         cmdline+=" systemd.verity_usr_hash=PARTUUID=${hash_uuid}"
         cmdline+=" systemd.verity_usr_options=panic-on-corruption"
         cmdline+=" usrhash=${usr_hash}"
