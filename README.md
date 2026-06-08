@@ -26,7 +26,7 @@ The links below will help you get started with Azure Container Linux:
 - **Questions and discussion:** see [SUPPORT.md](SUPPORT.md) for the full set of channels.
 - **Security vulnerabilities:** do **not** open a public issue. Follow the process in [SECURITY.md](SECURITY.md) to report privately to the Microsoft Security Response Center.
 - **Pull requests:** see [CONTRIBUTING.md](CONTRIBUTING.md) for the patch-series workflow, commit-message conventions, and review expectations.
-- **Community calls:** Azure Linux hosts community calls where users can connect with our product and support teams, discuss new features, share feedback, and learn how others are using Azure Linux and Azure Container Linux. Each session also includes a featured demo. The schedule for upcoming community calls is as follows:
+- **Community calls:** Azure Linux hosts community calls where users can connect with our product and support teams, discuss new features, share feedback, and learn how others are using Azure Linux and Azure Container Linux. Each session also includes a featured demo. The schedule for upcoming community calls (US Pacific time; PDT/PST depending on daylight saving) is as follows:
   - 2026-07-23 08:00–09:00 PT ([Join the call][community-call-join])
   - 2026-09-24 08:00–09:00 PT ([Join the call][community-call-join])
   - 2026-11-19 08:00–09:00 PT ([Join the call][community-call-join])
