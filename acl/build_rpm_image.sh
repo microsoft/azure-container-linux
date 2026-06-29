@@ -199,6 +199,8 @@ if [[ -v ACL_IPE_SIGNING_MODE ]]; then
     IPE_SIGNING_MODE_OVERRIDE_SET=true
 fi
 ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE:-ephemeral}"
+# FastTrack preview repo file - forwarded into the SDK container for CVE RPM resolution
+export FASTTRACK_REPO_FILE="${FASTTRACK_REPO_FILE:-}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
