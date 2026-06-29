@@ -160,6 +160,7 @@ if [[ -z ${stat} ]] ; then
         -e IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
         -e IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
         -e EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
+        -e FASTTRACK_REPO_FILE="${FASTTRACK_REPO_FILE:+/mnt/host/source/src/scripts/__build__/fasttrack-repo/fasttrack-preview.repo}"
         --name="${name}"
         --hostname="${hostname}"
         --entrypoint /bin/bash
@@ -184,4 +185,4 @@ fi
 # Workaround: The SDK expects to be able to write to /etc/hosts
 call_docker exec "${name}" sh -c 'cp /etc/hosts /etc/hosts2; umount /etc/hosts ; mv /etc/hosts2 /etc/hosts'
 
-call_docker exec "${tty[@]}" -i -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"
+call_docker exec "${tty[@]}" -i -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" -e FASTTRACK_REPO_FILE="${FASTTRACK_REPO_FILE:+/mnt/host/source/src/scripts/__build__/fasttrack-repo/fasttrack-preview.repo}" "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"
