@@ -2,10 +2,9 @@
 #              ACL GitHub PR Validation - Trigger                                #
 #                                                                               #
 # Thin entry point for GitHub PR validation, living in the GitHub repo          #
-# (microsoft/azure-container-linux). Triggers on PRs targeting aclmain and       #
-# delegates the build/test to ACL-GitHub-PR.yml in the acl-pipelines ADO repo    #
-# via the 1ES PT Official wrapper (onees-pt-official.yml), matching the ADO      #
-# sibling prcheck (def 5306).                                                   #
+# (microsoft/azure-container-linux). Triggers on PRs targeting aclmain and      #
+# extends the shared ACL-GitHub-PR.yml template in the acl-pipelines ADO        #
+# repo, which runs the actual build and test.                                   #
 #                                                                               #
 # Security:                                                                     #
 #   - Fork PRs do NOT get secrets by default (ADO default behavior)             #
