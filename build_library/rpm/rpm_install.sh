@@ -133,7 +133,8 @@ EOF
             info "  Adding fasttrack preview repo: ${FASTTRACK_REPO_FILE}"
             sudo cp "${FASTTRACK_REPO_FILE}" "${repo_dir}/"
         else
-            warn "  FASTTRACK_REPO_FILE set but file not found: ${FASTTRACK_REPO_FILE}"
+            error "  FASTTRACK_REPO_FILE set but file not found: ${FASTTRACK_REPO_FILE}"
+            return 1
         fi
     fi
 
@@ -377,8 +378,10 @@ rpm_install_package() {
         -y
     )
 
+    local forcearch_arg=""
     if [[ ${BOARD:-} == "arm64-usr" ]]; then
         dnf_args+=(--forcearch="aarch64")
+        forcearch_arg="--forcearch=aarch64"
     fi
 
     if [[ "${nogpgcheck}" == "true" ]]; then
@@ -389,7 +392,7 @@ rpm_install_package() {
     if [[ -n "${FASTTRACK_REPO_FILE:-}" ]] && [[ -f "${root_fs_dir}/etc/yum.repos.d/$(basename "${FASTTRACK_REPO_FILE}")" ]]; then
         info "=== FastTrack preview repo packages available ==="
         sudo /usr/bin/dnf5 repoquery --installroot="${root_fs_dir}" --releasever=3.0 \
-            --repo=fasttrack-preview --available 2>/dev/null | sort || true
+            ${forcearch_arg} --repo=fasttrack-preview --available 2>/dev/null | sort || true
         info "=== End of fasttrack packages ==="
     fi
 
@@ -425,15 +428,18 @@ rpm_install_package() {
         info "=== Packages installed from fasttrack-preview repo ==="
         grep -i "fasttrack-preview" /tmp/rpm-install.log || info "  (none or repo name not shown in transaction log)"
         info "=== Installed versions of fasttrack packages ==="
-        sudo /usr/bin/dnf5 repoquery --installroot="${root_fs_dir}" --releasever=3.0 \
-            --repo=fasttrack-preview --available --queryformat="%{name}-%{evr}" 2>/dev/null \
-            | while read -r ft_pkg; do
-                pkg_name="${ft_pkg%%-[0-9]*}"
-                installed_ver=$(sudo chroot "${root_fs_dir}" rpm -q "${pkg_name}" 2>/dev/null || true)
-                if [[ -n "${installed_ver}" && "${installed_ver}" != *"not installed"* ]]; then
-                    info " ${installed_ver} (fasttrack available: ${ft_pkg})"
-                fi
-            done || true
+        local ft_pkgs
+        ft_pkgs=$(sudo /usr/bin/dnf5 repoquery --installroot="${root_fs_dir}" --releasever=3.0 \
+            ${forcearch_arg} --repo=fasttrack-preview --available --queryformat="%{name}-%{evr}\n" 2>/dev/null) || true
+        local ft_pkg
+        for ft_pkg in ${ft_pkgs}; do
+            local pkg_name="${ft_pkg%%-[0-9]*}"
+            local installed_ver
+            installed_ver=$(sudo rpm --dbpath="${root_fs_dir}/var/lib/rpm" -q "${pkg_name}" 2>/dev/null || true)
+            if [[ -n "${installed_ver}" && "${installed_ver}" != *"not installed"* ]]; then
+                info "  ${installed_ver} (fasttrack available: ${ft_pkg})"
+            fi
+        done
         info "=== End of fasttrack verification ==="
     fi
 
