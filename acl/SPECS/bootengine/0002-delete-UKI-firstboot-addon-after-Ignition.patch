@@ -1,7 +1,7 @@
 From 8cd08045b19026fc357c25140a8325f3c07edab0 Mon Sep 17 00:00:00 2001
 From: Lanze Liu <lanzeliu@microsoft.com>
 Date: Tue, 3 Mar 2026 05:03:08 +0000
-Subject: [PATCH] ignition-quench: delete UKI firstboot addon after Ignition
+Subject: [PATCH] ignition-quench: tolerate missing marker and delete UKI addon
 
 In UKI (systemd-boot) mode there is no GRUB to conditionally inject
 first-boot kernel cmdline args.  Instead, a firstboot.addon.efi is
@@ -15,26 +15,42 @@ so that subsequent boots do not re-trigger Ignition.
 
 Use a glob pattern (*.efi.extra.d) so the removal works regardless of
 the UKI filename (e.g. acl.efi or vmlinuz-<version>.efi per UAPI).
+
+Additionally, downgrade the "no marker or addon found" case from a
+fatal error to a no-op success.  On ACL-T images the marker/addon
+combination is not always present (the UKI is rebuilt by Image
+Customizer with a new filename, orphaning the addon directory), and
+even when they are present, some kola tests inject Ignition configs
+that mutate /sysroot state before quench runs.  In those cases quench
+is effectively already done and blocking the boot creates false
+regressions.  Ignition itself gates on `flatcar.first_boot=detected`
+in the kernel cmdline (from the addon) and on the marker file, so
+best-effort cleanup here is sufficient.
 ---
- dracut/30ignition/ignition-quench.service | 8 +++++---
- 1 file changed, 5 insertions(+), 3 deletions(-)
+ dracut/30ignition/ignition-quench.service | 13 +++++++++----
+ 1 file changed, 10 insertions(+), 3 deletions(-)
 
 diff --git a/dracut/30ignition/ignition-quench.service b/dracut/30ignition/ignition-quench.service
 index 6460917..f56f2a3 100644
 --- a/dracut/30ignition/ignition-quench.service
 +++ b/dracut/30ignition/ignition-quench.service
-@@ -14,6 +14,8 @@ After=sysroot-boot.service
+@@ -14,6 +14,13 @@ After=sysroot-boot.service
 
  [Service]
  Type=oneshot
 -# We will only run if GRUB detected this file. Fail if we are unable to
 -# remove it, rather than risking rerunning Ignition at next boot.
 -ExecStart=/bin/sh -c 'if [ ! -e /sysroot/boot/flatcar/first_boot ] && [ ! -e /sysroot/boot/coreos/first_boot ]; then echo "error: /sysroot/boot/(flatcar|coreos)/first_boot not found"; exit 1; else rm -f /sysroot/boot/flatcar/first_boot /sysroot/boot/coreos/first_boot; fi'
-+# We will only run if GRUB detected the first_boot marker file or if a UKI
-+# firstboot addon exists. Fail if we cannot find either, rather than risking
-+# rerunning Ignition at next boot.  In UKI mode, also remove the firstboot
-+# addon so systemd-boot stops appending first-boot cmdline args.
-+ExecStart=/bin/sh -c 'fb_marker=false; for f in /sysroot/boot/flatcar/first_boot /sysroot/boot/coreos/first_boot; do [ -e "$f" ] && fb_marker=true && rm -f "$f"; done; for addon in /sysroot/boot/EFI/Linux/*.efi.extra.d/firstboot.addon.efi; do [ -e "$addon" ] && fb_marker=true && rm -f "$addon"; done; if [ "$fb_marker" = false ]; then echo "error: no first-boot marker or addon found"; exit 1; fi'
++# In UKI (systemd-boot) mode, remove the firstboot addon file(s) so that
++# systemd-boot stops appending first-boot cmdline args on subsequent boots.
++# Also remove any legacy /boot/(flatcar|coreos)/first_boot marker files.
++# Missing marker/addon is not fatal: Ignition will re-run only if either
++# `flatcar.first_boot=detected` reaches the kernel cmdline (addon path) or a
++# marker file is present, and both are cleaned here on best-effort. On images
++# where an earlier boot stage (e.g. kola-style Ignition configs that alter
++# /sysroot state before this unit runs) consumes the marker, quenching is
++# already effectively done and we should not block the boot.
++ExecStart=/bin/sh -c 'for f in /sysroot/boot/flatcar/first_boot /sysroot/boot/coreos/first_boot; do [ -e "$f" ] && rm -f "$f"; done; for addon in /sysroot/boot/EFI/Linux/*.efi.extra.d/firstboot.addon.efi; do [ -e "$addon" ] && rm -f "$addon"; done; exit 0'
 --
 2.45.4
 

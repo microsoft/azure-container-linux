@@ -104,8 +104,38 @@ reboot_and_wait() {
     az vm boot-diagnostics get-boot-log --resource-group "$VM_RG" --name "$VM_NAME" 2>&1 \
         | jq -r . > "${prefix}-serial.log" || true
 
-    info "Full serial log: ${prefix}-serial.log ($(wc -c <"${prefix}-serial.log") bytes); last 200 lines:"
-    tail -200 "${prefix}-serial.log" | sed 's/^/  [serial] /' || true
+    # The raw last-N tail is useless when the VM is stuck in the systemd
+    # spinner ("Job foo.service/start running (Ns / no limit)") — every 0.5s
+    # it prints a fresh spinner line, so 200 lines ≈ 100s of spinner noise
+    # with zero causal signal. Dump three things instead:
+    #   1) The last 60 lines verbatim (small budget, latest state).
+    #   2) The last 200 non-spinner lines (drops the noise; keeps kernel /
+    #      ignition / systemd messages that name the actual hang).
+    #   3) Which units are marked "activating" / "start running" (the stuck
+    #      one).
+    local size
+    size=$(wc -c <"${prefix}-serial.log" 2>/dev/null || echo 0)
+    info "Full serial log: ${prefix}-serial.log (${size} bytes)"
+
+    info "--- Last 60 lines (verbatim, includes spinner) ---"
+    tail -60 "${prefix}-serial.log" | sed 's/^/  [serial] /' || true
+
+    # Early boot slice: kernel/ignition banner, config-source URL, DNS attempts.
+    # When the tail is 100% spinner ("Job foo/start running") the last-N-non-spinner
+    # dump comes out empty; the causal signal is at the START of the boot,
+    # not the end. Print both ends so we don't have to download the artifact.
+    info "--- First 200 non-spinner lines (kernel / ignition / systemd early boot) ---"
+    grep -vE 'Job [^ ]+\.service/start running \(' "${prefix}-serial.log" 2>/dev/null \
+        | head -200 | sed 's/^/  [serial] /' || true
+
+    info "--- Last 200 non-spinner lines (kernel / ignition / systemd messages) ---"
+    grep -vE 'Job [^ ]+\.service/start running \(' "${prefix}-serial.log" 2>/dev/null \
+        | tail -200 | sed 's/^/  [serial] /' || true
+
+    info "--- Units named in 'Job X/start running' spinner lines (the stuck ones) ---"
+    grep -oE 'Job [^ ]+\.(service|target|mount|socket)/start running' "${prefix}-serial.log" 2>/dev/null \
+        | sort -u | sed 's/^/  [stuck] /' || true
+
     info "Diagnostics saved to ${prefix}-{instance-view.json,serial.log}"
     error "VM did not come back after reboot"
     return 1
