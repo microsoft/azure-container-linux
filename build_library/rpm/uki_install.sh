@@ -171,6 +171,15 @@ OSREL
     # Common base args — platform-agnostic, same for all image types.
     cmdline+=" root=LABEL=ROOT rootflags=rw"
     cmdline+=" consoleblank=0"
+    # IPE permissive rollout (gated on ACL_IPE_ENABLE): run IPE in permissive
+    # so a loaded policy only logs violations, never blocks. This is the single
+    # source of truth for IPE's enforcement mode -- baked into the signed UKI
+    # cmdline (not an addon) so it is always present and can't be dropped from
+    # the ESP. acl-ipe-load.sh only loads/activates the policy; it does not set
+    # the mode, so changing enforcement is a one-line change here.
+    if [[ "${ACL_IPE_ENABLE:-}" == "1" ]]; then
+        cmdline+=" ipe.enforce=0"
+    fi
     # NOTE: crashkernel=256M is delivered via a UKI addon (kdump.addon.efi)
     # rather than baked into the main UKI cmdline.  This allows disabling
     # kdump by removing the addon from the ESP without rebuilding the UKI.

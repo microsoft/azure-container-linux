@@ -184,4 +184,4 @@ fi
 # Workaround: The SDK expects to be able to write to /etc/hosts
 call_docker exec "${name}" sh -c 'cp /etc/hosts /etc/hosts2; umount /etc/hosts ; mv /etc/hosts2 /etc/hosts'
 
-call_docker exec "${tty[@]}" -i -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"
+call_docker exec "${tty[@]}" -i -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" -e ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-}" "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"

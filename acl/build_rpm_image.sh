@@ -171,6 +171,10 @@ export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
+# Opt-in IPE permissive policy loader (see build_image_util.sh / uki_install.sh /
+# sign_uki_ephemeral.sh). Forwarded into the SDK container so the gated build
+# steps can see it.
+export ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"

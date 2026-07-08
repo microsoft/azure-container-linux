@@ -1,0 +1,21 @@
+[Unit]
+Description=Load and activate ACL IPE policy (initrd, permissive)
+Documentation=https://docs.kernel.org/admin-guide/LSM/ipe.html
+DefaultDependencies=no
+# Run before switch_root, after block devices are up (so the ESP is mountable),
+# while SELinux is not yet loaded -- this avoids the mac_admin/EPERM denial on
+# the securityfs policy write that occurs once SELinux is enforcing in the real
+# system. Mirrors 99acl-selinux-toggle's ordering.
+After=initrd-setup-root.service
+Before=initrd-parse-etc.service
+# Only act on IPE-enabled images (ipe.enforce= is added to the cmdline then).
+ConditionKernelCommandLine=ipe.enforce
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/acl-ipe-load
+StandardOutput=journal+console
+
+[Install]
+WantedBy=initrd.target

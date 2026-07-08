@@ -25,8 +25,11 @@
 
 set -euo pipefail
 
-ESP_DIR="${1:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir>}"
-CERT_OUTPUT_DIR="${2:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir>}"
+ESP_DIR="${1:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir> [ipe-policy-src]}"
+CERT_OUTPUT_DIR="${2:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir> [ipe-policy-src]}"
+# Optional: when given, also sign the ACL IPE policy with the SAME ephemeral
+# key and place it on the ESP (see the block after EFI signing).
+IPE_POLICY_SRC="${3:-}"
 
 CERT_NAME="uki-signing-ca.pem"
 
@@ -127,3 +130,31 @@ done
 # Private key is in WORK_DIR which is cleaned up by the trap.
 info "Signing complete. ${#efi_files[@]} file(s) signed."
 info "Public certificate: ${CERT_FILE}"
+
+# Optionally sign the ACL IPE policy with the SAME ephemeral key, while it
+# still exists (WORK_DIR is removed by the EXIT trap). Because CERT_FILE is the
+# same cert enrolled in the Secure Boot db, the kernel's .platform keyring will
+# trust this policy's signature at load time -- no separate enrollment needed.
+# The rootfs is read-only at image_to_vm time, so the signed policy is placed on
+# the ESP (writable here; mounted rw at /boot at runtime). The kernel verifies
+# the policy's PKCS#7 signature against .platform regardless of where the file
+# lives, so the writable ESP is safe. acl-ipe-load.service reads it from /boot.
+if [[ -n "${IPE_POLICY_SRC}" ]]; then
+    if [[ ! -f "${IPE_POLICY_SRC}" ]]; then
+        error "IPE policy source not found: ${IPE_POLICY_SRC}"
+        exit 1
+    fi
+    info "Signing IPE policy ${IPE_POLICY_SRC} with ephemeral key"
+    ipe_out_dir="${ESP_DIR}/acl-ipe"
+    ipe_p7b_tmp="${WORK_DIR}/acl.pol.p7b"
+    openssl smime -sign \
+        -in "${IPE_POLICY_SRC}" \
+        -signer "${CERT_FILE}" \
+        -inkey "${KEY_FILE}" \
+        -noattr -nodetach -nosmimecap \
+        -outform der \
+        -out "${ipe_p7b_tmp}"
+    sudo mkdir -p "${ipe_out_dir}"
+    sudo cp "${ipe_p7b_tmp}" "${ipe_out_dir}/acl.pol.p7b"
+    info "IPE policy signed -> ${ipe_out_dir}/acl.pol.p7b (ESP)"
+fi

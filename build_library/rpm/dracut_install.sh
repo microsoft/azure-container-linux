@@ -307,6 +307,26 @@ SETUP_EOF
     sudo chmod +x "${selinux_toggle_module}/module-setup.sh"
     sudo chmod +x "${selinux_toggle_module}/acl-selinux-toggle.sh"
 
+    # Optional: ACL IPE policy loader dracut module (permissive rollout). Gated
+    # on ACL_IPE_ENABLE=1 so mainline images are unaffected. Runs in the initrd
+    # (before switch_root) so the securityfs policy write happens while SELinux
+    # is not yet enforcing -- otherwise the write is denied (mac_admin/EPERM).
+    # The signed policy is on the ESP (placed by sign_uki_ephemeral.sh); this
+    # module mounts the ESP by label to read it.
+    if [[ "${ACL_IPE_ENABLE:-}" == "1" ]]; then
+        info "RPM mode: Creating acl-ipe-load dracut module (ACL_IPE_ENABLE=1)"
+        local ipe_load_module="${root_fs_dir}/usr/lib/dracut/modules.d/99acl-ipe-load"
+        sudo mkdir -p "${ipe_load_module}"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-ipe-load/module-setup.sh" \
+            "${ipe_load_module}/module-setup.sh"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.sh" \
+            "${ipe_load_module}/acl-ipe-load.sh"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.service" \
+            "${ipe_load_module}/acl-ipe-load.service"
+        sudo chmod +x "${ipe_load_module}/module-setup.sh"
+        sudo chmod +x "${ipe_load_module}/acl-ipe-load.sh"
+    fi
+
     # NOTE: /etc overlay is handled by bootengine's 99setup-root/initrd-setup-root
     # We need to create the required files BEFORE dracut runs so they get included in initramfs
 
