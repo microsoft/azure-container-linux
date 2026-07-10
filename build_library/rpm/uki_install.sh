@@ -49,6 +49,69 @@ case "${FLAGS_target}" in
         ;;
 esac
 
+# IPE: sign the /usr dm-verity roothash with the per-build ephemeral cert so the
+# kernel (DM_VERITY_VERIFY_ROOTHASH_SIG + .platform keyring) reports
+# dmverity_signature=TRUE for /usr, letting the permissive IPE policy trust the
+# OS's own code (clears the dev=dm-0 EXECUTE would-denies).
+#
+# The kernel verifies the PKCS#7 over the BINARY root-hash digest, so we hex
+# -decode first. The signature rides inside the initramfs (ukify appends it as an
+# extra --initrd) at /etc/verity-usr-roothash.p7s and is consumed by
+# systemd-veritysetup via root-hash-signature= on the (signed UKI) cmdline.
+#
+# On success sets IPE_VERITY_SIG_INITRD (extra initrd cpio) + IPE_VERITY_SIG_PATH.
+# Best-effort: on any failure returns 1 and leaves the vars empty so the image
+# still boots (unsigned /usr) rather than failing the build.
+IPE_VERITY_SIG_INITRD=""
+IPE_VERITY_SIG_PATH=""
+_uki_ipe_sign_verity_roothash() {
+    local roothash_hex_file="$1" work_dir="$2"
+    local build_dir cert_dir key cert hex bin sig cpio_root out
+
+    build_dir="$(readlink -f "$(dirname "${roothash_hex_file}")")"
+    cert_dir="${build_dir}/acl-ipe-ephemeral"
+    if ! "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}"; then
+        error "UKI/RPM: IPE could not ensure ephemeral signing cert"
+        return 1
+    fi
+    key="${cert_dir}/ca.key"
+    cert="${cert_dir}/uki-signing-ca.pem"
+
+    hex="$(tr -d '[:space:]' < "${roothash_hex_file}")"
+    bin="${work_dir}/usr-roothash.bin"
+    if ! python3 -c 'import sys,binascii; open(sys.argv[2],"wb").write(binascii.unhexlify(sys.argv[1]))' \
+            "${hex}" "${bin}" 2>/dev/null || [[ ! -s "${bin}" ]]; then
+        error "UKI/RPM: IPE failed to hex-decode verity roothash"
+        return 1
+    fi
+
+    sig="${work_dir}/usr-roothash.p7s"
+    if ! openssl smime -sign -noattr -binary \
+            -in "${bin}" -signer "${cert}" -inkey "${key}" \
+            -outform der -out "${sig}" 2>/dev/null || [[ ! -s "${sig}" ]]; then
+        error "UKI/RPM: IPE openssl failed to sign verity roothash"
+        return 1
+    fi
+
+    # Pack the signature into a tiny cpio that ukify appends to the initramfs; it
+    # extracts to /etc/verity-usr-roothash.p7s in the initrd rootfs.
+    cpio_root="${work_dir}/ipe-sig-cpio"
+    rm -rf "${cpio_root}"
+    mkdir -p "${cpio_root}/etc"
+    cp "${sig}" "${cpio_root}/etc/verity-usr-roothash.p7s"
+    out="${work_dir}/verity-usr-roothash-initrd.img"
+    if ! ( cd "${cpio_root}" && find . -print0 | cpio --null --create --format=newc ) \
+            > "${out}" 2>/dev/null || [[ ! -s "${out}" ]]; then
+        error "UKI/RPM: IPE failed to build verity signature cpio"
+        return 1
+    fi
+
+    IPE_VERITY_SIG_INITRD="${out}"
+    IPE_VERITY_SIG_PATH="/etc/verity-usr-roothash.p7s"
+    info "UKI/RPM: signed /usr verity roothash ($(wc -c <"${sig}") B PKCS#7); delivered via initramfs"
+    return 0
+}
+
 uki_install_rpm() {
     info "UKI/RPM mode: Installing systemd-boot and shim to BOARD_ROOT"
 
@@ -160,10 +223,21 @@ OSREL
         else
             die "UKI/RPM: Verity enabled but no hash file at ${FLAGS_verity_hash}"
         fi
+        local verity_usr_options="hash-offset=${verity_hash_offset},panic-on-corruption"
+        # IPE: sign the /usr verity roothash so the kernel marks /usr
+        # dmverity_signature=TRUE. Best-effort — if signing fails we ship the
+        # image with unsigned /usr (still bootable) rather than failing the build.
+        if [[ "${ACL_IPE_ENABLE:-}" == "1" ]]; then
+            if _uki_ipe_sign_verity_roothash "${FLAGS_verity_hash}" "${uki_temp_dir}"; then
+                verity_usr_options+=",root-hash-signature=${IPE_VERITY_SIG_PATH}"
+            else
+                info "UKI/RPM: WARNING: /usr verity roothash NOT signed (best-effort); dmverity_signature will be FALSE"
+            fi
+        fi
         cmdline="mount.usr=/dev/mapper/usr mount.usrflags=ro"
         cmdline+=" systemd.verity_usr_data=PARTUUID=${usr_a_uuid}"
         cmdline+=" systemd.verity_usr_hash=PARTUUID=${usr_a_uuid}"
-        cmdline+=" systemd.verity_usr_options=hash-offset=${verity_hash_offset},panic-on-corruption"
+        cmdline+=" systemd.verity_usr_options=${verity_usr_options}"
         cmdline+=" usrhash=${usr_hash}"
     else
         cmdline="mount.usr=PARTUUID=${usr_a_uuid} mount.usrflags=ro"
@@ -234,10 +308,19 @@ OSREL
     local uki_output="${uki_temp_dir}/${uki_name}"
     info "UKI/RPM: Building UKI with ukify"
 
+    # ukify concatenates multiple --initrd into the UKI's .initrd section. When
+    # IPE signed the /usr verity roothash, append the tiny signature cpio so it
+    # lands at /etc/verity-usr-roothash.p7s in the initramfs for veritysetup.
+    local -a _uki_initrds=(--initrd="${initrd}")
+    if [[ -n "${IPE_VERITY_SIG_INITRD:-}" ]]; then
+        _uki_initrds+=(--initrd="${IPE_VERITY_SIG_INITRD}")
+        info "UKI/RPM: appending /usr verity roothash signature to initramfs"
+    fi
+
     sudo ukify build \
         --stub="${efi_stub}" \
         --linux="${kernel}" \
-        --initrd="${initrd}" \
+        "${_uki_initrds[@]}" \
         --cmdline=@"${uki_temp_dir}/cmdline.txt" \
         --os-release=@"${osrelease}" \
         --output="${uki_output}"
