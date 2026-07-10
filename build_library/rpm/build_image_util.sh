@@ -95,6 +95,19 @@ start_image_rpm() {
     # Remove the bootstrap repo now that the package-provided repos are in place.
     rpm_use_official_repos "${root_fs_dir}"
 
+    # Check ACL SPECs for PMC staleness - fails the build if any package is stale.
+    # The check compares pmc_base_version/pmc_base_release metadata in each
+    # ACL SPEC against the current PMC repo to detect packages that need rebase.
+    # Packages in the exception list are allowed to be stale (e.g. waiting for
+    # ACL changes to land upstream).
+    local staleness_exceptions="selinux-policy"
+    if [[ -x "${BUILD_LIBRARY_DIR}/rpm/check_pmc_staleness.sh" ]]; then
+        if ! "${BUILD_LIBRARY_DIR}/rpm/check_pmc_staleness.sh" "${root_fs_dir}" "${staleness_exceptions}"; then
+            error "PMC staleness check failed - rebase stale ACL SPECs before building."
+            return 1
+        fi
+    fi
+
     # Create sysusers.d configs and run systemd-sysusers to create users/groups
     # BEFORE any RPM packages are installed, since RPM %pre scriptlets may need them
     start_image_uids_rpm "${root_fs_dir}"
