@@ -54,10 +54,11 @@ esac
 # dmverity_signature=TRUE for /usr, letting the permissive IPE policy trust the
 # OS's own code (clears the dev=dm-0 EXECUTE would-denies).
 #
-# The kernel verifies the PKCS#7 over the BINARY root-hash digest, so we hex
-# -decode first. The signature rides inside the initramfs (ukify appends it as an
-# extra --initrd) at /etc/verity-usr-roothash.p7s and is consumed by
-# systemd-veritysetup via root-hash-signature= on the (signed UKI) cmdline.
+# The kernel verifies the PKCS#7 over the root-hash HEX STRING (as it appears in
+# the dm-verity table), so we sign those hex chars. The signature rides inside
+# the initramfs (ukify appends it as an extra --initrd) at
+# /etc/verity-usr-roothash.p7s and is consumed by systemd-veritysetup via
+# root-hash-signature= on the (signed UKI) cmdline.
 #
 # On success sets IPE_VERITY_SIG_INITRD (extra initrd cpio) + IPE_VERITY_SIG_PATH.
 # Best-effort: on any failure returns 1 and leaves the vars empty so the image
@@ -77,11 +78,15 @@ _uki_ipe_sign_verity_roothash() {
     key="${cert_dir}/ca.key"
     cert="${cert_dir}/uki-signing-ca.pem"
 
+    # The kernel verifies the PKCS#7 over the root-hash HEX STRING exactly as it
+    # appears in the dm-verity table (argv[8], strlen 64), NOT the binary digest
+    # -- see dm-verity-target.c verity_ctr(). Sign those 64 hex chars with NO
+    # trailing newline so the signed content matches byte-for-byte.
     hex="$(tr -d '[:space:]' < "${roothash_hex_file}")"
-    bin="${work_dir}/usr-roothash.bin"
-    if ! python3 -c 'import sys,binascii; open(sys.argv[2],"wb").write(binascii.unhexlify(sys.argv[1]))' \
-            "${hex}" "${bin}" 2>/dev/null || [[ ! -s "${bin}" ]]; then
-        error "UKI/RPM: IPE failed to hex-decode verity roothash"
+    bin="${work_dir}/usr-roothash.hex"
+    printf '%s' "${hex}" > "${bin}"
+    if [[ ! -s "${bin}" ]]; then
+        error "UKI/RPM: IPE failed to read verity roothash"
         return 1
     fi
 
@@ -90,6 +95,15 @@ _uki_ipe_sign_verity_roothash() {
             -in "${bin}" -signer "${cert}" -inkey "${key}" \
             -outform der -out "${sig}" 2>/dev/null || [[ ! -s "${sig}" ]]; then
         error "UKI/RPM: IPE openssl failed to sign verity roothash"
+        return 1
+    fi
+
+    # Build-time sanity: confirm the detached signature validates over the hex
+    # content (ignoring cert trust) so we never ship a malformed signature that
+    # would make /usr verity setup fail and brick boot.
+    if ! openssl smime -verify -inform der -binary -in "${sig}" \
+            -content "${bin}" -certfile "${cert}" -noverify >/dev/null 2>&1; then
+        error "UKI/RPM: IPE verity roothash signature failed self-verify"
         return 1
     fi
 
