@@ -1,3 +1,8 @@
+# PMC rebase tracking - update these after incorporating upstream PMC changes.
+# check_pmc_staleness.sh compares these against the current PMC release.
+%define pmc_base_version 1.0.19
+%define pmc_base_release 10
+
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
 Name:    lksctp-tools
