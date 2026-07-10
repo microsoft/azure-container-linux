@@ -1,5 +1,10 @@
 %define commit_hash daf43bf9c1ca45bf1a43566c3a6f96ec0cb44a36
 
+# PMC rebase tracking - update these after incorporating upstream PMC changes.
+# check_pmc_staleness.sh compares these against the current PMC release.
+%define pmc_base_version 0.0.38
+%define pmc_base_release 1
+
 Name:           bootengine
 Version:        0.0.38
 Release:        2%{?dist}
