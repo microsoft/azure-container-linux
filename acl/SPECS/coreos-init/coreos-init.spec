@@ -1,3 +1,8 @@
+# PMC rebase tracking - update these after incorporating upstream PMC changes.
+# check_pmc_staleness.sh compares these against the current PMC release.
+%define pmc_base_version 0.0.1
+%define pmc_base_release 2
+
 Name:           coreos-init
 Version:        0.0.1
 Release:        4%{?dist}
