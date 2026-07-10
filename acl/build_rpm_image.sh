@@ -174,7 +174,11 @@ export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
 # Opt-in IPE permissive policy loader (see build_image_util.sh / uki_install.sh /
 # sign_uki_ephemeral.sh). Forwarded into the SDK container so the gated build
 # steps can see it.
-export ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-}"
+# TEST-ONLY (throwaway branch aadagarwal/acl-ipe-permissive-test): default this
+# ON so PR-Validation exercises the IPE path without an acl-pipelines change.
+# DO NOT MERGE -- the shippable branch aadagarwal/acl-ipe-permissive keeps this
+# gated off ("${ACL_IPE_ENABLE:-}").
+export ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-1}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
