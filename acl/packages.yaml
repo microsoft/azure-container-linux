@@ -32,3 +32,6 @@ packages:
   - microcode_ctl       # CPU microcode updater (Fedora import)
   - selinux-policy      # SELinux reference policy (ACL-specific modules)
   - WALinuxAgent        # Azure Linux Agent
+
+  # --- Container runtime overrides ----------------------------------------
+  - containerd2         # containerd 2.2.4-5 (custom build for testing; see SPECS/containerd2/)
