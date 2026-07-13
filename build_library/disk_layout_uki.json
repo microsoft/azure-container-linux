@@ -13,7 +13,7 @@
                 "label": "EFI-SYSTEM",
                 "fs_label": "EFI-SYSTEM",
                 "type": "efi",
-                "blocks": "524288",
+                "blocks": "262144",
                 "fs_type": "vfat",
                 "mount": "/boot",
                 "features": []
