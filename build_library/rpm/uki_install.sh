@@ -495,7 +495,7 @@ _uki_build_verity_addons() {
     # Helper: look up a partition UUID by label, dying on missing or duplicate
     _lookup_partuuid() {
         local label="$1"
-        local matches count uuid
+        local matches uuid
         matches=$(jq -r "[.layouts.base[] | select(.label == \"${label}\")] | length" "${disk_layout_file}")
         if [[ "${matches}" -eq 0 ]]; then
             die "UKI/RPM: No partition with label '${label}' in disk layout"
