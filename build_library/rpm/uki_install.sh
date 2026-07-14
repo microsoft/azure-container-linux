@@ -457,12 +457,13 @@ _uki_build_debug_addon() {
 #
 # Each addon contains the slot-specific kernel cmdline args that tell systemd
 # which partitions to use for dm-verity:
-#   mount.usr=/dev/mapper/usr
 #   systemd.verity_usr_data=PARTUUID=<data-partition>
 #   systemd.verity_usr_hash=PARTUUID=<hash-partition>
 #   systemd.verity_usr_options=panic-on-corruption
 #   usrhash=<root-hash>
 #
+# mount.usr=/dev/mapper/usr is slot-independent and stays in the main UKI
+# cmdline (not the addon).
 # At boot, systemd-stub appends the active addon's cmdline to the main UKI
 # cmdline.  Trident swaps which addon is in .extra.d/ to switch slots.
 _uki_build_verity_addons() {

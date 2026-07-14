@@ -130,20 +130,20 @@ grub_provision_rpm() {
                 if [[ -n "${FLAGS_fs_uuid}" && -f "${FLAGS_fs_uuid}" ]]; then
                     local grub_fs_uuid
                     grub_fs_uuid=$(cat "${FLAGS_fs_uuid}")
+                    [[ -n "${grub_fs_uuid}" ]] || die "RPM mode: FS UUID file '${FLAGS_fs_uuid}' is empty"
                     info "RPM mode: Injecting FS UUID ${grub_fs_uuid}"
                     sed_cmds+=(-e "s/@@FSUUID@@/${grub_fs_uuid}/")
                 else
-                    warn "RPM mode: No FS UUID file provided"
-                    sed_cmds+=(-e 's/@@FSUUID@@//')
+                    die "RPM mode: verity enabled but no FS UUID file provided"
                 fi
                 if [[ -n "${FLAGS_verity_uuid}" && -f "${FLAGS_verity_uuid}" ]]; then
                     local grub_verity_uuid
                     grub_verity_uuid=$(cat "${FLAGS_verity_uuid}")
+                    [[ -n "${grub_verity_uuid}" ]] || die "RPM mode: verity UUID file '${FLAGS_verity_uuid}' is empty"
                     info "RPM mode: Injecting verity UUID ${grub_verity_uuid}"
                     sed_cmds+=(-e "s/@@VERITYUUID@@/${grub_verity_uuid}/")
                 else
-                    warn "RPM mode: No verity UUID file provided"
-                    sed_cmds+=(-e 's/@@VERITYUUID@@//')
+                    die "RPM mode: verity enabled but no verity UUID file provided"
                 fi
             else
                 sed_cmds+=(-e 's/@@MOUNTUSR@@/mount.usr/')
