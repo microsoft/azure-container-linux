@@ -138,13 +138,13 @@ OSREL
     fi
     info "UKI/RPM: Using ukify from $(command -v ukify)"
 
-    # NOTE: Filesystem and verity UUIDs (FLAGS_fs_uuid, FLAGS_verity_uuid)
-    # are not used by the UKI cmdline — slot identity is delivered via
-    # verity addons using PARTUUID.  The UUID flags are retained because
-    # they are still passed through to grub_install.sh for grub.cfg.
-    #
-    # grub_install.sh only warns on missing UUIDs (substitutes empty values
-    # into grub.cfg), so validate here to fail fast.
+    # NOTE: The filesystem/verity UUIDs (FLAGS_fs_uuid, FLAGS_verity_uuid)
+    # are not used by the UKI cmdline — UKI slot identity is delivered via
+    # verity addons using PARTUUID.  They are consumed only by the separate
+    # grub_install.sh entrypoint (GRUB boot path), which build_image_util
+    # invokes independently.  Validate them here as a build-output sanity
+    # check so a missing UUID file fails fast during the UKI install rather
+    # than only surfacing later in a GRUB build.
     if [[ ${FLAGS_verity} -eq ${FLAGS_TRUE} ]]; then
         if [[ -z "${FLAGS_fs_uuid}" || ! -f "${FLAGS_fs_uuid}" ]]; then
             die "UKI/RPM: FLAGS_fs_uuid not set or file missing (required for grub.cfg)"
