@@ -833,6 +833,10 @@ def Verity(options):
 
   for part_num, part in partitions.items():
     hash_part_num = part.get('verity_hash')
+    if hash_part_num is not None:
+      # partitions is keyed by string partition numbers (JSON object keys);
+      # normalize so a numeric verity_hash value still resolves correctly.
+      hash_part_num = str(hash_part_num)
     has_verity_feature = 'verity' in part.get('features', [])
 
     if not hash_part_num and not has_verity_feature:
