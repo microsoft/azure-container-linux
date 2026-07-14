@@ -852,39 +852,38 @@ def Verity(options):
       ReadWriteSubvol(options, part, disable_rw=True)
 
     if hash_part_num:
-      # Separate hash partition mode: write hash tree to a dedicated partition.
       hash_part = partitions[hash_part_num]
       if not hash_part['image_compat']:
         raise InvalidLayout("Hash partition is incompatible with existing image")
-
-      with PartitionLoop(options, part) as data_loop, \
-           PartitionLoop(options, hash_part) as hash_loop:
-        verityout = SudoOutput(['veritysetup', 'format', '--hash=sha256',
-                    '--data-block-size', part['fs_block_size'],
-                    '--hash-block-size', part['fs_block_size'],
-                    '--data-blocks', part['fs_blocks'],
-                    data_loop, hash_loop]).decode('utf8')
-        print(verityout.strip())
-
-        # Read the btrfs FS UUID from the data partition for cmdline use.
-        if options.fs_uuid:
-          fs_uuid_out = SudoOutput(
-              ['blkid', '-s', 'UUID', '-o', 'value', data_loop]).decode('utf8').strip()
-          if not fs_uuid_out:
-            raise Exception("Failed to read btrfs FS UUID from %s" % data_loop)
-          with open(options.fs_uuid, 'w') as f:
-            f.write(fs_uuid_out + '\n')
-
     else:
-      # Legacy inline mode: hash tree appended within the same partition.
-      with PartitionLoop(options, part) as loop_dev:
-        verityout = SudoOutput(['veritysetup', 'format', '--hash=sha256',
+      hash_part = None
+
+    with contextlib.ExitStack() as loops:
+      data_loop = loops.enter_context(PartitionLoop(options, part))
+      verity_cmd = ['veritysetup', 'format', '--hash=sha256',
                     '--data-block-size', part['fs_block_size'],
                     '--hash-block-size', part['fs_block_size'],
-                    '--data-blocks', part['fs_blocks'],
-                    '--hash-offset', part['fs_bytes'],
-                    loop_dev, loop_dev]).decode('utf8')
-        print(verityout.strip())
+                    '--data-blocks', part['fs_blocks']]
+      if hash_part:
+        # Separate hash partition mode: write hash tree to a dedicated partition.
+        hash_loop = loops.enter_context(PartitionLoop(options, hash_part))
+      else:
+        # Legacy inline mode: hash tree appended within the same partition.
+        hash_loop = data_loop
+        verity_cmd += ['--hash-offset', part['fs_bytes']]
+      verity_cmd += [data_loop, hash_loop]
+
+      verityout = SudoOutput(verity_cmd).decode('utf8')
+      print(verityout.strip())
+
+      # Read the btrfs FS UUID from the data partition for cmdline use.
+      if options.fs_uuid:
+        fs_uuid_out = SudoOutput(
+            ['blkid', '-s', 'UUID', '-o', 'value', data_loop]).decode('utf8').strip()
+        if not fs_uuid_out:
+          raise Exception("Failed to read btrfs FS UUID from %s" % data_loop)
+        with open(options.fs_uuid, 'w') as f:
+          f.write(fs_uuid_out + '\n')
 
     m = re.search(r'Root hash:\s+([a-f0-9]{64})$', verityout, re.IGNORECASE|re.MULTILINE)
     if not m:
