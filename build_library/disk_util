@@ -869,9 +869,11 @@ def Verity(options):
         # Read the btrfs FS UUID from the data partition for cmdline use.
         if options.fs_uuid:
           fs_uuid_out = SudoOutput(
-              ['blkid', '-s', 'UUID', '-o', 'value', data_loop]).decode('utf8')
+              ['blkid', '-s', 'UUID', '-o', 'value', data_loop]).decode('utf8').strip()
+          if not fs_uuid_out:
+            raise Exception("Failed to read btrfs FS UUID from %s" % data_loop)
           with open(options.fs_uuid, 'w') as f:
-            f.write(fs_uuid_out.strip() + '\n')
+            f.write(fs_uuid_out + '\n')
 
     else:
       # Legacy inline mode: hash tree appended within the same partition.
