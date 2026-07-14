@@ -852,6 +852,10 @@ def Verity(options):
       ReadWriteSubvol(options, part, disable_rw=True)
 
     if hash_part_num:
+      if hash_part_num not in partitions:
+        raise InvalidLayout(
+            "verity_hash references partition %r which is not in the layout"
+            % hash_part_num)
       hash_part = partitions[hash_part_num]
       if not hash_part['image_compat']:
         raise InvalidLayout("Hash partition is incompatible with existing image")
