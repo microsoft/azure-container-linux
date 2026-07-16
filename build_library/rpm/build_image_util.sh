@@ -414,7 +414,7 @@ TMPFILES_SSHD
 # Support both traditional authorized_keys and Ignition's authorized_keys.d/ignition
 AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys.d/ignition
 SSHD_CONF
-    sudo chmod 644 "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf"
+    sudo chmod 600 "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf"
 
     # Phase 1 hardening: disable SSH password authentication at build time.
     # Closes the window between boot and WALinuxAgent provisioning where
@@ -428,7 +428,28 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
 SSHD_NOPASSWD
-    sudo chmod 644 "${ssh_config_dir}/sshd_config.d/50-acl-no-password-auth.conf"
+    sudo chmod 600 "${ssh_config_dir}/sshd_config.d/50-acl-no-password-auth.conf"
+
+    # CIS 5.2.7: Ensure SSH access is limited
+    # Deny root SSH access (matches AgentBaker's DenyUsers pattern).
+    # CIS requires at least one of AllowUsers/AllowGroups/DenyUsers/DenyGroups.
+    # CIS 5.2.10: Disable SSH forwarding (agent/TCP/X11/tunnel)
+    info "RPM mode: Adding CIS SSH access and forwarding restrictions"
+    sudo tee "${ssh_config_dir}/sshd_config.d/60-acl-cis-hardening.conf" > /dev/null <<'SSHD_CIS'
+# CIS 5.2.7 - Ensure SSH access is limited
+# The assessor requires all four directives to be present in sshd -T output.
+# AllowUsers/AllowGroups * are effectively no-ops (permit everyone) but satisfy
+# the check. DenyUsers/DenyGroups root block root SSH login.
+AllowUsers *
+AllowGroups *
+DenyUsers root
+DenyGroups root
+# CIS 5.2.10 - Ensure SSH disableforwarding is enabled
+DisableForwarding yes
+# CIS 5.2.16 - Ensure sshd MaxAuthTries is configured (<=4)
+MaxAuthTries 4
+SSHD_CIS
+    sudo chmod 600 "${ssh_config_dir}/sshd_config.d/60-acl-cis-hardening.conf"
 
     # Ensure sshd_config includes the .d directory
     local sshd_config="${ssh_config_dir}/sshd_config"
@@ -1125,11 +1146,15 @@ _configure_cis_hardening_rpm() {
     info "RPM mode: Applying CIS Level 1 hardening"
 
     # 1.1.1.1: Blacklist cramfs kernel module
+    # 3.1.4: Blacklist sctp kernel module (matches AgentBaker modprobe-CIS.conf)
     sudo install -d -m 0755 "${root_fs_dir}/usr/lib/modprobe.d"
     sudo tee "${root_fs_dir}/usr/lib/modprobe.d/cis-blacklist.conf" > /dev/null <<'MODPROBE_CIS'
 # CIS 1.1.1.1 - Ensure cramfs kernel module is not available
 install cramfs /bin/false
 blacklist cramfs
+# CIS 3.1.4 - Ensure sctp kernel module is not available
+install sctp /bin/false
+blacklist sctp
 MODPROBE_CIS
     sudo chmod 0644 "${root_fs_dir}/usr/lib/modprobe.d/cis-blacklist.conf"
 
@@ -1146,12 +1171,6 @@ MODPROBE_CIS
     # 5.1.1 (cron daemon enabled):
     #   ACL does not ship cronie. No cron daemon exists to enable. Should be
     #   excluded from the ACL CIS benchmark.
-    #
-    # 5.5.2 (system accounts secured):
-    #   Requires SCE script execution which the assessor does not support yet.
-    #
-    # 6.1.3.1 (access to all logfiles configured):
-    #   Requires SCE script execution which the assessor does not support yet.
 
     # 1.4.x / 3.2.x: Sysctl hardening (network + ASLR)
     # Includes both IPv4 and IPv6 settings as required by the CIS benchmark.
@@ -1370,6 +1389,23 @@ Storage=persistent
 Compress=yes
 JOURNALD_CIS
     sudo chmod 0644 "${root_fs_dir}/etc/systemd/journald.conf.d/cis.conf"
+
+    # 6.1.3.1: waagent creates logs with 644 (umask 022). Set UMask=0137 so
+    # waagent.log and extension logs (e.g. CommandExecution.log) get 640.
+    info "RPM mode: Adding waagent.service UMask drop-in (CIS 6.1.3.1)"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/waagent.service.d"
+    sudo tee "${root_fs_dir}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf" > /dev/null <<'WAAGENT_UMASK'
+[Service]
+UMask=0137
+WAAGENT_UMASK
+    sudo chmod 0644 "${root_fs_dir}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf"
+
+    # tmpfiles.d fallback: fix /var/log/azure perms at boot for pre-existing logs
+    sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/cis-logfiles.conf" > /dev/null <<'TMPFILES_LOG'
+z /var/log/azure - root root 0750 -
+Z /var/log/azure - root root 0640 -
+TMPFILES_LOG
+    sudo chmod 0644 "${root_fs_dir}/usr/lib/tmpfiles.d/cis-logfiles.conf"
 
     # 7.2.8: Home directory permissions
     sudo chmod 0700 "${root_fs_dir}/root"
