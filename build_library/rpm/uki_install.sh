@@ -146,12 +146,17 @@ OSREL
     # check so a missing UUID file fails fast during the UKI install rather
     # than only surfacing later in a GRUB build.
     if [[ ${FLAGS_verity} -eq ${FLAGS_TRUE} ]]; then
+        local fs_uuid_content verity_uuid_content
         if [[ -z "${FLAGS_fs_uuid}" || ! -f "${FLAGS_fs_uuid}" ]]; then
             die "UKI/RPM: FLAGS_fs_uuid not set or file missing (required for grub.cfg)"
         fi
+        fs_uuid_content=$(tr -d '[:space:]' < "${FLAGS_fs_uuid}")
+        [[ -n "${fs_uuid_content}" ]] || die "UKI/RPM: FS UUID file '${FLAGS_fs_uuid}' is empty"
         if [[ -z "${FLAGS_verity_uuid}" || ! -f "${FLAGS_verity_uuid}" ]]; then
             die "UKI/RPM: FLAGS_verity_uuid not set or file missing (required for grub.cfg)"
         fi
+        verity_uuid_content=$(tr -d '[:space:]' < "${FLAGS_verity_uuid}")
+        [[ -n "${verity_uuid_content}" ]] || die "UKI/RPM: verity UUID file '${FLAGS_verity_uuid}' is empty"
     fi
 
     local cmdline=""

@@ -122,8 +122,7 @@ grub_provision_rpm() {
                     info "RPM mode: Injecting verity hash ${usr_hash}"
                     sed_cmds+=(-e "s/@@USRHASH@@/${usr_hash}/")
                 else
-                    warn "RPM mode: Verity enabled but no hash file provided"
-                    sed_cmds+=(-e 's/@@USRHASH@@//')
+                    die "RPM mode: Verity enabled but no hash file provided"
                 fi
 
                 # Inject filesystem and verity UUIDs for A/B agnostic boot
