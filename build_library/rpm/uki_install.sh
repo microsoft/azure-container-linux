@@ -508,7 +508,7 @@ _uki_build_verity_addons() {
         if [[ "${matches}" -ne 1 ]]; then
             die "UKI/RPM: Expected exactly 1 '${label}' partition, found ${matches}"
         fi
-        uuid=$(jq -e -r "[.layouts.base[] | select(.label == \"${label}\")] | .[0].uuid" "${disk_layout_file}")
+        uuid=$(jq -r "[.layouts.base[] | select(.label == \"${label}\")] | .[0].uuid" "${disk_layout_file}")
         if [[ -z "${uuid}" || "${uuid}" == "null" ]]; then
             die "UKI/RPM: Partition '${label}' has no uuid field"
         fi
