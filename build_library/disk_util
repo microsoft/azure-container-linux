@@ -895,21 +895,21 @@ def Verity(options):
 
     m = re.search(r'Root hash:\s+([a-f0-9]{64})$', verityout, re.IGNORECASE|re.MULTILINE)
     if not m:
-        raise Exception("Failed to parse verity root hash!")
+      raise Exception("Failed to parse verity root hash!")
 
-    if options.root_hash != None:
-        with open(options.root_hash, "w") as hash_file:
-            hash_file.write(m.group(1))
-            hash_file.write("\n")
+    if options.root_hash is not None:
+      with open(options.root_hash, "w") as hash_file:
+        hash_file.write(m.group(1))
+        hash_file.write("\n")
 
     # Extract the verity superblock UUID from veritysetup output.
     if options.verity_uuid:
       m_uuid = re.search(r'UUID:\s+([a-f0-9-]{36})$', verityout, re.IGNORECASE|re.MULTILINE)
       if not m_uuid:
-          raise Exception("Failed to parse verity UUID!")
+        raise Exception("Failed to parse verity UUID!")
       with open(options.verity_uuid, 'w') as f:
-          f.write(m_uuid.group(1))
-          f.write("\n")
+        f.write(m_uuid.group(1))
+        f.write("\n")
 
 
 def Extract(options):
