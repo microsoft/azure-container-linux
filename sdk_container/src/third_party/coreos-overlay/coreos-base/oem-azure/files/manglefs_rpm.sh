@@ -15,6 +15,15 @@ if [[ -f "${rootfs}/usr/lib/systemd/system/waagent.service" ]]; then
         "${rootfs}/usr/lib/systemd/system/waagent.service"
 fi
 
+# CIS 6.1.3.1: waagent creates logs with 644 (umask 022). Set UMask=0027 so
+# waagent.log and extension logs get 640 while directories stay traversable (0750).
+mkdir -p "${rootfs}/usr/lib/systemd/system/waagent.service.d"
+cat > "${rootfs}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf" <<'EOF'
+[Service]
+UMask=0027
+EOF
+chmod 0644 "${rootfs}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf"
+
 # Patch waagent service file to create symlink back to /etc/waagent.conf at ExecStartPre
 if [[ -f "${rootfs}/usr/lib/systemd/system/waagent.service" ]]; then
     # Insert ExecStartPre lines after the [Service] header
