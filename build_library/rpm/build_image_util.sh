@@ -437,9 +437,12 @@ SSHD_NOPASSWD
     info "RPM mode: Adding CIS SSH access and forwarding restrictions"
     sudo tee "${ssh_config_dir}/sshd_config.d/60-acl-cis-hardening.conf" > /dev/null <<'SSHD_CIS'
 # CIS 5.2.7 - Ensure SSH access is limited
-# The assessor requires all four directives to be present in sshd -T output.
-# AllowUsers/AllowGroups * are effectively no-ops (permit everyone) but satisfy
-# the check. DenyUsers/DenyGroups root block root SSH login.
+# The assessor requires 'allowusers' present in sshd -T (regex .+$), without it
+# the rule fails with "Option 'allowusers' not found". A static allow-list is not
+# possible because WALinuxAgent provisions the admin user in a dynamic group.
+# NOTE: AllowUsers/AllowGroups are additive in OpenSSH, a wildcard means
+# downstream consumers must replace this file to narrow access (adding another
+# AllowUsers in a drop-in unions with '*', i.e. still everyone).
 AllowUsers *
 AllowGroups *
 DenyUsers root
@@ -447,6 +450,8 @@ DenyGroups root
 # CIS 5.2.10 - Ensure SSH disableforwarding is enabled
 DisableForwarding yes
 # CIS 5.2.16 - Ensure sshd MaxAuthTries is configured (<=4)
+# Note: counts keys offered, not accepted. Clients with >=4 loaded keys
+# should use IdentitiesOnly=yes to avoid "Too many authentication failures".
 MaxAuthTries 4
 SSHD_CIS
     sudo chmod 600 "${ssh_config_dir}/sshd_config.d/60-acl-cis-hardening.conf"
@@ -460,13 +465,14 @@ SSHD_CIS
 # Include drop-in configurations
 Include /etc/ssh/sshd_config.d/*.conf
 SSHD_CONFIG_EOF
-        sudo chmod 644 "${sshd_config}"
     elif ! sudo grep -q "^Include.*/etc/ssh/sshd_config.d" "${sshd_config}"; then
         info "RPM mode: Adding Include directive to existing sshd_config"
         sudo sed -i '1i Include /etc/ssh/sshd_config.d/*.conf' "${sshd_config}"
     else
         info "RPM mode: sshd_config already has Include directive"
     fi
+    # CIS 5.2.1: sshd_config must be 600 root:root regardless of how it was created
+    sudo chmod 600 "${sshd_config}"
 
     # Switch sshd to socket activation (matching Flatcar behavior)
     # The Azure Linux openssh RPM only ships sshd.service (traditional daemon).
@@ -1153,7 +1159,8 @@ _configure_cis_hardening_rpm() {
 install cramfs /bin/false
 blacklist cramfs
 # CIS 3.1.4 - Ensure sctp kernel module is not available
-install sctp /bin/false
+# /bin/true so modprobe callers get exit 0 (not a hard error from /bin/false)
+install sctp /bin/true
 blacklist sctp
 MODPROBE_CIS
     sudo chmod 0644 "${root_fs_dir}/usr/lib/modprobe.d/cis-blacklist.conf"
@@ -1390,20 +1397,10 @@ Compress=yes
 JOURNALD_CIS
     sudo chmod 0644 "${root_fs_dir}/etc/systemd/journald.conf.d/cis.conf"
 
-    # 6.1.3.1: waagent creates logs with 644 (umask 022). Set UMask=0137 so
-    # waagent.log and extension logs (e.g. CommandExecution.log) get 640.
-    info "RPM mode: Adding waagent.service UMask drop-in (CIS 6.1.3.1)"
-    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/waagent.service.d"
-    sudo tee "${root_fs_dir}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf" > /dev/null <<'WAAGENT_UMASK'
-[Service]
-UMask=0137
-WAAGENT_UMASK
-    sudo chmod 0644 "${root_fs_dir}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf"
-
-    # tmpfiles.d fallback: fix /var/log/azure perms at boot for pre-existing logs
+    # tmpfiles.d: create /var/log/azure with 0750 at boot (CIS 6.1.3.1).
+    # 'd' creates the dir if missing, UMask=0027 handles file perms at runtime.
     sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/cis-logfiles.conf" > /dev/null <<'TMPFILES_LOG'
-z /var/log/azure - root root 0750 -
-Z /var/log/azure - root root 0640 -
+d /var/log/azure 0750 root root - -
 TMPFILES_LOG
     sudo chmod 0644 "${root_fs_dir}/usr/lib/tmpfiles.d/cis-logfiles.conf"
 
