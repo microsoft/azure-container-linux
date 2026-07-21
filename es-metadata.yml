@@ -1,9 +1,0 @@
-# Inventory as Code - Polar Development ST
-schemaVersion: 0.0.1
-isProduction: false
-accountableOwners:
-  service: 289cc86b-04ae-4afd-96a1-92251967e9f5
-routing:
-  defaultAreaPath:
-    org: mariner-org
-    path: ACL\Build

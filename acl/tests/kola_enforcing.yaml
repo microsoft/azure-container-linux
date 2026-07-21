@@ -108,11 +108,19 @@ tests:
   - name: bpf.execsnoop
     exceptions:
       - imageVariants: [acl-t]
-        reason: bpf/local-gadget tooling ships in a sysext on stock acl; acl-t drops sysexts and does not package it as an RPM. local-gadget.service fails-to-start.
+        reason: |
+          Test uses `docker run` (NeedsDocker). On ACL, mantle injects
+          the docker sysext at test time (platform/cluster.go). acl-t
+          ships no docker RPM and replaces the containerd sysext with
+          moby-containerd (containerd/ctr only) — nothing to inject.
   - name: bpf.local-gadget
     exceptions:
       - imageVariants: [acl-t]
-        reason: local-gadget.service ships in a sysext on stock acl; acl-t drops sysexts and does not package it as an RPM.
+        reason: |
+          local-gadget.service and its binary come from the test's
+          Ignition, not a sysext. Failure is local-gadget itself
+          speaking the Docker API (NeedsDocker). Same root cause as
+          bpf.execsnoop: no docker on acl-t.
 
   - name: cl.cloudinit.basic
   - name: cl.cloudinit.multipart-mime
@@ -276,16 +284,6 @@ tests:
       - platforms: [azure]
         reason: Azure requires hostname at instance creation and waagent can overwrite Ignition-set hostnames after boot
   - name: coreos.ignition.systemd.enable-service
-    exceptions:
-      - imageVariants: [acl-t]
-        reason: |
-          Test exercises ignition's systemd.enable-service feature by
-          enabling nfs-server.service + rpc-statd.service in the ignition
-          config, rebooting, then checking they started. acl-t drops
-          nfs-utils / rpcbind from the RPM set (same reason linux.nfs.v3/v4
-          are exempted), so those units load but fail to start. The
-          feature under test is unaffected — only the test's chosen
-          guinea-pig service is missing.
   - name: coreos.selinux.boolean
   - name: coreos.tls.fetch-urls
 
@@ -303,7 +301,11 @@ tests:
   - name: docker.containerd-restart
     exceptions:
       - imageVariants: [acl-t]
-        reason: acl-t has no docker CLI/daemon (moby-containerd RPM only ships containerd/ctr).
+        reason: |
+          Test drives the docker CLI to restart containerd; acl-t has no
+          docker CLI (moby-containerd RPM ships containerd/ctr only).
+          Direct containerd-restart coverage on acl-t is tracked as a
+          follow-up (new `containerd.*` mantle tests using ctr).
   - name: docker.enable-service.sysext
     exceptions:
       - imageVariants: [acl-t]
@@ -389,19 +391,17 @@ tests:
       - platforms: [azure]
         reason: Test requires hostname control that conflicts with Azure instance-level hostname handling
       - imageVariants: [acl-t]
-        reason: nfs-utils / rpcbind not in the acl-t RPM set. nfs-server.service and rpcbind.service fail-to-start.
+        reason: rpcbind.service fails to start on acl-t (daemon child exits 1); cascade fails nfs-server. Tracked separately from RPM pre-baking.
   - name: linux.nfs.v4
     exceptions:
       - platforms: [azure]
         reason: Test requires hostname control that conflicts with Azure instance-level hostname handling
       - imageVariants: [acl-t]
-        reason: nfs-utils / rpcbind not in the acl-t RPM set. nfs-server.service and rpcbind.service fail-to-start.
+        reason: rpcbind.service fails to start on acl-t (daemon child exits 1); cascade fails nfs-server. Tracked separately from RPM pre-baking.
   - name: linux.ntp
     exceptions:
       - platforms: [azure]
         reason: Test starts a local NTP server, so it is not cloud-environment coverage
-      - imageVariants: [acl-t]
-        reason: ntp/ntpd binaries not in the acl-t RPM set (chrony is the acl-t time daemon).
 
   - name: sysext.custom-docker.sysext
     exceptions:
