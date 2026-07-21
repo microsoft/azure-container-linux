@@ -555,6 +555,7 @@ install_oem_package() {
             "${oem_files_dir}"
         if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
             install_uki_oem_addon
+            install_uki_timeout_addon
         fi
         return 0
     fi
@@ -600,6 +601,7 @@ install_oem_package() {
     # UKI addon (replacing the role of grub.cfg).
     if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
         install_uki_oem_addon
+        install_uki_timeout_addon
     fi
 }
 
@@ -754,6 +756,88 @@ install_uki_oem_addon() {
         "${ARCH}" \
         "${VM_TMP_ROOT}" \
         "${oem_files_dir}"
+}
+
+# Build and install a UKI addon that raises the systemd device-init timeout,
+# scoped to the arm64 kola *test* image only (INJECT_DOCKER_SYSEXT=true).
+#
+# Under kola's parallel QEMU-TCG emulation on aarch64, heavy CPU contention can
+# prevent udev from initialising the ESP/OEM/usr-verity devices within the
+# default initrd device timeout, dropping the VM to an emergency shell.  Baking
+# systemd.default_device_timeout_sec=120 into a UKI addon on the test image's
+# ESP fixes this without changing production or amd64 boot behaviour.
+#
+# Deliberately NOT applied to the production VM image (INJECT_DOCKER_SYSEXT=false)
+# or to amd64: the failure is a CI-only TCG-emulation artefact that never occurs
+# on real hardware.
+install_uki_timeout_addon() {
+    if [[ "${BOOTLOADER_MODE}" != "uki" ]]; then
+        return 0
+    fi
+
+    # Scope: arm64 test image only.
+    if [[ "${ARCH}" != "arm64" ]] || [[ "${INJECT_DOCKER_SYSEXT:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    local esp_dir="${VM_TMP_ROOT}/boot"
+    if [[ ! -d "${esp_dir}/EFI/Linux" ]]; then
+        warn "UKI timeout addon: ESP directory ${esp_dir}/EFI/Linux not found; skipping"
+        return 0
+    fi
+
+    # EFI architecture suffix for the systemd-boot stub.
+    local efi_arch
+    case "${ARCH}" in
+        amd64)  efi_arch="x64" ;;
+        arm64)  efi_arch="aa64" ;;
+        *)      warn "UKI timeout addon: unsupported arch ${ARCH}; skipping"; return 0 ;;
+    esac
+
+    local efi_stub="${VM_TMP_ROOT}/usr/lib/systemd/boot/efi/linux${efi_arch}.efi.stub"
+    if [[ ! -f "${efi_stub}" ]]; then
+        warn "UKI timeout addon: EFI stub not found at ${efi_stub}; skipping"
+        return 0
+    fi
+
+    # Detect the main UKI (vmlinuz-<version>.efi) to locate its .extra.d dir.
+    local uki_name
+    uki_name=$(find "${esp_dir}/EFI/Linux/" -maxdepth 1 -name 'vmlinuz-*.efi' -printf '%f\n' | sort -V | head -n 1)
+    if [[ -z "${uki_name}" ]]; then
+        warn "UKI timeout addon: no UKI (vmlinuz-*.efi) found in ESP; skipping"
+        return 0
+    fi
+
+    if ! command -v ukify &>/dev/null; then
+        die "UKI timeout addon: ukify not found on PATH"
+    fi
+
+    info "UKI timeout addon: Building for arm64 test image (${VM_IMG_TYPE})"
+
+    local addon_dir="${esp_dir}/EFI/Linux/${uki_name}.extra.d"
+    sudo mkdir -p "${addon_dir}"
+
+    local timeout_temp_dir
+    timeout_temp_dir=$(mktemp -d)
+
+    printf '%s\n' "systemd.default_device_timeout_sec=120" \
+        > "${timeout_temp_dir}/timeout-cmdline.txt"
+
+    sudo ukify build \
+        --cmdline=@"${timeout_temp_dir}/timeout-cmdline.txt" \
+        --stub="${efi_stub}" \
+        --output="${timeout_temp_dir}/timeout.addon.efi"
+
+    if [[ ! -f "${timeout_temp_dir}/timeout.addon.efi" ]]; then
+        rm -rf "${timeout_temp_dir}"
+        die "UKI timeout addon: ukify failed to produce timeout.addon.efi"
+    fi
+
+    sudo cp "${timeout_temp_dir}/timeout.addon.efi" "${addon_dir}/timeout.addon.efi"
+    info "UKI timeout addon: Installed -> EFI/Linux/${uki_name}.extra.d/timeout.addon.efi"
+    info "UKI timeout addon: cmdline = systemd.default_device_timeout_sec=120"
+
+    rm -rf "${timeout_temp_dir}"
 }
 
 # Any other tweaks required?
