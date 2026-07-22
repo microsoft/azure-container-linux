@@ -891,12 +891,12 @@ def Verity(options):
       verityout = SudoOutput(verity_cmd).decode('utf8')
       print(verityout.strip())
 
-      # Read the btrfs FS UUID from the data partition for cmdline use.
+      # Read the filesystem UUID from the data partition for cmdline use.
       if options.fs_uuid:
         fs_uuid_out = SudoOutput(
             ['blkid', '-s', 'UUID', '-o', 'value', data_loop]).decode('utf8').strip()
         if not fs_uuid_out:
-          raise Exception("Failed to read btrfs FS UUID from %s" % data_loop)
+          raise Exception("Failed to read filesystem UUID from %s" % data_loop)
         with open(options.fs_uuid, 'w') as f:
           f.write(fs_uuid_out + '\n')
 
