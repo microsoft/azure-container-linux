@@ -836,7 +836,14 @@ def Verity(options):
     if hash_part_num is not None:
       # partitions is keyed by string partition numbers (JSON object keys);
       # normalize so a numeric verity_hash value still resolves correctly.
-      hash_part_num = str(hash_part_num)
+      hash_part_num = str(hash_part_num).strip()
+      # A present-but-empty verity_hash is a malformed layout, not a request
+      # for legacy inline mode: silently falling back would produce an
+      # invalid verity layout that is hard to debug. Fail fast instead.
+      if not hash_part_num:
+        raise InvalidLayout(
+            "partition %r has an empty verity_hash; name a hash partition "
+            "number or omit the key" % part_num)
     has_verity_feature = 'verity' in part.get('features', [])
 
     if not hash_part_num and not has_verity_feature:
