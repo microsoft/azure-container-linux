@@ -592,7 +592,14 @@ EOF
         sudo sed -i 's|/var/run/|/run/|g' "${root_fs_dir}/usr/lib/systemd/system/rpcbind.socket"
     fi
 
-    # Enable tridentd.socket - listens for trident API requests
+    # Enable tridentd.socket - listens for trident API requests.
+    # trident is a required component of ACL images: a missing unit means the
+    # trident RPM was not installed, i.e. a broken image. Fail the build now
+    # rather than leave a dangling wants-symlink and ship an image whose
+    # provisioning socket never activates.
+    if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/tridentd.socket" ]]; then
+        die "tridentd.socket not found in image - trident RPM missing (trident is required for ACL)"
+    fi
     info "RPM mode: Enabling tridentd.socket"
     sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sockets.target.wants"
     sudo ln -sf ../tridentd.socket "${root_fs_dir}/usr/lib/systemd/system/sockets.target.wants/tridentd.socket"

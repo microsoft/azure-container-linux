@@ -801,12 +801,20 @@ install_uki_timeout_addon() {
     fi
 
     # Detect the main UKI (vmlinuz-<version>.efi) to locate its .extra.d dir.
-    local uki_name
-    uki_name=$(find "${esp_dir}/EFI/Linux/" -maxdepth 1 -name 'vmlinuz-*.efi' -printf '%f\n' | sort -V | head -n 1)
-    if [[ -z "${uki_name}" ]]; then
+    # ACL test images ship exactly one UKI; require that here so the addon is
+    # never silently installed into the wrong <uki>.efi.extra.d (which would
+    # leave the timeout ineffective and resurrect the emergency-shell flake
+    # this addon exists to fix). Mirrors rpm/uki_install.sh's single-UKI rule.
+    local -a uki_matches
+    mapfile -t uki_matches < <(find "${esp_dir}/EFI/Linux/" -maxdepth 1 -name 'vmlinuz-*.efi' -printf '%f\n' | sort -V)
+    if [[ "${#uki_matches[@]}" -eq 0 ]]; then
         warn "UKI timeout addon: no UKI (vmlinuz-*.efi) found in ESP; skipping"
         return 0
     fi
+    if [[ "${#uki_matches[@]}" -gt 1 ]]; then
+        die "UKI timeout addon: expected exactly one UKI in ${esp_dir}/EFI/Linux/, found ${#uki_matches[@]}: ${uki_matches[*]}"
+    fi
+    local uki_name="${uki_matches[0]}"
 
     if ! command -v ukify &>/dev/null; then
         die "UKI timeout addon: ukify not found on PATH"
