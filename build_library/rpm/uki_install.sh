@@ -226,15 +226,19 @@ OSREL
     local uki_output="${uki_temp_dir}/${uki_name}"
     info "UKI/RPM: Building UKI with ukify"
 
-    sudo ukify build \
+    if ! sudo ukify build \
         --stub="${efi_stub}" \
         --linux="${kernel}" \
         --initrd="${initrd}" \
         --cmdline=@"${uki_temp_dir}/cmdline.txt" \
         --os-release=@"${osrelease}" \
-        --output="${uki_output}"
+        --output="${uki_output}"; then
+        rm -rf "${uki_temp_dir}"
+        die "UKI/RPM: ukify build failed for ${uki_output}"
+    fi
 
     if [[ ! -f "${uki_output}" ]]; then
+        rm -rf "${uki_temp_dir}"
         die "UKI/RPM: ukify failed to produce ${uki_output}"
     fi
 
@@ -321,12 +325,16 @@ _uki_build_firstboot_addon() {
     # efi_stub existence was already verified by the caller.
     local efi_stub="${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub"
 
-    sudo ukify build \
+    if ! sudo ukify build \
         --cmdline=@"${fb_temp_dir}/firstboot-cmdline.txt" \
         --stub="${efi_stub}" \
-        --output="${fb_temp_dir}/firstboot.addon.efi"
+        --output="${fb_temp_dir}/firstboot.addon.efi"; then
+        rm -rf "${fb_temp_dir}"
+        die "UKI/RPM: ukify build failed for firstboot addon"
+    fi
 
     if [[ ! -f "${fb_temp_dir}/firstboot.addon.efi" ]]; then
+        rm -rf "${fb_temp_dir}"
         die "UKI/RPM: ukify failed to produce firstboot.addon.efi"
     fi
 
@@ -362,12 +370,16 @@ _uki_build_fips_addon() {
 
     local efi_stub="${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub"
 
-    sudo ukify build \
+    if ! sudo ukify build \
         --cmdline=@"${fips_temp_dir}/fips-cmdline.txt" \
         --stub="${efi_stub}" \
-        --output="${fips_temp_dir}/fips.addon.efi"
+        --output="${fips_temp_dir}/fips.addon.efi"; then
+        rm -rf "${fips_temp_dir}"
+        die "UKI/RPM: ukify build failed for fips addon"
+    fi
 
     if [[ ! -f "${fips_temp_dir}/fips.addon.efi" ]]; then
+        rm -rf "${fips_temp_dir}"
         die "UKI/RPM: ukify failed to produce fips.addon.efi"
     fi
 
@@ -399,12 +411,16 @@ _uki_build_kdump_addon() {
 
     local efi_stub="${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub"
 
-    sudo ukify build \
+    if ! sudo ukify build \
         --cmdline=@"${kdump_temp_dir}/kdump-cmdline.txt" \
         --stub="${efi_stub}" \
-        --output="${kdump_temp_dir}/kdump.addon.efi"
+        --output="${kdump_temp_dir}/kdump.addon.efi"; then
+        rm -rf "${kdump_temp_dir}"
+        die "UKI/RPM: ukify build failed for kdump addon"
+    fi
 
     if [[ ! -f "${kdump_temp_dir}/kdump.addon.efi" ]]; then
+        rm -rf "${kdump_temp_dir}"
         die "UKI/RPM: ukify failed to produce kdump.addon.efi"
     fi
 
@@ -442,12 +458,16 @@ _uki_build_debug_addon() {
 
     local efi_stub="${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub"
 
-    sudo ukify build \
+    if ! sudo ukify build \
         --cmdline=@"${debug_temp_dir}/debug-cmdline.txt" \
         --stub="${efi_stub}" \
-        --output="${debug_temp_dir}/debug.addon.efi"
+        --output="${debug_temp_dir}/debug.addon.efi"; then
+        rm -rf "${debug_temp_dir}"
+        die "UKI/RPM: ukify build failed for debug addon"
+    fi
 
     if [[ ! -f "${debug_temp_dir}/debug.addon.efi" ]]; then
+        rm -rf "${debug_temp_dir}"
         die "UKI/RPM: ukify failed to produce debug.addon.efi"
     fi
 
@@ -557,12 +577,16 @@ _uki_build_verity_addons() {
         echo "${cmdline}" > "${verity_temp_dir}/verity-${slot}-cmdline.txt"
 
         addon_file="${verity_temp_dir}/verity-${slot}.addon.efi"
-        sudo ukify build \
+        if ! sudo ukify build \
             --cmdline=@"${verity_temp_dir}/verity-${slot}-cmdline.txt" \
             --stub="${efi_stub}" \
-            --output="${addon_file}"
+            --output="${addon_file}"; then
+            rm -rf "${verity_temp_dir}"
+            die "UKI/RPM: ukify build failed for verity-${slot}.addon.efi"
+        fi
 
         if [[ ! -f "${addon_file}" ]]; then
+            rm -rf "${verity_temp_dir}"
             die "UKI/RPM: ukify failed to produce verity-${slot}.addon.efi"
         fi
 
