@@ -233,12 +233,12 @@ OSREL
         --cmdline=@"${uki_temp_dir}/cmdline.txt" \
         --os-release=@"${osrelease}" \
         --output="${uki_output}"; then
-        rm -rf "${uki_temp_dir}"
+        sudo rm -rf "${uki_temp_dir}"
         die "UKI/RPM: ukify build failed for ${uki_output}"
     fi
 
     if [[ ! -f "${uki_output}" ]]; then
-        rm -rf "${uki_temp_dir}"
+        sudo rm -rf "${uki_temp_dir}"
         die "UKI/RPM: ukify failed to produce ${uki_output}"
     fi
 
@@ -302,7 +302,7 @@ OSREL
     fi
 
     # Clean up
-    rm -rf "${uki_temp_dir}"
+    sudo rm -rf "${uki_temp_dir}"
 }
 
 # Build a self-removing firstboot addon that triggers Ignition on first boot.
@@ -329,12 +329,12 @@ _uki_build_firstboot_addon() {
         --cmdline=@"${fb_temp_dir}/firstboot-cmdline.txt" \
         --stub="${efi_stub}" \
         --output="${fb_temp_dir}/firstboot.addon.efi"; then
-        rm -rf "${fb_temp_dir}"
+        sudo rm -rf "${fb_temp_dir}"
         die "UKI/RPM: ukify build failed for firstboot addon"
     fi
 
     if [[ ! -f "${fb_temp_dir}/firstboot.addon.efi" ]]; then
-        rm -rf "${fb_temp_dir}"
+        sudo rm -rf "${fb_temp_dir}"
         die "UKI/RPM: ukify failed to produce firstboot.addon.efi"
     fi
 
@@ -349,7 +349,7 @@ _uki_build_firstboot_addon() {
     sudo cp "${fb_temp_dir}/firstboot.addon.efi" "${template_dir}/firstboot.addon.efi"
     info "UKI/RPM: Saved firstboot addon template → acl/uki-addons/firstboot.addon.efi"
 
-    rm -rf "${fb_temp_dir}"
+    sudo rm -rf "${fb_temp_dir}"
 }
 
 # Build a reusable FIPS addon template for UKI systems.
@@ -374,19 +374,19 @@ _uki_build_fips_addon() {
         --cmdline=@"${fips_temp_dir}/fips-cmdline.txt" \
         --stub="${efi_stub}" \
         --output="${fips_temp_dir}/fips.addon.efi"; then
-        rm -rf "${fips_temp_dir}"
+        sudo rm -rf "${fips_temp_dir}"
         die "UKI/RPM: ukify build failed for fips addon"
     fi
 
     if [[ ! -f "${fips_temp_dir}/fips.addon.efi" ]]; then
-        rm -rf "${fips_temp_dir}"
+        sudo rm -rf "${fips_temp_dir}"
         die "UKI/RPM: ukify failed to produce fips.addon.efi"
     fi
 
     sudo cp "${fips_temp_dir}/fips.addon.efi" "${template_dir}/fips.addon.efi"
     info "UKI/RPM: Saved FIPS addon template -> acl/uki-addons/fips.addon.efi"
 
-    rm -rf "${fips_temp_dir}"
+    sudo rm -rf "${fips_temp_dir}"
 }
 
 # Build a reusable kdump addon template for UKI systems.
@@ -415,12 +415,12 @@ _uki_build_kdump_addon() {
         --cmdline=@"${kdump_temp_dir}/kdump-cmdline.txt" \
         --stub="${efi_stub}" \
         --output="${kdump_temp_dir}/kdump.addon.efi"; then
-        rm -rf "${kdump_temp_dir}"
+        sudo rm -rf "${kdump_temp_dir}"
         die "UKI/RPM: ukify build failed for kdump addon"
     fi
 
     if [[ ! -f "${kdump_temp_dir}/kdump.addon.efi" ]]; then
-        rm -rf "${kdump_temp_dir}"
+        sudo rm -rf "${kdump_temp_dir}"
         die "UKI/RPM: ukify failed to produce kdump.addon.efi"
     fi
 
@@ -428,7 +428,7 @@ _uki_build_kdump_addon() {
     info "UKI/RPM: Saved kdump addon template -> acl/uki-addons/kdump.addon.efi"
     info "UKI/RPM: To enable kdump, copy to EFI/Linux/vmlinuz-<kver>.efi.extra.d/kdump.addon.efi"
 
-    rm -rf "${kdump_temp_dir}"
+    sudo rm -rf "${kdump_temp_dir}"
 }
 
 # Build an optional debug addon that appends extra kernel cmdline args.
@@ -462,12 +462,12 @@ _uki_build_debug_addon() {
         --cmdline=@"${debug_temp_dir}/debug-cmdline.txt" \
         --stub="${efi_stub}" \
         --output="${debug_temp_dir}/debug.addon.efi"; then
-        rm -rf "${debug_temp_dir}"
+        sudo rm -rf "${debug_temp_dir}"
         die "UKI/RPM: ukify build failed for debug addon"
     fi
 
     if [[ ! -f "${debug_temp_dir}/debug.addon.efi" ]]; then
-        rm -rf "${debug_temp_dir}"
+        sudo rm -rf "${debug_temp_dir}"
         die "UKI/RPM: ukify failed to produce debug.addon.efi"
     fi
 
@@ -475,7 +475,7 @@ _uki_build_debug_addon() {
     info "UKI/RPM: Installed debug addon → EFI/Linux/${uki_name}.extra.d/debug.addon.efi"
     info "UKI/RPM: debug cmdline = ${extra_cmdline}"
 
-    rm -rf "${debug_temp_dir}"
+    sudo rm -rf "${debug_temp_dir}"
 }
 
 # Build verity slot addons for A/B partition switching.
@@ -581,12 +581,12 @@ _uki_build_verity_addons() {
             --cmdline=@"${verity_temp_dir}/verity-${slot}-cmdline.txt" \
             --stub="${efi_stub}" \
             --output="${addon_file}"; then
-            rm -rf "${verity_temp_dir}"
+            sudo rm -rf "${verity_temp_dir}"
             die "UKI/RPM: ukify build failed for verity-${slot}.addon.efi"
         fi
 
         if [[ ! -f "${addon_file}" ]]; then
-            rm -rf "${verity_temp_dir}"
+            sudo rm -rf "${verity_temp_dir}"
             die "UKI/RPM: ukify failed to produce verity-${slot}.addon.efi"
         fi
 
@@ -606,7 +606,7 @@ _uki_build_verity_addons() {
     # when switching A/B slots at OS update time.  The templates in
     # acl/uki-addons/ are starting points, not the final runtime state.
 
-    rm -rf "${verity_temp_dir}"
+    sudo rm -rf "${verity_temp_dir}"
 }
 
 info "Installing UKI packages for target ${FLAGS_target}"
