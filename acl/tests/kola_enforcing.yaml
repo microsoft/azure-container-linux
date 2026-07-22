@@ -31,16 +31,6 @@ version: 1
 tests:
   - name: acl.basic
   - name: acl.basic/ServicesActive
-    exceptions:
-      - imageVariants: [acl-t]
-        reason: |
-          Safety net until the mantle container rebuild propagates.
-          mantle kola/tests/coretest/core.go TestServicesActiveACL was
-          patched to only require docker.socket when its unit file exists
-          on disk — acl-t swaps the docker sysext for the containerd RPM
-          and ships no docker.socket, so is-active returned exit 4.
-          Remove this exception once the deployed mantle image contains
-          the fix. Other acl.basic subtests remain enforced on acl-t.
   - name: acl.etcd-member.discovery
     exceptions:
       - platforms: [qemu]
@@ -390,18 +380,21 @@ tests:
     exceptions:
       - platforms: [azure]
         reason: Test requires hostname control that conflicts with Azure instance-level hostname handling
-      - imageVariants: [acl-t]
-        reason: rpcbind.service fails to start on acl-t (daemon child exits 1); cascade fails nfs-server. Tracked separately from RPM pre-baking.
   - name: linux.nfs.v4
     exceptions:
       - platforms: [azure]
         reason: Test requires hostname control that conflicts with Azure instance-level hostname handling
-      - imageVariants: [acl-t]
-        reason: rpcbind.service fails to start on acl-t (daemon child exits 1); cascade fails nfs-server. Tracked separately from RPM pre-baking.
   - name: linux.ntp
     exceptions:
       - platforms: [azure]
         reason: Test starts a local NTP server, so it is not cloud-environment coverage
+      - imageVariants: [acl-t]
+        reason: |
+          Test hardcodes systemd-timesyncd (mantle kola/tests/misc/ntp.go
+          waits for "Synchronized to time server"). acl-t ships chronyd
+          (Azure/WALinuxAgent stack) and disables timesyncd via chrony
+          RPM %post. Coverage on acl-t is via acl.basic/ServicesActive,
+          which uses the timesyncd/chronyd/ntpd anyOf pattern.
 
   - name: sysext.custom-docker.sysext
     exceptions:
