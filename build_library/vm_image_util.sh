@@ -831,10 +831,13 @@ install_uki_timeout_addon() {
     printf '%s\n' "systemd.default_device_timeout_sec=120" \
         > "${timeout_temp_dir}/timeout-cmdline.txt"
 
-    sudo ukify build \
+    if ! sudo ukify build \
         --cmdline=@"${timeout_temp_dir}/timeout-cmdline.txt" \
         --stub="${efi_stub}" \
-        --output="${timeout_temp_dir}/timeout.addon.efi"
+        --output="${timeout_temp_dir}/timeout.addon.efi"; then
+        rm -rf "${timeout_temp_dir}"
+        die "UKI timeout addon: ukify build failed"
+    fi
 
     if [[ ! -f "${timeout_temp_dir}/timeout.addon.efi" ]]; then
         rm -rf "${timeout_temp_dir}"
