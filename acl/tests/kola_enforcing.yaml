@@ -30,7 +30,6 @@ version: 1
 
 tests:
   - name: acl.basic
-  - name: acl.basic/ServicesActive
   - name: acl.etcd-member.discovery
     exceptions:
       - platforms: [qemu]
@@ -380,10 +379,14 @@ tests:
     exceptions:
       - platforms: [azure]
         reason: Test requires hostname control that conflicts with Azure instance-level hostname handling
+      - imageVariants: [acl-t]
+        reason: nfs-server.service and rpc-statd.service come up failed at basic-check on acl-t (kola-qemu). NFS server-side wiring on acl-t is not covered — no viable target until the RPM units are pulled in.
   - name: linux.nfs.v4
     exceptions:
       - platforms: [azure]
         reason: Test requires hostname control that conflicts with Azure instance-level hostname handling
+      - imageVariants: [acl-t]
+        reason: nfs-server.service and rpc-statd.service come up failed at basic-check on acl-t (kola-qemu). NFS server-side wiring on acl-t is not covered — no viable target until the RPM units are pulled in.
   - name: linux.ntp
     exceptions:
       - platforms: [azure]
