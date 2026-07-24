@@ -556,6 +556,8 @@ install_oem_package() {
         if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
             install_uki_oem_addon
             install_uki_timeout_addon
+        elif [[ "${BOOTLOADER_MODE}" == "grub" ]]; then
+            install_grub_timeout_override
         fi
         return 0
     fi
@@ -602,6 +604,8 @@ install_oem_package() {
     if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
         install_uki_oem_addon
         install_uki_timeout_addon
+    elif [[ "${BOOTLOADER_MODE}" == "grub" ]]; then
+        install_grub_timeout_override
     fi
 }
 
@@ -849,6 +853,55 @@ install_uki_timeout_addon() {
     info "UKI timeout addon: cmdline = systemd.default_device_timeout_sec=120"
 
     sudo rm -rf "${timeout_temp_dir}"
+}
+
+# Append systemd.default_device_timeout_sec=120 to grub.cfg's shared cmdline,
+# scoped to the arm64 kola *test* image only (INJECT_DOCKER_SYSEXT=true).
+#
+# GRUB has no addon mechanism like UKI's .extra.d, so unlike
+# install_uki_timeout_addon this patches the already-written grub.cfg copies
+# on the ESP directly (both are plain text, no rebuild/re-signing needed) -
+# same CI-only QEMU-TCG device-init timeout this exists to work around.
+#
+# Deliberately NOT applied to the production VM image (INJECT_DOCKER_SYSEXT=false)
+# or to amd64: the failure is a CI-only TCG-emulation artefact that never occurs
+# on real hardware.
+install_grub_timeout_override() {
+    if [[ "${BOOTLOADER_MODE}" != "grub" ]]; then
+        return 0
+    fi
+
+    # Scope: arm64 test image only.
+    if [[ "${ARCH}" != "arm64" ]] || [[ "${INJECT_DOCKER_SYSEXT:-false}" != "true" ]]; then
+        return 0
+    fi
+
+    local esp_dir="${VM_TMP_ROOT}/boot"
+    local -a grub_cfgs=(
+        "${esp_dir}/EFI/boot/grub.cfg"
+        "${esp_dir}/boot/grub2/grub.cfg"
+    )
+
+    local found=0
+    for cfg in "${grub_cfgs[@]}"; do
+        if [[ ! -f "${cfg}" ]]; then
+            continue
+        fi
+        found=1
+        if sudo grep -q 'systemd.default_device_timeout_sec=' "${cfg}"; then
+            info "GRUB timeout override: ${cfg} already patched; skipping"
+            continue
+        fi
+        sudo sed -i 's/^set linux_cmdline="\(.*\)"$/set linux_cmdline="\1 systemd.default_device_timeout_sec=120"/' "${cfg}"
+        info "GRUB timeout override: patched ${cfg}"
+    done
+
+    if [[ "${found}" -eq 0 ]]; then
+        warn "GRUB timeout override: no grub.cfg found under ${esp_dir}; skipping"
+        return 0
+    fi
+
+    info "GRUB timeout override: cmdline += systemd.default_device_timeout_sec=120"
 }
 
 # Any other tweaks required?

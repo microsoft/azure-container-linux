@@ -32,22 +32,36 @@
         "fs_type":"btrfs",
         "fs_compression":"zstd",
         "mount":"/usr",
+        "verity_hash":"4",
         "features": ["prioritize", "verity"]
       },
       "4":{
+        "label":"HASH-A",
+        "uuid":"1fae528b-6baf-4efc-a226-2a23f9291ce6",
+        "type":"dps-usr-verity",
+        "blocks":"20480"
+      },
+      "5":{
         "label":"USR-B",
         "uuid":"e03dd35c-7c2d-4a47-b3fe-27f15780a57c",
         "type":"flatcar-rootfs",
         "blocks":"2097152",
-        "fs_blocks":"262144"
+        "fs_blocks":"262144",
+        "verity_hash":"6"
       },
-      "5":{
+      "6":{
+        "label":"HASH-B",
+        "uuid":"accb60b1-1d72-4e05-9363-6fd51e2ce788",
+        "type":"dps-usr-verity",
+        "blocks":"20480"
+      },
+      "7":{
         "label":"ROOT-C",
         "uuid":"d82521b4-07ac-4f1c-8840-ddefedc332f3",
         "type":"blank",
         "blocks":"0"
       },
-      "6":{
+      "8":{
         "label":"OEM",
         "fs_label":"OEM",
         "type":"data",
@@ -56,17 +70,17 @@
         "fs_compression":"zlib",
         "mount":"/oem"
       },
-      "7":{
+      "9":{
         "label":"OEM-CONFIG",
         "type":"flatcar-reserved",
         "blocks":"131072"
       },
-      "8":{
+      "10":{
         "type":"blank",
         "label":"flatcar-reserved",
         "blocks":"0"
       },
-      "9":{
+      "11":{
         "label":"ROOT",
         "fs_label":"ROOT",
         "type":"dps-root",
@@ -76,28 +90,28 @@
       }
     },
     "vm":{
-      "9":{
+      "11":{
         "label":"ROOT",
         "fs_label":"ROOT",
         "blocks":"12943360"
       }
     },
     "azure":{
-      "9":{
+      "11":{
         "label":"ROOT",
         "fs_label":"ROOT",
         "blocks":"58875904"
       }
     },
     "vagrant":{
-      "9":{
+      "11":{
         "label":"ROOT",
         "fs_label":"ROOT",
         "blocks":"33845248"
       }
     },
     "onmetal":{
-      "7":{
+      "9":{
         "label":"config-2",
         "fs_label":"config-2",
         "type":"data",
@@ -130,6 +144,12 @@
         "type":"blank"
       },
       "9":{
+        "type":"blank"
+      },
+      "10":{
+        "type":"blank"
+      },
+      "11":{
         "label":"ROOT",
         "fs_label":"ROOT",
         "type":"0fc63daf-8483-4772-8e79-3d69d8477de4",
