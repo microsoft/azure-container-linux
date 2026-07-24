@@ -17,14 +17,6 @@
 #   - Within a single rule, fields combine with AND (all must match).
 #   - Across rules, they combine with OR (any matching rule allows failure).
 #   - A test with no exceptions is always enforced.
-#
-# imageVariants notes:
-#   - Callers that don't pass an --image-variant to evaluate_test_results.sh
-#     get "acl" as the default (matches the stock acl build). acl-t stages
-#     pass "acl-t" so the acl-t-only exceptions below apply.
-#   - acl-t removes the docker CLI (moby-containerd RPM ships containerd/ctr
-#     only) and drops both sysexts (containerd + oem-azure), so docker.* and
-#     sysext.* tests have no viable target on acl-t.
 
 version: 1
 
@@ -38,7 +30,7 @@ tests:
       - platforms: [azure]
         reason: Azure version depends on discovery.etcd.io, which is unmaintained.
       - imageVariants: [acl-t]
-        reason: etcd-member ships as a sysext on stock acl; acl-t drops the containerd/oem sysexts and does not ship etcd-member as an RPM. No viable target.
+        reason: etcd-member ships as a sysext on stock acl; acl-t drops sysexts and does not package etcd-member as an RPM.
 
   - name: acl.flannel.udp
     exceptions:
@@ -71,9 +63,10 @@ tests:
       - imageVariants: [acl-t]
         reason: |
           All three subtests are non-viable on acl-t: DockerPing/DockerEcho
-          need the docker CLI (moby-containerd ships containerd/ctr only),
-          and NTPDate needs ntpdate (chrony is acl-t's time daemon; same
-          reason as linux.ntp).
+          need docker (same reason as docker.*), and NTPDate needs the
+          ntpdate binary (chrony is acl-t's time daemon; same reason as
+          linux.ntp). Covered by the containerd and chrony follow-up tests
+          tracked there.
 
   # TEMPORARY (AB#22249): acl.kdump and acl.kdump.grub are disabled on the ACL
   # distro in mantle (ExcludeDistros: [acl]), so kola never selects them and the
@@ -98,18 +91,18 @@ tests:
     exceptions:
       - imageVariants: [acl-t]
         reason: |
-          Test uses `docker run` (NeedsDocker). On ACL, mantle injects
-          the docker sysext at test time (platform/cluster.go). acl-t
-          ships no docker RPM and replaces the containerd sysext with
-          moby-containerd (containerd/ctr only) — nothing to inject.
+          acl-t ships no docker — the containerd sysext is replaced by the
+          moby-containerd RPM (containerd/ctr only), so there is no docker
+          sysext for mantle to inject; containerd-native (ctr) replacement
+          tests are tracked as a follow-up.
   - name: bpf.local-gadget
     exceptions:
       - imageVariants: [acl-t]
         reason: |
-          local-gadget.service and its binary come from the test's
-          Ignition, not a sysext. Failure is local-gadget itself
-          speaking the Docker API (NeedsDocker). Same root cause as
-          bpf.execsnoop: no docker on acl-t.
+          acl-t ships no docker — the containerd sysext is replaced by the
+          moby-containerd RPM (containerd/ctr only), so there is no docker
+          sysext for mantle to inject; containerd-native (ctr) replacement
+          tests are tracked as a follow-up.
 
   - name: cl.cloudinit.basic
   - name: cl.cloudinit.multipart-mime
@@ -246,7 +239,7 @@ tests:
       - platforms: [azure]
         reason: Test uses custom OEM files and should not run on cloud platforms
       - imageVariants: [acl-t]
-        reason: acl-t ships no sysexts (containerd + oem-azure are replaced by first-class RPMs); the sysext-boot smoke has no viable target.
+        reason: acl-t ships no sysexts — containerd and oem-azure are replaced by first-class RPMs, so there is no sysext machinery to exercise.
   - name: cl.users.shells
   - name: cl.verity
 
@@ -282,34 +275,54 @@ tests:
         architectures: [aarch64]
         reason: Flakiness on TCG-emulated arm64, failures due to slow device enumeration.
       - imageVariants: [acl-t]
-        reason: acl-t replaces the containerd sysext with the moby-containerd RPM, which ships containerd/ctr but no docker CLI/daemon.
+        reason: |
+          acl-t ships no docker — the containerd sysext is replaced by the
+          moby-containerd RPM (containerd/ctr only), so there is no docker
+          sysext for mantle to inject; containerd-native (ctr) replacement
+          tests are tracked as a follow-up.
   - name: docker.btrfs-storage
     exceptions:
       - imageVariants: [acl-t]
-        reason: acl-t has no docker CLI/daemon (moby-containerd RPM only ships containerd/ctr).
+        reason: |
+          acl-t ships no docker — the containerd sysext is replaced by the
+          moby-containerd RPM (containerd/ctr only), so there is no docker
+          sysext for mantle to inject; containerd-native (ctr) replacement
+          tests are tracked as a follow-up.
   - name: docker.containerd-restart
     exceptions:
       - imageVariants: [acl-t]
         reason: |
-          Test drives the docker CLI to restart containerd; acl-t has no
-          docker CLI (moby-containerd RPM ships containerd/ctr only).
-          Direct containerd-restart coverage on acl-t is tracked as a
-          follow-up (new `containerd.*` mantle tests using ctr).
+          acl-t ships no docker — the containerd sysext is replaced by the
+          moby-containerd RPM (containerd/ctr only), so there is no docker
+          sysext for mantle to inject; containerd-native (ctr) replacement
+          tests are tracked as a follow-up.
   - name: docker.enable-service.sysext
     exceptions:
       - imageVariants: [acl-t]
-        reason: acl-t has no docker sysext to enable — containerd is a first-class RPM, not a sysext.
+        reason: |
+          acl-t ships no docker — the containerd sysext is replaced by the
+          moby-containerd RPM (containerd/ctr only), so there is no docker
+          sysext for mantle to inject; containerd-native (ctr) replacement
+          tests are tracked as a follow-up.
   - name: docker.selinux
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: Slow emulation causes this test to hit the duplicate journal entry bug (azure coverage doesn't exhibit this)
       - imageVariants: [acl-t]
-        reason: acl-t has no docker CLI/daemon (moby-containerd RPM only ships containerd/ctr).
+        reason: |
+          acl-t ships no docker — the containerd sysext is replaced by the
+          moby-containerd RPM (containerd/ctr only), so there is no docker
+          sysext for mantle to inject; containerd-native (ctr) replacement
+          tests are tracked as a follow-up.
   - name: docker.userns
     exceptions:
       - imageVariants: [acl-t]
-        reason: acl-t has no docker CLI/daemon (moby-containerd RPM only ships containerd/ctr).
+        reason: |
+          acl-t ships no docker — the containerd sysext is replaced by the
+          moby-containerd RPM (containerd/ctr only), so there is no docker
+          sysext for mantle to inject; containerd-native (ctr) replacement
+          tests are tracked as a follow-up.
 
   - name: kubeadm.v1.32.4.calico.base
     exceptions:
@@ -390,27 +403,27 @@ tests:
       - imageVariants: [acl-t]
         reason: |
           Test hardcodes systemd-timesyncd (mantle kola/tests/misc/ntp.go
-          waits for "Synchronized to time server"). acl-t ships chronyd
-          (Azure/WALinuxAgent stack) and disables timesyncd via chrony
-          RPM %post. Coverage on acl-t is via acl.basic/ServicesActive,
-          which uses the timesyncd/chronyd/ntpd anyOf pattern.
+          waits for "Synchronized to time server"); acl-t ships chronyd and
+          the chrony RPM %post disables timesyncd. Daemon liveness is
+          covered by acl.basic/ServicesActive; a chrony-native sync test
+          (chronyc tracking) is tracked as a follow-up.
 
   - name: sysext.custom-docker.sysext
     exceptions:
       - imageVariants: [acl-t]
-        reason: acl-t has no docker sysext infrastructure — containerd is a first-class RPM, so there is no docker sysext to customize.
+        reason: acl-t ships no sysexts — containerd and oem-azure are replaced by first-class RPMs, so there is no sysext machinery to exercise.
   - name: sysext.disable-containerd
     exceptions:
       - imageVariants: [acl-t]
-        reason: acl-t drops the containerd sysext (moby-containerd RPM replaces it); nothing to disable.
+        reason: acl-t ships no sysexts — containerd and oem-azure are replaced by first-class RPMs, so there is no sysext machinery to exercise.
   - name: sysext.disable-docker
     exceptions:
       - imageVariants: [acl-t]
-        reason: acl-t drops the docker/containerd sysexts (RPMs replace them); nothing to disable.
+        reason: acl-t ships no sysexts — containerd and oem-azure are replaced by first-class RPMs, so there is no sysext machinery to exercise.
   - name: sysext.simple
     exceptions:
       - imageVariants: [acl-t]
-        reason: acl-t ships no sysexts at all — containerd + oem-azure are replaced by first-class RPMs, so there is no sysext to exercise.
+        reason: acl-t ships no sysexts — containerd and oem-azure are replaced by first-class RPMs, so there is no sysext machinery to exercise.
 
   - name: systemd.journal.remote
     exceptions:
