@@ -893,6 +893,9 @@ install_grub_timeout_override() {
             continue
         fi
         sudo sed -i 's/^set linux_cmdline="\(.*\)"$/set linux_cmdline="\1 systemd.default_device_timeout_sec=120"/' "${cfg}"
+        if ! sudo grep -q 'systemd.default_device_timeout_sec=120' "${cfg}"; then
+            die "GRUB timeout override: sed substitution did not match in ${cfg}; linux_cmdline format may have changed"
+        fi
         info "GRUB timeout override: patched ${cfg}"
     done
 
