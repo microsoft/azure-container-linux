@@ -23,7 +23,12 @@ echo "Kernel command line: ${cmdline}"
 if [[ " ${cmdline} " != *" ipe.enforce=0 "* ]]; then
     fail "expected ipe.enforce=0 in the signed kernel command line"
 fi
-if [[ " ${cmdline} " != *" root-hash-signature=/etc/verity-usr-roothash.p7s"* ]]; then
+verity_usr_options="$(
+    tr ' ' '\n' <<< "${cmdline}" |
+        sed -n 's/^systemd\.verity_usr_options=//p' |
+        head -n 1
+)"
+if [[ ",${verity_usr_options}," != *",root-hash-signature=/etc/verity-usr-roothash.p7s,"* ]]; then
     fail "signed /usr dm-verity root hash is not required by the kernel command line"
 fi
 
