@@ -58,17 +58,60 @@ case "${FLAGS_target}" in
 esac
 
 # IPE assets are signed with one per-build certificate and packed into a small
-# cpio archive that ukify appends to the main initramfs. For verity images, the
-# rendered policy binds execution trust to the exact /usr dm-verity root hash.
-# This avoids making dm-verity setup depend on a detached signature when Secure
-# Boot is disabled and the ephemeral certificate is not in the platform keyring.
+# cpio archive that ukify appends to the main initramfs. The same certificate
+# signs the UKI, policy, and /usr dm-verity root hash. Pipeline validation only
+# enables this mode for the Secure Boot image whose UEFI db enrolls the cert.
 IPE_INITRAMFS=""
+IPE_VERITY_SIG_PATH=""
+
+_uki_ipe_sign_verity_roothash() {
+    local roothash_hex_file="$1" work_dir="$2" cert_dir="$3" output_sig="$4"
+    local key cert hex content sig
+
+    key="${cert_dir}/ca.key"
+    cert="${cert_dir}/uki-signing-ca.pem"
+
+    # dm-verity verifies the signature over the root-hash hex string exactly as
+    # it appears in its table, without a trailing newline.
+    hex="$(tr -d '[:space:]' < "${roothash_hex_file}")"
+    if ! [[ "${hex}" =~ ^[[:xdigit:]]{64}$ ]]; then
+        error "UKI/RPM: invalid SHA-256 /usr verity root hash"
+        return 1
+    fi
+    hex="${hex,,}"
+
+    content="${work_dir}/usr-roothash.hex"
+    printf '%s' "${hex}" > "${content}"
+
+    sig="${work_dir}/usr-roothash.p7s"
+    if ! openssl smime -sign -noattr -binary \
+            -in "${content}" -signer "${cert}" -inkey "${key}" \
+            -outform der -out "${sig}" 2>/dev/null || [[ ! -s "${sig}" ]]; then
+        error "UKI/RPM: IPE failed to sign verity root hash"
+        return 1
+    fi
+
+    if ! openssl smime -verify -inform der -binary -in "${sig}" \
+            -content "${content}" -certfile "${cert}" -noverify >/dev/null 2>&1; then
+        error "UKI/RPM: IPE verity root-hash signature failed self-verify"
+        return 1
+    fi
+
+    if ! cp "${sig}" "${output_sig}"; then
+        error "UKI/RPM: IPE failed to add verity signature to initramfs"
+        return 1
+    fi
+
+    IPE_VERITY_SIG_PATH="/etc/verity-usr-roothash.p7s"
+    info "UKI/RPM: signed /usr verity root hash ($(wc -c < "${sig}") B PKCS#7)"
+}
 
 _uki_ipe_build_initramfs() {
     local work_dir="$1" cert_dir="$2" roothash_hex_file="${3:-}"
-    local key cert policy_src policy roothash_hex cpio_root policy_sig verified_policy out
+    local key cert policy_src cpio_root policy_sig verified_policy out
 
     IPE_INITRAMFS=""
+    IPE_VERITY_SIG_PATH=""
 
     if ! "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}"; then
         error "UKI/RPM: IPE could not ensure ephemeral signing cert"
@@ -82,27 +125,12 @@ _uki_ipe_build_initramfs() {
         error "UKI/RPM: IPE policy source not found: ${policy_src}"
         return 1
     fi
-    if ! grep -q '@USR_VERITY_ROOT_HASH@' "${policy_src}"; then
-        error "UKI/RPM: IPE policy template is missing the /usr root-hash placeholder"
+    if ! grep -Fq 'op=EXECUTE dmverity_signature=TRUE action=ALLOW' "${policy_src}"; then
+        error "UKI/RPM: IPE policy does not trust verified dm-verity signatures"
         return 1
     fi
-
-    policy="${work_dir}/acl-ipe-boot-policy.pol"
-    if [[ -n "${roothash_hex_file}" ]]; then
-        roothash_hex="$(tr -d '[:space:]' < "${roothash_hex_file}")"
-        if ! [[ "${roothash_hex}" =~ ^[[:xdigit:]]{64}$ ]]; then
-            error "UKI/RPM: invalid SHA-256 /usr verity root hash"
-            return 1
-        fi
-        roothash_hex="${roothash_hex,,}"
-        sed "s/@USR_VERITY_ROOT_HASH@/${roothash_hex}/" "${policy_src}" > "${policy}"
-        info "UKI/RPM: bound IPE policy to /usr verity root hash ${roothash_hex}"
-    else
-        sed '/@USR_VERITY_ROOT_HASH@/d' "${policy_src}" > "${policy}"
-        info "UKI/RPM: no /usr verity root hash; policy only trusts boot-verified files"
-    fi
-    if [[ ! -s "${policy}" ]] || grep -q '@USR_VERITY_ROOT_HASH@' "${policy}"; then
-        error "UKI/RPM: failed to render IPE policy"
+    if grep -q '@USR_VERITY_ROOT_HASH@' "${policy_src}"; then
+        error "UKI/RPM: stale root-hash placeholder remains in IPE policy"
         return 1
     fi
 
@@ -112,7 +140,7 @@ _uki_ipe_build_initramfs() {
 
     policy_sig="${cpio_root}/etc/ipe/acl.pol.p7b"
     if ! openssl smime -sign -binary \
-            -in "${policy}" \
+            -in "${policy_src}" \
             -signer "${cert}" \
             -inkey "${key}" \
             -noattr -nodetach -nosmimecap \
@@ -129,8 +157,21 @@ _uki_ipe_build_initramfs() {
         error "UKI/RPM: IPE policy signature failed self-verify"
         return 1
     fi
-    if ! cmp -s "${policy}" "${verified_policy}"; then
-        error "UKI/RPM: verified IPE policy content differs from rendered policy"
+    if ! cmp -s "${policy_src}" "${verified_policy}"; then
+        error "UKI/RPM: verified IPE policy content differs from source policy"
+        return 1
+    fi
+
+    if [[ -z "${roothash_hex_file}" ]]; then
+        error "UKI/RPM: signed IPE mode requires a /usr dm-verity root hash"
+        return 1
+    fi
+    mkdir -p "${cpio_root}/etc"
+    if ! _uki_ipe_sign_verity_roothash \
+            "${roothash_hex_file}" \
+            "${work_dir}" \
+            "${cert_dir}" \
+            "${cpio_root}/etc/verity-usr-roothash.p7s"; then
         return 1
     fi
 
@@ -142,7 +183,7 @@ _uki_ipe_build_initramfs() {
     fi
 
     IPE_INITRAMFS="${out}"
-    info "UKI/RPM: signed rendered IPE policy and packed it into the appended initramfs"
+    info "UKI/RPM: signed IPE policy and /usr root hash and packed them into the appended initramfs"
     return 0
 }
 
@@ -259,8 +300,8 @@ OSREL
             die "UKI/RPM: Verity enabled but no hash file at ${FLAGS_verity_hash}"
         fi
     fi
-    if [[ "${IPE_MODE}" == "enforcing" && -z "${ipe_roothash_file}" ]]; then
-        die "UKI/RPM: enforcing IPE mode requires a /usr dm-verity root hash"
+    if [[ "${IPE_MODE}" != "off" && -z "${ipe_roothash_file}" ]]; then
+        die "UKI/RPM: signed IPE modes require a /usr dm-verity root hash"
     fi
 
     if [[ "${IPE_MODE}" != "off" ]]; then
@@ -278,6 +319,9 @@ OSREL
     local cmdline=""
     if [[ ${FLAGS_verity} -eq ${FLAGS_TRUE} ]]; then
         local verity_usr_options="hash-offset=${verity_hash_offset},panic-on-corruption"
+        if [[ -n "${IPE_VERITY_SIG_PATH}" ]]; then
+            verity_usr_options+=",root-hash-signature=${IPE_VERITY_SIG_PATH}"
+        fi
         cmdline="mount.usr=/dev/mapper/usr mount.usrflags=ro"
         cmdline+=" systemd.verity_usr_data=PARTUUID=${usr_a_uuid}"
         cmdline+=" systemd.verity_usr_hash=PARTUUID=${usr_a_uuid}"
@@ -351,8 +395,8 @@ OSREL
     info "UKI/RPM: Building UKI with ukify"
 
     # ukify concatenates multiple --initrd inputs into the UKI's .initrd
-    # section. The IPE cpio contains the policy after its /usr root-hash rule is
-    # rendered and the complete policy is signed.
+    # section. The IPE cpio contains the signed policy and the detached /usr
+    # dm-verity root-hash signature.
     local -a _uki_initrds=(--initrd="${initrd}")
     if [[ -n "${IPE_INITRAMFS:-}" ]]; then
         _uki_initrds+=(--initrd="${IPE_INITRAMFS}")

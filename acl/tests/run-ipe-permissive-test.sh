@@ -23,8 +23,8 @@ echo "Kernel command line: ${cmdline}"
 if [[ " ${cmdline} " != *" ipe.enforce=0 "* ]]; then
     fail "expected ipe.enforce=0 in the signed kernel command line"
 fi
-if [[ " ${cmdline} " == *" root-hash-signature="* ]]; then
-    fail "obsolete dm-verity root-hash-signature option is still present"
+if [[ " ${cmdline} " != *" root-hash-signature=/etc/verity-usr-roothash.p7s"* ]]; then
+    fail "signed /usr dm-verity root hash is not required by the kernel command line"
 fi
 
 if [[ ! -r "${IPE_DIR}/enforce" ]]; then
@@ -56,8 +56,11 @@ grep -Fq "DEFAULT op=EXECUTE action=DENY" <<< "${policy}" ||
     fail "active policy does not deny untrusted execution by default"
 grep -Fq "op=EXECUTE boot_verified=TRUE action=ALLOW" <<< "${policy}" ||
     fail "active policy does not trust boot-verified initramfs files"
-grep -Fq "op=EXECUTE dmverity_roothash=sha256:${usr_hash} action=ALLOW" <<< "${policy}" ||
-    fail "active policy is not bound to the booted /usr dm-verity root hash"
+grep -Fq "op=EXECUTE dmverity_signature=TRUE action=ALLOW" <<< "${policy}" ||
+    fail "active policy does not trust verified dm-verity signatures"
+if grep -Fq "dmverity_roothash=" <<< "${policy}"; then
+    fail "active policy still pins one dm-verity root hash instead of trusting signed volumes"
+fi
 
 verity_device="$(readlink -f /dev/mapper/usr 2>/dev/null || true)"
 usr_verity_mounted=false
@@ -72,8 +75,8 @@ if [[ "${usr_verity_mounted}" != "true" ]]; then
     fail "/usr mount stack does not include the expected dm-verity device"
 fi
 
-# An executable copied away from verified /usr matches the policy's deny
-# default. It must still run in permissive mode while generating audit data.
+# An executable copied to writable storage matches the policy's deny default.
+# It must still run in permissive mode while generating audit data.
 probe="/var/tmp/acl-ipe-permissive-probe"
 trap 'rm -f "${probe}"' EXIT
 cp /usr/bin/true "${probe}"
@@ -88,7 +91,7 @@ boot_logs="$(
 )"
 loader_errors="$(
     grep -Ei \
-        'acl-ipe-load: (failed|warning)|root hash verification failed|failed to set up verity device' \
+        'acl-ipe-load: (failed|warning)|root hash verification failed|root[- ]hash signature.*(failed|invalid|error)|failed to (set up|activate).*verity|ENOKEY|required key not available' \
         <<< "${boot_logs}" || true
 )"
 if [[ -n "${loader_errors}" ]]; then
@@ -112,4 +115,5 @@ echo ""
 echo "IPE policy: ${POLICY_NAME}"
 echo "IPE enforce state: 0 (permissive)"
 echo "/usr dm-verity root hash: ${usr_hash}"
+echo "/usr dm-verity root-hash signature: verified during device setup"
 echo "SUCCESS: IPE is active in permissive mode with no detected boot errors"

@@ -4,5 +4,4 @@ DEFAULT action=ALLOW
 
 DEFAULT op=EXECUTE action=DENY
 op=EXECUTE boot_verified=TRUE action=ALLOW
-# Replaced with the image's exact SHA-256 /usr root hash at build time.
-op=EXECUTE dmverity_roothash=sha256:@USR_VERITY_ROOT_HASH@ action=ALLOW
+op=EXECUTE dmverity_signature=TRUE action=ALLOW

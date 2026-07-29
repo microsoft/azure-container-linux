@@ -38,7 +38,7 @@
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --ipe-mode=MODE                      IPE mode: off|permissive|enforcing
-#                                        (test branch default: permissive)
+#                                        (default: off)
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
 #   --output=DIR                         Output directory for images
@@ -176,9 +176,10 @@ export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
 # IPE build mode forwarded into the SDK container. "off" omits the policy
 # loader and signed IPE assets, while permissive/enforcing select the matching
 # ipe.enforce= value in the signed UKI command line.
-# TEST-ONLY: default to permissive so branch validation exercises the IPE path
-# without an acl-pipelines change. A shippable branch should default to off.
-ACL_IPE_MODE="${ACL_IPE_MODE:-permissive}"
+# Pipeline validation selects permissive explicitly for the Secure Boot image.
+# Keep the source default off so ordinary and non-Secure-Boot builds do not
+# require the test signing certificate.
+ACL_IPE_MODE="${ACL_IPE_MODE:-off}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"

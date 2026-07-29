@@ -10,7 +10,8 @@
 #
 # The signed policy (PKCS#7) is embedded in the UKI's initramfs at
 # /etc/ipe/acl.pol.p7b. The kernel verifies it against the .platform keyring;
-# the same ephemeral certificate signs the policy and is enrolled in UEFI db.
+# the same ephemeral certificate signs the UKI, policy, and /usr dm-verity root
+# hash and is enrolled in UEFI db.
 #
 # Enforcement mode comes from the signed UKI's ipe.enforce= kernel command
 # line; this script only loads and activates the policy.
