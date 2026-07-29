@@ -93,6 +93,80 @@ assert_classification AuthorizationFailed \
     "The client is not authorized to create this VM." \
     2 ""
 
+assert_failed_vm_boot_diagnostics() {
+    local events_file="${TEST_TMPDIR}/boot-diagnostics-events"
+    : > "${events_file}"
+
+    info() { :; }
+    warn() { :; }
+
+    az() {
+        case "${1:-} ${2:-} ${3:-}" in
+            "vm show -g")
+                printf 'vm:show\n' >> "${events_file}"
+                return 0
+                ;;
+            "vm boot-diagnostics enable")
+                printf 'diagnostics:enable\n' >> "${events_file}"
+                return 0
+                ;;
+            "vm boot-diagnostics get-boot-log")
+                printf 'diagnostics:get-log\n' >> "${events_file}"
+                printf '"serial line one\\nserial line two\\n"\n'
+                return 0
+                ;;
+            *)
+                printf 'Unexpected az command: %q\n' "$*" >&2
+                return 1
+                ;;
+        esac
+    }
+
+    local serial_output
+    serial_output=$(capture_failed_vm_boot_diagnostics \
+        test-rg test-vm test-sku test-region 2>&1)
+
+    local expected_events actual_events
+    expected_events=$'vm:show\ndiagnostics:enable\ndiagnostics:get-log'
+    actual_events=$(cat "${events_file}")
+    if [[ "${actual_events}" != "${expected_events}" ]]; then
+        printf 'FAIL: boot diagnostics commands ran out of order\nExpected:\n%s\nActual:\n%s\n' \
+            "${expected_events}" "${actual_events}" >&2
+        return 1
+    fi
+    if [[ "${serial_output}" != *"[serial] serial line two"* ]]; then
+        printf 'FAIL: boot diagnostics serial output was not logged\n' >&2
+        return 1
+    fi
+
+    : > "${events_file}"
+    az() {
+        case "${1:-} ${2:-} ${3:-}" in
+            "vm show -g")
+                printf 'vm:show\n' >> "${events_file}"
+                return 1
+                ;;
+            *)
+                printf 'Unexpected az command after missing VM: %q\n' "$*" >&2
+                return 1
+                ;;
+        esac
+    }
+
+    if ! capture_failed_vm_boot_diagnostics \
+        test-rg test-vm test-sku test-region >/dev/null; then
+        printf 'FAIL: missing VM resource made diagnostics fatal\n' >&2
+        return 1
+    fi
+    actual_events=$(cat "${events_file}")
+    if [[ "${actual_events}" != "vm:show" ]]; then
+        printf 'FAIL: missing VM resource still attempted boot diagnostics\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: failed VM boot diagnostics are captured best-effort\n'
+}
+
 assert_fallback_uses_clean_resource_group() {
     local events_file="${TEST_TMPDIR}/fallback-events"
     local attempts_file="${TEST_TMPDIR}/fallback-attempts"
@@ -102,6 +176,9 @@ assert_fallback_uses_clean_resource_group() {
     info() { :; }
     warn() { :; }
     error() { printf 'ERROR: %s\n' "$*" >&2; }
+    capture_failed_vm_boot_diagnostics() {
+        printf 'diagnostics:capture:%s\n' "$1" >> "${events_file}"
+    }
 
     _try_vm_create() {
         local vm_rg_name="$1"
@@ -186,7 +263,7 @@ assert_fallback_uses_clean_resource_group() {
     fi
 
     local expected_events actual_events
-    expected_events=$'group:create:test-rg-1\ncreate:primary-sku@test-rg-1\ngroup:delete:test-rg-1\ngroup:create:test-rg-2\ncreate:fallback-sku@test-rg-2'
+    expected_events=$'group:create:test-rg-1\ncreate:primary-sku@test-rg-1\ndiagnostics:capture:test-rg-1\ngroup:delete:test-rg-1\ngroup:create:test-rg-2\ncreate:fallback-sku@test-rg-2'
     actual_events=$(cat "${events_file}")
     if [[ "${actual_events}" != "${expected_events}" ]]; then
         printf 'FAIL: unexpected fallback order\nExpected:\n%s\nActual:\n%s\n' \
@@ -212,6 +289,7 @@ assert_resource_group_failure_stops_fallback() {
     info() { :; }
     warn() { :; }
     error() { :; }
+    capture_failed_vm_boot_diagnostics() { :; }
 
     _try_vm_create() {
         printf '%s\n' "$4" >> "${attempts_file}"
@@ -319,6 +397,7 @@ assert_final_candidate_does_not_create_unused_resource_group() {
     info() { :; }
     warn() { :; }
     error() { :; }
+    capture_failed_vm_boot_diagnostics() { :; }
 
     _try_vm_create() {
         printf 'create:%s@%s\n' "$4" "$1" >> "${events_file}"
@@ -382,6 +461,7 @@ assert_final_candidate_moves_directly_to_backup_region() {
     info() { :; }
     warn() { :; }
     error() { printf 'ERROR: %s\n' "$*" >&2; }
+    capture_failed_vm_boot_diagnostics() { :; }
 
     check_image_replicated_to_region() {
         [[ "$2" == "backup-region" ]]
@@ -483,6 +563,7 @@ assert_final_candidate_moves_directly_to_backup_region() {
     printf 'PASS: final candidate moves directly to a clean backup-region resource group\n'
 }
 
+assert_failed_vm_boot_diagnostics
 assert_fallback_uses_clean_resource_group
 assert_resource_group_failure_stops_fallback
 assert_public_ip_failure_cleans_resource_group

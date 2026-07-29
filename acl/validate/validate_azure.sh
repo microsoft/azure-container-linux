@@ -176,6 +176,40 @@ create_vm_resource_group() {
     fi
 }
 
+capture_failed_vm_boot_diagnostics() {
+    local vm_rg_name="$1"
+    local vm_name="$2"
+    local vm_size="$3"
+    local region="$4"
+
+    if ! az vm show -g "$vm_rg_name" -n "$vm_name" &>/dev/null; then
+        info "No VM resource available for boot diagnostics"
+        return 0
+    fi
+
+    warn "Capturing boot diagnostics for failed VM: SKU=${vm_size} Region=${region}"
+    az vm boot-diagnostics enable \
+        --resource-group "$vm_rg_name" \
+        --name "$vm_name" &>/dev/null || true
+
+    local boot_log_json
+    if boot_log_json=$(az vm boot-diagnostics get-boot-log \
+        --resource-group "$vm_rg_name" \
+        --name "$vm_name" -o json 2>&1); then
+        local boot_log
+        if boot_log=$(jq -r . <<< "$boot_log_json" 2>/dev/null); then
+            info "Failed VM serial console log (last 200 lines):"
+            tail -200 <<< "$boot_log" | sed 's/^/  [serial] /' >&2 || true
+        else
+            warn "Failed to decode boot diagnostics output"
+        fi
+    else
+        warn "Boot diagnostics unavailable: $boot_log_json"
+    fi
+
+    return 0
+}
+
 # ── Azure console ─────────────────────────────────────────────────
 
 connect_vm_console_azure() {
@@ -992,6 +1026,8 @@ create_vm_azure() {
                 warn "✗ Retryable VM creation failure: ${sku} in ${region} — trying next candidate"
                 # A provisioning timeout may leave a VM, NIC, disk, or deployment
                 # behind. Isolate the next attempt instead of racing their deletion.
+                capture_failed_vm_boot_diagnostics \
+                    "$vm_rg_name" "$VM_NAME" "$sku" "$region" || true
                 az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
                 if ((sku_index + 1 < ${#region_skus[@]})); then
                     vm_rg_name=$(get_vm_rg_name)
