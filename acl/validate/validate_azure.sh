@@ -484,9 +484,9 @@ _cancel_vm_create() {
     exit "$status"
 }
 
-# Attempt a single az vm create. Returns 0 on success, 1 for an incompatible
-# SKU, 2 for a fatal error, 3 for a retryable OS provisioning error, or 4 for
-# a retryable allocation error.
+# Attempt a single az vm create.  Returns 0 on success, 1 on a retryable
+# candidate failure, or 2 on a non-retryable failure.  Retryable failures print
+# "RETRYABLE_VM_CREATE_ERROR" so the caller can advance to the next candidate.
 _try_vm_create() {
     local vm_rg_name="$1"
     local vm_name="$2"
@@ -580,30 +580,30 @@ _try_vm_create() {
         _VM_CREATE_RESULT="$output"
         return 0
     else
-        # Detect errors that mean "this SKU won't work here" so the caller
-        # can move on to the next candidate instead of aborting.
-        #   - SkuNotAvailable        → capacity restriction in this region
-        #   - InvalidParameter/vmSize → disk-controller incompatibility
-        #   - TrustedLaunch           → SKU does not support TrustedLaunch security type
+        # Detect candidate-specific or transient provisioning errors so the
+        # caller can move on to the next SKU/region instead of aborting.
+        #   - SkuNotAvailable / AllocationFailed → regional capacity restriction
+        #   - OSProvisioningTimedOut              → transient provisioning failure
+        #   - OperationNotAllowed + quota/cores   → subscription quota restriction
+        #   - InvalidParameter/vmSize             → disk-controller incompatibility
+        #   - TrustedLaunch                       → unsupported security type
+        local retryable=false
         if echo "$output" | grep -qiE \
-            "SkuNotAvailable|\"target\":\\s*\"vmSize\"|TrustedLaunch"; then
+            "SkuNotAvailable|AllocationFailed|ZonalAllocationFailed|OSProvisioningTimedOut|\"target\":\\s*\"vmSize\"|TrustedLaunch"; then
+            retryable=true
+        elif echo "$output" | grep -qi "OperationNotAllowed" && \
+            echo "$output" | grep -qiE "quota|cores"; then
+            retryable=true
+        fi
+
+        if [[ "$retryable" == "true" ]]; then
             # Log the error details to stderr so they appear in pipeline logs
             echo "$output" | grep -iE \
-                'SkuNotAvailable|Capacity|InvalidParameter|vmSize|TrustedLaunch|BadRequest' >&2 || true
-            _VM_CREATE_RESULT="SKU_NOT_AVAILABLE"
+                'SkuNotAvailable|AllocationFailed|ZonalAllocationFailed|OSProvisioningTimedOut|OperationNotAllowed|Capacity|Quota|InvalidParameter|vmSize|TrustedLaunch|BadRequest' >&2 || true
+            echo "RETRYABLE_VM_CREATE_ERROR"
             return 1
         fi
-        if echo "$output" | grep -qi "OSProvisioningTimedOut"; then
-            echo "$output" >&2
-            _VM_CREATE_RESULT="RETRYABLE_OS_PROVISIONING"
-            return 3
-        fi
-        if echo "$output" | grep -qiE "ZonalAllocationFailed|AllocationFailed"; then
-            echo "$output" >&2
-            _VM_CREATE_RESULT="RETRYABLE_ALLOCATION"
-            return 4
-        fi
-        # Non-SKU error — print the full output so the caller sees it, then fail
+        # Non-retryable error — print the full output so the caller sees it, then fail
         echo "$output" >&2
         return 2
     fi
@@ -948,18 +948,10 @@ create_vm_azure() {
                     --name "$VM_NAME" \
                     --resource-group "$vm_rg_name"
                 return 0
-            elif [[ $rc -eq 1 && "$result" == "SKU_NOT_AVAILABLE" ]]; then
-                warn "✗ SKU incompatible or unavailable: ${sku} in ${region} — trying next candidate"
-                _replace_vm_rg "$vm_rg_name" "$region" "${all_tags[@]}"
-                vm_rg_name="$VM_RG"
-                continue
-            # Repeated allocation failures are regional capacity noise, so try
-            # another candidate. Repeated OS provisioning timeouts likely
-            # indicate an image defect and intentionally remain fatal.
-            elif [[ $rc -eq 4 && "$result" == "RETRYABLE_ALLOCATION" ]]; then
-                warn "✗ Allocation failed twice for ${sku} in ${region} — trying next candidate"
-                _replace_vm_rg "$vm_rg_name" "$region" "${all_tags[@]}"
-                vm_rg_name="$VM_RG"
+            elif [[ $rc -eq 1 && "$result" == "RETRYABLE_VM_CREATE_ERROR" ]]; then
+                warn "✗ Retryable VM creation failure: ${sku} in ${region} — trying next candidate"
+                # Delete the failed VM resource (deployment may have left artifacts)
+                az vm delete -g "$vm_rg_name" -n "$VM_NAME" -y --no-wait 2>/dev/null || true
                 continue
             else
                 # Non-SKU failure — fatal
