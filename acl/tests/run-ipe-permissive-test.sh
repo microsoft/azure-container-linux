@@ -59,11 +59,17 @@ grep -Fq "op=EXECUTE boot_verified=TRUE action=ALLOW" <<< "${policy}" ||
 grep -Fq "op=EXECUTE dmverity_roothash=sha256:${usr_hash} action=ALLOW" <<< "${policy}" ||
     fail "active policy is not bound to the booted /usr dm-verity root hash"
 
-usr_source="$(findmnt -n -o SOURCE /usr 2>/dev/null || true)"
-usr_device="$(readlink -f "${usr_source}" 2>/dev/null || true)"
 verity_device="$(readlink -f /dev/mapper/usr 2>/dev/null || true)"
-if [[ -z "${verity_device}" || "${usr_device}" != "${verity_device}" ]]; then
-    fail "/usr is not mounted from the expected dm-verity device (source: ${usr_source:-unknown})"
+usr_verity_mounted=false
+while IFS= read -r usr_source; do
+    usr_device="$(readlink -f "${usr_source}" 2>/dev/null || true)"
+    if [[ -n "${verity_device}" && "${usr_device}" == "${verity_device}" ]]; then
+        usr_verity_mounted=true
+        break
+    fi
+done < <(findmnt -n -o SOURCE /usr 2>/dev/null || true)
+if [[ "${usr_verity_mounted}" != "true" ]]; then
+    fail "/usr mount stack does not include the expected dm-verity device"
 fi
 
 # An executable copied away from verified /usr matches the policy's deny
