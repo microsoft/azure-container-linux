@@ -40,7 +40,7 @@ VM_RG=""
 AZ_VM_ARGS="${AZ_VM_ARGS:-}"
 _VM_CREATE_RESULT=""
 
-# Backup VM SKUs to try when the primary SKU has capacity restrictions.
+# Backup VM SKUs to try when the primary SKU cannot be provisioned.
 # Ordered by preference:
 #   AMD64 — v5 D-family (SCSI) first, then cross-family (F/B), then v6 (NVMe,
 #           may fail with disk-controller incompatibility on current images).
@@ -145,6 +145,35 @@ check_image_replicated_to_region() {
 
     local target_lower="${target_region,,}"
     echo "$regions" | grep -qxF "$target_lower"
+}
+
+create_vm_resource_group() {
+    local vm_rg_name="$1"
+    local region="$2"
+    local public_ip_name="$3"
+    shift 3
+    local -a tags=("$@")
+
+    info "Creating VM RG: $vm_rg_name (location: $region)"
+    if ! az group create \
+        --name "$vm_rg_name" \
+        --location "$region" \
+        --tags "${tags[@]}"; then
+        return 1
+    fi
+
+    info "Creating public IP with policy-compliant tags: $public_ip_name"
+    if ! az network public-ip create \
+        --name "$public_ip_name" \
+        --resource-group "$vm_rg_name" \
+        --location "$region" \
+        --allocation-method Static \
+        --sku Standard \
+        --ip-tags FirstPartyUsage=/NonProd \
+        --tags "${tags[@]}"; then
+        az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
+        return 1
+    fi
 }
 
 # ── Azure console ─────────────────────────────────────────────────
@@ -846,6 +875,7 @@ create_vm_azure() {
     local original_region="${AZ_REGION}"
     local current_rg_region=""
     local tried_combos=()
+    local public_ip_name="${VM_NAME}PublicIP"
 
     info "VM SKU fallback candidates:"
     info "  SKUs:    ${unique_skus[*]}"
@@ -878,15 +908,25 @@ create_vm_azure() {
         if [[ "$region" != "$current_rg_region" ]]; then
             if [[ -n "$current_rg_region" ]]; then
                 info "Switching from ${current_rg_region} to ${region} — recreating resource group"
-                _replace_vm_rg "$vm_rg_name" "$region" "${all_tags[@]}"
-                vm_rg_name="$VM_RG"
-            else
-                _create_vm_rg_resources "$vm_rg_name" "$region" "${all_tags[@]}"
+                az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
+                vm_rg_name=$(get_vm_rg_name)
+            elif [[ -z "$vm_rg_name" ]]; then
+                # The last candidate in the prior region already deleted its RG.
+                vm_rg_name=$(get_vm_rg_name)
             fi
+            if ! create_vm_resource_group \
+                "$vm_rg_name" "$region" "$public_ip_name" "${all_tags[@]}"; then
+                error "Failed to prepare resource group '${vm_rg_name}'"
+                return 1
+            fi
+
+            VM_RG="$vm_rg_name"
             current_rg_region="$region"
         fi
 
-        for sku in "${region_skus[@]}"; do
+        local sku_index sku
+        for ((sku_index = 0; sku_index < ${#region_skus[@]}; sku_index++)); do
+            sku="${region_skus[$sku_index]}"
             tried_combos+=("${sku}@${region}")
             local attempt=1
             local max_attempts=2
@@ -950,11 +990,25 @@ create_vm_azure() {
                 return 0
             elif [[ $rc -eq 1 && "$result" == "RETRYABLE_VM_CREATE_ERROR" ]]; then
                 warn "✗ Retryable VM creation failure: ${sku} in ${region} — trying next candidate"
-                # Delete the failed VM resource (deployment may have left artifacts)
-                az vm delete -g "$vm_rg_name" -n "$VM_NAME" -y --no-wait 2>/dev/null || true
+                # A provisioning timeout may leave a VM, NIC, disk, or deployment
+                # behind. Isolate the next attempt instead of racing their deletion.
+                az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
+                if ((sku_index + 1 < ${#region_skus[@]})); then
+                    vm_rg_name=$(get_vm_rg_name)
+                    if ! create_vm_resource_group \
+                        "$vm_rg_name" "$region" "$public_ip_name" "${all_tags[@]}"; then
+                        error "Failed to prepare a clean resource group before retrying"
+                        return 1
+                    fi
+                    VM_RG="$vm_rg_name"
+                else
+                    # Let the next replicated region create its RG, if one remains.
+                    vm_rg_name=""
+                    current_rg_region=""
+                fi
                 continue
             else
-                # Non-SKU failure — fatal
+                # Non-retryable failure — fatal
                 error "VM creation failed with a non-recoverable error (exit code: ${rc})"
                 _delete_vm_rg_sync "$vm_rg_name"
                 return 1
@@ -962,8 +1016,7 @@ create_vm_azure() {
         done
     done
 
-    _delete_vm_rg_sync "$vm_rg_name"
-    error "No available VM SKU found across all candidate regions"
+    error "No VM candidate succeeded across all candidate regions"
     error "  Tried: ${tried_combos[*]}"
     return 1
 }
