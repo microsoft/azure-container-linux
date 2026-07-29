@@ -8,11 +8,9 @@
 # initrd SELinux is not yet loaded, so the CAP_MAC_ADMIN write succeeds. This
 # mirrors how 99acl-selinux-toggle runs before switch_root.
 #
-# The signed policy (PKCS#7) is on the ESP (vfat) at /acl-ipe/acl.pol.p7b,
-# placed there by sign_uki_ephemeral.sh (the rootfs is read-only at build time).
-# The kernel verifies the policy signature against the .platform keyring (the
-# ephemeral UKI-signing cert is enrolled in the UEFI db), so the file's location
-# is not security-relevant.
+# The signed policy (PKCS#7) is embedded in the UKI's initramfs at
+# /etc/ipe/acl.pol.p7b. The kernel verifies it against the .platform keyring;
+# the same ephemeral certificate signs the policy and is enrolled in UEFI db.
 #
 # Enforcement mode comes from the ipe.enforce= kernel cmdline (permissive for
 # this rollout); this script only loads + activates the policy.
@@ -23,9 +21,7 @@ set -uo pipefail
 
 POLICY_NAME="acl_ipe_boot_policy"
 IPE_DIR="/sys/kernel/security/ipe"
-ESP_LABEL="EFI-SYSTEM"
-ESP_MNT="/run/acl-ipe-esp"
-POLICY_REL="acl-ipe/acl.pol.p7b"
+POLICY_FILE="/etc/ipe/acl.pol.p7b"
 
 log() { echo "acl-ipe-load: $*" >&2; }
 
@@ -41,35 +37,17 @@ fi
 if [[ -d "${IPE_DIR}/policies/${POLICY_NAME}" ]]; then
     log "Policy ${POLICY_NAME} already present; ensuring it is active."
 else
-    # Mount the ESP (vfat) read-only to read the signed policy.
-    mkdir -p "${ESP_MNT}"
-    mounted=0
-    if mount -L "${ESP_LABEL}" -o ro "${ESP_MNT}" 2>/dev/null; then
-        mounted=1
-    elif [[ -e "/dev/disk/by-label/${ESP_LABEL}" ]] \
-         && mount -o ro "/dev/disk/by-label/${ESP_LABEL}" "${ESP_MNT}" 2>/dev/null; then
-        mounted=1
-    fi
-    if [[ "${mounted}" -ne 1 ]]; then
-        log "Could not mount ESP (label ${ESP_LABEL}); cannot load policy. Skipping."
+    if [[ ! -f "${POLICY_FILE}" ]]; then
+        log "No signed policy at ${POLICY_FILE}; nothing to load."
         exit 0
     fi
 
-    policy_file="${ESP_MNT}/${POLICY_REL}"
-    if [[ ! -f "${policy_file}" ]]; then
-        log "No policy at ESP:/${POLICY_REL}; nothing to load."
-        umount "${ESP_MNT}" 2>/dev/null || true
-        exit 0
-    fi
-
-    if cat "${policy_file}" > "${IPE_DIR}/new_policy" 2>/dev/null; then
-        log "Loaded policy ${POLICY_NAME} from ESP."
+    if cat "${POLICY_FILE}" > "${IPE_DIR}/new_policy" 2>/dev/null; then
+        log "Loaded policy ${POLICY_NAME} from the signed UKI initramfs."
     else
-        log "Failed to load ${policy_file} (untrusted signature, malformed, or write denied)."
-        umount "${ESP_MNT}" 2>/dev/null || true
+        log "Failed to load ${POLICY_FILE} (untrusted signature, malformed, or write denied)."
         exit 0
     fi
-    umount "${ESP_MNT}" 2>/dev/null || true
 fi
 
 if [[ -w "${IPE_DIR}/policies/${POLICY_NAME}/active" ]]; then

@@ -143,16 +143,13 @@ run_fs_hook
 # Secure Boot db.
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]; then
     if [[ "${ACL_IPE_ENABLE:-}" == "1" ]]; then
-        # Also sign the ACL IPE policy with the same ephemeral key; the signer
-        # places the signed .p7b on the ESP (the rootfs is read-only here).
-        # Arg 4 reuses the same per-build ephemeral cert that uki_install.sh used
-        # to sign the /usr verity roothash (FLAGS_from is the build output dir,
-        # matching uki_install.sh's dirname of the verity-hash file), so the one
-        # enrolled cert verifies the UKI, the IPE policy, and the roothash sig.
+        # Reuse the per-build certificate that uki_install.sh used to sign the
+        # IPE policy and optional /usr verity roothash embedded in the UKI.
+        # FLAGS_from is the build output directory, matching dirname of the
+        # production disk image passed to uki_install.sh.
         "${BUILD_LIBRARY_DIR}/rpm/sign_uki_ephemeral.sh" \
             "${VM_TMP_ROOT}/boot" \
             "$(_dst_dir)" \
-            "${BUILD_LIBRARY_DIR}/rpm/additional_files/ipe/acl-ipe-boot-policy.pol" \
             "${FLAGS_from}/acl-ipe-ephemeral"
     else
         "${BUILD_LIBRARY_DIR}/rpm/sign_uki_ephemeral.sh" \

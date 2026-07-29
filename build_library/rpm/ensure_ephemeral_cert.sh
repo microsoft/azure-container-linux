@@ -8,18 +8,18 @@
 # Idempotently generate the per-build, throwaway RSA-2048 signing key +
 # certificate used (only when ACL_IPE_ENABLE=1) to sign, with ONE cert:
 #   - the UKI Secure Boot chain and addons   (sign_uki_ephemeral.sh)
-#   - the ACL IPE policy                       (sign_uki_ephemeral.sh)
-#   - the /usr dm-verity roothash              (uki_install.sh)
+#   - the ACL IPE policy                     (uki_install.sh)
+#   - the /usr dm-verity roothash            (uki_install.sh)
 #
 # All three MUST share the same cert: a single public cert is enrolled in the
 # test VM's UEFI db (→ .platform keyring), and that is what the kernel verifies
 # the UKI signature, the IPE policy signature, AND the verity roothash signature
 # against.
 #
-# uki_install.sh (build_image phase) calls this first to sign the verity
-# roothash; sign_uki_ephemeral.sh (image_to_vm phase) then finds the cert
-# already here and reuses it. Both run in the same SDK chroot and address the
-# build output dir by the same absolute path, so the file is shared.
+# uki_install.sh (build_image phase) calls this first to sign the policy and
+# optional verity roothash; sign_uki_ephemeral.sh (image_to_vm phase) then finds
+# the cert here and reuses it. Both run in the same SDK chroot and address the
+# build output directory by the same absolute path.
 #
 # Idempotent: if the key + cert already exist, this is a no-op.
 

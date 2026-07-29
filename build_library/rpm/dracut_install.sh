@@ -311,8 +311,7 @@ SETUP_EOF
     # on ACL_IPE_ENABLE=1 so mainline images are unaffected. Runs in the initrd
     # (before switch_root) so the securityfs policy write happens while SELinux
     # is not yet enforcing -- otherwise the write is denied (mac_admin/EPERM).
-    # The signed policy is on the ESP (placed by sign_uki_ephemeral.sh); this
-    # module mounts the ESP by label to read it.
+    # uki_install.sh embeds the signed policy in the UKI's initramfs.
     if [[ "${ACL_IPE_ENABLE:-}" == "1" ]]; then
         info "RPM mode: Creating acl-ipe-load dracut module (ACL_IPE_ENABLE=1)"
         local ipe_load_module="${root_fs_dir}/usr/lib/dracut/modules.d/99acl-ipe-load"
