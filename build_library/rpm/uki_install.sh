@@ -351,8 +351,8 @@ OSREL
     info "UKI/RPM: Building UKI with ukify"
 
     # ukify concatenates multiple --initrd inputs into the UKI's .initrd
-    # section. The IPE cpio contains the signed policy and, when available, the
-    # /usr verity roothash signature.
+    # section. The IPE cpio contains the policy after its /usr root-hash rule is
+    # rendered and the complete policy is signed.
     local -a _uki_initrds=(--initrd="${initrd}")
     if [[ -n "${IPE_INITRAMFS:-}" ]]; then
         _uki_initrds+=(--initrd="${IPE_INITRAMFS}")
