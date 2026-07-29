@@ -12,10 +12,12 @@
 # /etc/ipe/acl.pol.p7b. The kernel verifies it against the .platform keyring;
 # the same ephemeral certificate signs the policy and is enrolled in UEFI db.
 #
-# Enforcement mode comes from the ipe.enforce= kernel cmdline (permissive for
-# this rollout); this script only loads + activates the policy.
+# Enforcement mode comes from the signed UKI's ipe.enforce= kernel command
+# line; this script only loads and activates the policy.
 #
-# Best-effort: any failure logs and exits 0 so boot is never blocked.
+# Prototype behavior remains fail-open: any loader failure logs and exits 0.
+# "enforcing" controls access decisions after successful policy activation; a
+# production rollout still needs an explicit fail-closed or recovery design.
 
 set -uo pipefail
 

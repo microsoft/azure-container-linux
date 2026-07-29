@@ -37,6 +37,8 @@
 #   --help                               Show this help message
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
+#   --ipe-mode=MODE                      IPE mode: off|permissive|enforcing
+#                                        (test branch default: permissive)
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
 #   --output=DIR                         Output directory for images
@@ -171,14 +173,12 @@ export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
-# Opt-in IPE permissive policy loader (see build_image_util.sh / uki_install.sh /
-# sign_uki_ephemeral.sh). Forwarded into the SDK container so the gated build
-# steps can see it.
-# TEST-ONLY (throwaway branch aadagarwal/acl-ipe-permissive-test): default this
-# ON so PR-Validation exercises the IPE path without an acl-pipelines change.
-# DO NOT MERGE -- the shippable branch aadagarwal/acl-ipe-permissive keeps this
-# gated off ("${ACL_IPE_ENABLE:-}").
-export ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-1}"
+# IPE build mode forwarded into the SDK container. "off" omits the policy
+# loader and signed IPE assets, while permissive/enforcing select the matching
+# ipe.enforce= value in the signed UKI command line.
+# TEST-ONLY: default to permissive so branch validation exercises the IPE path
+# without an acl-pipelines change. A shippable branch should default to off.
+ACL_IPE_MODE="${ACL_IPE_MODE:-permissive}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
@@ -235,7 +235,7 @@ is_azure_linux_3() {
 
 # Show usage information
 show_help() {
-    head -30 "$0" | grep -E "^#" | sed 's/^# *//'
+    sed -n '1,/^# Examples:/p' "$0" | grep -E "^#" | sed 's/^# *//'
     exit 0
 }
 
@@ -257,6 +257,18 @@ parse_args() {
                 ;;
             --group)
                 GROUP="$2"
+                shift 2
+                ;;
+            --ipe-mode=*)
+                ACL_IPE_MODE="${1#*=}"
+                shift
+                ;;
+            --ipe-mode)
+                if [[ $# -lt 2 ]]; then
+                    error "--ipe-mode requires a value"
+                    exit 1
+                fi
+                ACL_IPE_MODE="$2"
                 shift 2
                 ;;
             --img-name=*)
@@ -620,6 +632,17 @@ parse_args() {
             exit 1
         fi
     fi
+
+    case "${ACL_IPE_MODE}" in
+        off|permissive|enforcing)
+            export ACL_IPE_MODE
+            ;;
+        *)
+            error "Invalid IPE mode: ${ACL_IPE_MODE}"
+            error "Valid options: off, permissive, enforcing"
+            exit 1
+            ;;
+    esac
 
     # Normalize group name
     case "$GROUP" in
@@ -1269,6 +1292,7 @@ main() {
 
     section "Azure Container Linux Image Builder"
     info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"
+    info "IPE mode: ${ACL_IPE_MODE}"
 
     check_prerequisites
     print_summary

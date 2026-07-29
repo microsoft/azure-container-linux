@@ -108,14 +108,23 @@ fi
 sed -i -e '/export INJECT_DOCKER_SYSEXT=/d' /home/sdk/.bashrc 2>/dev/null || true
 echo "export INJECT_DOCKER_SYSEXT='${INJECT_DOCKER_SYSEXT:-false}'" >> /home/sdk/.bashrc
 
-# Forward the opt-in IPE feature flag so the gated build steps
+# Forward the validated IPE mode so the gated build steps
 # (build_image_util.sh, uki_install.sh, image_to_vm.sh) see it. The build runs
-# as the sdk user via `sudo su sdk -c`, which drops the environment, so the flag
+# as the sdk user via `sudo su sdk -c`, which drops the environment, so the mode
 # must be re-injected here (same pattern as INJECT_DOCKER_SYSEXT above).
-sed -i -e '/export ACL_IPE_ENABLE=/d' /home/sdk/.bashrc 2>/dev/null || true
-if [[ -n "${ACL_IPE_ENABLE:-}" ]]; then
-    echo "export ACL_IPE_ENABLE='${ACL_IPE_ENABLE}'" >> /home/sdk/.bashrc
-fi
+ACL_IPE_MODE="${ACL_IPE_MODE:-off}"
+case "${ACL_IPE_MODE}" in
+    off|permissive|enforcing) ;;
+    *)
+        echo "ERROR: ACL_IPE_MODE must be one of: off, permissive, enforcing (got: ${ACL_IPE_MODE})" >&2
+        exit 1
+        ;;
+esac
+sed -i \
+    -e '/export ACL_IPE_ENABLE=/d' \
+    -e '/export ACL_IPE_MODE=/d' \
+    /home/sdk/.bashrc 2>/dev/null || true
+echo "export ACL_IPE_MODE='${ACL_IPE_MODE}'" >> /home/sdk/.bashrc
 
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"

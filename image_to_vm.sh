@@ -22,6 +22,14 @@ assert_not_root_user
 . "${BUILD_LIBRARY_DIR}/vm_image_util.sh" || exit 1
 . "${BUILD_LIBRARY_DIR}/cros_vm_constants.sh" || exit 1
 
+ACL_IPE_MODE="${ACL_IPE_MODE:-off}"
+case "${ACL_IPE_MODE}" in
+    off|permissive|enforcing) ;;
+    *)
+        die_notrace "ACL_IPE_MODE must be one of: off, permissive, enforcing (got: ${ACL_IPE_MODE})"
+        ;;
+esac
+
 # UKI mode uses a dedicated disk layout without BIOS and unused partitions
 if [[ "${BOOTLOADER_MODE:-}" == "uki" ]]; then
   export DISK_LAYOUT_FILE="${BUILD_LIBRARY_DIR}/disk_layout_uki.json"
@@ -142,9 +150,9 @@ run_fs_hook
 # output directory so _write_qemu_uefi_secure_conf() can enroll it in the OVMF
 # Secure Boot db.
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]; then
-    if [[ "${ACL_IPE_ENABLE:-}" == "1" ]]; then
+    if [[ "${ACL_IPE_MODE}" != "off" ]]; then
         # Reuse the per-build certificate that uki_install.sh used to sign the
-        # IPE policy and optional /usr verity roothash embedded in the UKI.
+        # IPE policy embedded in the UKI.
         # FLAGS_from is the build output directory, matching dirname of the
         # production disk image passed to uki_install.sh.
         "${BUILD_LIBRARY_DIR}/rpm/sign_uki_ephemeral.sh" \

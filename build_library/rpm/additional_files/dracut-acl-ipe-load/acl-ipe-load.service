@@ -1,5 +1,5 @@
 [Unit]
-Description=Load and activate ACL IPE policy (initrd, permissive)
+Description=Load and activate ACL IPE policy in the initrd
 Documentation=https://docs.kernel.org/admin-guide/LSM/ipe.html
 DefaultDependencies=no
 # Run before switch_root while SELinux is not yet loaded. This avoids the

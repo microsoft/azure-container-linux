@@ -926,9 +926,9 @@ _configure_misc_rpm() {
         sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/audit-rules.service" "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service"
     fi
 
-    # NOTE: the ACL IPE policy loader (gated on ACL_IPE_ENABLE=1) is installed as
-    # an initramfs dracut module (99acl-ipe-load) in dracut_install.sh, not as a
-    # real-root service. It must run before switch_root: once the real root's
+    # NOTE: in permissive/enforcing mode, the ACL IPE policy loader is installed
+    # as an initramfs dracut module (99acl-ipe-load) in dracut_install.sh, not as
+    # a real-root service. It must run before switch_root: once the real root's
     # SELinux policy is loaded and enforcing, the securityfs policy write is
     # denied (mac_admin/EPERM).
 
