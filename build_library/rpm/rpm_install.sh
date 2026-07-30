@@ -919,6 +919,20 @@ sslverify=1
 EOF
 }
 
+# Read a policy module CIL file, which may or may not be bzip2 compressed.
+_selinux_module_cil() {
+    local cil="$1"
+    sudo bzcat "${cil}" 2>/dev/null || sudo cat "${cil}" 2>/dev/null
+}
+
+# Print a single line of an installed policy module's CIL file.
+_selinux_module_line() {
+    local root_fs_dir="$1" rel="$2" no="$3"
+    _selinux_module_cil \
+        "${root_fs_dir}/var/lib/selinux/targeted/active/modules/${rel}" \
+        | sed -n "${no}p"
+}
+
 rpm_configure_selinux() {
     local root_fs_dir="$1"
 
@@ -1036,46 +1050,94 @@ EOF
 
     # Remove unnecessary SELinux policy modules (minimize the policy)
     info "RPM mode: Minimizing SELinux policy".
-    sudo chroot "${root_fs_dir}" semodule -X 100 -r \
-        abrt accountsd acct acpi afs aide aisexec alsa amanda amavis amtu anaconda \
-        apache apcupsd apt aptcacher arpwatch asterisk auditadm automount avahi \
-        awstats backup bacula bind bird bitlbee blueman bluetooth boinc brctl \
-        bugzilla cachefilesd calamaris canna cdrecord certbot certmaster certmonger \
-        certwatch cfengine cgmanager cgroup chkrootkit chromium chronyd clamav \
-        cloudinit cobbler cockpit collectd colord comsat condor consolesetup \
-        container_compat corosync couchdb courier cpucontrol cpufreqselector crio \
-        cryfs ctdb cups cvs cyphesis cyrus daemontools dante dbadm dbskk ddclient \
-        devicekit dhcp dictd dirmngr distcc djbdns dkim dmidecode dnsmasq docker \
-        dovecot dphysswapfile dpkg drbd eg25manager entropyd evolution exim fail2ban \
-        fakehwclock fapolicyd fcoe fetchmail finger firewalld firstboot fprintd ftp \
-        games gatekeeper gdomap geoclue git gitosis glance glusterfs gnome gnomeclock \
-        gpg gpm gpsd gssproxy guest hadoop haproxy hddtemp hostapd hwloc hypervkvp \
-        i18n_input icecast ifplugd iiosensorproxy inetd inn iodine ipsec irc ircd \
-        irqbalance iscsi isns jabber java kdump kerberos kerneloops keystone kismet \
-        knot ksmtuned kubernetes l2tp ldap libmtp lightsquid likewise lircd livecd \
-        lldpad loadkeys logadm logrotate logwatch lowmemorymonitor lpd lsm mailman \
-        man2html mandb matrixd mcelog mediawiki memcached memlockd milter minidlna \
-        minissdpd modemmanager mojomojo mon mongodb monit mono monop mozilla mpd \
-        mplayer mrtg munin mysql nagios ncftool nessus netlabel networkmanager nis \
-        node_exporter nsd nslcd ntop ntp numad nut nx obex obfs4proxy oddjob oident \
-        openarc openca openct openhpi openoffice opensm openvpn openvswitch pacemaker pads \
-        passenger pcscd pegasus perdition pingd pkcs pki plymouthd podman portmap \
-        portreserve portslave postfix postfixpolicyd postgresql postgrey \
-        powerprofiles ppp prelink prelude privoxy procmail psad publicfile \
-        pulseaudio puppet pwauth pxe pyzor qemu qmail qpid quantum quota rabbitmq \
-        radius radvd rasdaemon razor rdisc realmd redis remotelogin resmgr rhsmcertd \
-        rkhunter rlogin rngd rootlesskit rpc rpcbind rpm rshd rssh rtkit rwho samba \
-        samhain sanlock sasl sblim screen secadm sendmail sensord setroubleshoot \
-        seunshare shibboleth shorewall shutdown sigrok slocate slpd slrnpull smartmon \
-        smokeping smstools snmp snort sosreport soundserver spamassassin squid stubby \
-        stunnel sudo svnserve switcheroo sxid sympa syncthing sysstat systemtap \
-        tboot tcpd tcsd telepathy telnet tftp tgtd thunderbird thunderbolt timidity \
-        tmpreaper tomcat tor tpm2 transproxy tripwire tuned tvtime tzdata ucspitcp \
-        ulogd uml updfstab uptime usbguard usbmodules usbmuxd userhelper usernetctl \
-        uucp uuidd uwimap varnishd vbetool vdagent vhostmd virt vlock vmware vnstatd \
-        vpn watchdog wdmd webadm webalizer wine wireguard wireshark wm xen xfs \
-        xguest xscreensaver xserver zabbix zarafa zebra zfs zosremote \
-        > /dev/null
+    # Azure Linux releases differ in which modules own which types, so the
+    # removal list can orphan a symbol that a surviving module still needs.
+    # semodule -r is atomic, so resolve the owning module and keep it instead
+    # of failing the build. On 3.0 the list resolves on the first attempt.
+    local -a _sel_remove=(
+        abrt accountsd acct acpi afs aide aisexec alsa amanda amavis amtu anaconda apache
+        apcupsd apt aptcacher arpwatch asterisk auditadm automount avahi awstats backup bacula
+        bind bird bitlbee blueman bluetooth boinc brctl bugzilla cachefilesd calamaris canna
+        cdrecord certbot certmaster certmonger certwatch cfengine cgmanager cgroup chkrootkit
+        chromium chronyd clamav cloudinit cobbler cockpit collectd colord comsat condor
+        consolesetup container_compat corosync couchdb courier cpucontrol cpufreqselector crio
+        cryfs ctdb cups cvs cyphesis cyrus daemontools dante dbadm dbskk ddclient devicekit
+        dhcp dictd dirmngr distcc djbdns dkim dmidecode dnsmasq docker dovecot dphysswapfile
+        dpkg drbd eg25manager entropyd evolution exim fail2ban fakehwclock fapolicyd fcoe
+        fetchmail finger firewalld firstboot fprintd ftp games gatekeeper gdomap geoclue git
+        gitosis glance glusterfs gnome gnomeclock gpg gpm gpsd gssproxy guest hadoop haproxy
+        hddtemp hostapd hwloc hypervkvp i18n_input icecast ifplugd iiosensorproxy inetd inn
+        iodine ipsec irc ircd irqbalance iscsi isns jabber java kdump kerberos kerneloops
+        keystone kismet knot ksmtuned kubernetes l2tp ldap libmtp lightsquid likewise lircd
+        livecd lldpad loadkeys logadm logrotate logwatch lowmemorymonitor lpd lsm mailman
+        man2html mandb matrixd mcelog mediawiki memcached memlockd milter minidlna minissdpd
+        modemmanager mojomojo mon mongodb monit mono monop mozilla mpd mplayer mrtg munin mysql
+        nagios ncftool nessus netlabel networkmanager nis node_exporter nsd nslcd ntop ntp
+        numad nut nx obex obfs4proxy oddjob oident openarc openca openct openhpi openoffice
+        opensm openvpn openvswitch pacemaker pads passenger pcscd pegasus perdition pingd pkcs
+        pki plymouthd podman portmap portreserve portslave postfix postfixpolicyd postgresql
+        postgrey powerprofiles ppp prelink prelude privoxy procmail psad publicfile pulseaudio
+        puppet pwauth pxe pyzor qemu qmail qpid quantum quota rabbitmq radius radvd rasdaemon
+        razor rdisc realmd redis remotelogin resmgr rhsmcertd rkhunter rlogin rngd rootlesskit
+        rpc rpcbind rpm rshd rssh rtkit rwho samba samhain sanlock sasl sblim screen secadm
+        sendmail sensord setroubleshoot seunshare shibboleth shorewall shutdown sigrok slocate
+        slpd slrnpull smartmon smokeping smstools snmp snort sosreport soundserver spamassassin
+        squid stubby stunnel sudo svnserve switcheroo sxid sympa syncthing sysstat systemtap
+        tboot tcpd tcsd telepathy telnet tftp tgtd thunderbird thunderbolt timidity tmpreaper
+        tomcat tor tpm2 transproxy tripwire tuned tvtime tzdata ucspitcp ulogd uml updfstab
+        uptime usbguard usbmodules usbmuxd userhelper usernetctl uucp uuidd uwimap varnishd
+        vbetool vdagent vhostmd virt vlock vmware vnstatd vpn watchdog wdmd webadm webalizer
+        wine wireguard wireshark wm xen xfs xguest xscreensaver xserver zabbix zarafa zebra zfs
+        zosremote
+    )
+    local -a _sel_keep=() _sel_args=()
+    local _sel_attempt _sel_out _sel_ref _sel_rel _sel_no _sel_sym _sel_owner _sel_dir _m _k _skip
+    for _sel_attempt in $(seq 1 40); do
+        _sel_args=()
+        for _m in "${_sel_remove[@]}"; do
+            _skip=0
+            for _k in ${_sel_keep[@]+"${_sel_keep[@]}"}; do
+                [[ "${_m}" == "${_k}" ]] && _skip=1
+            done
+            [[ ${_skip} -eq 0 ]] && _sel_args+=("${_m}")
+        done
+        if _sel_out=$(sudo chroot "${root_fs_dir}" \
+                semodule -X 100 -r "${_sel_args[@]}" 2>&1); then
+            break
+        fi
+        _sel_ref=$(echo "${_sel_out}" \
+            | grep -oE '/var/lib/selinux/targeted/tmp/modules/[0-9]+/[^:]+:[0-9]+' \
+            | head -1)
+        if [[ -z "${_sel_ref}" ]]; then
+            echo "${_sel_out}" >&2
+            die "RPM mode: failed to minimize the SELinux policy"
+        fi
+        _sel_rel=${_sel_ref%:*}
+        _sel_rel=${_sel_rel#/var/lib/selinux/targeted/tmp/modules/}
+        _sel_no=${_sel_ref##*:}
+        _sel_sym=$(_selinux_module_line "${root_fs_dir}" "${_sel_rel}" "${_sel_no}" \
+            | tr -d '()' | awk '{print $NF}')
+        _sel_owner=""
+        for _sel_dir in "${root_fs_dir}"/var/lib/selinux/targeted/active/modules/100/*/; do
+            if _selinux_module_cil "${_sel_dir}/cil" \
+                    | grep -qE "^\((type|boolean|typealias) ${_sel_sym}[ )]"; then
+                _sel_owner=$(basename "${_sel_dir}")
+                break
+            fi
+        done
+        if [[ -z "${_sel_owner}" ]]; then
+            _sel_owner=${_sel_rel#*/}
+            _sel_owner=${_sel_owner%/cil}
+        fi
+        for _k in ${_sel_keep[@]+"${_sel_keep[@]}"}; do
+            if [[ "${_k}" == "${_sel_owner}" ]]; then
+                echo "${_sel_out}" >&2
+                die "RPM mode: failed to minimize the SELinux policy"
+            fi
+        done
+        warn "RPM mode: keeping SELinux module ${_sel_owner} (provides ${_sel_sym})"
+        _sel_keep+=("${_sel_owner}")
+    done
 
     info "RPM mode: Adding SELinux policy compatibility fixes"
     # Add policy name compatibility symlink.  The Gentoo MCS policy is
