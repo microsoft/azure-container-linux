@@ -85,3 +85,24 @@ packages:
   sys-libs/zlib: zlib-ng-compat
   # was: zlib
   virtual/zlib: zlib-ng-compat
+
+  # --- No runtime Azure Linux 4.0 build ---------------------------------
+  # Present only in the 4.0 'sdk' (devel) repository, which is not a runtime
+  # repository, so these cannot be installed into the image.
+  # was: ncompress (sdk-only)
+  app-arch/ncompress: SKIP
+  # was: gflags (sdk-only)
+  dev-cpp/gflags: SKIP
+  # was: mercurial (sdk-only)
+  dev-vcs/mercurial: SKIP
+  # was: ebtables-legacy (sdk-only)
+  net-firewall/ebtables: SKIP
+
+  # ACL builds these in-tree against Azure Linux 3; they are not published
+  # for 4.0 and are not yet rebuilt, so drop them from the 4.0 image.
+  # was: coreos-init
+  coreos-base/coreos-init: SKIP
+  # was: bootengine
+  sys-kernel/bootengine: SKIP
+  # was: moby-engine sdnotify-proxy
+  app-containers/docker: moby-engine

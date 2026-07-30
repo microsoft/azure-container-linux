@@ -97,6 +97,14 @@ rpm_setup_repos() {
 
     info "Setting up Azure Linux repositories in ${root_fs_dir}"
 
+    # The local cache holds ACL's in-tree RPMs built against Azure Linux 3.
+    # They would outrank the official 4.0 packages, so ignore it for 4.0
+    # until those RPMs are rebuilt against the new release.
+    if [[ "${releasever}" == "4.0" ]] && [[ -n "${local_repo_dir}" ]]; then
+        warn "  Ignoring local package cache (built for a different Azure Linux release)"
+        local_repo_dir=""
+    fi
+
     # Setup local repository cache if provided and has proper metadata
     if [[ -n "${local_repo_dir}" ]] && [[ -d "${local_repo_dir}" ]]; then
         if [[ -f "${local_repo_dir}/repodata/repomd.xml" ]]; then
