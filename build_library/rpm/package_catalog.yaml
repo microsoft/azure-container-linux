@@ -182,8 +182,10 @@ packages:
 
   # Version control
   dev-vcs/git: git
-  dev-vcs/mercurial: mercurial
-  dev-vcs/subversion: subversion
+  # mercurial and subversion are build-time only; they appear in no image
+  # or sysext package list.
+  dev-vcs/mercurial: SKIP
+  dev-vcs/subversion: SKIP
 
   # Debugging tools
   dev-debug/strace: strace
@@ -625,7 +627,9 @@ packages:
   dev-libs/mpdecimal: SKIP
   app-crypt/rhash: SKIP
   app-crypt/libb2: SKIP
-  dev-go/go-md2man: go-md2man
+  # go-md2man only generates man pages at build time; it is installed in no
+  # image or sysext.
+  dev-go/go-md2man: SKIP
 
   # Build tool alternatives (skip - build-time only)
   app-alternatives/lex: SKIP
