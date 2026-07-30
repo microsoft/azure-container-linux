@@ -933,6 +933,30 @@ _selinux_module_line() {
         | sed -n "${no}p"
 }
 
+# Apply tmpfiles.d using the image's own systemd-tmpfiles.
+#
+# Azure Linux 4 ships tmpfiles.d entries that use modifiers the SDK's older
+# systemd-tmpfiles does not understand, which makes it exit with EX_DATAERR
+# and skip those entries. The image's own binary always understands the
+# configuration shipped alongside it.
+rpm_run_systemd_tmpfiles() {
+    local root_fs_dir="$1"
+    local d rc=0
+
+    for d in proc sys dev; do
+        sudo mount --bind "/${d}" "${root_fs_dir}/${d}"
+    done
+
+    sudo chroot "${root_fs_dir}" systemd-tmpfiles \
+        --create --remove --boot --exclude-prefix=/dev || rc=$?
+
+    for d in dev sys proc; do
+        sudo umount -l "${root_fs_dir}/${d}" || true
+    done
+
+    return "${rc}"
+}
+
 rpm_configure_selinux() {
     local root_fs_dir="$1"
 
