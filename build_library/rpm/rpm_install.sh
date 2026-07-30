@@ -1118,10 +1118,12 @@ EOF
         _sel_sym=$(_selinux_module_line "${root_fs_dir}" "${_sel_rel}" "${_sel_no}" \
             | tr -d '()' | awk '{print $NF}')
         _sel_owner=""
-        for _sel_dir in "${root_fs_dir}"/var/lib/selinux/targeted/active/modules/100/*/; do
-            if _selinux_module_cil "${_sel_dir}/cil" \
+        for _sel_dir in $(sudo ls \
+                "${root_fs_dir}/var/lib/selinux/targeted/active/modules/100"); do
+            if _selinux_module_cil \
+                    "${root_fs_dir}/var/lib/selinux/targeted/active/modules/100/${_sel_dir}/cil" \
                     | grep -qE "^\((type|boolean|typealias) ${_sel_sym}[ )]"; then
-                _sel_owner=$(basename "${_sel_dir}")
+                _sel_owner="${_sel_dir}"
                 break
             fi
         done
