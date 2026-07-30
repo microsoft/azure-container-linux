@@ -183,7 +183,7 @@ packages:
   # Version control
   dev-vcs/git: git
   # mercurial and subversion are build-time only; they appear in no image
-  # or sysext package list.
+  # or sysext package list. Neither has a 4.0 runtime build either.
   dev-vcs/mercurial: SKIP
   dev-vcs/subversion: SKIP
 
@@ -641,7 +641,7 @@ packages:
   app-crypt/rhash: SKIP
   app-crypt/libb2: SKIP
   # go-md2man only generates man pages at build time; it is installed in no
-  # image or sysext.
+  # image or sysext, and has no 4.0 build.
   dev-go/go-md2man: SKIP
 
   # Build tool alternatives (skip - build-time only)

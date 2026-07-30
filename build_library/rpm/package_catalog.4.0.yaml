@@ -37,8 +37,6 @@ packages:
   coreos-base/update-ssh-keys: SKIP
   # was: etcd
   dev-db/etcdctl: SKIP
-  # was: go-md2man
-  dev-go/go-md2man: SKIP
   # was: expat-libs
   dev-libs/expat-libs: expat
   # was: libpcre2-16-0
@@ -93,8 +91,6 @@ packages:
   app-arch/ncompress: SKIP
   # was: gflags (sdk-only)
   dev-cpp/gflags: SKIP
-  # was: mercurial (sdk-only)
-  dev-vcs/mercurial: SKIP
   # was: ebtables-legacy (sdk-only)
   net-firewall/ebtables: SKIP
 
