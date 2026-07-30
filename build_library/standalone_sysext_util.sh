@@ -175,6 +175,8 @@ build_standalone_sysext_images() {
             "IMAGE_VERSION=${IMAGE_VERSION:-}"
             "IMAGE_VERSION_ID=${IMAGE_VERSION_ID:-}"
             "IMAGE_BUILD_ID=${IMAGE_BUILD_ID:-}"
+            "AZL_RELEASEVER=${AZL_RELEASEVER:-3.0}"
+            "AZL_REPO_CHANNEL=${AZL_REPO_CHANNEL:-prod}"
         )
     fi
 
