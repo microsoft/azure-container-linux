@@ -106,3 +106,8 @@ packages:
   sys-kernel/bootengine: SKIP
   # was: moby-engine sdnotify-proxy
   app-containers/docker: moby-engine
+  # Azure Linux 4's ignition ships a dracut module that depends on url-lib,
+  # which requires the curl binary.  curl is not otherwise pulled in now that
+  # weak dependencies are disabled.
+  app-admin/ignition: ignition curl
+  sys-apps/ignition: ignition curl

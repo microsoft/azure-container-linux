@@ -38,6 +38,25 @@ _dracut_prepare_chroot() {
         die "Investigate further once this comes back."
     fi
 }
+# Delete an inclusive line range from a file, but only when both the start and
+# the end pattern are actually present.  An unmatched end pattern makes sed
+# delete everything to EOF, which silently truncates shell functions -- Azure
+# Linux 4 ships reworked dracut modules where several of the ranges below no
+# longer terminate where they used to.
+_sed_delete_range() {
+    local file="$1" start="$2" end="$3"
+    if ! sudo grep -qE -- "${start}" "${file}"; then
+        return 0
+    fi
+    if ! sudo grep -qE -- "${end}" "${file}"; then
+        warn "RPM mode: skipping patch of $(basename "${file}"): no line matches '${end}'"
+        return 0
+    fi
+    # -E so the patterns match grep -qE above; % addresses so patterns may
+    # contain slashes.
+    sudo sed -i -E "\\%${start}%,\\%${end}%d" "${file}"
+}
+
 
 # Patch bootengine dracut modules for Azure Linux compatibility.
 # Removes unsupported modules, fixes ignition/disk-uuid/network-cleanup for ACL,
@@ -76,11 +95,22 @@ _dracut_patch_bootengine_modules() {
     if [[ -f "${ignition_module_setup}" ]]; then
         info "RPM mode: Removing Flatcar-specific sections from ignition module-setup.sh"
         # Remove cloud_aws_ebs_nvme_id (AWS-specific, doesn't exist in Azure Linux)
-        sudo sed -i '/# Flatcar: add cloud_aws_ebs_nvme_id/,/\/usr\/lib\/udev\/cloud_aws_ebs_nvme_id"/d' "${ignition_module_setup}"
-        # Remove clevis binding section (clevis not available in Azure Linux)
-        sudo sed -i '/# Needed for clevis binding/,/tpm2_create$/d' "${ignition_module_setup}"
-        # Remove s390x z/VM section (not supported)
-        sudo sed -i "/# Required by s390x's z\/VM installation/,/inst_multiple -o chccwdev vmur$/d" "${ignition_module_setup}"
+        _sed_delete_range "${ignition_module_setup}" \
+            '# Flatcar: add cloud_aws_ebs_nvme_id' \
+            '/usr/lib/udev/cloud_aws_ebs_nvme_id"'
+        # Remove clevis binding section (clevis not available in Azure Linux).
+        # Azure Linux 4 ends the list with tpm2_createpolicy instead of
+        # tpm2_create, so accept either as the last entry.
+        _sed_delete_range "${ignition_module_setup}" \
+            '# Needed for clevis binding' \
+            'tpm2_create(policy)?$'
+        # Remove s390x z/VM section (not supported).  Azure Linux 4 wraps it in
+        # an `if [[ ... == s390x ]]` block, so the old range would leave a
+        # dangling `fi`; the guard turns that case into a no-op and the block
+        # is inert on x86_64/aarch64 anyway.
+        _sed_delete_range "${ignition_module_setup}" \
+            "# Required by s390x's z/VM installation" \
+            'inst_multiple -o chccwdev vmur$'
         # Remove clevis symlink entries from the executable wrapper loop
         sudo sed -i '/\/usr\/bin\/clevis\*,\\$/d' "${ignition_module_setup}"
         sudo sed -i '/\/usr\/libexec\/clevis\*\\$/d' "${ignition_module_setup}"
