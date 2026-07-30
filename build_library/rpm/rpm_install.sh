@@ -6,7 +6,10 @@
 # RPM package installation functions for Azure Linux packages
 #
 # ENVIRONMENT VARIABLES:
-#   RPM_LOCAL_CACHE - Optional path to local repository cache directory
+#   RPM_LOCAL_CACHE - Optional path to local repository cache directory.
+#                     Caches are per release; the default staging dir is
+#                     __build__/rpm-staging for 3.0 and
+#                     __build__/rpm-staging-<release> otherwise.
 #                     If set, will be configured as a local repo with priority=1
 #                     If not set, falls back to RPM staging directory
 #
@@ -33,18 +36,33 @@ export AZL_RELEASEVER AZL_REPO_CHANNEL
 # Helper function to find RPM staging directory
 # =============================================================================
 rpm_get_staging_dir() {
-    local rpm_staging=""
+    # RPMs built for one Azure Linux release are not interchangeable with
+    # another, so every release past 3.0 gets its own staging directory.
+    # 3.0 keeps the historical path so existing caches keep working.
+    local suffix=""
+    if [[ "${AZL_RELEASEVER}" != "3.0" ]]; then
+        suffix="-${AZL_RELEASEVER}"
+    fi
+
+    local rpm_staging="" fallback="" candidate
     for candidate in \
-        "${RPM_STAGING_DIR}" \
-        "/mnt/host/source/src/scripts/__build__/rpm-staging" \
-        "${SCRIPT_ROOT}/../__build__/rpm-staging" \
-        "__build__/rpm-staging"; do
+        "${RPM_STAGING_DIR:-}" \
+        "/mnt/host/source/src/scripts/__build__/rpm-staging${suffix}" \
+        "${SCRIPT_ROOT:-}/../__build__/rpm-staging${suffix}" \
+        "__build__/rpm-staging${suffix}"; do
+        [[ -n "${candidate}" ]] || continue
         if [[ -d "${candidate}" ]]; then
             rpm_staging="${candidate}"
             break
         fi
+        # Remember the first candidate whose parent exists, so a release with
+        # no cache yet still has somewhere to stage downloaded RPMs.
+        if [[ -z "${fallback}" ]] && [[ -d "$(dirname "${candidate}")" ]]; then
+            fallback="${candidate}"
+        fi
     done
-    echo "${rpm_staging}"
+
+    echo "${rpm_staging:-${fallback}}"
 }
 
 RPM_MANIFEST_QUERY_FORMAT='%{NAME}\t%{VERSION}-%{RELEASE}\t%{INSTALLTIME}\t%{BUILDTIME}\t%{VENDOR}\t%{EPOCH}\t%{SIZE}\t%{ARCH}\t%{EPOCHNUM}\t%{SOURCERPM}\n'
@@ -97,14 +115,6 @@ rpm_setup_repos() {
 
     info "Setting up Azure Linux repositories in ${root_fs_dir}"
 
-    # The local cache holds ACL's in-tree RPMs built against Azure Linux 3.
-    # They would outrank the official 4.0 packages, so ignore it for 4.0
-    # until those RPMs are rebuilt against the new release.
-    if [[ "${releasever}" == "4.0" ]] && [[ -n "${local_repo_dir}" ]]; then
-        warn "  Ignoring local package cache (built for a different Azure Linux release)"
-        local_repo_dir=""
-    fi
-
     # Setup local repository cache if provided and has proper metadata
     if [[ -n "${local_repo_dir}" ]] && [[ -d "${local_repo_dir}" ]]; then
         if [[ -f "${local_repo_dir}/repodata/repomd.xml" ]]; then
@@ -121,7 +131,12 @@ EOF
         else
             warn "  Skipping local cache (no repository metadata): ${local_repo_dir}"
             info "  Hint: Run 'createrepo_c ${local_repo_dir}' to create repository metadata"
-            exit 1
+            # An explicitly requested cache that cannot be used is a mistake
+            # worth stopping for.  An auto-discovered staging directory may
+            # simply hold downloaded RPMs that were never indexed, so carry on.
+            if [[ -n "${RPM_LOCAL_CACHE:-}" ]]; then
+                exit 1
+            fi
         fi
     fi
 
