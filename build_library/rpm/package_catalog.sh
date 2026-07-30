@@ -61,6 +61,23 @@ while IFS=$'\t' read -r key value arch; do
     fi
 done < <(_catalog_tsv_cmd "${_CATALOG_YAML}")
 
+# ── Apply the release-specific overlay, if any ──────────────────────────────
+#
+# Azure Linux 4.0 renamed or dropped a large number of packages relative to
+# 3.0.  Rather than fork the catalog, package_catalog.<releasever>.yaml holds
+# only the entries that differ and is merged on top of the base catalog.
+_CATALOG_OVERLAY="${_CATALOG_DIR}/package_catalog.${AZL_RELEASEVER:-3.0}.yaml"
+if [[ -f "${_CATALOG_OVERLAY}" ]]; then
+    while IFS=$'\t' read -r key value arch; do
+        [[ -z "$key" ]] && continue
+        if [[ -n "$arch" && "$arch" != "null" && "$arch" != "$_board_arch" ]]; then
+            PACKAGE_CATALOG["$key"]="SKIP"
+        else
+            PACKAGE_CATALOG["$key"]="$value"
+        fi
+    done < <(_catalog_tsv_cmd "${_CATALOG_OVERLAY}")
+fi
+
 unset _board_arch
 
 # ── Helper functions ────────────────────────────────────────────────────────
@@ -84,6 +101,15 @@ catalog_filter_by_arch() {
             PACKAGE_CATALOG["$_key"]="SKIP"
         fi
     done < <(_catalog_tsv_cmd "${_CATALOG_YAML}")
+
+    if [[ -f "${_CATALOG_OVERLAY}" ]]; then
+        while IFS=$'\t' read -r _key _ _arch; do
+            [[ -z "$_key" ]] && continue
+            if [[ -n "$_arch" && "$_arch" != "null" && "$_arch" != "$target_arch" ]]; then
+                PACKAGE_CATALOG["$_key"]="SKIP"
+            fi
+        done < <(_catalog_tsv_cmd "${_CATALOG_OVERLAY}")
+    fi
 }
 
 # Get RPM package name from Portage package name

@@ -87,7 +87,13 @@ start_image_rpm() {
 
     # Install azurelinux-repos and azurelinux-repos-cloud-native to get the official
     # repository definitions and GPG keys shipped by Azure Linux.
-    rpm_install_package "${root_fs_dir}" azurelinux-repos azurelinux-repos-cloud-native azurelinux-release || {
+    # Azure Linux 4.0 folded the cloud-native content into the base/microsoft
+    # repos and no longer ships azurelinux-repos-cloud-native.
+    local repo_pkgs=(azurelinux-repos azurelinux-release)
+    if [[ "${AZL_RELEASEVER}" == "3.0" ]]; then
+        repo_pkgs+=(azurelinux-repos-cloud-native)
+    fi
+    rpm_install_package "${root_fs_dir}" "${repo_pkgs[@]}" || {
         error "Failed to install azurelinux-repos packages"
         return 1
     }

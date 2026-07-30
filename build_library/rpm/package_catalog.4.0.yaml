@@ -1,0 +1,87 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# Azure Linux 4.0 overlay for package_catalog.yaml.
+#
+# Entries here override the corresponding entries in package_catalog.yaml
+# when AZL_RELEASEVER=4.0.  AzL4 follows Fedora/RHEL package naming, so many
+# AzL3 package names were renamed or split.  Packages with no AzL4 equivalent
+# are marked SKIP.
+#
+# Same format as package_catalog.yaml.
+
+packages:
+  # was: zstd-libs
+  app-arch/zstd-libs: libzstd
+  # was: cni
+  app-containers/cni: containernetworking-plugins
+  # was: containerd2
+  app-containers/containerd: containerd
+  # was: ca-certificates-shared
+  app-crypt/ca-certificates-shared: ca-certificates
+  # was: ca-certificates-tools
+  app-crypt/ca-certificates-tools: ca-certificates
+  # was: krb5
+  app-crypt/mit-krb5: krb5-libs
+  # was: vim
+  app-editors/vim: vim-minimal
+  # was: vim
+  app-editors/vim-core: vim-minimal
+  # was: walinuxagent-acl-config oras fuse fuse3-libs blobfuse2
+  app-emulation/wa-linux-agent:
+    - fuse
+    - fuse3-libs
+  # was: coreos-cloudinit
+  coreos-base/coreos-cloudinit: SKIP
+  # was: update-ssh-keys
+  coreos-base/update-ssh-keys: SKIP
+  # was: etcd
+  dev-db/etcdctl: SKIP
+  # was: go-md2man
+  dev-go/go-md2man: SKIP
+  # was: expat-libs
+  dev-libs/expat-libs: expat
+  # was: libpcre2-16-0
+  dev-libs/libpcre2-16: pcre2-utf16
+  # was: libpcre2-32-0
+  dev-libs/libpcre2-32: pcre2-utf32
+  # was: libpcre2-8-0
+  dev-libs/libpcre2-8: pcre2
+  # was: libpcre2-posix2
+  dev-libs/libpcre2-posix: pcre2
+  # was: libusb
+  dev-libs/libusb: libusb1
+  # was: python3-urllib3 python-setuptools
+  dev-python/urllib3:
+    - python3-urllib3
+    - python3-setuptools
+  # was: iptables
+  net-firewall/iptables: iptables-nft
+  # was: rpcsvc-proto
+  net-libs/rpcsvc-proto: rpcsvc-proto-devel
+  # was: cni
+  net-misc/cni: containernetworking-plugins
+  # was: curl-libs
+  net-misc/curl-libs: libcurl
+  # was: ntp
+  net-misc/ntp: chrony
+  # was: wget
+  net-misc/wget: wget2
+  # was: gptfdisk
+  sys-apps/gptfdisk: gdisk
+  # was: grub2
+  sys-boot/grub:
+    - grub2-common
+    - grub2-tools
+  # was: grub2-efi
+  sys-boot/grub-efi: grub2-efi-x64
+  # was: grub2-efi-binary
+  sys-boot/grub-efi-binary: grub2-efi-x64
+  # was: shim
+  sys-boot/shim: shim-x64
+  # was: shim
+  sys-boot/shim-signed: shim-x64
+  # was: zlib
+  sys-libs/zlib: zlib-ng-compat
+  # was: zlib
+  virtual/zlib: zlib-ng-compat
