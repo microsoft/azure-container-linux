@@ -116,3 +116,9 @@ packages:
   # container-selinux package and splits selinux-policy-targeted out of
   # selinux-policy; 3.0 bundles both into selinux-policy.
   sys-apps/systemd: systemd systemd-journal-remote libselinux-utils selinux-policy selinux-policy-targeted container-selinux policycoreutils ca-certificates irqbalance
+
+  # Azure Linux 4 splits git into the perl porcelain (git) and the actual
+  # binary (git-core).  git-core needs no perl, which the denylist strips
+  # anyway, leaving broken scripts behind.
+  # was: git
+  dev-vcs/git: git-core
