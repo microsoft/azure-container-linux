@@ -160,6 +160,8 @@ if [[ -z ${stat} ]] ; then
         -e IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
         -e IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
         -e EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
+        -e AZL_RELEASEVER="${AZL_RELEASEVER:-}"
+        -e AZL_REPO_CHANNEL="${AZL_REPO_CHANNEL:-}"
         --name="${name}"
         --hostname="${hostname}"
         --entrypoint /bin/bash
