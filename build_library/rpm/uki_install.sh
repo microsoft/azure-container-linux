@@ -244,20 +244,39 @@ OSREL
     # Both shim and systemd-boot RPMs install to /boot/efi/EFI/BOOT/.
     local azl_efi_dir="${BOARD_ROOT}/boot/efi/EFI/BOOT"
 
-    # Install shim as the default UEFI bootloader
-    local shim_efi="${azl_efi_dir}/boot${EFI_ARCH}.efi"
-    if [[ ! -f "${shim_efi}" ]]; then
-        die "UKI/RPM: Shim not found at ${shim_efi}. Ensure the shim RPM is installed."
+    # Install shim as the default UEFI bootloader.  Azure Linux 3 ships it as
+    # bootx64.efi, Azure Linux 4 as BOOTX64.EFI.
+    local shim_efi=""
+    local _cand
+    for _cand in "${azl_efi_dir}/boot${EFI_ARCH}.efi" \
+                 "${azl_efi_dir}/BOOT${EFI_ARCH^^}.EFI"; do
+        if [[ -f "${_cand}" ]]; then
+            shim_efi="${_cand}"
+            break
+        fi
+    done
+    if [[ -z "${shim_efi}" ]]; then
+        die "UKI/RPM: Shim not found under ${azl_efi_dir}. Ensure the shim RPM is installed."
     fi
 
     sudo mkdir -p "${ESP_DIR}/EFI/BOOT"
     sudo cp "${shim_efi}" "${ESP_DIR}/EFI/BOOT/BOOT${EFI_ARCH^^}.EFI"
     info "UKI/RPM: Installed shim → EFI/BOOT/BOOT${EFI_ARCH^^}.EFI"
 
-    # Install systemd-boot where shim expects its second-stage bootloader
-    local sd_boot_efi="${azl_efi_dir}/grub${EFI_ARCH}.efi"
-    if [[ ! -f "${sd_boot_efi}" ]]; then
-        die "UKI/RPM: systemd-boot not found at ${sd_boot_efi}. Ensure the systemd-boot RPM is installed."
+    # Install systemd-boot where shim expects its second-stage bootloader.
+    # Azure Linux 3 pre-places it as grubx64.efi next to shim; Azure Linux 4
+    # ships systemd-boot-unsigned, which only drops the binary under
+    # /usr/lib/systemd/boot/efi.
+    local sd_boot_efi=""
+    for _cand in "${azl_efi_dir}/grub${EFI_ARCH}.efi" \
+                 "${BOARD_ROOT}/usr/lib/systemd/boot/efi/systemd-boot${EFI_ARCH}.efi"; do
+        if [[ -f "${_cand}" ]]; then
+            sd_boot_efi="${_cand}"
+            break
+        fi
+    done
+    if [[ -z "${sd_boot_efi}" ]]; then
+        die "UKI/RPM: systemd-boot not found under ${azl_efi_dir} or ${BOARD_ROOT}/usr/lib/systemd/boot/efi. Ensure the systemd-boot RPM is installed."
     fi
 
     sudo cp "${sd_boot_efi}" "${ESP_DIR}/EFI/BOOT/grub${EFI_ARCH}.efi"
