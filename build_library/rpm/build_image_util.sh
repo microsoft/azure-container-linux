@@ -141,6 +141,33 @@ finish_image_rpm() {
         die "RPM mode: Expected exactly 1 kernel in /boot, found ${#_kernel_files[@]}: ${_kernel_files[*]}"
     fi
     kernel_file="${_kernel_files[0]:-}"
+
+    # Azure Linux 4 splits the kernel into kernel/kernel-core/kernel-modules and
+    # ships every /boot/* entry as %ghost: the payload only contains
+    # /usr/lib/modules/<version>/vmlinuz, and /boot is meant to be populated by
+    # kernel-install from the %posttrans scriptlet.  kernel-install never runs
+    # in an installroot chroot, so materialize the files the rest of the image
+    # build expects.
+    if [[ -z "${kernel_file}" ]]; then
+        local _modules_kernel
+        for _modules_kernel in "${root_fs_dir}"/usr/lib/modules/*/vmlinuz; do
+            [[ -f "${_modules_kernel}" ]] || continue
+            local _kver
+            _kver=$(basename "$(dirname "${_modules_kernel}")")
+            info "RPM mode: No /boot kernel; recovering ${_kver} from /usr/lib/modules"
+            sudo mkdir -p "${root_fs_dir}/boot"
+            sudo cp "${_modules_kernel}" "${root_fs_dir}/boot/vmlinuz-${_kver}"
+            local _aux
+            for _aux in config System.map; do
+                if [[ -f "${root_fs_dir}/usr/lib/modules/${_kver}/${_aux}" ]]; then
+                    sudo cp "${root_fs_dir}/usr/lib/modules/${_kver}/${_aux}" \
+                        "${root_fs_dir}/boot/${_aux}-${_kver}"
+                fi
+            done
+            kernel_file="${root_fs_dir}/boot/vmlinuz-${_kver}"
+            break
+        done
+    fi
     if [[ -n "${kernel_file}" ]]; then
       BOOT_FC_PATH="${root_fs_dir}/boot/flatcar"
 
