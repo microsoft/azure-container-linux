@@ -122,3 +122,25 @@ packages:
   # anyway, leaving broken scripts behind.
   # was: git
   dev-vcs/git: git-core
+
+  # --- ACL in-tree packages: NOT rebuilt for 4.0 ------------------------
+  # acl/SPECS/ builds nine packages into the local RPM cache.  The 4.0 cache
+  # (__build__/rpm-staging-4.0) is empty because none of them have been built
+  # with AZL_TOOLKIT_BRANCH=4.0 yet, so on 4.0 they either drop out or are
+  # silently satisfied by a stock Azure Linux package:
+  #
+  #   selinux-policy   -> SILENTLY REPLACED by stock selinux-policy 43.7 +
+  #                       selinux-policy-targeted.  ACL's policy customisations
+  #                       are absent; this is why the hotfix/minimisation code
+  #                       needed the 4.0 workarounds.
+  #   microcode_ctl    -> SILENTLY REPLACED by stock microcode_ctl 2.1-71.1.
+  #   coreos-init      -> SKIP (below)
+  #   bootengine       -> SKIP (below)
+  #   sdnotify-proxy   -> dropped from app-containers/docker (above)
+  #   stress-ng, Judy, libbsd, lksctp-tools
+  #                    -> only used by the lisa-testing sysext, which is not
+  #                       built on 4.0.
+  #
+  # Separately, these ship in the Azure Linux 3.0 'base' repo but have no 4.0
+  # build at all, so they are not recoverable by rebuilding in-tree:
+  #   coreos-cloudinit, update-ssh-keys, walinuxagent-acl-config
