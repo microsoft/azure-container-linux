@@ -111,3 +111,8 @@ packages:
   # weak dependencies are disabled.
   app-admin/ignition: ignition curl
   sys-apps/ignition: ignition curl
+
+  # Azure Linux 4 ships the container SELinux rules in a separate
+  # container-selinux package and splits selinux-policy-targeted out of
+  # selinux-policy; 3.0 bundles both into selinux-policy.
+  sys-apps/systemd: systemd systemd-journal-remote libselinux-utils selinux-policy selinux-policy-targeted container-selinux policycoreutils ca-certificates irqbalance

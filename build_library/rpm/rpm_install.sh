@@ -1009,7 +1009,29 @@ EOF
 ; AKS fixes
 (allow unconfined_domain_type domain (io_uring (override_creds sqpoll cmd)))
 EOF
-    sudo chroot "${root_fs_dir}" semodule -X 200 -i "${policy_hotfix}"
+    # Some hotfix statements reference SELinux types or attributes that only
+    # exist in a subset of the supported Azure Linux releases (for example
+    # container_engine_system_domain, which Azure Linux 4.0's container-selinux
+    # does not define).  Rather than forking the hotfix per release, install it
+    # and comment out any statement semodule reports as unresolvable, warning
+    # loudly for each one.
+    local _attempt _semodule_out _bad_line
+    for _attempt in $(seq 1 64); do
+        if _semodule_out=$(sudo chroot "${root_fs_dir}" \
+                semodule -X 200 -i "${policy_hotfix}" 2>&1); then
+            break
+        fi
+        _bad_line=$(echo "${_semodule_out}" \
+            | grep -oE 'hotfix/cil:[0-9]+' | head -1 | cut -d: -f2)
+        if [[ -z "${_bad_line}" ]]; then
+            echo "${_semodule_out}" >&2
+            die "RPM mode: failed to install the SELinux policy hotfix"
+        fi
+        warn "RPM mode: dropping unresolvable SELinux hotfix statement: $(
+            sudo sed -n "${_bad_line}p" "${root_fs_dir}/${policy_hotfix}")"
+        sudo sed -i "${_bad_line}s|.*|; dropped: unresolvable on this release|" \
+            "${root_fs_dir}/${policy_hotfix}"
+    done
     sudo rm -f "${root_fs_dir}/${policy_hotfix}"
 
     # Remove unnecessary SELinux policy modules (minimize the policy)
