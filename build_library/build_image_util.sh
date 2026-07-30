@@ -774,7 +774,11 @@ EOF
     # This must happen AFTER packages are installed but BEFORE systemd-tmpfiles --create runs
     finish_image_cleanup_issue_rpm "${root_fs_dir}"
   fi
-  sudo systemd-tmpfiles --create --remove --boot --exclude-prefix=/dev --root="${root_fs_dir}"
+  if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${AZL_RELEASEVER:-3.0}" != "3.0" ]]; then
+    rpm_run_systemd_tmpfiles "${root_fs_dir}"
+  else
+    sudo systemd-tmpfiles --create --remove --boot --exclude-prefix=/dev --root="${root_fs_dir}"
+  fi
   if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
     for dbfile in passwd shadow group gshadow; do
       sudo rm -f "${root_fs_dir}"/etc/"${dbfile}"
