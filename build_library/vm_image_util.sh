@@ -661,6 +661,8 @@ install_oem_sysext() {
             "IMAGE_VERSION=${IMAGE_VERSION:-}"
             "IMAGE_VERSION_ID=${IMAGE_VERSION_ID:-}"
             "IMAGE_BUILD_ID=${IMAGE_BUILD_ID:-}"
+            "AZL_RELEASEVER=${AZL_RELEASEVER:-3.0}"
+            "AZL_REPO_CHANNEL=${AZL_REPO_CHANNEL:-prod}"
         )
         if [[ "${oem_sysext}" == "oem-azure" ]]; then
             build_sysext_env+=("RPM_PRESERVE_PYTHON=1")
