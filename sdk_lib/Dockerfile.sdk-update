@@ -12,9 +12,9 @@ RUN echo 'export FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -
 
 RUN chown sdk:sdk /mnt/host/source
 
-# Regenerate manifest for sdk-depends to pick up the new r58 revision with RPM/DNF5 and UKI tools
-# Use the actual source location since /var/lib/portage/repos/coreos-overlay doesn't exist yet
-RUN sudo bash -c 'cd /mnt/host/source/src/third_party/coreos-overlay/coreos-devel/sdk-depends && for ebuild in *.ebuild; do ebuild "$ebuild" manifest; done'
+# Regenerate manifests for source-overlay packages not present in the base SDK.
+# Use the source location since /var/lib/portage/repos/coreos-overlay does not exist yet.
+RUN sudo bash -c 'set -e; overlay=/mnt/host/source/src/third_party/coreos-overlay; for package in coreos-devel/sdk-depends sys-fs/erofs-utils; do cd "$overlay/$package"; for ebuild_file in *.ebuild; do ebuild "$ebuild_file" manifest; done; done'
 
 RUN /home/sdk/sdk_entry.sh ./update_chroot --toolchain_boards="amd64-usr arm64-usr"
 

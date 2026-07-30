@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>maintainer-needed@gentoo.org</email>
+	</maintainer>
+	<longdescription>
+		Userspace tools for creating and inspecting EROFS filesystems.
+	</longdescription>
+	<use>
+		<flag name="lz4">Enable LZ4 compression support</flag>
+	</use>
+</pkgmetadata>
