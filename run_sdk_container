@@ -137,6 +137,13 @@ if [[ -z ${stat} ]] ; then
         call_docker pull "${container_image_name}" || true
     fi
 
+    # RPMs are not interchangeable across Azure Linux releases, so 3.0 keeps
+    # the historical staging directory and every other release gets its own.
+    rpm_staging_dir="/mnt/host/source/src/scripts/__build__/rpm-staging"
+    if [[ "${AZL_RELEASEVER:-3.0}" != "3.0" ]]; then
+        rpm_staging_dir+="-${AZL_RELEASEVER}"
+    fi
+
     docker_flags=(
         "${tty[@]}"
         -i
@@ -153,7 +160,7 @@ if [[ -z ${stat} ]] ; then
         -e SDK_GROUP_ID="$(id -g)"
         -e PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-}"
         -e BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
-        -e RPM_STAGING_DIR="/mnt/host/source/src/scripts/__build__/rpm-staging"
+        -e RPM_STAGING_DIR="${rpm_staging_dir}"
         -e SYSEXT_COMPRESSION="${SYSEXT_COMPRESSION:-}"
         -e STANDALONE_SYSEXTS_SPEC="${STANDALONE_SYSEXTS_SPEC:-}"
         -e IMAGE_VERSION="${IMAGE_VERSION:-}"
