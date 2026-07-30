@@ -12,6 +12,14 @@ RUN echo 'export FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -
 
 RUN chown sdk:sdk /mnt/host/source
 
+# Azure Linux 4 ships xz-compressed RPM payloads. rpm only advertises
+# rpmlib(PayloadIsXz) when built with the lzma USE flag, which is off by
+# default in the portage-stable ebuild. Set it before any emerge below so
+# --changed-use picks up the rebuild.
+RUN sudo mkdir -p /etc/portage/package.use && \
+    echo 'app-arch/rpm caps acl sqlite zstd lzma bzip2' \
+        | sudo tee /etc/portage/package.use/rpm
+
 # Regenerate manifest for sdk-depends to pick up the new r58 revision with RPM/DNF5 and UKI tools
 # Use the actual source location since /var/lib/portage/repos/coreos-overlay doesn't exist yet
 RUN sudo bash -c 'cd /mnt/host/source/src/third_party/coreos-overlay/coreos-devel/sdk-depends && for ebuild in *.ebuild; do ebuild "$ebuild" manifest; done'
