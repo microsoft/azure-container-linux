@@ -385,6 +385,7 @@ rpm_install_package() {
         --installroot="${root_fs_dir}"
         --releasever="${AZL_RELEASEVER}"
         --nodocs
+        --setopt=install_weak_deps=False
         -y
     )
 
