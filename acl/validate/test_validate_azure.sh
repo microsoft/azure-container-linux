@@ -69,7 +69,7 @@ assert_classification SkuNotAvailable \
     1 RETRYABLE_VM_CREATE_ERROR
 assert_classification OSProvisioningTimedOut \
     "OS provisioning for the VM did not finish in the allotted time." \
-    1 RETRYABLE_VM_CREATE_ERROR
+    1 PROVISIONING_TIMEOUT
 assert_classification AllocationFailed \
     "Allocation failed because the requested VM size is unavailable." \
     1 RETRYABLE_VM_CREATE_ERROR
@@ -93,6 +93,55 @@ assert_classification AuthorizationFailed \
     "The client is not authorized to create this VM." \
     2 ""
 
+assert_vm_size_family_parsing() {
+    local test_case vm_size expected actual
+    local cases=(
+        "Standard_D2s_v5:Ds_v5"
+        "Standard_D2as_v5:Das_v5"
+        "Standard_D2ads_v5:Dads_v5"
+        "Standard_D2ps_v6:Dps_v6"
+        "Standard_D2ps_v5:Dps_v5"
+        "Standard_F2s_v2:Fs_v2"
+        "custom-size:custom-size"
+    )
+
+    for test_case in "${cases[@]}"; do
+        vm_size="${test_case%%:*}"
+        expected="${test_case#*:}"
+        actual=$(get_vm_size_family "$vm_size")
+        if [[ "$actual" != "$expected" ]]; then
+            printf 'FAIL: family for %s was %s, expected %s\n' \
+                "$vm_size" "$actual" "$expected" >&2
+            return 1
+        fi
+    done
+
+    printf 'PASS: VM size families preserve modifiers and generations\n'
+}
+
+assert_timeout_configuration_validation() {
+    error() { :; }
+
+    local value
+    for value in 1 2 10; do
+        AZ_MAX_PROVISIONING_TIMEOUTS="$value"
+        if ! validate_azure_configuration; then
+            printf 'FAIL: valid timeout limit %s was rejected\n' "$value" >&2
+            return 1
+        fi
+    done
+
+    for value in 0 -1 abc ""; do
+        AZ_MAX_PROVISIONING_TIMEOUTS="$value"
+        if validate_azure_configuration; then
+            printf 'FAIL: invalid timeout limit %q was accepted\n' "$value" >&2
+            return 1
+        fi
+    done
+
+    printf 'PASS: provisioning timeout configuration is validated\n'
+}
+
 assert_failed_vm_boot_diagnostics() {
     local events_file="${TEST_TMPDIR}/boot-diagnostics-events"
     : > "${events_file}"
@@ -112,7 +161,17 @@ assert_failed_vm_boot_diagnostics() {
                 ;;
             "vm boot-diagnostics get-boot-log")
                 printf 'diagnostics:get-log\n' >> "${events_file}"
-                printf '"serial line one\\nserial line two\\n"\n'
+                if [[ " $* " != *" -o tsv "* ]]; then
+                    printf 'FAIL: boot diagnostics must request raw TSV output\n' >&2
+                    return 1
+                fi
+                local line
+                for line in $(seq 1 25); do
+                    printf 'warning line %s\n' "$line" >&2
+                done
+                for line in $(seq 1 205); do
+                    printf 'serial line %s\n' "$line"
+                done
                 return 0
                 ;;
             *)
@@ -134,8 +193,16 @@ assert_failed_vm_boot_diagnostics() {
             "${expected_events}" "${actual_events}" >&2
         return 1
     fi
-    if [[ "${serial_output}" != *"[serial] serial line two"* ]]; then
+    if ! grep -qFx '  [serial] serial line 205' <<< "$serial_output" || \
+        grep -qFx '  [serial] serial line 5' <<< "$serial_output" || \
+        ! grep -qFx '  [serial] serial line 6' <<< "$serial_output"; then
         printf 'FAIL: boot diagnostics serial output was not logged\n' >&2
+        return 1
+    fi
+    if ! grep -qFx '  [az] warning line 25' <<< "$serial_output" || \
+        grep -qFx '  [az] warning line 5' <<< "$serial_output" || \
+        ! grep -qFx '  [az] warning line 6' <<< "$serial_output"; then
+        printf 'FAIL: boot diagnostics stderr was not logged separately\n' >&2
         return 1
     fi
 
@@ -165,6 +232,244 @@ assert_failed_vm_boot_diagnostics() {
     fi
 
     printf 'PASS: failed VM boot diagnostics are captured best-effort\n'
+}
+
+assert_provisioning_timeouts_are_bounded() {
+    local events_file="${TEST_TMPDIR}/provisioning-timeout-events"
+    local attempts_file="${TEST_TMPDIR}/provisioning-timeout-attempts"
+    local errors_file="${TEST_TMPDIR}/provisioning-timeout-errors"
+    : > "${events_file}"
+    : > "${attempts_file}"
+    : > "${errors_file}"
+
+    info() { :; }
+    warn() { :; }
+    error() { printf '%s\n' "$*" >> "${errors_file}"; }
+    capture_failed_vm_boot_diagnostics() {
+        printf 'diagnostics:capture:%s\n' "$1" >> "${events_file}"
+    }
+
+    _try_vm_create() {
+        printf '%s\n' "$4" >> "${attempts_file}"
+        printf 'create:%s@%s\n' "$4" "$1" >> "${events_file}"
+        echo "PROVISIONING_TIMEOUT"
+        return 1
+    }
+
+    check_image_replicated_to_region() {
+        printf 'FAIL: timeout cap allowed a backup-region attempt\n' >&2
+        return 1
+    }
+
+    az() {
+        case "${1:-} ${2:-} ${3:-} ${4:-}" in
+            "group create "*)
+                printf 'group:create:%s\n' "$4" >> "${events_file}"
+                return 0
+                ;;
+            "network public-ip create "*)
+                return 0
+                ;;
+            "group delete "*)
+                printf 'group:delete:%s\n' "$4" >> "${events_file}"
+                return 0
+                ;;
+            *)
+                printf 'Unexpected az command: %q\n' "$*" >&2
+                return 1
+                ;;
+        esac
+    }
+
+    get_vm_rg_name() {
+        local group_count
+        group_count=$(grep -c '^group:create:' "${events_file}" || true)
+        printf 'test-rg-%s\n' "$((group_count + 1))"
+    }
+
+    BOARD=amd64-usr
+    AZ_VM_SIZE=Standard_D2s_v5
+    AZ_BACKUP_VM_SIZES_AMD64="Standard_D2as_v5 Standard_F2s_v2 Standard_B2s_v2"
+    AZ_BACKUP_REGIONS=backup-region
+    AZ_REGION=primary-region
+    AZ_MAX_PROVISIONING_TIMEOUTS=2
+    ACG_IMAGE_VERSION_ID=test-image-id
+    RESOURCE_TAGS=(createdBy=test)
+    VM_NAME=test-vm
+    VM_RG=test-rg-1
+
+    if create_vm_azure test-rg-1 test-image-id >/dev/null; then
+        printf 'FAIL: provisioning timeouts unexpectedly succeeded\n' >&2
+        return 1
+    fi
+
+    local expected_attempts actual_attempts
+    expected_attempts=$'Standard_D2s_v5\nStandard_D2as_v5'
+    actual_attempts=$(cat "${attempts_file}")
+    if [[ "${actual_attempts}" != "${expected_attempts}" ]]; then
+        printf 'FAIL: provisioning timeout attempts were not bounded across distinct families\nExpected:\n%s\nActual:\n%s\n' \
+            "${expected_attempts}" "${actual_attempts}" >&2
+        return 1
+    fi
+    if ! grep -q 'likely image boot failure' "${errors_file}"; then
+        printf 'FAIL: provisioning timeout did not report a likely image boot failure\n' >&2
+        return 1
+    fi
+
+    local create_count
+    create_count=$(grep -c '^create:' "${events_file}")
+    if [[ ${create_count} -ne 2 ]]; then
+        printf 'FAIL: expected 2 VM attempts, got %s\n' "${create_count}" >&2
+        return 1
+    fi
+
+    printf 'PASS: provisioning timeouts stop after two distinct SKU families\n'
+}
+
+assert_single_provisioning_timeout_limit() {
+    local attempts_file="${TEST_TMPDIR}/single-timeout-attempts"
+    local errors_file="${TEST_TMPDIR}/single-timeout-errors"
+    : > "${attempts_file}"
+    : > "${errors_file}"
+
+    info() { :; }
+    warn() { :; }
+    error() { printf '%s\n' "$*" >> "${errors_file}"; }
+    capture_failed_vm_boot_diagnostics() { :; }
+    _try_vm_create() {
+        printf '%s\n' "$4" >> "${attempts_file}"
+        echo "PROVISIONING_TIMEOUT"
+        return 1
+    }
+    az() {
+        case "${1:-} ${2:-}" in
+            "group create"|"network public-ip"|"group delete") return 0 ;;
+            *) return 1 ;;
+        esac
+    }
+
+    BOARD=amd64-usr
+    AZ_VM_SIZE=Standard_D2s_v5
+    AZ_BACKUP_VM_SIZES_AMD64=Standard_F2s_v2
+    AZ_BACKUP_REGIONS=""
+    AZ_REGION=primary-region
+    AZ_MAX_PROVISIONING_TIMEOUTS=1
+    ACG_IMAGE_VERSION_ID=test-image-id
+    RESOURCE_TAGS=(createdBy=test)
+    VM_NAME=test-vm
+
+    if create_vm_azure test-rg test-image-id >/dev/null; then
+        printf 'FAIL: timeout limit 1 unexpectedly succeeded\n' >&2
+        return 1
+    fi
+    if [[ $(wc -l < "${attempts_file}") -ne 1 ]]; then
+        printf 'FAIL: timeout limit 1 allowed more than one attempt\n' >&2
+        return 1
+    fi
+    if ! grep -q 'likely image boot failure' "${errors_file}"; then
+        printf 'FAIL: timeout limit 1 did not report likely image boot failure\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: timeout limit 1 stops after the first provisioning timeout\n'
+}
+
+assert_all_families_timeout_below_limit() {
+    local errors_file="${TEST_TMPDIR}/all-families-timeout-errors"
+    : > "${errors_file}"
+
+    info() { :; }
+    warn() { :; }
+    error() { printf '%s\n' "$*" >> "${errors_file}"; }
+    capture_failed_vm_boot_diagnostics() { :; }
+    _try_vm_create() {
+        echo "PROVISIONING_TIMEOUT"
+        return 1
+    }
+    az() {
+        case "${1:-} ${2:-}" in
+            "group create"|"network public-ip"|"group delete") return 0 ;;
+            *) return 1 ;;
+        esac
+    }
+
+    BOARD=amd64-usr
+    AZ_VM_SIZE=Standard_D2s_v5
+    AZ_BACKUP_VM_SIZES_AMD64=""
+    AZ_BACKUP_REGIONS=""
+    AZ_REGION=primary-region
+    AZ_MAX_PROVISIONING_TIMEOUTS=2
+    ACG_IMAGE_VERSION_ID=test-image-id
+    RESOURCE_TAGS=(createdBy=test)
+    VM_NAME=test-vm
+
+    if create_vm_azure test-rg test-image-id >/dev/null; then
+        printf 'FAIL: all-family timeout unexpectedly succeeded\n' >&2
+        return 1
+    fi
+    if ! grep -q 'All configured VM SKU families timed out' "${errors_file}" || \
+        ! grep -q 'likely image boot failure' "${errors_file}"; then
+        printf 'FAIL: all-family timeout below cap was not identified as image boot failure\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: all-family timeout is identified even below the configured cap\n'
+}
+
+assert_mixed_failures_keep_generic_terminal_error() {
+    local attempts_file="${TEST_TMPDIR}/mixed-failure-attempts"
+    local errors_file="${TEST_TMPDIR}/mixed-failure-errors"
+    : > "${attempts_file}"
+    : > "${errors_file}"
+
+    info() { :; }
+    warn() { :; }
+    error() { printf '%s\n' "$*" >> "${errors_file}"; }
+    capture_failed_vm_boot_diagnostics() { :; }
+    _try_vm_create() {
+        local attempt_count
+        attempt_count=$(wc -l < "${attempts_file}")
+        printf '%s\n' "$4" >> "${attempts_file}"
+        if [[ $attempt_count -eq 0 ]]; then
+            echo "PROVISIONING_TIMEOUT"
+        else
+            echo "RETRYABLE_VM_CREATE_ERROR"
+        fi
+        return 1
+    }
+    az() {
+        case "${1:-} ${2:-}" in
+            "group create"|"network public-ip"|"group delete") return 0 ;;
+            *) return 1 ;;
+        esac
+    }
+    get_vm_rg_name() { printf 'mixed-rg-%s\n' "$(wc -l < "${attempts_file}")"; }
+
+    BOARD=amd64-usr
+    AZ_VM_SIZE=Standard_D2s_v5
+    AZ_BACKUP_VM_SIZES_AMD64="Standard_F2s_v2 Standard_B2s_v2"
+    AZ_BACKUP_REGIONS=""
+    AZ_REGION=primary-region
+    AZ_MAX_PROVISIONING_TIMEOUTS=2
+    ACG_IMAGE_VERSION_ID=test-image-id
+    RESOURCE_TAGS=(createdBy=test)
+    VM_NAME=test-vm
+
+    if create_vm_azure mixed-rg-0 test-image-id >/dev/null; then
+        printf 'FAIL: mixed failures unexpectedly succeeded\n' >&2
+        return 1
+    fi
+    if grep -q 'likely image boot failure' "${errors_file}"; then
+        printf 'FAIL: mixed timeout/capacity failures were mislabeled as image boot failure\n' >&2
+        return 1
+    fi
+    if ! grep -q 'No VM candidate succeeded' "${errors_file}" || \
+        ! grep -q 'Provisioning timeouts:' "${errors_file}"; then
+        printf 'FAIL: mixed failures did not preserve generic exhaustion with timeout context\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: mixed timeout and capacity failures keep generic exhaustion signal\n'
 }
 
 assert_fallback_uses_clean_resource_group() {
@@ -563,10 +868,16 @@ assert_final_candidate_moves_directly_to_backup_region() {
     printf 'PASS: final candidate moves directly to a clean backup-region resource group\n'
 }
 
-assert_failed_vm_boot_diagnostics
-assert_fallback_uses_clean_resource_group
-assert_resource_group_failure_stops_fallback
-assert_public_ip_failure_cleans_resource_group
-assert_final_candidate_does_not_create_unused_resource_group
-assert_final_candidate_moves_directly_to_backup_region
+( assert_failed_vm_boot_diagnostics )
+( assert_vm_size_family_parsing )
+( assert_timeout_configuration_validation )
+( assert_provisioning_timeouts_are_bounded )
+( assert_single_provisioning_timeout_limit )
+( assert_all_families_timeout_below_limit )
+( assert_mixed_failures_keep_generic_terminal_error )
+( assert_fallback_uses_clean_resource_group )
+( assert_resource_group_failure_stops_fallback )
+( assert_public_ip_failure_cleans_resource_group )
+( assert_final_candidate_does_not_create_unused_resource_group )
+( assert_final_candidate_moves_directly_to_backup_region )
 )
