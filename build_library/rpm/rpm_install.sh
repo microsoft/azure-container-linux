@@ -14,6 +14,20 @@
 #   - Local cache repository (if RPM_LOCAL_CACHE is set) - priority 1
 #   - Bootstrap base repo (used only to install filesystem + azurelinux-repos)
 #   - Azure Linux official repositories (installed via azurelinux-repos RPM)
+#
+# AZURE LINUX RELEASE SELECTION:
+#   AZL_RELEASEVER   - Azure Linux release to build against (default: 3.0)
+#   AZL_REPO_CHANNEL - packages.microsoft.com channel. Derived from
+#                      AZL_RELEASEVER when unset: 4.0 -> beta, otherwise prod.
+
+AZL_RELEASEVER="${AZL_RELEASEVER:-3.0}"
+if [[ -z "${AZL_REPO_CHANNEL:-}" ]]; then
+    case "${AZL_RELEASEVER}" in
+        4.0) AZL_REPO_CHANNEL="beta" ;;
+        *)   AZL_REPO_CHANNEL="prod" ;;
+    esac
+fi
+export AZL_RELEASEVER AZL_REPO_CHANNEL
 
 # =============================================================================
 # Helper function to find RPM staging directory
@@ -72,7 +86,7 @@ rpm_init_database() {
 # Setup Azure Linux repositories in target rootfs
 rpm_setup_repos() {
     local root_fs_dir="$1"
-    local releasever="${2:-3.0}"
+    local releasever="${2:-${AZL_RELEASEVER}}"
     local local_repo_dir="${3:-}"  # Optional local repository cache
 
     local repo_dir="${root_fs_dir}/etc/yum.repos.d"
@@ -115,7 +129,7 @@ EOF
     sudo tee "${repo_dir}/azurelinux-bootstrap.repo" > /dev/null <<EOF
 [azurelinux-bootstrap]
 name=Azure Linux Bootstrap \$releasever \$basearch
-baseurl=https://packages.microsoft.com/azurelinux/\$releasever/prod/base/\$basearch
+baseurl=https://packages.microsoft.com/azurelinux/\$releasever/${AZL_REPO_CHANNEL}/base/\$basearch
 gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
 gpgcheck=1
 repo_gpgcheck=1
@@ -326,7 +340,7 @@ _rpm_package_exists() {
 
     local dnf_args=(
         --installroot="${root_fs_dir}"
-        --releasever=3.0
+        --releasever="${AZL_RELEASEVER}"
         -q
     )
     if [[ ${BOARD:-} == "arm64-usr" ]]; then
@@ -359,7 +373,7 @@ rpm_install_package() {
     # Build dnf5 command arguments (always use --nodocs to minimize image size)
     local dnf_args=(
         --installroot="${root_fs_dir}"
-        --releasever=3.0
+        --releasever="${AZL_RELEASEVER}"
         --nodocs
         -y
     )
@@ -507,7 +521,7 @@ rpm_install_init() {
     local rpm_staging
     rpm_staging=$(rpm_get_staging_dir 2>/dev/null || echo "")
     local local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
-    rpm_setup_repos "${root_fs_dir}" "3.0" "${local_cache}"
+    rpm_setup_repos "${root_fs_dir}" "${AZL_RELEASEVER}" "${local_cache}"
 }
 
 # Query installed RPM packages
@@ -810,7 +824,7 @@ rpm_download_packages() {
     # Note: Not using --resolve to only download requested packages (dependencies installed separately)
     local download_args=(
         --setopt=reposdir="${repo_dir}"
-        --releasever=3.0
+        --releasever="${AZL_RELEASEVER}"
         --destdir="${dest_dir}"
         --nogpgcheck
     )
@@ -839,12 +853,29 @@ rpm_use_official_repos() {
         sudo rm -f "${bootstrap_repo}"
     fi
 
+    # Azure Linux 4.0 repo files reference a per-release GPG key
+    # (RPM-GPG-KEY-azurelinux-$releasever-$basearch) that is not shipped by
+    # azurelinux-repos.  packages.microsoft.com signs every Azure Linux release
+    # with the same Microsoft key, so alias it to the expected filenames.
+    local sdk_key="/etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY"
+    if [[ -f "${sdk_key}" ]]; then
+        sudo mkdir -p "${root_fs_dir}/etc/pki/rpm-gpg"
+        local basearch
+        case "${BOARD:-amd64-usr}" in
+            arm64-usr) basearch="aarch64" ;;
+            *)         basearch="x86_64" ;;
+        esac
+        sudo cp -f "${sdk_key}" \
+            "${root_fs_dir}/etc/pki/rpm-gpg/RPM-GPG-KEY-azurelinux-${AZL_RELEASEVER}-${basearch}"
+        sudo cp -f "${sdk_key}" "${root_fs_dir}${sdk_key}"
+    fi
+
     # Add Nvidia repository — azurelinux-repos does not include it
     info "Adding Nvidia repository"
-    sudo tee "${repo_dir}/azurelinux-nvidia.repo" > /dev/null <<'EOF'
+    sudo tee "${repo_dir}/azurelinux-nvidia.repo" > /dev/null <<EOF
 [azurelinux-official-nvidia]
-name=Azure Linux Official Nvidia $releasever $basearch
-baseurl=https://packages.microsoft.com/azurelinux/$releasever/prod/nvidia/$basearch
+name=Azure Linux Official Nvidia \$releasever \$basearch
+baseurl=https://packages.microsoft.com/azurelinux/\$releasever/${AZL_REPO_CHANNEL}/nvidia/\$basearch
 gpgkey=file:///etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY
 gpgcheck=1
 repo_gpgcheck=1
