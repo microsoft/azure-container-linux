@@ -209,7 +209,7 @@ finish_image_rpm() {
 # ACL partition table — consumed by Image Customizer for offline customization.
 # This file is NOT visible at runtime (/etc/fstab does not exist).
 # It lives at /usr/share/ic/etc/fstab on the USR-A partition.
-/dev/mapper/usr                                /usr   btrfs  ro,compress=zstd   0  0
+/dev/mapper/usr                                /usr   erofs  ro                 0  0
 LABEL=ROOT                                     /      ext4   rw                 0  1
 LABEL=EFI-SYSTEM                               /boot  vfat   rw                 0  2
 LABEL=OEM                                      /oem   btrfs  rw,compress=zlib   0  0
@@ -379,7 +379,7 @@ finish_image_selinux_rpm() {
     info "RPM mode: Labeling filesystem with targeted SELinux policy"
     #sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}" >/dev/null
     sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/etc" >/dev/null
-    #sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/usr" >/dev/null
+    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/usr" >/dev/null
 }
 
 # ── Machine-id: remove for first-boot detection ──────────────────────────────

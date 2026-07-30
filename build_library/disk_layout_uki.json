@@ -24,8 +24,8 @@
                 "type": "flatcar-rootfs",
                 "blocks": "2097152",
                 "fs_blocks": "260094",
-                "fs_type": "btrfs",
-                "fs_compression": "zstd",
+                "fs_type": "erofs",
+                "fs_compression": "lz4",
                 "mount": "/usr",
                 "features": [
                     "prioritize",

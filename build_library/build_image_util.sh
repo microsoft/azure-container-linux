@@ -879,10 +879,32 @@ EOF
     sudo fstrim "${root_fs_dir}/usr" || true
   fi
 
+  local usr_fs_type
+  usr_fs_type=$(
+    "${BUILD_LIBRARY_DIR}/disk_util" \
+      --disk_layout="${disk_layout}" \
+      --arch="${BOARD}" \
+      readfstype 2
+  )
+  if [[ "${usr_fs_type}" == "erofs" && ${disable_read_write} -ne ${FLAGS_TRUE} ]]; then
+    die "EROFS /usr requires rootfs verification in this experiment"
+  fi
+
   # Make the filesystem un-mountable as read-write and setup verity.
   if [[ ${disable_read_write} -eq ${FLAGS_TRUE} ]]; then
-    # Unmount /usr partition
-    sudo umount --recursive "${root_fs_dir}/usr" || exit 1
+    if [[ "${usr_fs_type}" == "erofs" ]]; then
+      "${BUILD_LIBRARY_DIR}/disk_util" \
+        --disk_layout="${disk_layout}" \
+        --arch="${BOARD}" \
+        erofs "${BUILD_DIR}/${image_name}" "USR-A" "${root_fs_dir}/usr"
+
+      sudo rm -rf "${root_fs_dir}/usr"
+      sudo mkdir -p "${root_fs_dir}/usr"
+      sudo fstrim "${root_fs_dir}" || true
+    else
+      # Unmount /usr partition
+      sudo umount --recursive "${root_fs_dir}/usr" || exit 1
+    fi
 
     "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" verity \
         --root_hash="${BUILD_DIR}/${image_name%.bin}_verity.txt" \

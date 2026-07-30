@@ -49,6 +49,9 @@ RUN sudo mkdir -p /etc/pki/rpm-gpg && \
 # Verify ukify is available from systemd[boot,ukify]
 RUN ukify --help >/dev/null 2>&1 || (echo "ERROR: ukify not found or broken" && exit 1)
 
+# EROFS /usr images are assembled after the writable staging tree is complete.
+RUN mkfs.erofs --help >/dev/null 2>&1 || (echo "ERROR: mkfs.erofs not found or broken" && exit 1)
+
 # Restore original .bashrc to remove sandbox disablement
 RUN mv /home/sdk/.bashrc.bak /home/sdk/.bashrc
 RUN chown sdk:sdk /home/sdk/.bashrc
