@@ -72,7 +72,7 @@ uki_install_rpm() {
     local uki_rpms=()
     local rpm_file
     for pkg in systemd-boot shim; do
-        rpm_file=$(find "${uki_local_cache}" -name "${pkg}-[0-9]*.${RPM_ARCH}.rpm" | sort -V | tail -1)
+        rpm_file=$(rpm_find_cached_rpm "${uki_local_cache}" "${pkg}" "${RPM_ARCH}") || rpm_file=""
         if [[ -z "${rpm_file}" ]]; then
             die "RPM file not found for package: ${pkg} (${RPM_ARCH}) in ${uki_local_cache}"
         fi

@@ -102,6 +102,37 @@ rpm_init_database() {
 }
 
 # Setup Azure Linux repositories in target rootfs
+# Locate a cached RPM file for a logical package name.
+#
+# Azure Linux renames some packages between releases (4.0 ships shim as
+# shim-x64 and systemd-boot as systemd-boot-unsigned), so a plain filename
+# glob is not enough.  Fall back to matching on the rpm Provides, which is
+# what dnf resolved against when the package was downloaded.
+rpm_find_cached_rpm() {
+    local cache_dir="$1"
+    local pkg="$2"
+    local arch="$3"
+    local rpm_path
+
+    rpm_path=$(find "${cache_dir}" -name "${pkg}-[0-9]*.${arch}.rpm" 2>/dev/null | sort -V | tail -1)
+    if [[ -n "${rpm_path}" ]]; then
+        echo "${rpm_path}"
+        return 0
+    fi
+
+    local candidate
+    while read -r candidate; do
+        [[ -n "${candidate}" ]] || continue
+        if rpm -qp --provides "${candidate}" 2>/dev/null \
+                | grep -qE "^${pkg}([[:space:]]|=|$)"; then
+            echo "${candidate}"
+            return 0
+        fi
+    done < <(find "${cache_dir}" -name "*.${arch}.rpm" 2>/dev/null | sort -V)
+
+    return 1
+}
+
 rpm_setup_repos() {
     local root_fs_dir="$1"
     local releasever="${2:-${AZL_RELEASEVER}}"
