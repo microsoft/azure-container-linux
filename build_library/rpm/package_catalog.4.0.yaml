@@ -87,12 +87,13 @@ packages:
   # --- No runtime Azure Linux 4.0 build ---------------------------------
   # Present only in the 4.0 'sdk' (devel) repository, which is not a runtime
   # repository, so these cannot be installed into the image.
-  # was: ncompress (sdk-only)
-  app-arch/ncompress: SKIP
-  # was: gflags (sdk-only)
-  dev-cpp/gflags: SKIP
-  # was: ebtables-legacy (sdk-only)
-  net-firewall/ebtables: SKIP
+  # ebtables-legacy is sdk-only on 4.0, but we do not want it anyway:
+  # Flatcar's coreos/config/env/net-firewall/ebtables patches eselect so
+  # that ebtables points at xtables-nft-multi rather than the legacy
+  # implementation. On 4.0 iptables-nft (azurelinux-base) Provides:
+  # ebtables, which is exactly that nft-based implementation.
+  # 3.0 has no iptables-nft, hence the ebtables-legacy mapping there.
+  net-firewall/ebtables: iptables-nft
 
   # ACL builds these in-tree against Azure Linux 3; they are not published
   # for 4.0 and are not yet rebuilt, so drop them from the 4.0 image.
