@@ -291,6 +291,11 @@ remove_orphaned_perl_scripts() {
     sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-svn"
     sudo rm -f "${root_fs_dir}/usr/share/git-core/templates/hooks/fsmonitor-watchman.sample"
 
+    # git contrib/libexec perl helpers (Azure Linux 4 git packaging)
+    sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-contacts"
+    sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-credential-netrc"
+    sudo rm -rf "${root_fs_dir}/usr/share/git-core/contrib"
+
     # gitweb (perl CGI) and its launcher
     sudo rm -f "${root_fs_dir}/usr/libexec/git-core/git-instaweb"
     sudo rm -rf "${root_fs_dir}/usr/share/gitweb"
@@ -449,6 +454,19 @@ rpm_install_package() {
     # Remove debug info
     info "RPM mode: Removing debug info files"
     sudo rm -rf "${root_fs_dir}/usr/lib/debug"
+
+    # /usr/lib/.build-id is a tree of symlinks into the debuginfo payload;
+    # every entry dangles once /usr/lib/debug is gone.
+    sudo rm -rf "${root_fs_dir}/usr/lib/.build-id"
+
+    # kernel modules build/source point at kernel-devel, which is not
+    # installed into the image.
+    sudo rm -f "${root_fs_dir}"/usr/lib/modules/*/build \
+               "${root_fs_dir}"/usr/lib/modules/*/source
+
+    # gssproxy ships a compat symlink to a runtime socket that never
+    # exists in a built image.
+    sudo rm -f "${root_fs_dir}/var/lib/gssproxy/default.sock"
 
     # Remove dangling ignition-delete-config.service symlink from sysinit.target.wants.
     # The coreos-init RPM installs this symlink but the target unit doesn't exist.
