@@ -38,19 +38,35 @@ fi
 VM_RG_PREFIX="${VM_RG_PREFIX:-$(whoami)-acl-test-vm-rg}"
 VM_RG=""
 AZ_VM_ARGS="${AZ_VM_ARGS:-}"
+_VM_CREATE_RESULT=""
 
 # Backup VM SKUs to try when the primary SKU has capacity restrictions.
 # Ordered by preference:
 #   AMD64 — v5 D-family (SCSI) first, then cross-family (F/B), then v6 (NVMe,
 #           may fail with disk-controller incompatibility on current images).
-#   ARM64 — v6 Cobalt 100 SKUs first (only v6 ARM supports TrustedLaunch),
-#           then cross-family v6, then v5 last-resort (no TrustedLaunch).
+#   ARM64 — v6 Cobalt 100 D-family SKUs first, then cross-family v6. ARM v5
+#           is excluded because these smoke VMs require Trusted Launch.
 AZ_BACKUP_VM_SIZES_AMD64="${AZ_BACKUP_VM_SIZES_AMD64:-Standard_D2as_v5 Standard_D2ds_v5 Standard_D2ads_v5 Standard_F2s_v2 Standard_B2s_v2 Standard_B2as_v2 Standard_D2s_v6 Standard_D2as_v6 Standard_D2ds_v6}"
-AZ_BACKUP_VM_SIZES_ARM64="${AZ_BACKUP_VM_SIZES_ARM64:-Standard_D2pds_v6 Standard_D2pls_v6 Standard_D2plds_v6 Standard_E2ps_v6 Standard_D2ps_v5 Standard_D2pds_v5 Standard_D2pls_v5}"
+AZ_BACKUP_VM_SIZES_ARM64="${AZ_BACKUP_VM_SIZES_ARM64:-Standard_D2pds_v6 Standard_D2pls_v6 Standard_D2plds_v6 Standard_E2ps_v6}"
 
 # Backup regions for VM provisioning when the primary region is exhausted.
 # Only regions where the gallery image has been replicated will be tried.
 AZ_BACKUP_REGIONS="${AZ_BACKUP_REGIONS:-}"
+
+_enforce_arm_security_contract() {
+    [[ "${BOARD:-amd64-usr}" == "arm64-usr" ]] || return 0
+
+    if [[ "${SECURE_BOOT_ENABLED:-true}" != "true" ]]; then
+        warn "Ignoring disabled Secure Boot setting: Azure ARM smoke VMs require Secure Boot and vTPM"
+    fi
+    SECURE_BOOT_ENABLED=true
+
+    local forbidden_pattern='(^|[[:space:]])--(security-type|enable-vtpm|enable-secure-boot|size)(=|[[:space:]]|$)'
+    if [[ "${AZ_VM_ARGS:-}" =~ $forbidden_pattern ]]; then
+        error "--az-vm-args cannot override size or Trusted Launch security settings for Azure ARM VMs"
+        return 1
+    fi
+}
 
 # Resolve Azure VM size and image definition based on BOARD.
 # Must be called after argument parsing so that --board is applied.
@@ -58,6 +74,10 @@ resolve_azure_defaults() {
     case "${BOARD:-amd64-usr}" in
         arm64-usr)
             AZ_VM_SIZE="${AZ_VM_SIZE:-Standard_D2ps_v6}"
+            if [[ "${AZ_VM_SIZE,,}" == *_v5 ]]; then
+                warn "ARM v5 SKU ${AZ_VM_SIZE} does not support the required Trusted Launch configuration; using Standard_D2ps_v6"
+                AZ_VM_SIZE="Standard_D2ps_v6"
+            fi
             AZ_VM_IMAGE_DEF="${AZ_VM_IMAGE_DEF:-$(whoami)-acl-test-vm-img-arm64}"
             ;;
         *)
@@ -65,6 +85,8 @@ resolve_azure_defaults() {
             AZ_VM_IMAGE_DEF="${AZ_VM_IMAGE_DEF:-$(whoami)-acl-test-vm-img}"
             ;;
     esac
+
+    _enforce_arm_security_contract
 }
 
 # ── SKU / region fallback ──────────────────────────────────────────
@@ -440,9 +462,23 @@ create_gallery_image_version() {
 
 # ── Azure VM creation ─────────────────────────────────────────────
 
-# Attempt a single az vm create.  Returns 0 on success or 1 on failure.
-# On SkuNotAvailable, prints "SKU_NOT_AVAILABLE" to stdout so the caller
-# can distinguish capacity errors from other failures.
+_cancel_vm_create() {
+    local create_pid="$1"
+    local output_file="$2"
+    local vm_rg_name="$3"
+    local status="$4"
+
+    trap - INT TERM
+    kill -TERM "$create_pid" 2>/dev/null || true
+    wait "$create_pid" 2>/dev/null || true
+    rm -f "$output_file"
+    _delete_vm_rg_sync "$vm_rg_name" || true
+    exit "$status"
+}
+
+# Attempt a single az vm create. Returns 0 on success, 1 for an incompatible
+# SKU, 2 for a fatal error, 3 for a retryable OS provisioning error, or 4 for
+# a retryable allocation error.
 _try_vm_create() {
     local vm_rg_name="$1"
     local vm_name="$2"
@@ -451,6 +487,8 @@ _try_vm_create() {
     local region="$5"
     shift 5
     local -a extra_tags=("$@")
+    _VM_CREATE_RESULT=""
+    _enforce_arm_security_contract || return 2
 
     local vm_create_args=(
         --resource-group "$vm_rg_name"
@@ -467,22 +505,66 @@ _try_vm_create() {
         --tags "${extra_tags[@]}"
     )
 
-    if [[ "$SECURE_BOOT_ENABLED" == "true" ]]; then
-        vm_create_args+=(--enable-secure-boot true)
-    else
-        vm_create_args+=(--enable-secure-boot false)
-    fi
+    vm_create_args+=(--enable-secure-boot "$SECURE_BOOT_ENABLED")
 
     if [[ -n "$AZ_VM_ARGS" ]]; then
         vm_create_args+=($AZ_VM_ARGS)
     fi
 
-    local output
-    if output=$(az vm create "${vm_create_args[@]}" 2>&1); then
-        echo "$output"
+    local output output_file create_pid rc
+    local previous_int_trap previous_term_trap
+    if ! output_file=$(mktemp "${TMPDIR:-/tmp}/acl-vm-create.XXXXXX"); then
+        echo "Failed to create temporary file for Azure VM creation output" >&2
+        return 2
+    fi
+    previous_int_trap=$(trap -p INT)
+    previous_term_trap=$(trap -p TERM)
+
+    az vm create "${vm_create_args[@]}" >"$output_file" 2>&1 &
+    create_pid=$!
+    trap '_cancel_vm_create "$create_pid" "$output_file" "$vm_rg_name" 130' INT
+    trap '_cancel_vm_create "$create_pid" "$output_file" "$vm_rg_name" 143' TERM
+
+    # The CLI cannot request managed boot diagnostics directly on `vm create`.
+    # Enable it as soon as the VM resource exists, while provisioning is still
+    # running, so OS provisioning failures retain their serial console output.
+    while kill -0 "$create_pid" 2>/dev/null; do
+        if az vm show --resource-group "$vm_rg_name" --name "$vm_name" \
+            --only-show-errors >/dev/null 2>&1; then
+            if az vm boot-diagnostics enable \
+                --resource-group "$vm_rg_name" \
+                --name "$vm_name" \
+                --only-show-errors >/dev/null 2>&1; then
+                break
+            fi
+        fi
+        sleep 2
+    done
+
+    if wait "$create_pid"; then
+        rc=0
+    else
+        rc=$?
+    fi
+    trap - INT TERM
+    [[ -n "$previous_int_trap" ]] && eval "$previous_int_trap"
+    [[ -n "$previous_term_trap" ]] && eval "$previous_term_trap"
+
+    if [[ ! -r "$output_file" ]]; then
+        echo "Failed to read Azure VM creation output from $output_file" >&2
+        rm -f "$output_file"
+        return 2
+    fi
+    output=$(<"$output_file")
+    if ! rm -f "$output_file"; then
+        echo "Failed to remove Azure VM creation output file: $output_file" >&2
+        return 2
+    fi
+
+    if [[ $rc -eq 0 ]]; then
+        _VM_CREATE_RESULT="$output"
         return 0
     else
-        local rc=$?
         # Detect errors that mean "this SKU won't work here" so the caller
         # can move on to the next candidate instead of aborting.
         #   - SkuNotAvailable        → capacity restriction in this region
@@ -493,13 +575,155 @@ _try_vm_create() {
             # Log the error details to stderr so they appear in pipeline logs
             echo "$output" | grep -iE \
                 'SkuNotAvailable|Capacity|InvalidParameter|vmSize|TrustedLaunch|BadRequest' >&2 || true
-            echo "SKU_NOT_AVAILABLE"
+            _VM_CREATE_RESULT="SKU_NOT_AVAILABLE"
             return 1
+        fi
+        if echo "$output" | grep -qi "OSProvisioningTimedOut"; then
+            echo "$output" >&2
+            _VM_CREATE_RESULT="RETRYABLE_OS_PROVISIONING"
+            return 3
+        fi
+        if echo "$output" | grep -qiE "ZonalAllocationFailed|AllocationFailed"; then
+            echo "$output" >&2
+            _VM_CREATE_RESULT="RETRYABLE_ALLOCATION"
+            return 4
         fi
         # Non-SKU error — print the full output so the caller sees it, then fail
         echo "$output" >&2
         return 2
     fi
+}
+
+_delete_vm_rg_sync() {
+    local vm_rg_name="$1"
+    local exists
+
+    if ! exists=$(az group exists --name "$vm_rg_name" -o tsv); then
+        error "Failed to determine whether VM resource group exists: $vm_rg_name"
+        return 1
+    fi
+    if [[ "$exists" != "true" ]]; then
+        return 0
+    fi
+
+    info "Deleting failed VM resource group: $vm_rg_name"
+    az group delete --name "$vm_rg_name" --yes
+}
+
+_validate_arm_vm_size() {
+    local vm_size="$1"
+    local region="$2"
+    local capabilities architecture hyper_v_generations trusted_launch_disabled
+
+    if ! capabilities=$(az vm list-skus \
+        --subscription "$AZ_SUB_ID" \
+        --location "$region" \
+        --size "$vm_size" \
+        --all \
+        --query "[?name=='${vm_size}'] | [0].capabilities[?name=='CpuArchitectureType' || name=='HyperVGenerations' || name=='TrustedLaunchDisabled'].[name,value]" \
+        --output tsv); then
+        warn "Could not query Azure capabilities for ${vm_size} in ${region}"
+        return 1
+    fi
+
+    architecture=$(awk -F '\t' '$1 == "CpuArchitectureType" { print $2 }' <<< "$capabilities")
+    hyper_v_generations=$(awk -F '\t' '$1 == "HyperVGenerations" { print $2 }' <<< "$capabilities")
+    trusted_launch_disabled=$(awk -F '\t' '$1 == "TrustedLaunchDisabled" { print $2 }' <<< "$capabilities")
+
+    if [[ "$architecture" != "Arm64" ]]; then
+        warn "Ignoring ${vm_size} in ${region}: Azure reports architecture '${architecture:-unknown}', not Arm64"
+        return 1
+    fi
+    if [[ ",${hyper_v_generations// /}," != *,V2,* ]]; then
+        warn "Ignoring ${vm_size} in ${region}: Hyper-V generation V2 is not supported"
+        return 1
+    fi
+    if [[ "${trusted_launch_disabled,,}" == "true" ]]; then
+        warn "Ignoring ${vm_size} in ${region}: Trusted Launch is disabled"
+        return 1
+    fi
+}
+
+_collect_failed_vm_diagnostics() {
+    local vm_rg_name="$1"
+    local vm_name="$2"
+    local label="$3"
+    local diagnostics_root="${DIAGNOSTICS_DIR:-${TMPDIR:-/tmp}/acl-vm-diagnostics}"
+    local safe_label latest_deployment
+
+    safe_label=$(printf '%s' "${vm_rg_name}-${label}" | tr -c '[:alnum:]_.-' '_')
+    if ! mkdir -p "$diagnostics_root"; then
+        warn "Could not create diagnostics directory ${diagnostics_root}; continuing with VM cleanup"
+        return 0
+    fi
+    info "Collecting failed VM diagnostics in ${diagnostics_root}"
+
+    az vm get-instance-view \
+        --resource-group "$vm_rg_name" \
+        --name "$vm_name" \
+        --output json \
+        >"${diagnostics_root}/${safe_label}-instance-view.json" \
+        2>"${diagnostics_root}/${safe_label}-instance-view.err" || true
+
+    az vm boot-diagnostics get-boot-log \
+        --resource-group "$vm_rg_name" \
+        --name "$vm_name" \
+        >"${diagnostics_root}/${safe_label}-boot.log" \
+        2>"${diagnostics_root}/${safe_label}-boot.err" || true
+
+    az deployment group list \
+        --resource-group "$vm_rg_name" \
+        --output json \
+        >"${diagnostics_root}/${safe_label}-deployments.json" \
+        2>"${diagnostics_root}/${safe_label}-deployments.err" || true
+
+    latest_deployment=$(az deployment group list \
+        --resource-group "$vm_rg_name" \
+        --query "sort_by(@, &properties.timestamp)[-1].name" \
+        --output tsv 2>/dev/null || true)
+    if [[ -n "$latest_deployment" ]]; then
+        az deployment operation group list \
+            --resource-group "$vm_rg_name" \
+            --name "$latest_deployment" \
+            --output json \
+            >"${diagnostics_root}/${safe_label}-deployment-operations.json" \
+            2>"${diagnostics_root}/${safe_label}-deployment-operations.err" || true
+    fi
+}
+
+_create_vm_rg_resources() {
+    local vm_rg_name="$1"
+    local region="$2"
+    shift 2
+    local -a all_tags=("$@")
+
+    info "Creating VM RG: $vm_rg_name (location: $region)"
+    az group create \
+        --name "$vm_rg_name" \
+        --location "$region" \
+        --tags "${all_tags[@]}"
+
+    local public_ip_name="${VM_NAME}PublicIP"
+    info "Creating public IP with policy-compliant tags: $public_ip_name"
+    az network public-ip create \
+        --name "$public_ip_name" \
+        --resource-group "$vm_rg_name" \
+        --location "$region" \
+        --allocation-method Static \
+        --sku Standard \
+        --ip-tags FirstPartyUsage=/NonProd \
+        --tags "${all_tags[@]}"
+}
+
+_replace_vm_rg() {
+    local old_vm_rg_name="$1"
+    local region="$2"
+    shift 2
+    local -a all_tags=("$@")
+
+    _delete_vm_rg_sync "$old_vm_rg_name"
+    VM_RG=$(get_vm_rg_name)
+    _create_vm_rg_resources "$VM_RG" "$region" "${all_tags[@]}"
 }
 
 create_vm_azure() {
@@ -525,11 +749,19 @@ create_vm_azure() {
     local -A seen_skus=()
     local unique_skus=()
     for s in "${all_skus[@]}"; do
+        if [[ "${BOARD:-amd64-usr}" == "arm64-usr" && "${s,,}" != *_v6 ]]; then
+            warn "Ignoring non-v6 Azure ARM fallback SKU: ${s}"
+            continue
+        fi
         if [[ -z "${seen_skus[$s]:-}" ]]; then
             seen_skus[$s]=1
             unique_skus+=("$s")
         fi
     done
+    if [[ ${#unique_skus[@]} -eq 0 ]]; then
+        error "No Azure ARM v6 VM SKU candidates remain after enforcing the Trusted Launch contract"
+        return 1
+    fi
 
     # Build ordered list of regions to try: primary first, then backups
     local all_regions=("${AZ_REGION}")
@@ -559,44 +791,63 @@ create_vm_azure() {
             info "✓ Image available in ${region}"
         fi
 
+        local region_skus=()
+        for sku in "${unique_skus[@]}"; do
+            if [[ "${BOARD:-amd64-usr}" == "arm64-usr" ]] && ! _validate_arm_vm_size "$sku" "$region"; then
+                continue
+            fi
+            region_skus+=("$sku")
+        done
+        if [[ ${#region_skus[@]} -eq 0 ]]; then
+            warn "No compatible VM SKU candidates in ${region} — skipping region"
+            continue
+        fi
+
         # Create or recreate resource group if we're in a new region
         if [[ "$region" != "$current_rg_region" ]]; then
             if [[ -n "$current_rg_region" ]]; then
-                # Changing region — delete the old RG (async) and create new one
                 info "Switching from ${current_rg_region} to ${region} — recreating resource group"
-                az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
-                vm_rg_name=$(get_vm_rg_name)
-                VM_RG="$vm_rg_name"
+                _replace_vm_rg "$vm_rg_name" "$region" "${all_tags[@]}"
+                vm_rg_name="$VM_RG"
+            else
+                _create_vm_rg_resources "$vm_rg_name" "$region" "${all_tags[@]}"
             fi
-            info "Creating VM RG: $vm_rg_name (location: $region)"
-            az group create \
-                --name "$vm_rg_name" \
-                --location "$region" \
-                --tags "${all_tags[@]}"
-
-            local public_ip_name="${VM_NAME}PublicIP"
-            info "Creating public IP with policy-compliant tags: $public_ip_name"
-            az network public-ip create \
-                --name "$public_ip_name" \
-                --resource-group "$vm_rg_name" \
-                --location "$region" \
-                --allocation-method Static \
-                --sku Standard \
-                --ip-tags FirstPartyUsage=/NonProd \
-                --tags "${all_tags[@]}"
-
             current_rg_region="$region"
         fi
 
-        for sku in "${unique_skus[@]}"; do
+        for sku in "${region_skus[@]}"; do
             tried_combos+=("${sku}@${region}")
-            info "Attempting VM creation: SKU=${sku} Region=${region}..."
-
-            # The || captures the exit code without triggering set -e (errexit).
-            # Without this, a non-zero return from _try_vm_create would kill the
-            # shell before the retry logic ever runs.
+            local attempt=1
+            local max_attempts=2
             local result rc
-            result=$(_try_vm_create "$vm_rg_name" "$VM_NAME" "$image_id" "$sku" "$region" "${all_tags[@]}") && rc=0 || rc=$?
+
+            while [[ $attempt -le $max_attempts ]]; do
+                info "Attempting VM creation: SKU=${sku} Region=${region} Attempt=${attempt}/${max_attempts}..."
+
+                # Invoke directly so this shell owns the background Azure CLI
+                # process and can clean it up if the validator is interrupted.
+                if _try_vm_create "$vm_rg_name" "$VM_NAME" "$image_id" "$sku" "$region" "${all_tags[@]}"; then
+                    rc=0
+                else
+                    rc=$?
+                fi
+                result="$_VM_CREATE_RESULT"
+
+                if [[ $rc -ne 0 ]]; then
+                    _collect_failed_vm_diagnostics \
+                        "$vm_rg_name" "$VM_NAME" \
+                        "${sku}-${region}-attempt${attempt}"
+                fi
+
+                if [[ ( $rc -eq 3 || $rc -eq 4 ) && $attempt -lt $max_attempts ]]; then
+                    warn "Retryable VM creation failure for ${sku} in ${region}; recreating the full resource group before one retry"
+                    _replace_vm_rg "$vm_rg_name" "$region" "${all_tags[@]}"
+                    vm_rg_name="$VM_RG"
+                    attempt=$(( attempt + 1 ))
+                    continue
+                fi
+                break
+            done
 
             if [[ $rc -eq 0 ]]; then
                 echo "$result"  # Print the az vm create JSON output
@@ -619,7 +870,7 @@ create_vm_azure() {
                     --nic-name "$nic_name" \
                     --resource-group "$vm_rg_name" \
                     --name "$ip_config_name" \
-                    --public-ip-address "$public_ip_name"
+                    --public-ip-address "${VM_NAME}PublicIP"
 
                 info "Enabling boot diagnostics..."
                 az vm boot-diagnostics enable \
@@ -628,17 +879,24 @@ create_vm_azure() {
                 return 0
             elif [[ $rc -eq 1 && "$result" == "SKU_NOT_AVAILABLE" ]]; then
                 warn "✗ SKU incompatible or unavailable: ${sku} in ${region} — trying next candidate"
-                # Delete the failed VM resource (deployment may have left artifacts)
-                az vm delete -g "$vm_rg_name" -n "$VM_NAME" -y --no-wait 2>/dev/null || true
+                _replace_vm_rg "$vm_rg_name" "$region" "${all_tags[@]}"
+                vm_rg_name="$VM_RG"
+                continue
+            elif [[ $rc -eq 4 && "$result" == "RETRYABLE_ALLOCATION" ]]; then
+                warn "✗ Allocation failed twice for ${sku} in ${region} — trying next candidate"
+                _replace_vm_rg "$vm_rg_name" "$region" "${all_tags[@]}"
+                vm_rg_name="$VM_RG"
                 continue
             else
                 # Non-SKU failure — fatal
                 error "VM creation failed with a non-recoverable error (exit code: ${rc})"
+                _delete_vm_rg_sync "$vm_rg_name"
                 return 1
             fi
         done
     done
 
+    _delete_vm_rg_sync "$vm_rg_name"
     error "No available VM SKU found across all candidate regions"
     error "  Tried: ${tried_combos[*]}"
     return 1
