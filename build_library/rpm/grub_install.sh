@@ -35,7 +35,7 @@ grub_install_rpm() {
             # so arm64 builds pick aarch64 RPMs and x86 builds pick x86_64 RPMs.
             grub_rpms=()
             for pkg in grub2 grub2-efi grub2-efi-binary shim; do
-                rpm_file=$(find "${grub_local_cache}" -name "${pkg}-[0-9]*.${rpm_arch}.rpm" | sort -V | tail -1)
+                rpm_file=$(rpm_find_cached_rpm "${grub_local_cache}" "${pkg}" "${rpm_arch}") || rpm_file=""
                 if [[ -z "${rpm_file}" ]]; then
                     die "RPM file not found for package: ${pkg} (${rpm_arch}) in ${grub_local_cache}"
                 fi
