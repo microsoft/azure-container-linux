@@ -89,6 +89,15 @@ fi
 if [[ -n "${SYSEXT_COMPRESSION:-}" ]]; then
     echo "export SYSEXT_COMPRESSION='${SYSEXT_COMPRESSION}'" >> /home/sdk/.bashrc
 fi
+# Forward the Azure Linux release selection so the RPM build targets the right
+# packages.microsoft.com release and channel.
+sed -i -e '/export AZL_RELEASEVER=/d' -e '/export AZL_REPO_CHANNEL=/d' /home/sdk/.bashrc 2>/dev/null || true
+if [[ -n "${AZL_RELEASEVER:-}" ]]; then
+    echo "export AZL_RELEASEVER='${AZL_RELEASEVER}'" >> /home/sdk/.bashrc
+fi
+if [[ -n "${AZL_REPO_CHANNEL:-}" ]]; then
+    echo "export AZL_REPO_CHANNEL='${AZL_REPO_CHANNEL}'" >> /home/sdk/.bashrc
+fi
 if [[ -n "${STANDALONE_SYSEXTS_SPEC:-}" ]]; then
     sed -i -e '/export STANDALONE_SYSEXTS_SPEC=/d' /home/sdk/.bashrc 2>/dev/null || true
     echo "export STANDALONE_SYSEXTS_SPEC='${STANDALONE_SYSEXTS_SPEC}'" >> /home/sdk/.bashrc
