@@ -6,7 +6,9 @@
 # Entries here override the corresponding entries in package_catalog.yaml
 # when AZL_RELEASEVER=4.0.  AzL4 follows Fedora/RHEL package naming, so many
 # AzL3 package names were renamed or split.  Packages with no AzL4 equivalent
-# are marked SKIP.
+# that are safe to drop are marked SKIP; packages that are genuinely required
+# but have no AzL4 equivalent yet are marked MISSING, which makes the build
+# fail loudly rather than silently substituting a similarly-named package.
 #
 # Same format as package_catalog.yaml.
 
@@ -103,11 +105,17 @@ packages:
   sys-kernel/bootengine: SKIP
   # was: moby-engine sdnotify-proxy
   app-containers/docker: moby-engine
-  # Azure Linux 4's ignition ships a dracut module that depends on url-lib,
-  # which requires the curl binary.  curl is not otherwise pulled in now that
-  # weak dependencies are disabled.
-  app-admin/ignition: ignition curl
-  sys-apps/ignition: ignition curl
+  # Azure Linux 4 does not ship ignition-flatcar - it was dropped, not
+  # renamed.  The stock "ignition" package (2.26.0) is NOT a substitute: it
+  # has no OEM support, none of the ~20 Flatcar patches, and no Ignition 2.x
+  # config translation, and build_image_util.sh's post-install patching
+  # (module-setup.sh, ignition-setup.sh, ignition-generator, the
+  # ignition-*.service units) all assume the Flatcar layout.
+  #
+  # Marked MISSING so the build fails loudly instead of silently shipping
+  # upstream Ignition.  Blocked on porting SPECS/ignition-flatcar to 4.0.
+  app-admin/ignition: MISSING
+  sys-apps/ignition: MISSING
 
   # Azure Linux 4 ships the container SELinux rules in a separate
   # container-selinux package and splits selinux-policy-targeted out of
