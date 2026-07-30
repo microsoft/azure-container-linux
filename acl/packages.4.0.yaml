@@ -1,0 +1,24 @@
+# Azure Linux 4.0 overlay for acl/packages.yaml.
+#
+# Packages listed here are NOT built in-house on 4.0 because Azure Linux 4.0
+# ships them in the runtime `base` repository.  On 3.0 they only exist in the
+# `extended` repository, which ACL does not enable, which is the sole reason
+# they are built from acl/SPECS/ in the first place.
+#
+# Verified against packages.microsoft.com/azurelinux/4.0/beta/base:
+#   microcode_ctl  2:2.1-71.1.azl4
+#   stress-ng      0.20.01-2.azl4
+#   Judy           1.0.5-43.azl4
+#   libbsd         0.12.2-7.azl4
+#   lksctp-tools   1.0.21-2.azl4
+#
+# The remaining acl/SPECS/ entries (bootengine, coreos-init, sdnotify-proxy,
+# selinux-policy) still have to be built for 4.0 — selinux-policy in
+# particular, since Azure Linux 4.0 ships an unrelated policy lineage that
+# silently satisfies the dependency without ACL's customisations.
+skip:
+  - microcode_ctl
+  - stress-ng
+  - Judy
+  - libbsd
+  - lksctp-tools

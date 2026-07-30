@@ -31,3 +31,7 @@ packages:
   - bootengine          # Flatcar bootengine (glob-based firstboot addon removal for UAPI UKI naming)
   - microcode_ctl       # CPU microcode updater (Fedora import)
   - selinux-policy      # SELinux reference policy (ACL-specific modules)
+
+# Release overlays: acl/packages.<release>.yaml may list packages under 'skip'
+# when that Azure Linux release ships them in its runtime repositories and we
+# no longer need to build them ourselves. See acl/packages.4.0.yaml.

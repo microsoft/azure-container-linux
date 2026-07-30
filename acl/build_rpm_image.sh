@@ -829,6 +829,36 @@ build_rpms() {
         exit 1
     fi
     
+    # Azure Linux releases can ship a package we otherwise have to build
+    # ourselves.  acl/packages.<release>.yaml lists those under 'skip'.
+    local overlay_file="${SCRIPT_DIR}/acl/packages.${AZL_RELEASEVER}.yaml"
+    if [[ -f "$overlay_file" ]]; then
+        local -a skip_list=()
+        if ! mapfile -t skip_list < <(yq -r '.skip[]' "$overlay_file"); then
+            error "Failed to parse skip list from $overlay_file"
+            exit 1
+        fi
+        if [[ ${#skip_list[@]} -gt 0 ]]; then
+            local -a kept=()
+            local pkg skip found
+            for pkg in "${package_list[@]}"; do
+                found=false
+                for skip in "${skip_list[@]}"; do
+                    if [[ "$pkg" == "$skip" ]]; then
+                        found=true
+                        break
+                    fi
+                done
+                if [[ "$found" == true ]]; then
+                    info "  Skipping in-house build of ${pkg} (provided by Azure Linux ${AZL_RELEASEVER})"
+                else
+                    kept+=("$pkg")
+                fi
+            done
+            package_list=("${kept[@]}")
+        fi
+    fi
+
     info "Running RPM build script..."
     info "  Build script: $build_script"
     info "  Package list: ${package_list[*]}"
