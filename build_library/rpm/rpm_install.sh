@@ -784,6 +784,7 @@ rpm_install_package_using_portage_name() {
     local rpm_pkgs=()
     local portage_pkgs=()
     local unrecognized_pkgs=()
+    local missing_pkgs=()
     local skip_count=0
 
     while IFS= read -r dep; do
@@ -803,6 +804,10 @@ rpm_install_package_using_portage_name() {
                 info "DEBUG: Skipping package: $dep"
                 skip_count=$((skip_count + 1))
                 ;;
+            MISSING)
+                # Needed, but no package exists for this release yet.
+                missing_pkgs+=("$dep")
+                ;;
             *)
                 unrecognized_pkgs+=("$dep")
         esac
@@ -816,6 +821,14 @@ rpm_install_package_using_portage_name() {
     if [[ ${#unrecognized_pkgs[@]} -gt 0 ]]; then
         error "Unrecognized packages: ${unrecognized_pkgs[*]}"
         die "Found ${#unrecognized_pkgs[@]} unrecognized package(s), catalog them first."
+    fi
+
+    if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
+        error "The following package(s) are required but have no equivalent on"
+        error "Azure Linux ${AZL_RELEASEVER:-3.0}: ${missing_pkgs[*]}"
+        error "They are marked MISSING in the package catalog.  Substituting a"
+        error "similarly-named package would silently produce a broken image."
+        die "Found ${#missing_pkgs[@]} package(s) with no ${AZL_RELEASEVER:-3.0} equivalent."
     fi
 
     if [[ ${#portage_pkgs[@]} -gt 0 ]]; then

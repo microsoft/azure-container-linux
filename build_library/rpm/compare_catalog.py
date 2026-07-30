@@ -106,7 +106,7 @@ def _parse_yaml_catalog(yaml_path: Path, catalog: dict) -> dict:
             rpm_names = [str(value)]
 
         rpm_str = " ".join(rpm_names)
-        if rpm_str == "SKIP":
+        if rpm_str in ("SKIP", "MISSING"):
             catalog["skip"].add(portage_pkg)
         else:
             catalog["mappings"][portage_pkg] = rpm_names

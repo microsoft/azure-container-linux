@@ -26,7 +26,7 @@ fi
 # ── Load the package catalog from YAML ──────────────────────────────────────
 #
 # Entry formats in YAML:
-#   key: scalar          → single RPM name (or SKIP)
+#   key: scalar          → single RPM name (or SKIP / MISSING)
 #   key: [list]          → multiple RPM names, joined with spaces
 #   key: {rpm: …}        → single RPM with optional attributes (e.g. arch)
 #   key: {rpm: [], …}    → multiple RPMs with optional attributes
@@ -127,8 +127,8 @@ get_rpm_package_name() {
         return 1
     fi
 
-    # Check if it's actually a valid RPM name (not SKIP)
-    if [[ "$rpm_name" == "SKIP" ]]; then
+    # Check if it's actually a valid RPM name (not SKIP/MISSING)
+    if [[ "$rpm_name" == "SKIP" || "$rpm_name" == "MISSING" ]]; then
         return 1
     fi
 
@@ -152,9 +152,12 @@ get_package_status() {
         return
     fi
 
-    # If value is SKIP, return SKIP status, otherwise RPM
+    # SKIP = deliberately not installed; MISSING = no package exists on this
+    # release and one is genuinely needed (hard error at install time).
     if [[ "$value" == "SKIP" ]]; then
         echo "SKIP"
+    elif [[ "$value" == "MISSING" ]]; then
+        echo "MISSING"
     else
         echo "RPM"
     fi
