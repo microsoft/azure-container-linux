@@ -33,3 +33,7 @@ packages:
   - microcode_ctl       # CPU microcode updater (Fedora import)
   - runc                # Pre-merge validation of Azure Linux container runtime changes
   - selinux-policy      # SELinux reference policy (ACL-specific modules)
+
+# Release overlays: acl/packages.<release>.yaml may list packages under 'skip'
+# when that Azure Linux release ships them in its runtime repositories and we
+# no longer need to build them ourselves. See acl/packages.4.0.yaml.
