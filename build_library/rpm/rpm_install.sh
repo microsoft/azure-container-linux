@@ -870,7 +870,14 @@ rpm_use_official_repos() {
         sudo cp -f "${sdk_key}" "${root_fs_dir}${sdk_key}"
     fi
 
-    # Add Nvidia repository — azurelinux-repos does not include it
+    # Add Nvidia repository - azurelinux-repos does not include it.
+    # Azure Linux 4.0 does not publish a usable nvidia repository yet, so skip it.
+    if [[ "${AZL_RELEASEVER}" == "4.0" ]]; then
+        info "Skipping Nvidia repository (not published for Azure Linux ${AZL_RELEASEVER})"
+        sudo rm -f "${repo_dir}/azurelinux-nvidia.repo"
+        return 0
+    fi
+
     info "Adding Nvidia repository"
     sudo tee "${repo_dir}/azurelinux-nvidia.repo" > /dev/null <<EOF
 [azurelinux-official-nvidia]
