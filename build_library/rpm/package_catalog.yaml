@@ -718,4 +718,3 @@ packages:
   sys-libs/nss-usrfiles: SKIP
   sys-libs/tevent: SKIP
   sys-power/acpid: SKIP
-
