@@ -123,23 +123,27 @@ packages:
   # was: git
   dev-vcs/git: git-core
 
-  # --- ACL in-tree packages: NOT rebuilt for 4.0 ------------------------
+  # --- ACL in-tree packages on 4.0 -------------------------------------
   # acl/SPECS/ builds nine packages into the local RPM cache.  The 4.0 cache
   # (__build__/rpm-staging-4.0) is empty because none of them have been built
-  # with AZL_TOOLKIT_BRANCH=4.0 yet, so on 4.0 they either drop out or are
-  # silently satisfied by a stock Azure Linux package:
+  # with AZL_TOOLKIT_BRANCH=4.0 yet.  Outcome on 4.0:
   #
   #   selinux-policy   -> SILENTLY REPLACED by stock selinux-policy 43.7 +
-  #                       selinux-policy-targeted.  ACL's policy customisations
-  #                       are absent; this is why the hotfix/minimisation code
-  #                       needed the 4.0 workarounds.
-  #   microcode_ctl    -> SILENTLY REPLACED by stock microcode_ctl 2.1-71.1.
-  #   coreos-init      -> SKIP (below)
-  #   bootengine       -> SKIP (below)
-  #   sdnotify-proxy   -> dropped from app-containers/docker (above)
-  #   stress-ng, Judy, libbsd, lksctp-tools
-  #                    -> only used by the lisa-testing sysext, which is not
-  #                       built on 4.0.
+  #                       selinux-policy-targeted.  ACL's policy fork is a
+  #                       different lineage (2.20240226-x) and its
+  #                       customisations are absent; this is why the hotfix
+  #                       and minimisation code needed 4.0 workarounds.
+  #   coreos-init      -> SKIP (below); also has no 4.0 build in PMC.
+  #   bootengine       -> SKIP (below); also has no 4.0 build in PMC.
+  #   sdnotify-proxy   -> dropped from app-containers/docker (above).  Exists
+  #                       only in-tree, never published to PMC.
+  #
+  # These five no longer need an in-tree build on 4.0 - Azure Linux 4 ships
+  # them in the runtime 'base' repo, whereas 3.0 only has them in 'extended':
+  #   microcode_ctl 2.1-71.1, stress-ng 0.20.01, Judy 1.0.5-43,
+  #   libbsd 0.12.2-7, lksctp-tools 1.0.21.
+  # microcode_ctl is therefore silently satisfied from base on 4.0; the other
+  # four are only used by the lisa-testing sysext, which is not built here.
   #
   # Separately, these ship in the Azure Linux 3.0 'base' repo but have no 4.0
   # build at all, so they are not recoverable by rebuilding in-tree:
