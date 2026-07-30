@@ -132,7 +132,14 @@ VM_TYPE="${VM_TYPE:-qemu}"
 START_VM=false
 VM_NAME="${VM_NAME:-acl}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-__build__}"
-STAGING_DIR="${SCRIPT_DIR}/__build__/rpm-staging"
+AZL_RELEASEVER="${AZL_RELEASEVER:-3.0}"
+# Keep the historical path for 3.0; other releases stage separately so
+# their RPMs never mix with a cache built for a different release.
+if [[ "${AZL_RELEASEVER}" == "3.0" ]]; then
+    STAGING_DIR="${SCRIPT_DIR}/__build__/rpm-staging"
+else
+    STAGING_DIR="${SCRIPT_DIR}/__build__/rpm-staging-${AZL_RELEASEVER}"
+fi
 DISK_LAYOUT="${DISK_LAYOUT:-vm}"  # Use 'vm' layout for larger ROOT partition (needed for RPM mode)
 RUN_SCRIPTS=()  # Scripts to run on VM after boot
 RUN_HOST_SCRIPTS=()  # Scripts to run on the host (not inside the VM)

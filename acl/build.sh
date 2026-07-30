@@ -8,9 +8,20 @@ set -euo pipefail
 # Find the absolute path of the directory containing this script
 ACL_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
-ARTIFACT_PUBLISH_DIR="${ACL_DIR}/../__build__/rpm-staging"
-BUILD_DIR="${ACL_DIR}/../__build__/rpms_build_dir"
-OUT_DIR="${ACL_DIR}/../__build__/rpms_out_dir"
+AZL_RELEASEVER="${AZL_RELEASEVER:-3.0}"
+# 3.0 keeps the historical, unsuffixed directories; every other release builds
+# and publishes into its own tree so the artifacts never mix.
+if [[ "${AZL_RELEASEVER}" == "3.0" ]]; then
+    AZL_SUFFIX=""
+    AZL_TOOLKIT_BRANCH="${AZL_TOOLKIT_BRANCH:-3.0-stable}"
+else
+    AZL_SUFFIX="-${AZL_RELEASEVER}"
+    AZL_TOOLKIT_BRANCH="${AZL_TOOLKIT_BRANCH:-${AZL_RELEASEVER}}"
+fi
+
+ARTIFACT_PUBLISH_DIR="${ACL_DIR}/../__build__/rpm-staging${AZL_SUFFIX}"
+BUILD_DIR="${ACL_DIR}/../__build__/rpms_build_dir${AZL_SUFFIX}"
+OUT_DIR="${ACL_DIR}/../__build__/rpms_out_dir${AZL_SUFFIX}"
 REUSE_SOURCES="${REUSE_SOURCES:-true}"
 
 function log() {
@@ -32,7 +43,7 @@ function clone_azl3() {
         sudo rm -rf azurelinux
     fi
     if [ ! -d "azurelinux" ]; then
-        git clone -b "3.0-stable" "https://github.com/microsoft/azurelinux.git"
+        git clone -b "${AZL_TOOLKIT_BRANCH}" "https://github.com/microsoft/azurelinux.git"
     fi
 }
 
