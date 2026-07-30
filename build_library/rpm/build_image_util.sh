@@ -1361,11 +1361,11 @@ UMASK_CIS
     # 6.1.1.1.3/5/6: Journald configuration
     # The CIS assessor runs "systemd-analyze cat-config systemd/journald.conf"
     # and searches for uncommented parameters. Use a drop-in to override defaults.
-    # 6.1.1.1.3: ForwardToSyslog — ACL has no rsyslog, so set to "no".
+    # 6.1.1.1.3: ForwardToSyslog - ACL ships rsyslog for Container Insights syslog collection.
     sudo install -d -m 0755 "${root_fs_dir}/etc/systemd/journald.conf.d"
     cat <<'JOURNALD_CIS' | sudo tee "${root_fs_dir}/etc/systemd/journald.conf.d/cis.conf" > /dev/null
 [Journal]
-ForwardToSyslog=no
+ForwardToSyslog=yes
 Storage=persistent
 Compress=yes
 JOURNALD_CIS
