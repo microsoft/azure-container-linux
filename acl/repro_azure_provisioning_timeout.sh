@@ -181,6 +181,22 @@ case "${ACCELERATED_NETWORKING,,}" in
     *) die "--accelerated-networking must be true or false" ;;
 esac
 
+owner=$(whoami | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')
+owner="${owner:-user}"
+if [[ -z "$RG_PREFIX" ]]; then
+  RG_PREFIX="${owner}-acl-provision-repro"
+fi
+run_id="$(date -u +%Y%m%d%H%M%S)-$$"
+[[ "$RG_PREFIX" != *[^A-Za-z0-9_.\(\)-]* ]] || \
+  die "--resource-group-prefix may contain only ASCII letters, numbers, underscores, parentheses, periods, and hyphens"
+max_attempt_suffix="$MAX_ATTEMPTS"
+if [[ ${#max_attempt_suffix} -lt 2 ]]; then
+  max_attempt_suffix="0${max_attempt_suffix}"
+fi
+longest_rg_name="${RG_PREFIX}-${run_id}-${max_attempt_suffix}"
+[[ ${#longest_rg_name} -le 90 ]] || \
+  die "--resource-group-prefix is too long: final resource group names may not exceed 90 characters"
+
 command -v az >/dev/null 2>&1 || die "Azure CLI (az) is required"
 command -v timeout >/dev/null 2>&1 || die "GNU timeout is required"
 if ! actual_subscription_id=$(az account show \
@@ -243,13 +259,6 @@ fi
 [[ -r "$SSH_PUBLIC_KEY_FILE" ]] || die "SSH public key is not readable: $SSH_PUBLIC_KEY_FILE"
 SSH_PUBLIC_KEY=$(<"$SSH_PUBLIC_KEY_FILE")
 [[ -n "$SSH_PUBLIC_KEY" ]] || die "SSH public key is empty: $SSH_PUBLIC_KEY_FILE"
-
-owner=$(whoami | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')
-owner="${owner:-user}"
-if [[ -z "$RG_PREFIX" ]]; then
-    RG_PREFIX="${owner}-acl-provision-repro"
-fi
-run_id="$(date -u +%Y%m%d%H%M%S)-$$"
 
 if ! TEMPLATE_FILE=$(mktemp "${TMPDIR:-/tmp}/acl-provision-repro.XXXXXX.json"); then
     die "Failed to create temporary ARM template"
