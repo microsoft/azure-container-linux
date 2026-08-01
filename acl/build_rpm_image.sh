@@ -742,6 +742,10 @@ parse_args() {
     # Add platform-specific host-side tests when --run-tests is used.
     if [[ "${RUN_TESTS:-false}" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
         RUN_HOST_SCRIPTS+=("./acl/tests/run-selinux-toggle-test.sh")
+        if [[ "${ACL_IPE_MODE}" == "permissive" ]] &&
+            [[ "${SECURE_BOOT_ENABLED:-true}" == "true" ]]; then
+            RUN_HOST_SCRIPTS+=("./acl/tests/run-ipe-mode-toggle-test.sh")
+        fi
     fi
 
     if [[ "$REUSE_IMAGE" == "true" ]]; then
