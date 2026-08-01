@@ -25,7 +25,7 @@ resources:
     - repository: acl_pipelines
       type: git
       name: ACL/acl-pipelines
-      ref: refs/heads/main
+      ref: refs/heads/aadagarwal/ipe-erofs-sdk-validation
     - repository: azure_container_linux
       type: github
       endpoint: github.com_acl
