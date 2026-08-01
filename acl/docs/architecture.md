@@ -56,7 +56,7 @@ The `/usr` partition (USR-A) is a read-only btrfs filesystem with zstd compressi
 - The verity hash tree is appended to the USR partition data.
 - At boot, `systemd-veritysetup` activates the verity device using kernel command-line parameters embedded in the UKI: `systemd.verity_usr_data`, `systemd.verity_usr_hash`, and `systemd.verity_usr_options=hash-offset=<N>,panic-on-corruption`.
 - Each IPE-enabled A/B slot's UKI carries the detached root-hash signature for its matching `/usr` image in the initramfs. The signed UKI command line references it through `root-hash-signature=/etc/verity-usr-roothash.p7s`, so activating or rolling back a slot selects the corresponding hash and signature together.
-- The attached signed IPE policy is stored at `/usr/lib/ipe/acl.pol.p7b`. After dm-verity mounts `/usr`, the initramfs verifies and activates that policy before `switch_root`.
+- The attached signed IPE policy is stored at `/usr/lib/ipe/acl.pol.p7b`, and the initramfs contains the early loader. The policy remains inactive by default; before `switch_root`, the loader activates it and writes runtime enforcement state `0` or `1` only when Azure IMDS requests `ipe=permissive` or `ipe=enforcing`.
 - Any corruption of `/usr` causes an immediate kernel panic, preventing the system from running a tampered image.
 
 The A/B partition scheme (USR-A / USR-B) enables safe updates: the inactive slot is written, verified, and then atomically switched on reboot.

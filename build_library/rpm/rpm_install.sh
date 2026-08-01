@@ -856,20 +856,20 @@ EOF
 
 rpm_install_ipe_policy() {
     local root_fs_dir="$1"
-    local ipe_mode="${ACL_IPE_MODE:-off}"
+    local ipe_enabled="${ACL_IPE_ENABLED:-true}"
 
-    case "${ipe_mode}" in
-        off)
+    case "${ipe_enabled}" in
+        false)
             if [[ -n "${BUILD_DIR:-}" ]]; then
-                printf '%s\n' "${ipe_mode}" > "${BUILD_DIR}/acl-ipe-mode" ||
-                    die "RPM mode: failed to record IPE build mode"
+                printf '%s\n' "${ipe_enabled}" > "${BUILD_DIR}/acl-ipe-enabled" ||
+                    die "RPM mode: failed to record IPE capability"
             fi
             return 0
             ;;
-        permissive|enforcing)
+        true)
             ;;
         *)
-            die "Invalid ACL_IPE_MODE: ${ipe_mode}"
+            die "Invalid ACL_IPE_ENABLED: ${ipe_enabled}"
             ;;
     esac
     if [[ "${BOOTLOADER_MODE:-uki}" != "uki" ]]; then
@@ -931,8 +931,8 @@ rpm_install_ipe_policy() {
         "${root_fs_dir}/usr/lib/ipe/acl.pol.p7b"
     sudo chroot "${root_fs_dir}" restorecon -RF /usr/lib/ipe
     rm -rf "${work_dir}"
-    printf '%s\n' "${ipe_mode}" > "${BUILD_DIR}/acl-ipe-mode" ||
-        die "RPM mode: failed to record IPE build mode"
+    printf '%s\n' "${ipe_enabled}" > "${BUILD_DIR}/acl-ipe-enabled" ||
+        die "RPM mode: failed to record IPE capability"
 
     info "RPM mode: Installed signed IPE policy on verified /usr"
 }

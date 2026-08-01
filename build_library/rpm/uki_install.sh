@@ -29,11 +29,11 @@ switch_to_strict_mode
 . "${BUILD_LIBRARY_DIR}/toolchain_util.sh" || exit 1
 . "${BUILD_LIBRARY_DIR}/board_options.sh"  || exit 1
 
-IPE_MODE="${ACL_IPE_MODE:-off}"
-case "${IPE_MODE}" in
-    off|permissive|enforcing) ;;
+IPE_ENABLED="${ACL_IPE_ENABLED:-true}"
+case "${IPE_ENABLED}" in
+    true|false) ;;
     *)
-        die_notrace "ACL_IPE_MODE must be one of: off, permissive, enforcing (got: ${IPE_MODE})"
+        die_notrace "ACL_IPE_ENABLED must be true or false (got: ${IPE_ENABLED})"
         ;;
 esac
 
@@ -247,11 +247,11 @@ OSREL
             die "UKI/RPM: Verity enabled but no hash file at ${FLAGS_verity_hash}"
         fi
     fi
-    if [[ "${IPE_MODE}" != "off" && ${FLAGS_verity} -ne ${FLAGS_TRUE} ]]; then
-        die "UKI/RPM: signed IPE modes require a /usr dm-verity root hash"
+    if [[ "${IPE_ENABLED}" == "true" && ${FLAGS_verity} -ne ${FLAGS_TRUE} ]]; then
+        die "UKI/RPM: IPE assets require a /usr dm-verity root hash"
     fi
 
-    if [[ "${IPE_MODE}" != "off" ]]; then
+    if [[ "${IPE_ENABLED}" == "true" ]]; then
         local build_dir cert_dir
         build_dir="$(readlink -f "$(dirname "${FLAGS_disk_image}")")"
         cert_dir="${build_dir}/acl-ipe-ephemeral"
@@ -280,13 +280,9 @@ OSREL
     # Common base args — platform-agnostic, same for all image types.
     cmdline+=" root=LABEL=ROOT rootflags=rw"
     cmdline+=" consoleblank=0"
-    # The signed UKI command line is the persistent source of truth for IPE's
-    # enforcement mode. The initramfs loader only loads and activates the
-    # policy; off omits both the loader and the ipe.enforce parameter.
-    case "${IPE_MODE}" in
-        permissive) cmdline+=" ipe.enforce=0" ;;
-        enforcing) cmdline+=" ipe.enforce=1" ;;
-    esac
+    # IPE activation is intentionally absent from the signed command line.
+    # The initramfs loader leaves the policy inactive unless Azure IMDS requests
+    # permissive or enforcing mode for this boot.
     # NOTE: crashkernel=256M is delivered via a UKI addon (kdump.addon.efi)
     # rather than baked into the main UKI cmdline.  This allows disabling
     # kdump by removing the addon from the ESP without rebuilding the UKI.

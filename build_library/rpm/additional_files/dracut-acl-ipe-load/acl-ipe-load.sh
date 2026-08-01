@@ -13,9 +13,9 @@
 # keyring; the same ephemeral certificate signs the UKI, policy, and /usr
 # dm-verity root hash and is enrolled in UEFI db.
 #
-# The signed UKI's ipe.enforce= command line remains the default mode. On
-# Azure, acl-node-security-profile=ipe=off|permissive|enforcing can override
-# that default after a reboot. The tag is read from IMDS before switch_root.
+# The policy is inactive by default. On Azure,
+# acl-node-security-profile=ipe=permissive|enforcing selects the mode for this
+# boot. The tag is read from IMDS before switch_root.
 #
 # Prototype behavior remains fail-open: any loader failure logs and exits 0.
 # "enforcing" controls access decisions after successful policy activation; a
@@ -23,22 +23,19 @@
 
 set -uo pipefail
 
-POLICY_NAME="acl_ipe_boot_policy"
-IPE_DIR="/sys/kernel/security/ipe"
-POLICY_FILE="/sysroot/usr/lib/ipe/acl.pol.p7b"
+POLICY_NAME="${ACL_IPE_POLICY_NAME:-acl_ipe_boot_policy}"
+IPE_DIR="${ACL_IPE_DIR:-/sys/kernel/security/ipe}"
+POLICY_FILE="${ACL_IPE_POLICY_FILE:-/sysroot/usr/lib/ipe/acl.pol.p7b}"
+CMDLINE_FILE="${ACL_IPE_CMDLINE_FILE:-/proc/cmdline}"
+SECURITY_PROFILE_HELPER="${ACL_IPE_SECURITY_PROFILE_HELPER:-/usr/lib/acl/acl-node-security-profile.sh}"
 
 log() { echo "acl-ipe-load: $*" >&2; }
 
-source /usr/lib/acl/acl-node-security-profile.sh
+source "${SECURITY_PROFILE_HELPER}"
 
-cmdline="$(cat /proc/cmdline)"
-case " ${cmdline} " in
-    *" ipe.enforce=0 "*) mode="permissive" ;;
-    *" ipe.enforce=1 "*) mode="enforcing" ;;
-    *) mode="off" ;;
-esac
-
-mode_source="signed UKI"
+cmdline="$(cat "${CMDLINE_FILE}")"
+mode="off"
+mode_source="default"
 if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
     if security_profile="$(acl_security_profile)"; then
         requested_mode="$(acl_security_profile_value "${security_profile}" "ipe")"
@@ -54,7 +51,7 @@ if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
                 ;;
         esac
     else
-        log "IMDS unavailable; falling back to the signed UKI IPE mode."
+        log "IMDS unavailable; leaving IPE off."
     fi
 fi
 log "Using IPE mode '${mode}' from ${mode_source}."
@@ -89,6 +86,22 @@ else
     fi
 fi
 
+case "${mode}" in
+    permissive) enforce_value=0 ;;
+    enforcing) enforce_value=1 ;;
+esac
+if [[ -w "${IPE_DIR}/enforce" ]]; then
+    if echo "${enforce_value}" > "${IPE_DIR}/enforce" 2>/dev/null; then
+        log "Set IPE enforcement to ${enforce_value} (${mode}) at runtime."
+    else
+        log "WARNING: failed to set IPE mode to ${mode}."
+        exit 0
+    fi
+else
+    log "WARNING: IPE enforcement node not found/writable."
+    exit 0
+fi
+
 active_file="${IPE_DIR}/policies/${POLICY_NAME}/active"
 if [[ -w "${active_file}" ]]; then
     if echo 1 > "${active_file}" 2>/dev/null; then
@@ -105,22 +118,8 @@ if [[ -r "${active_file}" ]]; then
     read -r policy_active < "${active_file}" || true
 fi
 if [[ "${policy_active}" != "1" ]]; then
-    log "WARNING: policy ${POLICY_NAME} is not active; leaving IPE enforcement unchanged."
+    log "WARNING: policy ${POLICY_NAME} is not active."
     exit 0
-fi
-
-case "${mode}" in
-    permissive) enforce_value=0 ;;
-    enforcing) enforce_value=1 ;;
-esac
-if [[ -w "${IPE_DIR}/enforce" ]]; then
-    if echo "${enforce_value}" > "${IPE_DIR}/enforce" 2>/dev/null; then
-        log "Set IPE mode to ${mode}."
-    else
-        log "WARNING: failed to set IPE mode to ${mode}."
-    fi
-else
-    log "WARNING: IPE enforcement node not found/writable."
 fi
 
 exit 0

@@ -160,7 +160,7 @@ if [[ -z ${stat} ]] ; then
         -e IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
         -e IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
         -e EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
-        -e ACL_IPE_MODE="${ACL_IPE_MODE:-off}"
+        -e ACL_IPE_ENABLED="${ACL_IPE_ENABLED:-true}"
         --name="${name}"
         --hostname="${hostname}"
         --entrypoint /bin/bash
@@ -187,5 +187,5 @@ call_docker exec "${name}" sh -c 'cp /etc/hosts /etc/hosts2; umount /etc/hosts ;
 
 call_docker exec "${tty[@]}" -i \
     -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" \
-    -e ACL_IPE_MODE="${ACL_IPE_MODE:-off}" \
+    -e ACL_IPE_ENABLED="${ACL_IPE_ENABLED:-true}" \
     "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"

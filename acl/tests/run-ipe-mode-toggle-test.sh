@@ -42,6 +42,35 @@ assert_ipe_mode() {
     return 1
 }
 
+assert_ipe_assets_present() {
+    local cmdline
+    cmdline=$(ssh_cmd "cat /proc/cmdline")
+
+    if [[ " ${cmdline} " == *" ipe.enforce="* ]]; then
+        error "IPE mode is still embedded in the kernel command line"
+        return 1
+    fi
+    if ! ssh_cmd "sudo test -s /usr/lib/ipe/acl.pol.p7b"; then
+        error "Signed IPE policy is missing from verified /usr"
+        return 1
+    fi
+    if ssh_cmd "sudo test -d '${POLICY_DIR}'"; then
+        error "IPE policy was loaded even though no mode was requested"
+        return 1
+    fi
+    if [[ "${cmdline}" != *"root-hash-signature=/etc/verity-usr-roothash.p7s"* ]]; then
+        error "Slot-specific /usr root-hash signature is missing from the UKI"
+        return 1
+    fi
+    info "IPE assets are present and no default mode is embedded in the UKI"
+}
+
+run_permissive_validation() {
+    ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
+        "sudo bash -s" \
+        < "${SCRIPT_DIR}/acl/tests/run-ipe-permissive-test.sh"
+}
+
 main() {
     parse_validate_args "$@"
 
@@ -61,23 +90,27 @@ main() {
         exit 1
     fi
 
-    section "Step 1: Check signed UKI default"
-    assert_ipe_mode "permissive"
+    section "Step 1: Verify absent IMDS tag leaves IPE off"
+    set_security_profile_tag ""
+    reboot_and_wait
+    assert_ipe_mode "off"
+    assert_ipe_assets_present
 
-    section "Step 2: Disable IPE through IMDS and reboot"
-    set_security_profile_tag "ipe=off,foo=bar"
+    section "Step 2: Enable permissive IPE through IMDS"
+    set_security_profile_tag "ipe=permissive,foo=bar"
+    reboot_and_wait
+    assert_ipe_mode "permissive"
+    run_permissive_validation
+
+    section "Step 3: Disable IPE through IMDS"
+    set_security_profile_tag "ipe=off"
     reboot_and_wait
     assert_ipe_mode "off"
 
-    section "Step 3: Restore permissive IPE through IMDS and reboot"
-    set_security_profile_tag "ipe=permissive"
-    reboot_and_wait
-    assert_ipe_mode "permissive"
-
-    section "Step 4: Remove override and verify signed UKI fallback"
+    section "Step 4: Remove tag and verify default remains off"
     set_security_profile_tag ""
     reboot_and_wait
-    assert_ipe_mode "permissive"
+    assert_ipe_mode "off"
 
     section "IPE IMDS Reboot Toggle Test Summary"
     info "All reboot-based IPE toggle assertions passed"

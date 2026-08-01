@@ -20,8 +20,8 @@ echo ""
 cmdline="$(cat /proc/cmdline)"
 echo "Kernel command line: ${cmdline}"
 
-if [[ " ${cmdline} " != *" ipe.enforce=0 "* ]]; then
-    fail "expected ipe.enforce=0 in the signed kernel command line"
+if [[ " ${cmdline} " == *" ipe.enforce="* ]]; then
+    fail "IPE mode must be selected at runtime, not by the signed kernel command line"
 fi
 verity_usr_options="$(
     tr ' ' '\n' <<< "${cmdline}" |
@@ -113,6 +113,9 @@ if [[ -n "${loader_errors}" ]]; then
     echo "${loader_errors}" >&2
     fail "IPE or dm-verity boot errors were detected"
 fi
+grep -Fq "acl-ipe-load: Using IPE mode 'permissive' from acl-node-security-profile." \
+    <<< "${boot_logs}" ||
+    fail "initramfs did not select permissive mode from acl-node-security-profile"
 
 audit_event="$(
     grep -F "${probe}" <<< "${boot_logs}" |
