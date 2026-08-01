@@ -382,8 +382,11 @@ finish_image_selinux_rpm() {
     sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/usr" >/dev/null
 
     _assert_selinux_type_rpm "${root_fs_dir}/usr/bin/bash" shell_exec_t
-    _assert_selinux_type_rpm "${root_fs_dir}/usr/lib/systemd/systemd-journald" systemd_journal_exec_t
-    _assert_selinux_type_rpm "${root_fs_dir}/usr/lib/systemd/systemd-sysusers" systemd_sysusers_exec_t
+    _assert_selinux_type_rpm "${root_fs_dir}/usr/bin/systemd-sysusers" systemd_sysusers_exec_t
+    _assert_selinux_type_rpm "${root_fs_dir}/usr/lib/systemd/systemd-journald" syslogd_exec_t
+    _assert_selinux_type_rpm \
+        "${root_fs_dir}/usr/lib/systemd/system-generators/systemd-fstab-generator" \
+        systemd_generator_exec_t
 }
 
 _assert_selinux_type_rpm() {

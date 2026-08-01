@@ -60,8 +60,11 @@ assert_selinux_type /lib lib_t
 [[ ! -e /lib64 && ! -L /lib64 ]] || assert_selinux_type /lib64 lib_t
 assert_selinux_type /usr usr_t
 assert_selinux_type /usr/bin/bash shell_exec_t
-assert_selinux_type /usr/lib/systemd/systemd-journald systemd_journal_exec_t
-assert_selinux_type /usr/lib/systemd/systemd-sysusers systemd_sysusers_exec_t
+assert_selinux_type /usr/bin/systemd-sysusers systemd_sysusers_exec_t
+assert_selinux_type /usr/lib/systemd/systemd-journald syslogd_exec_t
+assert_selinux_type \
+    /usr/lib/systemd/system-generators/systemd-fstab-generator \
+    systemd_generator_exec_t
 assert_selinux_type /run/log/journal systemd_journal_t
 assert_selinux_type /etc/machine-id etc_runtime_t
 
