@@ -374,12 +374,12 @@ finish_image_kernel_config_rpm() {
 finish_image_selinux_rpm() {
     local root_fs_dir="$1"
 
-    # Label the writable /etc tree before copying it into the immutable /usr
-    # overlay lowerdir. RPM installation already labels /usr; relabeling it
-    # here breaks early-boot domains once those xattrs are sealed into EROFS.
+    # The RPM installroot runs on an SELinux-disabled builder, so label both
+    # trees before /usr is sealed into EROFS.
     local file_contexts="${root_fs_dir}/etc/selinux/targeted/contexts/files/file_contexts"
-    info "RPM mode: Labeling /etc with targeted SELinux policy"
+    info "RPM mode: Labeling /etc and /usr with targeted SELinux policy"
     sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/etc" >/dev/null
+    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/usr" >/dev/null
 
     _assert_selinux_type_rpm "${root_fs_dir}/usr/bin/bash" shell_exec_t
     _assert_selinux_type_rpm "${root_fs_dir}/usr/lib/systemd/systemd-journald" systemd_journal_exec_t
@@ -1504,6 +1504,15 @@ finish_image_backup_etc_rpm() {
     info "RPM mode: Copying /etc to ${ETC_FULL_PATH} for overlay lowerdir"
     sudo rm -rf "${ETC_FULL_PATH}"
     sudo cp -a "${root_fs_dir}/etc" "${ETC_FULL_PATH}"
+
+    # This must remain after the recursive /usr relabel above. The lowerdir
+    # lives under /usr in the image but is mounted as /etc at runtime, so label
+    # it relative to ${DISTRO_SHARE} and match runtime paths such as /etc/passwd.
+    local file_contexts="${root_fs_dir}/etc/selinux/targeted/contexts/files/file_contexts"
+    info "RPM mode: Labeling /etc overlay lowerdir with runtime paths"
+    sudo setfiles -F -r "${DISTRO_SHARE}" "${file_contexts}" "${ETC_FULL_PATH}" >/dev/null
+    _assert_selinux_type_rpm "${ETC_FULL_PATH}" etc_t
+    _assert_selinux_type_rpm "${ETC_FULL_PATH}/passwd" passwd_file_t
 }
 
 # Escape a string for JSON - handles quotes, backslashes, and control characters
