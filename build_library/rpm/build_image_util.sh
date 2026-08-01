@@ -374,12 +374,16 @@ finish_image_kernel_config_rpm() {
 finish_image_selinux_rpm() {
     local root_fs_dir="$1"
 
-    # Use the targeted policy file_contexts to label the filesystem
+    # Label the writable /etc tree before copying it into the immutable /usr
+    # overlay lowerdir. RPM installation already labels /usr; relabeling it
+    # here breaks early-boot domains once those xattrs are sealed into EROFS.
     local file_contexts="${root_fs_dir}/etc/selinux/targeted/contexts/files/file_contexts"
-    info "RPM mode: Labeling filesystem with targeted SELinux policy"
-    #sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}" >/dev/null
+    info "RPM mode: Labeling /etc with targeted SELinux policy"
     sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/etc" >/dev/null
-    sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/usr" >/dev/null
+
+    _assert_selinux_type_rpm "${root_fs_dir}/usr/bin/bash" shell_exec_t
+    _assert_selinux_type_rpm "${root_fs_dir}/usr/lib/systemd/systemd-journald" systemd_journal_exec_t
+    _assert_selinux_type_rpm "${root_fs_dir}/usr/lib/systemd/systemd-sysusers" systemd_sysusers_exec_t
 }
 
 _assert_selinux_type_rpm() {

@@ -59,6 +59,9 @@ assert_selinux_type /sbin bin_t
 assert_selinux_type /lib lib_t
 [[ ! -e /lib64 && ! -L /lib64 ]] || assert_selinux_type /lib64 lib_t
 assert_selinux_type /usr usr_t
+assert_selinux_type /usr/bin/bash shell_exec_t
+assert_selinux_type /usr/lib/systemd/systemd-journald systemd_journal_exec_t
+assert_selinux_type /usr/lib/systemd/systemd-sysusers systemd_sysusers_exec_t
 assert_selinux_type /run/log/journal systemd_journal_t
 assert_selinux_type /etc/machine-id etc_runtime_t
 
@@ -76,15 +79,18 @@ systemctl is-active --quiet systemd-journald.service ||
 systemctl daemon-reload ||
     fail "systemd generator reload failed"
 
-loader_failures=$(
+boot_failure_pattern='error while loading shared libraries: .*Permission denied'
+boot_failure_pattern+='|systemd-journald.*status=127|generator.*status=127'
+boot_failure_pattern+='|failed to open /etc/(crypttab|fstab|integritytab|veritytab): Permission denied'
+boot_failure_pattern+='|failed to resolve (user|group).*: Permission denied'
+selinux_boot_failures=$(
     journalctl -b --no-pager -o cat |
-        grep -Ei \
-            'error while loading shared libraries: .*Permission denied|systemd-journald.*status=127|generator.*status=127' ||
+        grep -Ei "${boot_failure_pattern}" ||
         true
 )
-if [[ -n "${loader_failures}" ]]; then
-    echo "${loader_failures}" >&2
-    fail "SELinux-related dynamic-loader failures were detected"
+if [[ -n "${selinux_boot_failures}" ]]; then
+    echo "${selinux_boot_failures}" >&2
+    fail "SELinux-related boot failures were detected"
 fi
 
 echo "SELinux: enforcing"
