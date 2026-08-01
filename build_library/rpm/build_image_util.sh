@@ -1515,7 +1515,7 @@ finish_image_backup_etc_rpm() {
     info "RPM mode: Labeling /etc overlay lowerdir with runtime paths"
     sudo setfiles -F -r "${DISTRO_SHARE}" "${file_contexts}" "${ETC_FULL_PATH}" >/dev/null
     _assert_selinux_type_rpm "${ETC_FULL_PATH}" etc_t
-    _assert_selinux_type_rpm "${ETC_FULL_PATH}/passwd" passwd_file_t
+    _assert_selinux_type_rpm "${ETC_FULL_PATH}/passwd" etc_t
 }
 
 # Escape a string for JSON - handles quotes, backslashes, and control characters
