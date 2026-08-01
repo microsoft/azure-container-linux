@@ -37,6 +37,8 @@
 #   --help                               Show this help message
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
+#   --ipe-mode=MODE                      IPE mode: off|permissive|enforcing
+#                                        (default: off)
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
 #   --output=DIR                         Output directory for images
@@ -171,6 +173,14 @@ export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
+# IPE build mode forwarded into the SDK container. "off" omits the policy
+# loader and signed IPE assets, while permissive/enforcing select the matching
+# ipe.enforce= value in the signed UKI command line.
+# Pipeline validation selects permissive explicitly for the Secure Boot image.
+# Keep the source default off so ordinary and non-Secure-Boot builds do not
+# require the test signing certificate.
+ACL_IPE_MODE="${ACL_IPE_MODE:-off}"
+IPE_MODE_EXPLICIT=false
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
@@ -227,8 +237,57 @@ is_azure_linux_3() {
 
 # Show usage information
 show_help() {
-    head -30 "$0" | grep -E "^#" | sed 's/^# *//'
+    sed -n '1,/^# Examples:/p' "$0" | grep -E "^#" | sed 's/^# *//'
     exit 0
+}
+
+validate_ipe_boot_path() {
+    local mode="$1" vm_type="${2:-}"
+
+    [[ "${mode}" == "off" ]] && return 0
+    if [[ "${BOOTLOADER_MODE}" != "uki" ]]; then
+        error "IPE requires BOOTLOADER_MODE=uki"
+        return 1
+    fi
+    if [[ "${SECURE_BOOT_ENABLED:-true}" != "true" ]]; then
+        error "IPE requires Secure Boot"
+        return 1
+    fi
+    if [[ "${vm_type}" == "qemu" && "${BOARD}" == "arm64-usr" ]]; then
+        error "IPE is not supported by the arm64 QEMU Secure Boot path"
+        return 1
+    fi
+}
+
+load_artifact_ipe_mode() {
+    local artifact_dir="$1"
+    local mode_file="${artifact_dir}/acl-ipe-mode"
+    local artifact_mode
+
+    if [[ ! -r "${mode_file}" ]]; then
+        if [[ -d "${artifact_dir}/acl-ipe-ephemeral" ]]; then
+            error "IPE signing assets found without ${mode_file}"
+            return 1
+        fi
+        return 0
+    fi
+
+    read -r artifact_mode < "${mode_file}"
+    case "${artifact_mode}" in
+        off|permissive|enforcing) ;;
+        *)
+            error "Invalid IPE mode in ${mode_file}: ${artifact_mode}"
+            return 1
+            ;;
+    esac
+    if [[ "${IPE_MODE_EXPLICIT}" == "true" &&
+        "${ACL_IPE_MODE}" != "${artifact_mode}" ]]; then
+        error "Requested IPE mode '${ACL_IPE_MODE}' does not match source image mode '${artifact_mode}'"
+        return 1
+    fi
+
+    ACL_IPE_MODE="${artifact_mode}"
+    export ACL_IPE_MODE
 }
 
 # Parse command line arguments
@@ -249,6 +308,20 @@ parse_args() {
                 ;;
             --group)
                 GROUP="$2"
+                shift 2
+                ;;
+            --ipe-mode=*)
+                ACL_IPE_MODE="${1#*=}"
+                IPE_MODE_EXPLICIT=true
+                shift
+                ;;
+            --ipe-mode)
+                if [[ $# -lt 2 ]]; then
+                    error "--ipe-mode requires a value"
+                    exit 1
+                fi
+                ACL_IPE_MODE="$2"
+                IPE_MODE_EXPLICIT=true
                 shift 2
                 ;;
             --img-name=*)
@@ -613,6 +686,27 @@ parse_args() {
         fi
     fi
 
+    if [[ "$BUILD_IMAGE" != "true" ]] &&
+        { [[ "$BUILD_VM_IMAGE" == "true" ]] ||
+          [[ "$BUILD_TEST_IMAGE" == "true" ]] ||
+          [[ "$START_VM" == "true" ]] ||
+          [[ "$RUN_KOLA_TESTS" == "true" ]]; }; then
+        load_artifact_ipe_mode \
+            "${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest" ||
+            exit 1
+    fi
+
+    case "${ACL_IPE_MODE}" in
+        off|permissive|enforcing)
+            export ACL_IPE_MODE
+            ;;
+        *)
+            error "Invalid IPE mode: ${ACL_IPE_MODE}"
+            error "Valid options: off, permissive, enforcing"
+            exit 1
+            ;;
+    esac
+
     # Normalize group name
     case "$GROUP" in
         prod|production)
@@ -636,6 +730,14 @@ parse_args() {
                 ;;
         esac
     fi
+    local ipe_vm_type=""
+    if [[ "$BUILD_VM_IMAGE" == "true" ]] ||
+        [[ "$BUILD_TEST_IMAGE" == "true" ]] ||
+        [[ "$START_VM" == "true" ]] ||
+        [[ "$RUN_KOLA_TESTS" == "true" ]]; then
+        ipe_vm_type="${VM_TYPE}"
+    fi
+    validate_ipe_boot_path "${ACL_IPE_MODE}" "${ipe_vm_type}" || exit 1
 
     # Add platform-specific host-side tests when --run-tests is used.
     if [[ "${RUN_TESTS:-false}" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
@@ -1054,6 +1156,9 @@ build_vm_image() {
     # pulling a stale version.txt into local dev builds.
     local version_args=()
     local from_dir="${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest"
+    load_artifact_ipe_mode "${from_dir}" || exit 1
+    validate_ipe_boot_path "${ACL_IPE_MODE}" "${vm_type}" || exit 1
+
     if [[ "${NO_TTY:-false}" == "true" ]] && [[ -f "${from_dir}/version.txt" ]]; then
         info "Installing artifact version.txt into manifest location (CI mode)"
         cp "${from_dir}/version.txt" \
@@ -1261,6 +1366,7 @@ main() {
 
     section "Azure Container Linux Image Builder"
     info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"
+    info "IPE mode: ${ACL_IPE_MODE}"
 
     check_prerequisites
     print_summary

@@ -29,6 +29,14 @@ switch_to_strict_mode
 . "${BUILD_LIBRARY_DIR}/toolchain_util.sh" || exit 1
 . "${BUILD_LIBRARY_DIR}/board_options.sh"  || exit 1
 
+IPE_MODE="${ACL_IPE_MODE:-off}"
+case "${IPE_MODE}" in
+    off|permissive|enforcing) ;;
+    *)
+        die_notrace "ACL_IPE_MODE must be one of: off, permissive, enforcing (got: ${IPE_MODE})"
+        ;;
+esac
+
 # Determine EFI architecture suffix
 case "${FLAGS_target}" in
     x86_64-efi)
@@ -48,6 +56,85 @@ case "${FLAGS_target}" in
         die_notrace "Unknown target ${FLAGS_target}"
         ;;
 esac
+
+# The IPE policy is signed before dm-verity sealing and installed on /usr.
+# The matching /usr root-hash signature is packed into the slot-specific UKI
+# initramfs so A/B activation and rollback always select the correct pair. The
+# same certificate signs the UKI, policy, and root hash, and is enrolled in the
+# test VM's UEFI db.
+IPE_VERITY_INITRAMFS=""
+IPE_VERITY_SIG_PATH=""
+
+_uki_ipe_sign_verity_roothash() {
+    local roothash_hex_file="$1" work_dir="$2" cert_dir="$3" output_sig="$4"
+    local key cert hex content
+
+    key="${cert_dir}/ca.key"
+    cert="${cert_dir}/uki-signing-ca.pem"
+
+    # dm-verity verifies the signature over the root-hash hex string exactly as
+    # it appears in its table, without a trailing newline.
+    hex="$(tr -d '[:space:]' < "${roothash_hex_file}")"
+    if ! [[ "${hex}" =~ ^[[:xdigit:]]{64}$ ]]; then
+        error "UKI/RPM: invalid SHA-256 /usr verity root hash"
+        return 1
+    fi
+    hex="${hex,,}"
+
+    content="${work_dir}/usr-roothash.hex"
+    printf '%s' "${hex}" > "${content}"
+
+    if ! openssl smime -sign -noattr -binary \
+            -in "${content}" -signer "${cert}" -inkey "${key}" \
+            -outform der -out "${output_sig}" 2>/dev/null || [[ ! -s "${output_sig}" ]]; then
+        error "UKI/RPM: IPE failed to sign verity root hash"
+        return 1
+    fi
+
+    if ! openssl smime -verify -inform der -binary -in "${output_sig}" \
+            -content "${content}" -certfile "${cert}" -noverify >/dev/null 2>&1; then
+        error "UKI/RPM: IPE verity root-hash signature failed self-verify"
+        return 1
+    fi
+
+    IPE_VERITY_SIG_PATH="/etc/verity-usr-roothash.p7s"
+    info "UKI/RPM: signed /usr verity root hash ($(wc -c < "${output_sig}") B PKCS#7)"
+}
+
+_uki_ipe_build_verity_initramfs() {
+    local work_dir="$1" cert_dir="$2" roothash_hex_file="$3"
+    local cpio_root out
+
+    IPE_VERITY_INITRAMFS=""
+    IPE_VERITY_SIG_PATH=""
+
+    if ! "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}"; then
+        error "UKI/RPM: IPE could not ensure ephemeral signing cert"
+        return 1
+    fi
+
+    cpio_root="${work_dir}/ipe-verity-initramfs"
+    rm -rf "${cpio_root}"
+    mkdir -p "${cpio_root}/etc"
+
+    if ! _uki_ipe_sign_verity_roothash \
+            "${roothash_hex_file}" \
+            "${work_dir}" \
+            "${cert_dir}" \
+            "${cpio_root}/etc/verity-usr-roothash.p7s"; then
+        return 1
+    fi
+
+    out="${work_dir}/acl-ipe-verity-initramfs.img"
+    if ! ( cd "${cpio_root}" && find . -print0 | cpio --null --create --format=newc ) \
+            > "${out}" 2>/dev/null || [[ ! -s "${out}" ]]; then
+        error "UKI/RPM: IPE failed to build root-hash signature initramfs"
+        return 1
+    fi
+
+    IPE_VERITY_INITRAMFS="${out}"
+    info "UKI/RPM: packed /usr root-hash signature into the slot-specific UKI initramfs"
+}
 
 uki_install_rpm() {
     info "UKI/RPM mode: Installing systemd-boot and shim to BOARD_ROOT"
@@ -151,19 +238,41 @@ OSREL
 
     info "UKI/RPM: USR-A uuid=${usr_a_uuid}  verity hash-offset=${verity_hash_offset}"
 
-    local cmdline=""
+    local usr_hash=""
     if [[ ${FLAGS_verity} -eq ${FLAGS_TRUE} ]]; then
-        local usr_hash=""
         if [[ -n "${FLAGS_verity_hash}" && -f "${FLAGS_verity_hash}" ]]; then
             usr_hash=$(cat "${FLAGS_verity_hash}")
             info "UKI/RPM: Verity hash = ${usr_hash}"
         else
             die "UKI/RPM: Verity enabled but no hash file at ${FLAGS_verity_hash}"
         fi
+    fi
+    if [[ "${IPE_MODE}" != "off" && ${FLAGS_verity} -ne ${FLAGS_TRUE} ]]; then
+        die "UKI/RPM: signed IPE modes require a /usr dm-verity root hash"
+    fi
+
+    if [[ "${IPE_MODE}" != "off" ]]; then
+        local build_dir cert_dir
+        build_dir="$(readlink -f "$(dirname "${FLAGS_disk_image}")")"
+        cert_dir="${build_dir}/acl-ipe-ephemeral"
+        if ! _uki_ipe_build_verity_initramfs \
+                "${uki_temp_dir}" \
+                "${cert_dir}" \
+                "${FLAGS_verity_hash}"; then
+            die "UKI/RPM: failed to build /usr root-hash signature initramfs"
+        fi
+    fi
+
+    local cmdline=""
+    if [[ ${FLAGS_verity} -eq ${FLAGS_TRUE} ]]; then
+        local verity_usr_options="hash-offset=${verity_hash_offset},panic-on-corruption"
+        if [[ -n "${IPE_VERITY_SIG_PATH}" ]]; then
+            verity_usr_options+=",root-hash-signature=${IPE_VERITY_SIG_PATH}"
+        fi
         cmdline="mount.usr=/dev/mapper/usr mount.usrflags=ro"
         cmdline+=" systemd.verity_usr_data=PARTUUID=${usr_a_uuid}"
         cmdline+=" systemd.verity_usr_hash=PARTUUID=${usr_a_uuid}"
-        cmdline+=" systemd.verity_usr_options=hash-offset=${verity_hash_offset},panic-on-corruption"
+        cmdline+=" systemd.verity_usr_options=${verity_usr_options}"
         cmdline+=" usrhash=${usr_hash}"
     else
         cmdline="mount.usr=PARTUUID=${usr_a_uuid} mount.usrflags=ro"
@@ -171,6 +280,13 @@ OSREL
     # Common base args — platform-agnostic, same for all image types.
     cmdline+=" root=LABEL=ROOT rootflags=rw"
     cmdline+=" consoleblank=0"
+    # The signed UKI command line is the persistent source of truth for IPE's
+    # enforcement mode. The initramfs loader only loads and activates the
+    # policy; off omits both the loader and the ipe.enforce parameter.
+    case "${IPE_MODE}" in
+        permissive) cmdline+=" ipe.enforce=0" ;;
+        enforcing) cmdline+=" ipe.enforce=1" ;;
+    esac
     # NOTE: crashkernel=256M is delivered via a UKI addon (kdump.addon.efi)
     # rather than baked into the main UKI cmdline.  This allows disabling
     # kdump by removing the addon from the ESP without rebuilding the UKI.
@@ -225,10 +341,16 @@ OSREL
     local uki_output="${uki_temp_dir}/${uki_name}"
     info "UKI/RPM: Building UKI with ukify"
 
+    local -a uki_initrds=(--initrd="${initrd}")
+    if [[ -n "${IPE_VERITY_INITRAMFS}" ]]; then
+        uki_initrds+=(--initrd="${IPE_VERITY_INITRAMFS}")
+        info "UKI/RPM: appending /usr root-hash signature to the UKI initramfs"
+    fi
+
     sudo ukify build \
         --stub="${efi_stub}" \
         --linux="${kernel}" \
-        --initrd="${initrd}" \
+        "${uki_initrds[@]}" \
         --cmdline=@"${uki_temp_dir}/cmdline.txt" \
         --os-release=@"${osrelease}" \
         --output="${uki_output}"
