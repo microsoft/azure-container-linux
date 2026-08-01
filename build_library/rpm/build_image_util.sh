@@ -382,6 +382,42 @@ finish_image_selinux_rpm() {
     sudo setfiles -Dv -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/usr" >/dev/null
 }
 
+_assert_selinux_type_rpm() {
+    local path="$1"
+    local expected_type="$2"
+    local context
+
+    context=$(sudo stat -c '%C' "${path}") || die "RPM mode: Failed to read SELinux context for ${path}"
+    if [[ "${context}" != *":${expected_type}:"* ]]; then
+        die "RPM mode: Unexpected SELinux context for ${path}: ${context} (expected ${expected_type})"
+    fi
+}
+
+finish_image_root_selinux_rpm() {
+    local root_fs_dir="$1"
+    local file_contexts="${root_fs_dir}${DISTRO_SHARE_DIR}/etc/selinux/targeted/contexts/files/file_contexts"
+    local directory
+    local -a exclude_args=()
+
+    [[ -f "${file_contexts}" ]] || die "RPM mode: SELinux file contexts not found at ${file_contexts}"
+
+    # Label only the root directory and its top-level symlinks. Descending into
+    # separate /boot, /usr, and /oem filesystems can fail or relabel their
+    # contents after those trees have already been finalized.
+    while IFS= read -r -d '' directory; do
+        exclude_args+=(-e "${directory}")
+    done < <(sudo find "${root_fs_dir}" -mindepth 1 -maxdepth 1 -type d -print0)
+
+    info "RPM mode: Labeling final root and usr-merge symlinks"
+    sudo setfiles -F -r "${root_fs_dir}" "${exclude_args[@]}" "${file_contexts}" "${root_fs_dir}" >/dev/null
+
+    _assert_selinux_type_rpm "${root_fs_dir}" root_t
+    [[ ! -L "${root_fs_dir}/bin" ]] || _assert_selinux_type_rpm "${root_fs_dir}/bin" bin_t
+    [[ ! -L "${root_fs_dir}/sbin" ]] || _assert_selinux_type_rpm "${root_fs_dir}/sbin" bin_t
+    [[ ! -L "${root_fs_dir}/lib" ]] || _assert_selinux_type_rpm "${root_fs_dir}/lib" lib_t
+    [[ ! -L "${root_fs_dir}/lib64" ]] || _assert_selinux_type_rpm "${root_fs_dir}/lib64" lib_t
+}
+
 # ── Machine-id: remove for first-boot detection ──────────────────────────────
 _remove_machine_id_rpm() {
     local root_fs_dir="$1"
@@ -925,6 +961,15 @@ _configure_misc_rpm() {
         info "RPM mode: Installing placeholder audit-rules.service"
         sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/audit-rules.service" "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service"
     fi
+
+    info "RPM mode: Installing early SELinux runtime-state relabel service"
+    sudo install -d -m 0755 "${root_fs_dir}/etc/systemd/system/systemd-journald.service.d"
+    sudo install -m 0644 \
+        "${BUILD_LIBRARY_DIR}/rpm/additional_files/acl-selinux-relabel-journal.service" \
+        "${root_fs_dir}/etc/systemd/system/acl-selinux-relabel-journal.service"
+    sudo install -m 0644 \
+        "${BUILD_LIBRARY_DIR}/rpm/additional_files/10-selinux-runtime-relabel.conf" \
+        "${root_fs_dir}/etc/systemd/system/systemd-journald.service.d/10-selinux-runtime-relabel.conf"
 
     # NOTE: in permissive/enforcing mode, the ACL IPE policy loader is installed
     # as an initramfs dracut module (99acl-ipe-load) in dracut_install.sh, not as

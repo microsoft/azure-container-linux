@@ -872,6 +872,10 @@ EOF
     sudo rm "${root_fs_dir}/etc/resolv.conf"
   fi
 
+  if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    finish_image_root_selinux_rpm "${root_fs_dir}"
+  fi
+
   # Zero all fs free space to make it more compressible so auto-update
   # payloads become smaller, not fatal since it won't work on linux < 3.2
   sudo fstrim "${root_fs_dir}" || true

@@ -1,0 +1,12 @@
+[Unit]
+Description=Relabel initramfs runtime state after SELinux policy load
+DefaultDependencies=no
+Before=systemd-journald.service
+ConditionSecurity=selinux
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/restorecon -RF -i /run/log/journal /etc/machine-id
+RemainAfterExit=yes
+StandardOutput=null
+StandardError=kmsg

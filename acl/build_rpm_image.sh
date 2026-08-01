@@ -330,6 +330,7 @@ parse_args() {
                 RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-systemd-health-test.sh")
+                RUN_SCRIPTS+=("./acl/tests/run-erofs-selinux-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-dmesg-io-error-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-selinux-avc-test.sh")
                 shift

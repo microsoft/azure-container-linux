@@ -141,6 +141,17 @@ _get_sysext_arch() {
     fi
 }
 
+_assert_selinux_type() {
+  local path=$1
+  local expected_type=$2
+  local context
+
+  context=$(stat -c '%C' "${path}") || die "Failed to read SELinux context for '${path}'"
+  if [[ "${context}" != *":${expected_type}:"* ]]; then
+    die "Unexpected SELinux context for '${path}': '${context}' (expected type '${expected_type}')"
+  fi
+}
+
 cleanup() {
   local dirs=(
     "${BUILD_DIR}/fs-root"
@@ -158,6 +169,7 @@ cleanup() {
   # Remove RPM package log (created by rpm_install_package, root-owned)
   rm -f "${BUILD_DIR}/.rpm-packages-explicit"
   rm -f "${BUILD_DIR}/.rpm-base-manifest.tmp" "${BUILD_DIR}/.rpm-all-manifest.tmp" "${BUILD_DIR}/.rpm-sysext-manifest.tmp"
+  rm -f "${BUILD_DIR}/.sysext-file_contexts"
 }
 
 # Set up trap to execute cleanup() on script exit
@@ -268,6 +280,13 @@ for package; do
   fi
 done
 
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+  sysext_file_contexts="${BUILD_DIR}/.sysext-file_contexts"
+  source_file_contexts="${BUILD_DIR}/${FLAGS_install_root_basename}/etc/selinux/targeted/contexts/files/file_contexts"
+  [[ -f "${source_file_contexts}" ]] || die "SELinux file contexts not found at '${source_file_contexts}'"
+  cp "${source_file_contexts}" "${sysext_file_contexts}"
+fi
+
 # Make squashfs generation more reproducible.
 export SOURCE_DATE_EPOCH=$(stat -c '%Y' "${BUILD_DIR}/fs-root/usr/lib/os-release")
 
@@ -375,6 +394,16 @@ printf '%s\n' "${all_fields[@]}" >"${BUILD_DIR}/${FLAGS_install_root_basename}/u
 info "Removing opaque directory markers to always merge all contents"
 find "${BUILD_DIR}/${FLAGS_install_root_basename}" -xdev -type d -exec sh -c 'if [ "$(attr -R -q -g overlay.opaque {} 2>/dev/null)" = y ]; then attr -R -r overlay.opaque {}; fi' \;
 
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+  sysext_root="${BUILD_DIR}/${FLAGS_install_root_basename}"
+  info "Labeling '${SYSEXTNAME}' sysext with targeted SELinux policy"
+  setfiles -F -r "${sysext_root}" "${sysext_file_contexts}" "${sysext_root}/usr" >/dev/null
+  _assert_selinux_type "${sysext_root}/usr" usr_t
+  _assert_selinux_type \
+    "${sysext_root}/usr/lib/extension-release.d/extension-release.${SYSEXTNAME}" \
+    lib_t
+fi
+
 info "Checking for invalid file ownership"
 invalid_files=$(find "${BUILD_DIR}/${FLAGS_install_root_basename}" -user sdk -or -group sdk)
 if [[ -n "${invalid_files}" ]]; then
@@ -389,6 +418,12 @@ rm -rf "${BUILD_DIR}"/{fs-root,"${FLAGS_install_root_basename}",workdir}
 # Generate reports
 mkdir "${BUILD_DIR}/img-rootfs"
 mount -rt squashfs -o loop,nodev "${BUILD_DIR}/${SYSEXTNAME}.raw" "${BUILD_DIR}/img-rootfs"
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+  _assert_selinux_type "${BUILD_DIR}/img-rootfs/usr" usr_t
+  _assert_selinux_type \
+    "${BUILD_DIR}/img-rootfs/usr/lib/extension-release.d/extension-release.${SYSEXTNAME}" \
+    lib_t
+fi
 sysext_rpm_manifest=""
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && -s "${BUILD_DIR}/.rpm-sysext-manifest.tmp" ]]; then
   sysext_rpm_manifest="${BUILD_DIR}/.rpm-sysext-manifest.tmp"
