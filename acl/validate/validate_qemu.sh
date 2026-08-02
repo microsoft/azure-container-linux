@@ -125,11 +125,24 @@ generate_ignition_config() {
         ssh_keys_json+="]"
     fi
 
+    # The generated Ignition config is only used by ephemeral QEMU validation
+    # VMs. Keep a root serial shell available so diagnostics still work when
+    # networking or user provisioning fails during boot.
+    local systemd_units='
+      {
+        "name": "serial-getty@ttyS0.service",
+        "dropins": [
+          {
+            "name": "10-validation-autologin.conf",
+            "contents": "[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin root --keep-baud %I 115200,38400,9600 $TERM\n"
+          }
+        ]
+      }'
+
     # When booting the test image, inject a systemd unit that symlinks the
     # docker sysext from the OEM partition into /etc/extensions/ so that
     # systemd-sysext picks it up.  This mirrors what mantle's NeedsDocker
     # logic does for kola tests.
-    local systemd_section=""
     if [[ "${USE_TEST_IMAGE}" == "true" ]]; then
         info "Test image: injecting docker sysext symlink service into Ignition"
         # Escape the unit content for JSON embedding
@@ -143,9 +156,7 @@ UNIT
 [Unit]\nWants=sysext-docker-link.service\nAfter=sysext-docker-link.service
 DROPIN
 )
-        systemd_section=',
-  "systemd": {
-    "units": [
+        systemd_units+=',
       {
         "name": "sysext-docker-link.service",
         "enabled": true,
@@ -160,9 +171,14 @@ DROPIN
           }
         ]
       }
+'
+    fi
+
+    local systemd_section=',
+  "systemd": {
+    "units": ['"${systemd_units}"'
     ]
   }'
-    fi
 
     cat > "${config_path}" <<EOF
 {
