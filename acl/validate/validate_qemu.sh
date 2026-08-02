@@ -359,7 +359,7 @@ expect {
     -re "login:|Login:" {
         send "$user\r"
         expect {
-            -re "[Pp]assword:" {
+            -re {[Pp]assword:} {
                 send "$password\r"
                 expect -re {(^|\r|\n)[^\r\n]*[#$] ?$}
             }
