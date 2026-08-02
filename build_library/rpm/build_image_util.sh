@@ -418,7 +418,15 @@ finish_image_root_selinux_rpm() {
     info "RPM mode: Labeling final root and usr-merge symlinks"
     sudo setfiles -F -r "${root_fs_dir}" "${exclude_args[@]}" "${file_contexts}" "${root_fs_dir}" >/dev/null
 
+    # bootengine uses this directory as the writable upperdir and overlay root
+    # for /etc. If initramfs creates it after labeling, the overlay root gets an
+    # incorrect type and systemd generators cannot traverse /etc in enforcing mode.
+    info "RPM mode: Creating labeled /etc overlay upperdir"
+    sudo install -d -m 0755 "${root_fs_dir}/etc"
+    sudo setfiles -F -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/etc" >/dev/null
+
     _assert_selinux_type_rpm "${root_fs_dir}" root_t
+    _assert_selinux_type_rpm "${root_fs_dir}/etc" etc_t
     [[ ! -L "${root_fs_dir}/bin" ]] || _assert_selinux_type_rpm "${root_fs_dir}/bin" bin_t
     [[ ! -L "${root_fs_dir}/sbin" ]] || _assert_selinux_type_rpm "${root_fs_dir}/sbin" bin_t
     [[ ! -L "${root_fs_dir}/lib" ]] || _assert_selinux_type_rpm "${root_fs_dir}/lib" lib_t
