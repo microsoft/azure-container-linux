@@ -1047,6 +1047,16 @@ SUBSYSTEM=="block", KERNEL=="loop*", ENV{ID_FS_TYPE}=="squashfs", ATTR{queue/rea
 UDEV_LOOP
     sudo chmod 644 "${root_fs_dir}/etc/udev/rules.d/60-loop-read-ahead.rules"
 
+    # Keep crash details available on the serial console when networking or
+    # userspace is too damaged for the validation harness to collect journals.
+    sudo install -d "${root_fs_dir}/etc/systemd/journald.conf.d"
+    cat <<'EOF' | sudo tee "${root_fs_dir}/etc/systemd/journald.conf.d/10-validation-console.conf" > /dev/null
+[Journal]
+ForwardToConsole=yes
+MaxLevelConsole=info
+EOF
+    sudo chmod 0644 "${root_fs_dir}/etc/systemd/journald.conf.d/10-validation-console.conf"
+
     # Remove ldconfig from the sysinit.target critical path.
     #
     # Problem: The upstream ldconfig.service has Before=sysinit.target, making
