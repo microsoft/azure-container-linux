@@ -68,6 +68,14 @@ else
     done <<< "$FAILED_UNITS"
 fi
 
+if command -v coredumpctl &>/dev/null; then
+    echo ""
+    echo "Recent coredump information:"
+    echo "----------------------------"
+    coredumpctl --no-pager list 2>/dev/null | tail -20 || true
+    coredumpctl --no-pager info 2>/dev/null | tail -200 || true
+fi
+
 # Final summary
 echo ""
 echo "========================================="

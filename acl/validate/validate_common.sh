@@ -899,13 +899,20 @@ validate_main() {
                         exit 1
                     fi
                 else
-                    error "SSH not available - cannot run scripts"
-                    warn "Try using --use-serial for serial console execution"
-                    warn "You can still connect manually:"
                     if [[ "$VM_TYPE" == "qemu" ]]; then
-                        warn "  virsh console ${VM_NAME}"
+                        warn "SSH unavailable; falling back to serial console execution"
+                        if run_scripts_via_console "${VM_NAME}" "${RUN_SCRIPTS[@]}"; then
+                            print_script_results_summary
+                            info "All scripts completed successfully via serial console!"
+                        else
+                            print_script_results_summary
+                            error "One or more scripts failed via serial console"
+                            exit 1
+                        fi
                     else
+                        error "SSH not available - cannot run scripts"
                         warn "  az vm run-command invoke --command-id RunShellScript --name ${VM_NAME} --resource-group ${VM_RG} --scripts 'echo Hello'"
+                        exit 1
                     fi
                 fi
             fi
