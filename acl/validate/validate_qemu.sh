@@ -361,9 +361,9 @@ expect {
         expect {
             -re "[Pp]assword:" {
                 send "$password\r"
-                expect -re "\\$|#"
+                expect -re {(^|\r|\n)[^\r\n]*[#$] ?$}
             }
-            -re "\\$|#" {
+            -re {(^|\r|\n)[^\r\n]*[#$] ?$} {
             }
             timeout {
                 puts "ERROR: Timeout after login"
@@ -371,7 +371,7 @@ expect {
             }
         }
     }
-    -re "\\$|#" {
+    -re {(^|\r|\n)[^\r\n]*[#$] ?$} {
     }
     timeout {
         puts "ERROR: Timeout waiting for login prompt"

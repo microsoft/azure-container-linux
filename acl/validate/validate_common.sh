@@ -315,7 +315,8 @@ run_scripts_via_console() {
                 fi
             else
                 info "Running command via console: $script"
-                if ! run_command_via_console_qemu "$vm_name" "$script" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD"; then
+                local remote_cmd="${script}; echo \"SCRIPT_EXIT_CODE:\$?\""
+                if ! run_command_via_console_qemu "$vm_name" "$remote_cmd" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD"; then
                     error "Command failed: $script"
                     SCRIPT_RESULTS_NAMES+=("$script")
                     SCRIPT_RESULTS_STATUS+=(1)
