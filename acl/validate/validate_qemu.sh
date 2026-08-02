@@ -126,17 +126,17 @@ generate_ignition_config() {
     fi
 
     # The generated Ignition config is only used by ephemeral QEMU validation
-    # VMs. Keep a root serial shell available so diagnostics still work when
-    # networking or user provisioning fails during boot.
+    # VMs. Start a direct root shell rather than relying on agetty/login, since
+    # those may be among the broken processes that we need to diagnose.
     local systemd_units='
       {
+        "name": "validation-serial-shell.service",
+        "enabled": true,
+        "contents": "[Unit]\nDescription=Root serial shell for ephemeral validation\nAfter=systemd-user-sessions.service\nConflicts=serial-getty@ttyS0.service\n\n[Service]\nExecStart=/bin/bash --noprofile --norc -i\nRestart=always\nRestartSec=1\nStandardInput=tty-force\nStandardOutput=tty\nStandardError=tty\nTTYPath=/dev/ttyS0\nTTYReset=yes\nTTYVHangup=yes\nTTYVTDisallocate=yes\nEnvironment=TERM=vt100\n\n[Install]\nWantedBy=multi-user.target\n"
+      },
+      {
         "name": "serial-getty@ttyS0.service",
-        "dropins": [
-          {
-            "name": "10-validation-autologin.conf",
-            "contents": "[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin root --keep-baud %I 115200,38400,9600 $TERM\n"
-          }
-        ]
+        "mask": true
       }'
 
     # When booting the test image, inject a systemd unit that symlinks the
