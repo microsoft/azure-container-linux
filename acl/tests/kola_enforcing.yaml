@@ -403,8 +403,9 @@ tests:
       - imageVariants: [acl-t]
         reason: |
           Test hardcodes systemd-timesyncd (mantle kola/tests/misc/ntp.go
-          waits for "Synchronized to time server"); acl-t ships chronyd and
-          the chrony RPM %post disables timesyncd. Daemon liveness is
+          waits for "Synchronized to time server"); acl-t ships chronyd,
+          whose unit conflicts out timesyncd (upstream chronyd.service:
+          Conflicts=systemd-timesyncd.service). Daemon liveness is
           covered by acl.basic/ServicesActive; a chrony-native sync test
           (chronyc tracking) is tracked as a follow-up.
 
