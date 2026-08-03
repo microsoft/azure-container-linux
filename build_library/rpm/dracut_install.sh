@@ -228,7 +228,20 @@ _dracut_patch_bootengine_modules() {
         # Remove any remaining systemctl network start lines (only used for download)
         sudo sed -i '/systemctl start --quiet systemd-networkd systemd-resolved/d' "${setup_root_after}"
     fi
-    
+
+    # The immutable /etc lowerdir already contains the account database, but it
+    # must not be accessed before the real-root SELinux policy is loaded. Let
+    # tmpfiles defer rules for package users until normal userspace startup.
+    local setup_root="${root_fs_dir}/usr/lib/dracut/modules.d/99setup-root/initrd-setup-root"
+    if [[ -f "${setup_root}" ]]; then
+        info "RPM mode: Patching initrd-setup-root for deferred account lookup"
+        sudo sed -i \
+            's/systemd-tmpfiles --root=\/sysroot --create \\/systemd-tmpfiles --root=\/sysroot --graceful --create \\/' \
+            "${setup_root}"
+        sudo grep -qF 'systemd-tmpfiles --root=/sysroot --graceful --create \' "${setup_root}" ||
+            die "Failed to patch initrd-setup-root for deferred account lookup"
+    fi
+
     # Patch bootengine's 99setup-root scripts to use the distribution share directory
     # instead of the Flatcar-specific /usr/share/flatcar path
     local setup_root_dir="${root_fs_dir}/usr/lib/dracut/modules.d/99setup-root"
@@ -347,7 +360,8 @@ SETUP_EOF
 # The files are already visible through the /etc overlay lowerdir. Do not
 # access or copy them here: doing so instantiates overlay inodes before the
 # real-root SELinux policy is loaded, leaving those inodes as unlabeled_t
-# when systemd generators first read the account database.
+# when systemd generators first read the account database. initrd-setup-root
+# uses systemd-tmpfiles --graceful so unknown package users are deferred.
 exit 0
 EOF
     sudo chmod +x "${root_fs_dir}/usr/sbin/flatcar-tmpfiles"
