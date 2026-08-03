@@ -344,15 +344,10 @@ SETUP_EOF
 # Stub for flatcar-tmpfiles - Azure Linux handles user/group creation differently
 # This script is called by bootengine's initrd-setup-root to initialize shadow database
 # In Azure Linux, the shadow database is pre-populated by RPM packages
-SYSROOT="\${1:-/sysroot}"
-# Ensure essential directories exist
-mkdir -p "\${SYSROOT}/etc"
-# Ensure basic shadow files exist (if not already present)
-for f in passwd group shadow gshadow; do
-    if [[ ! -f "\${SYSROOT}/etc/\${f}" ]] && [[ -f "\${SYSROOT}${DISTRO_SHARE_DIR}/etc/\${f}" ]]; then
-        cp -a "\${SYSROOT}${DISTRO_SHARE_DIR}/etc/\${f}" "\${SYSROOT}/etc/\${f}"
-    fi
-done
+# The files are already visible through the /etc overlay lowerdir. Do not
+# access or copy them here: doing so instantiates overlay inodes before the
+# real-root SELinux policy is loaded, leaving those inodes as unlabeled_t
+# when systemd generators first read the account database.
 exit 0
 EOF
     sudo chmod +x "${root_fs_dir}/usr/sbin/flatcar-tmpfiles"
