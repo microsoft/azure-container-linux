@@ -350,7 +350,7 @@ mkdir -p "\${SYSROOT}/etc"
 # Ensure basic shadow files exist (if not already present)
 for f in passwd group shadow gshadow; do
     if [[ ! -f "\${SYSROOT}/etc/\${f}" ]] && [[ -f "\${SYSROOT}${DISTRO_SHARE_DIR}/etc/\${f}" ]]; then
-        cp "\${SYSROOT}${DISTRO_SHARE_DIR}/etc/\${f}" "\${SYSROOT}/etc/\${f}"
+        cp -a "\${SYSROOT}${DISTRO_SHARE_DIR}/etc/\${f}" "\${SYSROOT}/etc/\${f}"
     fi
 done
 exit 0
@@ -392,9 +392,10 @@ EOF
 # Intentionally empty - /usr/local dirs exist at build time; /usr is read-only
 EOF
 
-    # baselayout-home.conf - only core user home (not /home itself)
+    # baselayout-home.conf - home hierarchy and core user home
     cat <<'EOF' | sudo tee "${tmpfiles_dir}/baselayout-home.conf" > /dev/null
-# Core user home directory
+# Home hierarchy
+d /home 0755 root root -
 d /home/core 0700 core core -
 EOF
 

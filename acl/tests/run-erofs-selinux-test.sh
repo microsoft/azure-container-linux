@@ -66,7 +66,10 @@ assert_selinux_type \
     /usr/lib/systemd/system-generators/systemd-fstab-generator \
     systemd_generator_exec_t
 assert_selinux_type /run/log/journal systemd_journal_t
+assert_selinux_type /etc/passwd etc_t
 assert_selinux_type /etc/machine-id etc_runtime_t
+assert_selinux_type /home home_root_t
+assert_selinux_type /var var_t
 
 # These assertions intentionally require the systemd v255 sysext SELinux
 # backport to be installed in the same validation image.

@@ -403,30 +403,39 @@ _assert_selinux_type_rpm() {
 finish_image_root_selinux_rpm() {
     local root_fs_dir="$1"
     local file_contexts="${root_fs_dir}${DISTRO_SHARE_DIR}/etc/selinux/targeted/contexts/files/file_contexts"
-    local directory
-    local -a exclude_args=()
+    local -a exclude_args=(
+        -e "${root_fs_dir}/boot"
+        -e "${root_fs_dir}/oem"
+        -e "${root_fs_dir}/usr"
+    )
 
     [[ -f "${file_contexts}" ]] || die "RPM mode: SELinux file contexts not found at ${file_contexts}"
 
-    # Label only the root directory and its top-level symlinks. Descending into
-    # separate /boot, /usr, and /oem filesystems can fail or relabel their
-    # contents after those trees have already been finalized.
-    while IFS= read -r -d '' directory; do
-        exclude_args+=(-e "${directory}")
-    done < <(sudo find "${root_fs_dir}" -mindepth 1 -maxdepth 1 -type d -print0)
+    # Rootfs state is removed immediately before this function and recreated
+    # at boot. Preserve labeled mountpoints and writable hierarchy roots so
+    # early services do not encounter unlabeled_t before tmpfiles runs.
+    sudo install -d -m 0755 \
+        "${root_fs_dir}/dev" \
+        "${root_fs_dir}/etc" \
+        "${root_fs_dir}/home" \
+        "${root_fs_dir}/media" \
+        "${root_fs_dir}/mnt" \
+        "${root_fs_dir}/opt" \
+        "${root_fs_dir}/proc" \
+        "${root_fs_dir}/run" \
+        "${root_fs_dir}/srv" \
+        "${root_fs_dir}/sys" \
+        "${root_fs_dir}/var"
+    sudo install -d -m 0700 "${root_fs_dir}/root" "${root_fs_dir}/.etc-work"
+    sudo install -d -m 1777 "${root_fs_dir}/tmp"
 
-    info "RPM mode: Labeling final root and usr-merge symlinks"
+    info "RPM mode: Labeling final writable root hierarchy and usr-merge symlinks"
     sudo setfiles -F -r "${root_fs_dir}" "${exclude_args[@]}" "${file_contexts}" "${root_fs_dir}" >/dev/null
-
-    # bootengine uses this directory as the writable upperdir and overlay root
-    # for /etc. If initramfs creates it after labeling, the overlay root gets an
-    # incorrect type and systemd generators cannot traverse /etc in enforcing mode.
-    info "RPM mode: Creating labeled /etc overlay upperdir"
-    sudo install -d -m 0755 "${root_fs_dir}/etc"
-    sudo setfiles -F -r "${root_fs_dir}" "${file_contexts}" "${root_fs_dir}/etc" >/dev/null
 
     _assert_selinux_type_rpm "${root_fs_dir}" root_t
     _assert_selinux_type_rpm "${root_fs_dir}/etc" etc_t
+    _assert_selinux_type_rpm "${root_fs_dir}/home" home_root_t
+    _assert_selinux_type_rpm "${root_fs_dir}/var" var_t
     [[ ! -L "${root_fs_dir}/bin" ]] || _assert_selinux_type_rpm "${root_fs_dir}/bin" bin_t
     [[ ! -L "${root_fs_dir}/sbin" ]] || _assert_selinux_type_rpm "${root_fs_dir}/sbin" bin_t
     [[ ! -L "${root_fs_dir}/lib" ]] || _assert_selinux_type_rpm "${root_fs_dir}/lib" lib_t
