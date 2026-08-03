@@ -64,7 +64,7 @@ assert_selinux_type /usr/bin/systemd-sysusers systemd_sysusers_exec_t
 assert_selinux_type /usr/lib/systemd/systemd-journald syslogd_exec_t
 assert_selinux_type /usr/lib/systemd/systemd-networkd systemd_networkd_exec_t
 assert_selinux_type /usr/lib/systemd/systemd-resolved systemd_resolved_exec_t
-assert_selinux_type /usr/lib/systemd/systemd-timesyncd systemd_timesyncd_exec_t
+assert_selinux_type /usr/lib/systemd/systemd-timesyncd bin_t
 assert_selinux_type \
     /usr/lib/systemd/system-generators/systemd-fstab-generator \
     systemd_generator_exec_t
