@@ -998,6 +998,19 @@ _configure_misc_rpm() {
         "${BUILD_LIBRARY_DIR}/rpm/additional_files/10-selinux-runtime-relabel.conf" \
         "${root_fs_dir}/etc/systemd/system/systemd-journald.service.d/10-selinux-runtime-relabel.conf"
 
+    # These services have DefaultDependencies=no and can otherwise execute
+    # while systemd-sysext is replacing /usr with its overlay mount. SELinux
+    # then rejects the stale executable path even though both underlying files
+    # and the completed merged hierarchy have valid labels.
+    info "RPM mode: Ordering early network services after systemd-sysext"
+    local service
+    for service in systemd-networkd systemd-resolved systemd-timesyncd; do
+        sudo install -d -m 0755 "${root_fs_dir}/etc/systemd/system/${service}.service.d"
+        sudo install -m 0644 \
+            "${BUILD_LIBRARY_DIR}/rpm/additional_files/20-after-sysext.conf" \
+            "${root_fs_dir}/etc/systemd/system/${service}.service.d/20-after-sysext.conf"
+    done
+
     # NOTE: in permissive/enforcing mode, the ACL IPE policy loader is installed
     # as an initramfs dracut module (99acl-ipe-load) in dracut_install.sh, not as
     # a real-root service. It must run before switch_root: once the real root's
