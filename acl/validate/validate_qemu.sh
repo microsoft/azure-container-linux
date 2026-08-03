@@ -54,6 +54,8 @@ ensure_libvirt_network() {
         if sudo virsh net-start default; then
             sudo virsh net-autostart default 2>/dev/null || true
             info "Default network started successfully"
+        elif virsh net-info default 2>/dev/null | grep -q 'Active:.*yes'; then
+            info "Default network was started concurrently"
         else
             error "Failed to start default network"
             return 1
@@ -128,6 +130,8 @@ generate_ignition_config() {
     # The generated Ignition config is only used by ephemeral QEMU validation
     # VMs. Start a direct root shell rather than relying on agetty/login, since
     # those may be among the broken processes that we need to diagnose.
+    local serial_tty="ttyS0"
+    [[ "${BOARD}" == "arm64-usr" ]] && serial_tty="ttyAMA0"
     local systemd_units='
       {
         "name": "validation-serial-shell.service",
@@ -138,6 +142,7 @@ generate_ignition_config() {
         "name": "serial-getty@ttyS0.service",
         "mask": true
       }'
+    systemd_units="${systemd_units//ttyS0/${serial_tty}}"
 
     # When booting the test image, inject a systemd unit that symlinks the
     # docker sysext from the OEM partition into /etc/extensions/ so that
