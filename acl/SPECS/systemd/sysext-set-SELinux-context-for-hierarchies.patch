@@ -129,8 +129,6 @@ diff --git a/src/sysext/sysext.c b/src/sysext/sysext.c
 +        }
 +#endif
 +
--
-+
          /* The overlayfs superblock is read-only. Let's also mark the bind mount read-only. Extra turbo safety 😎 */
          r = bind_remount_recursive(overlay_path, MS_RDONLY, MS_RDONLY, NULL);
          if (r < 0)
