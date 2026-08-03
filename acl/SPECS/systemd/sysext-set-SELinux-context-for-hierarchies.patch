@@ -14,8 +14,8 @@ adapted to systemd v255's SELinux utility API.
 Backport of upstream commit 54459a5f8085f4975ae43c5ff2cb49babca9a512.
 [Backported to systemd v255 by Aadhar Agarwal <aadagarwal@microsoft.com>]
 ---
- src/sysext/sysext.c | 51 ++++++++++++++++++++++++++++++++++++++++++++++-----
- 1 file changed, 46 insertions(+), 5 deletions(-)
+ src/sysext/sysext.c | 73 ++++++++++++++++++++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 68 insertions(+), 5 deletions(-)
 
 diff --git a/src/sysext/sysext.c b/src/sysext/sysext.c
 --- a/src/sysext/sysext.c
@@ -46,7 +46,7 @@ diff --git a/src/sysext/sysext.c b/src/sysext/sysext.c
  
          /* Resolve the path of the host's version of the hierarchy, i.e. what we want to use as lowest layer
           * in the overlayfs stack. */
-@@ -551,20 +554,54 @@ static int merge_hierarchy(
+@@ -551,20 +554,60 @@ static int merge_hierarchy(
                  }
          }
  
@@ -57,6 +57,12 @@ diff --git a/src/sysext/sysext.c b/src/sysext/sysext.c
 +        r = mac_selinux_fix_full(AT_FDCWD, meta_path, hierarchy, 0);
 +        if (r < 0)
 +                return log_error_errno(r, "Failed to fix label of '%s' as '%s': %m", meta_path, hierarchy);
++
++#if HAVE_SELINUX
++        _cleanup_freecon_ char *context = NULL;
++        if (getfilecon_raw(meta_path, &context) >= 0)
++                log_info("SELinux context probe: metadata '%s' is '%s'.", meta_path, context);
++#endif
 +
          /* Let's generate a metadata file that lists all extensions we took into account for this
           * hierarchy. We include this in the final fs, to make things nicely discoverable and
@@ -102,7 +108,30 @@ diff --git a/src/sysext/sysext.c b/src/sysext/sysext.c
  
          /* Put the meta path (i.e. our synthesized stuff) at the top of the layer stack */
          layers = strv_new(meta_path);
-@@ -631,9 +668,18 @@ static int merge_hierarchy(
+@@ -613,6 +656,22 @@ static int merge_hierarchy(
+         if (r < 0)
+                 return r;
+ 
++#if HAVE_SELINUX
++        context = mac_selinux_free(context);
++        if (getfilecon_raw(overlay_path, &context) >= 0)
++                log_info("SELinux context probe: merged hierarchy '%s' is '%s'.", hierarchy, context);
++
++        if (streq(hierarchy, "/usr")) {
++                _cleanup_free_ char *probe = path_join(overlay_path, "lib/systemd/systemd-networkd");
++                if (!probe)
++                        return log_oom();
++
++                context = mac_selinux_free(context);
++                if (getfilecon_raw(probe, &context) >= 0)
++                        log_info("SELinux context probe: merged executable '/usr/lib/systemd/systemd-networkd' is '%s'.", context);
++        }
++#endif
++
+         /* The overlayfs superblock is read-only. Let's also mark the bind mount read-only. Extra turbo safety 😎 */
+         r = bind_remount_recursive(overlay_path, MS_RDONLY, MS_RDONLY, NULL);
+         if (r < 0)
+@@ -631,9 +690,18 @@ static int merge_hierarchy(
          if (!f)
                  return log_oom();
  
