@@ -111,7 +111,8 @@ diff --git a/src/sysext/sysext.c b/src/sysext/sysext.c
 @@ -613,6 +656,22 @@ static int merge_hierarchy(
          if (r < 0)
                  return r;
- 
+-
++
 +#if HAVE_SELINUX
 +        context = mac_selinux_free(context);
 +        if (getfilecon_raw(overlay_path, &context) >= 0)
@@ -127,6 +128,8 @@ diff --git a/src/sysext/sysext.c b/src/sysext/sysext.c
 +                        log_info("SELinux context probe: merged executable '/usr/lib/systemd/systemd-networkd' is '%s'.", context);
 +        }
 +#endif
++
+-
 +
          /* The overlayfs superblock is read-only. Let's also mark the bind mount read-only. Extra turbo safety 😎 */
          r = bind_remount_recursive(overlay_path, MS_RDONLY, MS_RDONLY, NULL);
