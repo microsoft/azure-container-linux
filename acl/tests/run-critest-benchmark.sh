@@ -72,8 +72,30 @@ if [ -z "$(ls -A /etc/cni/net.d 2>/dev/null)" ]; then
   ]
 }
 CNI_EOF
-    # containerd watches conf_dir and reloads without a restart.
-    sleep 6
+fi
+
+# Wait for containerd to report the network as ready rather than sleeping a
+# fixed interval. containerd watches conf_dir with fsnotify, and starting a
+# benchmark while that reload is still in flight makes CNI plugin execs fail
+# with "interrupted system call" (EINTR) partway through the run.
+network_ready() {
+    crictl --runtime-endpoint "$ENDPOINT" info 2>/dev/null | python3 -c '
+import json, sys
+try:
+    conditions = json.load(sys.stdin).get("status", {}).get("conditions", [])
+except Exception:
+    sys.exit(1)
+sys.exit(0 if any(c.get("type") == "NetworkReady" and c.get("status") for c in conditions) else 1)
+'
+}
+
+for _ in $(seq 1 30); do
+    network_ready && break
+    sleep 2
+done
+if ! network_ready; then
+    echo "containerd never reported NetworkReady; CNI config is not usable" >&2
+    exit 1
 fi
 
 rm -rf "$OUT"; mkdir -p "$OUT"
