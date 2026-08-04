@@ -114,6 +114,12 @@ if [[ -n "${ACL_PERF_TOOLS:-}" ]]; then
     echo "export ACL_PERF_TOOLS='${ACL_PERF_TOOLS}'" >> /home/sdk/.bashrc
 fi
 
+# Forward the optional IPE image feature into commands run as the sdk user.
+sed -i -e '/export ACL_IPE_ENABLE=/d' /home/sdk/.bashrc 2>/dev/null || true
+if [[ -n "${ACL_IPE_ENABLE:-}" ]]; then
+    echo "export ACL_IPE_ENABLE='${ACL_IPE_ENABLE}'" >> /home/sdk/.bashrc
+fi
+
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"
     echo -n "exec bash -l -i -c '" >"$cmd"

@@ -177,6 +177,9 @@ export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
 # binary on dm-verity-protected /usr to have anything to measure, and a sysext
 # cannot provide that, so it has to be decided here at image build time.
 export ACL_PERF_TOOLS="${ACL_PERF_TOOLS:-0}"
+# Enable the permissive IPE policy loader by default. Callers can explicitly
+# set ACL_IPE_ENABLE=0 to build an image without the runtime policy.
+export ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-1}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"

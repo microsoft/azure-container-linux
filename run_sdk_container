@@ -187,4 +187,5 @@ call_docker exec "${name}" sh -c 'cp /etc/hosts /etc/hosts2; umount /etc/hosts ;
 call_docker exec "${tty[@]}" -i \
     -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" \
     -e ACL_PERF_TOOLS="${ACL_PERF_TOOLS:-}" \
+    -e ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-}" \
     "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"

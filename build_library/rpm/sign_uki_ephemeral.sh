@@ -17,7 +17,7 @@
 # The private key is deleted after signing.
 #
 # Usage:
-#   sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir>
+#   sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir> [ipe-policy-src]
 #
 # Requirements (all available in the SDK container):
 #   - openssl   (key and certificate generation)
@@ -25,8 +25,9 @@
 
 set -euo pipefail
 
-ESP_DIR="${1:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir>}"
-CERT_OUTPUT_DIR="${2:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir>}"
+ESP_DIR="${1:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir> [ipe-policy-src]}"
+CERT_OUTPUT_DIR="${2:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir> [ipe-policy-src]}"
+IPE_POLICY_SRC="${3:-}"
 
 CERT_NAME="uki-signing-ca.pem"
 
@@ -123,6 +124,29 @@ info "Found ${#efi_files[@]} EFI file(s) to sign"
 for efi_file in "${efi_files[@]}"; do
     sign_efi_file "${efi_file}"
 done
+
+if [[ -n "${IPE_POLICY_SRC}" ]]; then
+    if [[ ! -f "${IPE_POLICY_SRC}" ]]; then
+        error "IPE policy source not found: ${IPE_POLICY_SRC}"
+        exit 1
+    fi
+
+    ipe_out_dir="${ESP_DIR}/acl-ipe"
+    ipe_p7b_tmp="${WORK_DIR}/acl.pol.p7b"
+    openssl smime -sign \
+        -binary \
+        -in "${IPE_POLICY_SRC}" \
+        -signer "${CERT_FILE}" \
+        -inkey "${KEY_FILE}" \
+        -noattr \
+        -nodetach \
+        -nosmimecap \
+        -outform der \
+        -out "${ipe_p7b_tmp}"
+    sudo mkdir -p "${ipe_out_dir}"
+    sudo cp "${ipe_p7b_tmp}" "${ipe_out_dir}/acl.pol.p7b"
+    sudo chmod 0644 "${ipe_out_dir}/acl.pol.p7b"
+fi
 
 # Private key is in WORK_DIR which is cleaned up by the trap.
 info "Signing complete. ${#efi_files[@]} file(s) signed."
