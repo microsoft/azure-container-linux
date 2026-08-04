@@ -171,9 +171,10 @@ export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
-# Enable the permissive IPE policy loader by default. Callers can explicitly
-# set ACL_IPE_ENABLE=0 to build an image without the runtime policy.
-export ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-1}"
+# IPE is disabled by default on this branch: it is the I0 axis of the IPE x
+# EROFS performance matrix, giving a no-IPE reference build. Callers can set
+# ACL_IPE_ENABLE=1 to re-enable the runtime policy loader.
+export ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-0}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
