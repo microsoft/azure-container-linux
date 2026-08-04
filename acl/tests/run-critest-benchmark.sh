@@ -22,30 +22,35 @@ SAMPLES="${CRITEST_SAMPLES:-30}"
 IMAGES="${CRITEST_IMAGES:-10}"
 BUDGET="${CRITEST_TIMEOUT:-2400}"
 
-# notaryaksegistry has anonymous pull enabled, so no ACR credentials are needed
-# on the test VM.
-REGISTRY="${ACL_PERF_REGISTRY:-notaryaksegistry.azurecr.io}"
+# notaryaksegistry and notarycontainerregistry both have anonymous pull enabled,
+# so no ACR credentials are needed on the test VM.
+REGISTRY="${ACL_PERF_REGISTRY:-notarycontainerregistry.azurecr.io}"
 
-# Pinned by digest on purpose. This manifest carries the precomputed EROFS
-# dm-verity referrers (application/vnd.cncf.notary.dmverity.v1). The
-# :validation-20260709-1630 tag currently resolves to this same digest, but the
-# tag has been re-pointed before; pinning keeps a re-push from silently
-# benchmarking the ordinary unpacking path instead of the precomputed one.
-PRECOMPUTED_IMAGE="${REGISTRY}/dmverity-precomputed-test/pause@sha256:7c38f24774e3cbd906d2d33c38354ccf787635581c122965132c9bd309754d4a"
-UNSIGNED_IMAGE="${REGISTRY}/test-unsigned/busybox:1.36"
-
-# critest's imagePullingBenchmarkImage takes exactly one reference, so the only
-# way to benchmark more than one image is to run critest once per variant. Each
-# variant gets its own output directory and its suites are reported under
-# "<label>/<suite>".
+# Controlled A/B ladder. Each rung is published twice from the same source with
+# byte-identical content and a shared manifest digest; only perf-erofs/* carries
+# the application/vnd.cncf.notary.dmverity.v1 referrers. Comparing a rung's two
+# variants therefore isolates the precomputed EROFS path, and comparing across
+# rungs shows how that difference scales with image size (2 MB to 130 MB).
 #
-# NOTE: the two defaults are NOT a controlled A/B. The precomputed pause layer
-# is ~316 KB and the unsigned busybox layer is ~2.2 MB, so any PullImage
-# difference between them is dominated by image size, not by the dm-verity
-# path. Isolating the precomputed path needs two images with identical content
-# where only one carries the referrers; until such a pair exists these are
-# reported side by side without a delta.
-IMAGE_SET="${CRITEST_IMAGE_SET:-precomputed=${PRECOMPUTED_IMAGE} unsigned=${UNSIGNED_IMAGE}}"
+# Published by sessions/dmverity-prototype/files/acl-perf/publish-ab-ladder.sh.
+LADDER="${CRITEST_LADDER:-pause:3.6 livenessprobe:v2.18.0 azure-cloud-node-manager:v1.34.8-2 kube-proxy:v1.34.7-2 azurefile-csi:v1.34.5}"
+
+# critest's imagePullingBenchmarkImage takes exactly one reference, so each
+# variant needs its own critest pass. Each gets its own output directory and its
+# suites are reported under "<variant>/<suite>".
+build_image_set() {
+    local rung name
+    for rung in $LADDER; do
+        name="${rung%%:*}"
+        printf 'plain-%s=%s/perf-plain/%s ' "$name" "$REGISTRY" "$rung"
+        printf 'erofs-%s=%s/perf-erofs/%s ' "$name" "$REGISTRY" "$rung"
+    done
+}
+IMAGE_SET="${CRITEST_IMAGE_SET:-$(build_image_set)}"
+
+# Pod and container suites are image-independent, so running them once per rung
+# would waste most of the budget. Only the first variant pair measures them.
+POD_SAMPLES="${CRITEST_SAMPLES:-30}"
 ENDPOINT="unix:///run/containerd/containerd.sock"
 OUT=/var/tmp/critest-out
 
@@ -111,16 +116,25 @@ critest --version 2>/dev/null || true
 echo "Kernel:    $(uname -r)"
 echo "Runtime:   $(ctr --version 2>/dev/null || echo unknown)"
 echo "Samples:   ${SAMPLES} pods/containers, ${IMAGES} image iterations"
-echo "Variants:  ${IMAGE_SET}"
+echo "Variants:  $(echo $IMAGE_SET | wc -w)"
 echo
 
 CRITEST_RC=0
+first=1
 for variant in $IMAGE_SET; do
     label="${variant%%=*}"
     image="${variant#*=}"
     if [ "$label" = "$variant" ] || [ -z "$image" ]; then
         echo "skipping malformed variant '${variant}', expected label=imageref" >&2
         continue
+    fi
+
+    # The pod and container suites do not touch the benchmarked image, so run
+    # them only once instead of repeating them for every rung of the ladder.
+    if [ "$first" = 1 ]; then
+        pods="$POD_SAMPLES"; first=0
+    else
+        pods=0
     fi
 
     # critest does not create -benchmarking-output-dir; every result write fails
@@ -131,10 +145,10 @@ for variant in $IMAGE_SET; do
     # critest silently fall back to its defaults, which run a single sample and
     # emit no data files at all.
     cat >/var/tmp/critest-params.yaml <<PARAMS_EOF
-containersNumber: ${SAMPLES}
+containersNumber: ${pods}
 containersNumberParallel: 1
 containerBenchmarkTimeoutSeconds: 60
-podsNumber: ${SAMPLES}
+podsNumber: ${pods}
 podsNumberParallel: 1
 podBenchmarkTimeoutSeconds: 60
 imagesNumber: ${IMAGES}
@@ -151,9 +165,13 @@ PARAMS_EOF
         -runtime-endpoint "$ENDPOINT" \
         -image-endpoint "$ENDPOINT" \
         -benchmarking-params-file /var/tmp/critest-params.yaml \
-        -benchmarking-output-dir "${OUT}/${label}" 2>&1 | tail -40
+        -benchmarking-output-dir "${OUT}/${label}" 2>&1 | tail -15
     rc=${PIPESTATUS[0]}
     [ "$rc" -ne 0 ] && CRITEST_RC=$rc
+
+    # Drop the pulled image so the next rung measures a cold pull rather than a
+    # cache hit.
+    crictl -r "$ENDPOINT" rmi "$image" >/dev/null 2>&1 || true
     echo
 done
 
@@ -213,18 +231,35 @@ for suite, body in suites.items():
     for name, stats in body['operations'].items():
         print(f"      {name:<28} p50 {stats['p50Ms']:>9} ms   p95 {stats['p95Ms']:>9} ms")
 
-# PullImage side by side. Deliberately no percentage delta: the variants are
-# different images, so a delta would mostly reflect layer size rather than the
-# dm-verity path. Compare these only against the same variant on another image.
-pulls = {b['variant']: b['operations']['PullImage']
-         for b in suites.values()
-         if b['suite'] == 'image_lifecycle' and 'PullImage' in b['operations']}
-if len(pulls) > 1:
-    print("\n--- PullImage by image variant (different images; not a controlled A/B)")
-    for variant in sorted(pulls):
-        stats = pulls[variant]
-        print(f"      {variant:<28} p50 {stats['p50Ms']:>9} ms   "
-              f"p95 {stats['p95Ms']:>9} ms")
+# Controlled A/B: plain-<rung> and erofs-<rung> are the same content and share a
+# manifest digest, differing only in the dm-verity referrer, so this delta
+# isolates the precomputed EROFS path rather than image size.
+pulls = {}
+for body in suites.values():
+    if body['suite'] != 'image_lifecycle' or 'PullImage' not in body['operations']:
+        continue
+    variant = body['variant']
+    if '-' not in variant:
+        continue
+    arm, rung = variant.split('-', 1)
+    pulls.setdefault(rung, {})[arm] = body['operations']['PullImage']
+
+paired = {rung: arms for rung, arms in pulls.items()
+          if 'plain' in arms and 'erofs' in arms}
+if paired:
+    print("\n--- PullImage: precomputed EROFS vs plain (identical content)")
+    print(f"      {'image':<28} {'plain p50':>10} {'erofs p50':>10} {'delta':>9}   "
+          f"{'plain p95':>10} {'erofs p95':>10}")
+    for rung in sorted(paired, key=lambda r: paired[r]['plain']['p50Ms'] or 0):
+        plain, erofs = paired[rung]['plain'], paired[rung]['erofs']
+        delta = (f"{(erofs['p50Ms'] - plain['p50Ms']) / plain['p50Ms'] * 100:+.1f}%"
+                 if plain['p50Ms'] else 'n/a')
+        print(f"      {rung:<28} {plain['p50Ms']:>10} {erofs['p50Ms']:>10} {delta:>9}   "
+              f"{plain['p95Ms']:>10} {erofs['p95Ms']:>10}")
+
+unpaired = sorted(set(pulls) - set(paired))
+if unpaired:
+    print(f"      (no plain/erofs pair for: {', '.join(unpaired)})")
 
 print("ACL_CRITEST_JSON=" + json.dumps({'critestRc': rc, 'suites': suites}, sort_keys=True))
 
