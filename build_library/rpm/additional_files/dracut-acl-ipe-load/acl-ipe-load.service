@@ -1,0 +1,15 @@
+[Unit]
+Description=Load and activate ACL IPE policy
+Documentation=https://docs.kernel.org/admin-guide/LSM/ipe.html
+DefaultDependencies=no
+After=initrd-setup-root.service
+Before=initrd-parse-etc.service initrd-switch-root.target initrd-switch-root.service sysroot-boot.service
+ConditionKernelCommandLine=ipe.enforce
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/acl-ipe-load
+
+[Install]
+WantedBy=initrd.target
