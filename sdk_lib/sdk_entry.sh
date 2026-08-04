@@ -108,6 +108,12 @@ fi
 sed -i -e '/export INJECT_DOCKER_SYSEXT=/d' /home/sdk/.bashrc 2>/dev/null || true
 echo "export INJECT_DOCKER_SYSEXT='${INJECT_DOCKER_SYSEXT:-false}'" >> /home/sdk/.bashrc
 
+# Forward the optional IPE image feature into commands run as the sdk user.
+sed -i -e '/export ACL_IPE_ENABLE=/d' /home/sdk/.bashrc 2>/dev/null || true
+if [[ -n "${ACL_IPE_ENABLE:-}" ]]; then
+    echo "export ACL_IPE_ENABLE='${ACL_IPE_ENABLE}'" >> /home/sdk/.bashrc
+fi
+
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"
     echo -n "exec bash -l -i -c '" >"$cmd"
