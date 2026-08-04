@@ -17,6 +17,12 @@
 #   - Within a single rule, fields combine with AND (all must match).
 #   - Across rules, they combine with OR (any matching rule allows failure).
 #   - A test with no exceptions is always enforced.
+#   - imageVariants values match exactly ('acl' never matches 'acl-t').
+#   - A rule whose ONLY constraint is imageVariants also drops the test
+#     from kola selection on that variant (it can never pass there, so it
+#     is not run at all). A rule that combines imageVariants with
+#     platforms/architectures/bootloader keeps the test selected and only
+#     forgives failures at evaluation where every key matches.
 
 version: 1
 
