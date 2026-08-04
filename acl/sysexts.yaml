@@ -57,6 +57,10 @@ sysexts:
     mode: embedded
     packages:
       - app-containers/containerd
+      # Activates the EROFS/dm-verity profile. Subpackages are not pulled in
+      # implicitly by the catalog mapping above, so this must be listed
+      # explicitly or the ACL profile is simply absent from the image.
+      - containerd2-erofs
 
  # --- scenario-specific sysexts -----------------------------------------
   - name: docker
