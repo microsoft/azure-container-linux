@@ -73,6 +73,22 @@ tests:
   - name: acl.ignition.v1.users
   - name: acl.ignition.v2.users
 
+  - name: acl.security.cis.logperms
+    exceptions:
+      - platforms: [qemu]
+        architectures: [aarch64]
+        reason: Flakiness on TCG-emulated arm64, failures due to slow device enumeration.
+  - name: acl.security.cis.modprobe
+    exceptions:
+      - platforms: [qemu]
+        architectures: [aarch64]
+        reason: Flakiness on TCG-emulated arm64, failures due to slow device enumeration.
+  - name: acl.security.cis.sshd
+    exceptions:
+      - platforms: [qemu]
+        architectures: [aarch64]
+        reason: Flakiness on TCG-emulated arm64, failures due to slow device enumeration.
+
   - name: bpf.execsnoop
   - name: bpf.local-gadget
 
