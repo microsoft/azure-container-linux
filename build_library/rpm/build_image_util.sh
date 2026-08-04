@@ -1011,6 +1011,12 @@ _configure_misc_rpm() {
             "${root_fs_dir}/etc/systemd/system/${service}.service.d/20-after-sysext.conf"
     done
 
+    info "RPM mode: Configuring SELinux context for the sysext overlay mount helper"
+    sudo install -d -m 0755 "${root_fs_dir}/etc/systemd/system/systemd-sysext.service.d"
+    sudo install -m 0644 \
+        "${BUILD_LIBRARY_DIR}/rpm/additional_files/20-overlay-selinux-context.conf" \
+        "${root_fs_dir}/etc/systemd/system/systemd-sysext.service.d/20-overlay-selinux-context.conf"
+
     info "RPM mode: Installing post-sysext SELinux context probe"
     sudo install -m 0644 \
         "${BUILD_LIBRARY_DIR}/rpm/additional_files/acl-sysext-context-probe.service" \
