@@ -11,6 +11,7 @@ history, and triage notes live here so the `.spec` stays terse.
 | Patch8    | dm-verity baseline | Upstream `add-signature-support` (aadagarwal). Split off by author so it can be dropped once it merges into azurelinux, leaving Patch9-10 unchanged. |
 | Patch9    | ACL integration | Derives referrer discovery and snapshotter-side formatting from the erofs differ's capability, and adds the ACL entry points. Leaves Patch8's defaults untouched. |
 | Patch10   | precomputed artifacts | Consumes signed precomputed EROFS/Merkle bundles and selects the newest. |
+| Patch11   | EROFS SELinux sharing | Strips the MCS categories from the shared layer's `context=` so one EROFS layer can be mounted by more than one container. Independent of dm-verity; touches only upstream code. |
 
 ## Source of truth
 
@@ -24,12 +25,21 @@ v2.2.4  193637f7ee8ae5f5aa5248f49e7baa3e6164966e   ( == %define commit_hash )
   └─ 8 commits   AZL Patch0-7, replayed with git am (upstream authorship kept)
       tag acl/base-v2.2.4-azl    843e2a8d0b96cd50a5886ba0da7f1cac232a4394
       └─ 1 commit   Aadhar Agarwal's add-signature-support  -> Patch8
-          tag acl/platform-v2.2.4  2a27bae8aefac877038537d07cf92f731c656661
-          ├─ 8152b7ef0  erofs: derive dm-verity referrer discovery from the differ
-          ├─ def15530c  erofs: support dm-verity referrers on OCI-layout imports
-          ├─ ff03414e2  erofs: consume signed precomputed EROFS and dm-verity artifacts
-          └─ b8a7d1bb8  erofs: select the newest precomputed bundle and fail closed
+          tag acl/platform-v2.2.4  a15edb104acd75913f84e71aedc79e24ca1dcd24
+          ├─ 9e59efb49  erofs: derive dm-verity referrer discovery from the differ
+          ├─ 02191af08  erofs: support dm-verity referrers on OCI-layout imports
+          ├─ 492478354  erofs: consume signed precomputed EROFS and dm-verity artifacts
+          ├─ d04b266f5  erofs: select the newest precomputed bundle and fail closed
+          └─ f347a5052  erofs: share layer mounts across containers under SELinux
 ```
+
+The SHAs above are informational; the **trailers** are what the export commands
+below actually resolve, so a rebase does not invalidate the procedure. The tag
+does matter, and it has gone stale once: until 2026-08-04 `acl/platform-v2.2.4`
+still pointed at `2a27bae8a` from before a branch regeneration, which was no
+longer an ancestor of the branch, so the documented procedure would have
+exported the wrong Patch8-10. If you rewrite the branch, **move the tag**, then
+re-run the export and confirm the committed patch files come back unchanged.
 
 Each ACL commit carries an `Acl-Patch-Group:` trailer naming the patch file it
 belongs to. Four commits collapse into two patch files: the commits exist for
@@ -37,8 +47,9 @@ review and bisect, the patch files exist so the spec stays maintainable.
 
 | Group trailer | Commits | Patch file |
 |---|---|---|
-| `acl-dmverity-integration` | `8152b7ef0`, `def15530c` | Patch9 |
-| `acl-dmverity-precomputed` | `ff03414e2`, `b8a7d1bb8` | Patch10 |
+| `acl-dmverity-integration` | `9e59efb49`, `02191af08` | Patch9 |
+| `acl-dmverity-precomputed` | `492478354`, `d04b266f5` | Patch10 |
+| `acl-erofs-selinux` | `f347a5052` | Patch11 |
 
 containerd does **not** inspect IPE policy. Layer signatures are passed to the
 kernel whenever they are present and the feature is enabled; the kernel alone
@@ -184,6 +195,67 @@ snapshotter (index 16 versus 9 in the resolved graph), so the capability is
 never visible and the check silently reads false. Gate 5 exists to catch exactly
 this.
 
+## Patch11 — EROFS layer sharing under SELinux
+
+Independent of everything above. It fixes upstream code
+(`plugins/mount/erofs/plugin_linux.go`), predates none of the dm-verity work,
+and can be dropped on its own the moment an equivalent lands upstream.
+
+`context=` is a **superblock-wide** SELinux mount option, and an EROFS layer is
+a single block device, so every container that uses a given image shares one
+superblock for that layer. The mount manager creates a new activation per
+container and `client.getRootFS` appends the consuming container's mount label
+to every mount it gets back from the snapshotter — and that label carries a
+per-container MCS category pair. So the first container's label fixes the
+superblock and the next one is rejected:
+
+```
+SELinux: mount invalid.  Same superblock, different security settings for (dev dm-1, type erofs)
+```
+
+containerd surfaces this as a bare `EINVAL` from the mount handler.
+
+This is fatal on a Kubernetes node rather than merely inconvenient, because
+**every pod sandbox shares the pause image**: only the first pod on a node can
+start. It is what failed all nine
+`kubeadm.v1.{32.4,33.0,34.1}.{calico,cilium,flannel}.base` kola cases in build
+1175150, through five reruns each. The captured journals show 274 superblock
+rejections against a single device carrying the pause layer, with 274 distinct
+MCS pairs requested against it. Single-container tests passed, which fits — the
+defect needs two consumers of one layer before it can fire.
+
+The fix strips the MCS categories from the shared layer's label so every
+consumer requests an identical superblock. **Isolation is unaffected**, for the
+same reason overlayfs is unaffected: the per-container overlay stacked above the
+layer still carries the full MCS pair, and that overlay is what the container
+actually sees. Overlayfs lowerdirs already sit on disk as
+`container_ro_file_t:s0` with no categories — confirmed on an ACL node with
+`matchpathcon` — so the EROFS layer was the outlier, and this brings it to
+parity rather than loosening anything.
+
+Details that matter if you touch `stripMCSCategories`:
+
+- A label is `user:role:type:level` and only `level` may contain further colons,
+  so `SplitN(label, ":", 4)` is what isolates it.
+- Categories are whatever follows the first colon on each side of a `-` range,
+  so `s0-s0:c1,c2` and `s0:c1,c2` both reduce to `s0`.
+- A degenerate range `s0-s0` collapses to `s0` so it matches what a
+  non-range mount asks for. Without that, two consumers can still disagree.
+- Quoting is preserved. The kernel quotes labels containing commas; a useful
+  tell when reading `/proc/mounts` is that stripped labels appear **unquoted**
+  and unstripped ones **quoted**.
+
+`plugin_linux_test.go` covers all of the above, plus the convergence property
+the fix actually depends on — that any two labels differing only in categories
+strip to the same string — and idempotency.
+
+Verified on an enforcing ACL node by starting two sandboxes from one image from
+a known-clean state, with the running binary's version asserted per arm: stock
+2.2.4 started 1 of 2 with one superblock rejection, the patched build started
+2 of 2 with none and mounted the shared layer twice concurrently, while the
+overlays above kept their distinct MCS pairs. **Not yet reproven through kola**
+— that needs a build carrying this patch.
+
 ## Regeneration procedure
 
 Patches are **exported from commits**, not diffed between hand-built trees:
@@ -194,10 +266,12 @@ BASE=$(git rev-parse acl/base-v2.2.4-azl^{})
 AADHAR=$(git rev-parse acl/platform-v2.2.4^{})
 INT=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-integration')
 PRE=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-precomputed')
+SEL=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-erofs-selinux')
 
 git diff $BASE   $AADHAR  # -> Patch8   (prepend the From:/Subject: header)
 git diff $AADHAR $INT     # -> Patch9
 git diff $INT    $PRE     # -> Patch10
+git diff $PRE    $SEL     # -> Patch11
 ```
 
 Each boundary is the **last** commit carrying a given group trailer, so the
@@ -213,7 +287,7 @@ commits. `patch -p1` ignores the header, exactly as it does for a
 Run all five after regenerating. The first is the one that matters most: it is
 what proves the patch files and the branch have not diverged.
 
-1. **Tree equality.** Apply Patch0-10 to the pristine `Source0` tarball with
+1. **Tree equality.** Apply Patch0-11 to the pristine `Source0` tarball with
    `patch -p1 --fuzz=0` (what `%autosetup -p1` does) and `diff -r` the result
    against a worktree at `dadelan/acl-erofs`. Must be **identical**.
 2. **Cross-compile.** `GOOS=linux`, `GOOS=windows`, and `GOOS=darwin`
@@ -222,7 +296,7 @@ what proves the patch files and the branch have not diverged.
    non-Linux builds — this has regressed before.
 3. **gofmt.** `gofmt -l` must be silent. containerd CI enforces it.
 4. **Feature tests.**
-   `go test ./internal/dmverity/... ./plugins/diff/erofs/... ./plugins/snapshots/erofs/... ./pkg/snapshotters/... ./core/transfer/local/...`
+   `go test ./internal/dmverity/... ./plugins/diff/erofs/... ./plugins/mount/erofs/... ./plugins/snapshots/erofs/... ./pkg/snapshotters/... ./core/transfer/local/...`
 5. **Plugin graph.** `go build -o /tmp/ctrd ./cmd/containerd && /tmp/ctrd config dump`
    must exit 0. `registry.Graph` has no cycle detection, so a bad `Requires` edge
    is a startup stack overflow that compiles, passes `gofmt`, passes every unit
