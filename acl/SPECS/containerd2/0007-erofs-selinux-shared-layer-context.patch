@@ -1,0 +1,252 @@
+From: Dallas Delaney <dadelan@microsoft.com>
+Subject: [PATCH] erofs: share layer mounts across containers under SELinux
+
+Single commit on the ACL containerd branch:
+
+  erofs: share layer mounts across containers under SELinux
+
+An EROFS layer is mounted once per container that uses it, but all those
+mounts resolve to a single block device and therefore a single superblock.
+context= is a superblock-wide setting, so the first container's label fixes
+it for everyone and the next one is rejected outright:
+
+  SELinux: mount invalid. Same superblock, different security settings
+           for (dev dm-1, type erofs)
+
+client.getRootFS appends the consuming container's mount label to every
+mount returned by the snapshotter, and that label carries a per-container
+MCS category pair, so two containers never agree on it. Any image used more
+than once fails to start on an enforcing node.
+
+This is not a corner case on a Kubernetes node: every pod sandbox shares the
+pause image, so only the first pod on a node can start. It is what fails the
+kubeadm kola tests -- all nine kubeadm.v1.{32.4,33.0,34.1}.{calico,cilium,
+flannel}.base cases lost five reruns each in build 1175150, and the captured
+journals show 274 superblock rejections against a single device carrying the
+pause layer, with 274 distinct MCS pairs requested against it.
+
+Strip the MCS categories from the shared layer's label so every consumer asks
+for the same superblock. This is what overlayfs already does: its lowerdirs
+sit on disk as container_ro_file_t:s0 with no categories, and the
+per-container label lives on the overlay above. Isolation is preserved for the
+same reason -- the overlay stacked on the layer still carries the full MCS
+pair, and that overlay is what the container actually sees.
+
+Verified on an enforcing ACL node by running two sandboxes off one image:
+stock 2.2.4 started 1 of 2 with one superblock rejection, the patched build
+started 2 of 2 with none and mounted the shared layer twice concurrently,
+while the overlays above kept their distinct MCS pairs.
+
+This touches only upstream code (plugins/mount/erofs/plugin_linux.go) and is
+independent of the dm-verity series, so it applies last and can be dropped on
+its own once the equivalent lands upstream.
+
+diff --git a/plugins/mount/erofs/plugin_linux.go b/plugins/mount/erofs/plugin_linux.go
+index 728c800ec..745367c91 100644
+--- a/plugins/mount/erofs/plugin_linux.go
++++ b/plugins/mount/erofs/plugin_linux.go
+@@ -63,6 +63,83 @@ func NewErofsMountHandler() mount.Handler {
+ // parallelism to win by sharding this per device name.
+ var dmverityOpenMu sync.Mutex
+ 
++// selinuxContextOpt is the superblock-wide SELinux mount option. Unlike
++// defcontext=/rootcontext=, it labels the whole superblock, so every mount of a
++// given device must agree on its value.
++const selinuxContextOpt = "context="
++
++// shareSELinuxContext rewrites a "context=" mount option so that every container
++// sharing a layer asks for the same superblock label.
++//
++// EROFS layers are shared by design: one image layer backs every container
++// started from that image. Each container is a separate mount-manager
++// activation, so the same block device gets mounted once per container, and the
++// kernel hands out a single superblock for it. "context=" is a property of that
++// superblock, so the first container's label wins and the next one is rejected:
++//
++//	SELinux: mount invalid. Same superblock, different security settings
++//	         for (dev dm-1, type erofs)
++//
++// The caller (client.getRootFS) appends the consuming container's mount label to
++// every snapshotter mount, and that label carries a per-container MCS category
++// pair -- so with more than one container per image the options are guaranteed to
++// differ and the mount is guaranteed to fail.
++//
++// Stripping the MCS categories makes the option identical for all consumers.
++// This matches how overlayfs already shares layers: its lowerdirs sit on disk
++// labelled container_ro_file_t:s0, with no categories, and the per-container
++// label lives on the overlay above. Isolation is preserved for the same reason
++// it is under overlayfs -- the overlay stacked on this layer still carries the
++// full MCS label, and that overlay, not the read-only layer, is what the
++// container sees.
++func shareSELinuxContext(opt string) string {
++	value := strings.TrimPrefix(opt, selinuxContextOpt)
++
++	// The value is normally quoted, since an MCS pair contains a comma and would
++	// otherwise be parsed as a second mount option.
++	quoted := len(value) > 1 && value[0] == '"' && value[len(value)-1] == '"'
++	if quoted {
++		value = value[1 : len(value)-1]
++	}
++
++	shared := stripMCSCategories(value)
++	if shared == value {
++		return opt
++	}
++	if quoted {
++		return selinuxContextOpt + `"` + shared + `"`
++	}
++	return selinuxContextOpt + shared
++}
++
++// stripMCSCategories removes the category set from the level component of an
++// SELinux label, turning "system_u:object_r:container_file_t:s0:c262,c637" into
++// "system_u:object_r:container_file_t:s0".
++//
++// A label is user:role:type:level, and only the level may contain further
++// colons, so a 4-way split isolates it. The level is either a single
++// sensitivity ("s0:c1,c2") or a range ("s0-s0:c1.c1023"); categories are
++// whatever follows the first colon on each side of the range.
++func stripMCSCategories(label string) string {
++	parts := strings.SplitN(label, ":", 4)
++	if len(parts) < 4 {
++		// No level component, so there are no categories to strip.
++		return label
++	}
++
++	low, high, isRange := strings.Cut(parts[3], "-")
++	low, _, _ = strings.Cut(low, ":")
++	if !isRange {
++		parts[3] = low
++	} else if high, _, _ = strings.Cut(high, ":"); low == high {
++		parts[3] = low
++	} else {
++		parts[3] = low + "-" + high
++	}
++
++	return strings.Join(parts, ":")
++}
++
+ // openOrReuseDmverityDevice returns the /dev/mapper path for a layer, creating
+ // the device if it does not already exist and validating it if it does.
+ func openOrReuseDmverityDevice(ctx context.Context, source, deviceName string, metadata *dmverity.DmverityMetadata) (string, error) {
+@@ -188,6 +265,13 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ 		if v == "loop" || strings.HasPrefix(v, "X-containerd.dmverity=") {
+ 			continue
+ 		}
++		if strings.HasPrefix(v, selinuxContextOpt) {
++			if shared := shareSELinuxContext(v); shared != v {
++				log.G(ctx).WithField("from", v).WithField("to", shared).
++					Debug("dropped MCS categories from shared EROFS layer label")
++				v = shared
++			}
++		}
+ 		filteredOptions = append(filteredOptions, v)
+ 	}
+ 	m.Options = filteredOptions
+diff --git a/plugins/mount/erofs/plugin_linux_test.go b/plugins/mount/erofs/plugin_linux_test.go
+new file mode 100644
+index 000000000..9f98e7a5e
+--- /dev/null
++++ b/plugins/mount/erofs/plugin_linux_test.go
+@@ -0,0 +1,101 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package erofs
++
++import "testing"
++
++func TestShareSELinuxContext(t *testing.T) {
++	for _, tc := range []struct {
++		name     string
++		opt      string
++		expected string
++	}{
++		{
++			name: "quoted MCS pair is the case containerd actually emits",
++			// client.getRootFS quotes the label because the MCS pair contains a
++			// comma, which would otherwise split into a second mount option.
++			opt:      `context="system_u:object_r:container_file_t:s0:c262,c637"`,
++			expected: `context="system_u:object_r:container_file_t:s0"`,
++		},
++		{
++			name:     "unquoted label is rewritten too",
++			opt:      "context=system_u:object_r:container_file_t:s0:c262,c637",
++			expected: "context=system_u:object_r:container_file_t:s0",
++		},
++		{
++			name:     "single category",
++			opt:      `context="system_u:object_r:container_file_t:s0:c262"`,
++			expected: `context="system_u:object_r:container_file_t:s0"`,
++		},
++		{
++			name: "degenerate range collapses",
++			opt:  `context="system_u:object_r:container_file_t:s0-s0:c1.c1023"`,
++			// s0-s0 carries no more information than s0, and collapsing it keeps
++			// the value equal to what a non-range mount of the same layer asks for.
++			expected: `context="system_u:object_r:container_file_t:s0"`,
++		},
++		{
++			name:     "real range is preserved, minus categories",
++			opt:      `context="system_u:object_r:container_file_t:s0-s15:c0.c1023"`,
++			expected: `context="system_u:object_r:container_file_t:s0-s15"`,
++		},
++		{
++			name: "already category-less is returned untouched",
++			// The identity case matters: it is what makes two containers agree on
++			// the superblock label.
++			opt:      `context="system_u:object_r:container_ro_file_t:s0"`,
++			expected: `context="system_u:object_r:container_ro_file_t:s0"`,
++		},
++		{
++			name:     "label without a level is left alone",
++			opt:      "context=system_u:object_r:container_file_t",
++			expected: "context=system_u:object_r:container_file_t",
++		},
++		{
++			name:     "empty value is left alone",
++			opt:      "context=",
++			expected: "context=",
++		},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			if got := shareSELinuxContext(tc.opt); got != tc.expected {
++				t.Errorf("shareSELinuxContext(%q) = %q, want %q", tc.opt, got, tc.expected)
++			}
++		})
++	}
++}
++
++// TestShareSELinuxContextConverges is the property the fix actually depends on:
++// two containers with different MCS pairs must end up asking for the same
++// superblock label, or the second mount of a shared layer is rejected.
++func TestShareSELinuxContextConverges(t *testing.T) {
++	first := shareSELinuxContext(`context="system_u:object_r:container_file_t:s0:c262,c637"`)
++	second := shareSELinuxContext(`context="system_u:object_r:container_file_t:s0:c154,c335"`)
++
++	if first != second {
++		t.Errorf("labels did not converge: %q != %q", first, second)
++	}
++}
++
++func TestStripMCSCategoriesIsIdempotent(t *testing.T) {
++	const label = "system_u:object_r:container_file_t:s0:c262,c637"
++
++	once := stripMCSCategories(label)
++	if twice := stripMCSCategories(once); twice != once {
++		t.Errorf("not idempotent: %q then %q", once, twice)
++	}
++}

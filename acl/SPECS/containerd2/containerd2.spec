@@ -31,7 +31,7 @@ Version: 2.2.4
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 6015.verity%{?dist}
+Release: 6016.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -96,6 +96,8 @@ Patch7:  CVE-2026-27136.patch
 Patch8:  0004-dm-verity-add-signature-support-upstream.patch
 Patch9:  0005-dm-verity-acl-integration.patch
 Patch10: 0006-dm-verity-precomputed-erofs-artifacts.patch
+# Independent of the dm-verity series; touches only upstream code.
+Patch11: 0007-erofs-selinux-shared-layer-context.patch
 
 %{?systemd_requires}
 
@@ -231,6 +233,19 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Tue Aug 04 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6016.verity
+- Patch11: share EROFS layer mounts across containers under SELinux. context=
+  is a superblock-wide option and an EROFS layer is one block device, so the
+  first container's per-container MCS pair fixed the label for every later
+  consumer and the kernel rejected the second mount with "Same superblock,
+  different security settings". Any image used more than once failed to start
+  on an enforcing node; because every pod sandbox shares the pause image, only
+  the first pod on a node could start, which is what failed all nine kubeadm
+  kola cases in build 1175150. Strip the MCS categories from the shared layer's
+  label so every consumer requests the same superblock, matching what overlayfs
+  already does with its lowerdirs. Isolation is unchanged: the per-container
+  overlay stacked above the layer still carries the full MCS pair.
+
 * Fri Jul 31 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6015.verity
 - Patch8: serialize the dm-verity device existence check against creation.
   Mapper names derive from the snapshot ID, so concurrent mounts of the same
