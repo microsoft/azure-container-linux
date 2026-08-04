@@ -11,12 +11,8 @@
 # Tunables (env):
 #   CRITEST_SAMPLES   pods/containers per benchmark suite  (default 30)
 #   CRITEST_IMAGES    image benchmark iterations           (default 10)
-#   CRITEST_IMAGE     image driven through pull/pod/container benchmarks
-#   CRITEST_LIST_IMAGES  space-separated set for the image-listing benchmark
+#   CRITEST_IMAGE_SET  space-separated "label=imageref" variants to benchmark
 #   CRITEST_TIMEOUT   overall wall-clock budget in seconds (default 2400)
-#
-# To compare the signed/precomputed path against an unsigned image, run twice
-# with different CRITEST_IMAGE values rather than changing this default.
 
 # No `set -e`: critest's exit code must survive to the summarizer below, which
 # reports the collected datapoints before deciding pass/fail.
@@ -31,15 +27,25 @@ BUDGET="${CRITEST_TIMEOUT:-2400}"
 REGISTRY="${ACL_PERF_REGISTRY:-notaryaksegistry.azurecr.io}"
 
 # Pinned by digest on purpose. This manifest carries the precomputed EROFS
-# dm-verity referrers (application/vnd.cncf.notary.dmverity.v1); the
-# :validation-20260709-1630 tag was later re-pushed and now resolves to a
-# manifest with no referrers, which would silently benchmark the ordinary
-# unpacking path instead of the precomputed one.
+# dm-verity referrers (application/vnd.cncf.notary.dmverity.v1). The
+# :validation-20260709-1630 tag currently resolves to this same digest, but the
+# tag has been re-pointed before; pinning keeps a re-push from silently
+# benchmarking the ordinary unpacking path instead of the precomputed one.
 PRECOMPUTED_IMAGE="${REGISTRY}/dmverity-precomputed-test/pause@sha256:7c38f24774e3cbd906d2d33c38354ccf787635581c122965132c9bd309754d4a"
 UNSIGNED_IMAGE="${REGISTRY}/test-unsigned/busybox:1.36"
 
-PERF_IMAGE="${CRITEST_IMAGE:-$PRECOMPUTED_IMAGE}"
-LIST_IMAGES="${CRITEST_LIST_IMAGES:-$PRECOMPUTED_IMAGE $UNSIGNED_IMAGE}"
+# critest's imagePullingBenchmarkImage takes exactly one reference, so the only
+# way to benchmark more than one image is to run critest once per variant. Each
+# variant gets its own output directory and its suites are reported under
+# "<label>/<suite>".
+#
+# NOTE: the two defaults are NOT a controlled A/B. The precomputed pause layer
+# is ~316 KB and the unsigned busybox layer is ~2.2 MB, so any PullImage
+# difference between them is dominated by image size, not by the dm-verity
+# path. Isolating the precomputed path needs two images with identical content
+# where only one carries the referrers; until such a pair exists these are
+# reported side by side without a delta.
+IMAGE_SET="${CRITEST_IMAGE_SET:-precomputed=${PRECOMPUTED_IMAGE} unsigned=${UNSIGNED_IMAGE}}"
 ENDPOINT="unix:///run/containerd/containerd.sock"
 OUT=/var/tmp/critest-out
 
@@ -100,10 +106,31 @@ fi
 
 rm -rf "$OUT"; mkdir -p "$OUT"
 
-# The parameters file must be flat lowerCamelCase. Nesting these keys makes
-# critest silently fall back to its defaults, which run a single sample and
-# emit no data files at all.
-cat >/var/tmp/critest-params.yaml <<PARAMS_EOF
+echo "=== ACL CRI benchmark (upstream critest) ==="
+critest --version 2>/dev/null || true
+echo "Kernel:    $(uname -r)"
+echo "Runtime:   $(ctr --version 2>/dev/null || echo unknown)"
+echo "Samples:   ${SAMPLES} pods/containers, ${IMAGES} image iterations"
+echo "Variants:  ${IMAGE_SET}"
+echo
+
+CRITEST_RC=0
+for variant in $IMAGE_SET; do
+    label="${variant%%=*}"
+    image="${variant#*=}"
+    if [ "$label" = "$variant" ] || [ -z "$image" ]; then
+        echo "skipping malformed variant '${variant}', expected label=imageref" >&2
+        continue
+    fi
+
+    # critest does not create -benchmarking-output-dir; every result write fails
+    # with only a log-level error (and a zero exit code) if it is missing.
+    mkdir -p "${OUT}/${label}"
+
+    # The parameters file must be flat lowerCamelCase. Nesting these keys makes
+    # critest silently fall back to its defaults, which run a single sample and
+    # emit no data files at all.
+    cat >/var/tmp/critest-params.yaml <<PARAMS_EOF
 containersNumber: ${SAMPLES}
 containersNumberParallel: 1
 containerBenchmarkTimeoutSeconds: 60
@@ -113,29 +140,22 @@ podBenchmarkTimeoutSeconds: 60
 imagesNumber: ${IMAGES}
 imagesNumberParallel: 1
 imageBenchmarkTimeoutSeconds: 120
-imagePullingBenchmarkImage: "${PERF_IMAGE}"
+imagePullingBenchmarkImage: "${image}"
 podContainerStartBenchmarkTimeoutSeconds: 60
 imageListingBenchmarkImages:
+  - "${image}"
 PARAMS_EOF
-for image in $LIST_IMAGES; do
-    echo "  - \"${image}\"" >>/var/tmp/critest-params.yaml
+
+    echo "--- variant ${label}: ${image}"
+    timeout "$BUDGET" critest -benchmark \
+        -runtime-endpoint "$ENDPOINT" \
+        -image-endpoint "$ENDPOINT" \
+        -benchmarking-params-file /var/tmp/critest-params.yaml \
+        -benchmarking-output-dir "${OUT}/${label}" 2>&1 | tail -40
+    rc=${PIPESTATUS[0]}
+    [ "$rc" -ne 0 ] && CRITEST_RC=$rc
+    echo
 done
-
-echo "=== ACL CRI benchmark (upstream critest) ==="
-critest --version 2>/dev/null || true
-echo "Kernel:    $(uname -r)"
-echo "Runtime:   $(ctr --version 2>/dev/null || echo unknown)"
-echo "Samples:   ${SAMPLES} pods/containers, ${IMAGES} image iterations"
-echo "Image:     ${PERF_IMAGE}"
-echo "Listing:   ${LIST_IMAGES}"
-echo
-
-timeout "$BUDGET" critest -benchmark \
-    -runtime-endpoint "$ENDPOINT" \
-    -image-endpoint "$ENDPOINT" \
-    -benchmarking-params-file /var/tmp/critest-params.yaml \
-    -benchmarking-output-dir "$OUT" 2>&1 | tail -40
-CRITEST_RC=${PIPESTATUS[0]}
 
 # Summarize critest's own datapoints. critest emits raw per-operation
 # nanosecond durations; percentiles are computed here only for readability,
@@ -152,7 +172,7 @@ def pct(samples, p):
     return round(samples[k] / 1e6, 2)
 
 suites = {}
-for path in sorted(glob.glob(os.path.join(out_dir, '*.json'))):
+for path in sorted(glob.glob(os.path.join(out_dir, '*', '*.json'))):
     with open(path) as fh:
         data = json.load(fh)
     names = data.get('operationsNames', [])
@@ -176,7 +196,11 @@ for path in sorted(glob.glob(os.path.join(out_dir, '*.json'))):
                 'maxMs': pct(ordered, 100),
             }
     ordered_totals = sorted(totals)
-    suites[os.path.basename(path).replace('_benchmark_data.json', '')] = {
+    variant = os.path.basename(os.path.dirname(path))
+    suite = os.path.basename(path).replace('_benchmark_data.json', '')
+    suites[f'{variant}/{suite}'] = {
+        'variant': variant,
+        'suite': suite,
         'samples': len(totals),
         'totalP50Ms': pct(ordered_totals, 50),
         'totalP95Ms': pct(ordered_totals, 95),
@@ -188,6 +212,19 @@ for suite, body in suites.items():
           f"total p50 {body['totalP50Ms']} ms / p95 {body['totalP95Ms']} ms")
     for name, stats in body['operations'].items():
         print(f"      {name:<28} p50 {stats['p50Ms']:>9} ms   p95 {stats['p95Ms']:>9} ms")
+
+# PullImage side by side. Deliberately no percentage delta: the variants are
+# different images, so a delta would mostly reflect layer size rather than the
+# dm-verity path. Compare these only against the same variant on another image.
+pulls = {b['variant']: b['operations']['PullImage']
+         for b in suites.values()
+         if b['suite'] == 'image_lifecycle' and 'PullImage' in b['operations']}
+if len(pulls) > 1:
+    print("\n--- PullImage by image variant (different images; not a controlled A/B)")
+    for variant in sorted(pulls):
+        stats = pulls[variant]
+        print(f"      {variant:<28} p50 {stats['p50Ms']:>9} ms   "
+              f"p95 {stats['p95Ms']:>9} ms")
 
 print("ACL_CRITEST_JSON=" + json.dumps({'critestRc': rc, 'suites': suites}, sort_keys=True))
 
