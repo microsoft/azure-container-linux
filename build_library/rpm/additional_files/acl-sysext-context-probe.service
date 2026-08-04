@@ -7,7 +7,8 @@ ConditionSecurity=selinux
 
 [Service]
 Type=simple
-ExecStart=/bin/bash -c 'exec 3</usr/bin/stat 4</usr/bin/sleep; while [[ ! -e /usr/.systemd-sysext/extensions ]]; do /proc/self/fd/4 0.1; done; /proc/self/fd/3 -L -c "SYSEXT CONTEXT: %%n %%C" /usr /usr/.systemd-sysext /usr/lib/systemd/systemd-networkd /usr/lib/systemd/systemd-resolved /usr/lib/systemd/systemd-timesyncd'
+ExecStartPre=/usr/sbin/semodule -DB
+ExecStart=/bin/bash -c 'exec 3</usr/bin/stat 4</usr/bin/sleep; while [[ ! -e /usr/.systemd-sysext/extensions ]]; do /proc/self/fd/4 0.1; done; shopt -s nullglob; /proc/self/fd/3 -L -c "SYSEXT CONTEXT: %%n %%C" /usr /usr/.systemd-sysext /usr/lib/systemd/systemd-networkd /usr/lib/systemd/systemd-resolved /usr/lib/systemd/systemd-timesyncd /usr/lib*/ld-linux* /usr/lib*/libc.so.6; while IFS= read -r line; do [[ "$line" == *" /usr "* ]] && echo "SYSEXT MOUNT: $line"; done </proc/self/mountinfo'
 StandardOutput=journal+console
 StandardError=journal+console
 
