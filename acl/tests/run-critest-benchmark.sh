@@ -9,19 +9,37 @@
 # with no kubelet competing for the runtime. That holds for a plain ACL test VM.
 #
 # Tunables (env):
-#   CRITEST_SAMPLES   pods/containers per benchmark suite (default 10)
-#   CRITEST_IMAGES    image-pull benchmark iterations     (default 5)
-#   CRITEST_IMAGE     benchmark image, must pull anonymously
-#   CRITEST_TIMEOUT   overall wall-clock budget in seconds (default 900)
+#   CRITEST_SAMPLES   pods/containers per benchmark suite  (default 30)
+#   CRITEST_IMAGES    image benchmark iterations           (default 10)
+#   CRITEST_IMAGE     image driven through pull/pod/container benchmarks
+#   CRITEST_LIST_IMAGES  space-separated set for the image-listing benchmark
+#   CRITEST_TIMEOUT   overall wall-clock budget in seconds (default 2400)
+#
+# To compare the signed/precomputed path against an unsigned image, run twice
+# with different CRITEST_IMAGE values rather than changing this default.
 
 # No `set -e`: critest's exit code must survive to the summarizer below, which
 # reports the collected datapoints before deciding pass/fail.
 set -uo pipefail
 
-SAMPLES="${CRITEST_SAMPLES:-10}"
-IMAGES="${CRITEST_IMAGES:-5}"
-PERF_IMAGE="${CRITEST_IMAGE:-mcr.microsoft.com/azurelinux/busybox:1.36}"
-BUDGET="${CRITEST_TIMEOUT:-900}"
+SAMPLES="${CRITEST_SAMPLES:-30}"
+IMAGES="${CRITEST_IMAGES:-10}"
+BUDGET="${CRITEST_TIMEOUT:-2400}"
+
+# notaryaksegistry has anonymous pull enabled, so no ACR credentials are needed
+# on the test VM.
+REGISTRY="${ACL_PERF_REGISTRY:-notaryaksegistry.azurecr.io}"
+
+# Pinned by digest on purpose. This manifest carries the precomputed EROFS
+# dm-verity referrers (application/vnd.cncf.notary.dmverity.v1); the
+# :validation-20260709-1630 tag was later re-pushed and now resolves to a
+# manifest with no referrers, which would silently benchmark the ordinary
+# unpacking path instead of the precomputed one.
+PRECOMPUTED_IMAGE="${REGISTRY}/dmverity-precomputed-test/pause@sha256:7c38f24774e3cbd906d2d33c38354ccf787635581c122965132c9bd309754d4a"
+UNSIGNED_IMAGE="${REGISTRY}/test-unsigned/busybox:1.36"
+
+PERF_IMAGE="${CRITEST_IMAGE:-$PRECOMPUTED_IMAGE}"
+LIST_IMAGES="${CRITEST_LIST_IMAGES:-$PRECOMPUTED_IMAGE $UNSIGNED_IMAGE}"
 ENDPOINT="unix:///run/containerd/containerd.sock"
 OUT=/var/tmp/critest-out
 
@@ -74,17 +92,20 @@ imagesNumber: ${IMAGES}
 imagesNumberParallel: 1
 imageBenchmarkTimeoutSeconds: 120
 imagePullingBenchmarkImage: "${PERF_IMAGE}"
-imageListingBenchmarkImages:
-  - "${PERF_IMAGE}"
 podContainerStartBenchmarkTimeoutSeconds: 60
+imageListingBenchmarkImages:
 PARAMS_EOF
+for image in $LIST_IMAGES; do
+    echo "  - \"${image}\"" >>/var/tmp/critest-params.yaml
+done
 
 echo "=== ACL CRI benchmark (upstream critest) ==="
 critest --version 2>/dev/null || true
 echo "Kernel:    $(uname -r)"
 echo "Runtime:   $(ctr --version 2>/dev/null || echo unknown)"
-echo "Samples:   ${SAMPLES} pods/containers, ${IMAGES} image pulls"
+echo "Samples:   ${SAMPLES} pods/containers, ${IMAGES} image iterations"
 echo "Image:     ${PERF_IMAGE}"
+echo "Listing:   ${LIST_IMAGES}"
 echo
 
 timeout "$BUDGET" critest -benchmark \
