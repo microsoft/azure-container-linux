@@ -171,6 +171,13 @@ OSREL
     # Common base args — platform-agnostic, same for all image types.
     cmdline+=" root=LABEL=ROOT rootflags=rw"
     cmdline+=" consoleblank=0"
+    # The initramfs loads the signed IPE policy before switch_root. Keep the
+    # rollout permissive (audit-only). Success auditing is disabled: it emits an
+    # audit record for every allowed execution, which floods the audit stream and
+    # measurably skews performance measurements. Denials are still recorded.
+    if [[ "${ACL_IPE_ENABLE:-}" == "1" ]]; then
+        cmdline+=" ipe.enforce=0 ipe.success_audit=0"
+    fi
     # NOTE: crashkernel=256M is delivered via a UKI addon (kdump.addon.efi)
     # rather than baked into the main UKI cmdline.  This allows disabling
     # kdump by removing the addon from the ESP without rebuilding the UKI.
