@@ -95,6 +95,12 @@ CONTAINER_RUNG="${CRITEST_CONTAINER_RUNG:-}"
 ENDPOINT="unix:///run/containerd/containerd.sock"
 OUT=/var/tmp/critest-out
 
+# Results are emitted twice: as a file for anyone running this by hand on a
+# node, and as a single greppable stdout line because the pipeline runs this on
+# a remote VM and only stdout is guaranteed to come back.
+RESULTS_JSON="${CRITEST_RESULTS_JSON:-/var/tmp/critest-results.json}"
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 command -v critest >/dev/null 2>&1 || { echo "critest is not installed" >&2; exit 1; }
 systemctl is-active --quiet containerd || { echo "containerd is not active" >&2; exit 1; }
 
@@ -321,10 +327,12 @@ ACL_REPO="$REPO" \
 ACL_SNAP_BEFORE="$SNAP_PROBE_BEFORE" \
 ACL_SNAP_AFTER="$SNAP_PROBE_AFTER" \
 ACL_CONTAINERD="$(containerd --version 2>/dev/null | awk '{print $3}')" \
-python3 - "$OUT" "$CRITEST_RC" <<'PY'
-import glob, json, os, sys
+ACL_STARTED_AT="$STARTED_AT" \
+ACL_LADDER="$LADDER" \
+python3 - "$OUT" "$CRITEST_RC" "$RESULTS_JSON" <<'PY'
+import glob, json, os, sys, time
 
-out_dir, rc = sys.argv[1], int(sys.argv[2])
+out_dir, rc, results_path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 
 def pct(samples, p):
     if not samples:
@@ -415,10 +423,10 @@ def table(title, suite_name, op):
         return
     print(f"\n--- {title} on {node['activeSnapshotter']} "
           f"(node: {node['image'] or 'unknown'})")
-    print(f"      {'image':<28} {'n':>4} {'p50 ms':>10} {'p95 ms':>10} {'max ms':>10}")
+    print(f"      {'image':<36} {'n':>4} {'p50 ms':>10} {'p95 ms':>10} {'max ms':>10}")
     for rung in sorted(rows, key=lambda r: rows[r]['p50Ms'] or 0):
         s = rows[rung]
-        print(f"      {rung:<28} {s['n']:>4} {s['p50Ms']:>10} {s['p95Ms']:>10} {s['maxMs']:>10}")
+        print(f"      {rung:<36} {s['n']:>4} {s['p50Ms']:>10} {s['p95Ms']:>10} {s['maxMs']:>10}")
 
 table('PullImage', 'image_lifecycle', 'PullImage')
 for op in ('CreateContainer', 'StartContainer'):
@@ -427,8 +435,62 @@ for op in ('CreateContainer', 'StartContainer'):
 deltas = ', '.join('{} {:+d}'.format(k, v['delta']) for k, v in node['snapshotters'].items())
 print(f"\nActive snapshotter: {node['activeSnapshotter']}  ({deltas})")
 
-print("ACL_CRITEST_JSON=" + json.dumps(
-    {'critestRc': rc, 'node': node, 'suites': suites}, sort_keys=True))
+# Identity of the run itself. Without this a datapoint cannot be plotted over
+# time or joined back to the build that produced it, which is the difference
+# between a log line and a dashboard. The ADO variables are read from the
+# environment so the script stays runnable by hand, where they are simply absent.
+run = {
+    'startedAt': os.environ.get('ACL_STARTED_AT', ''),
+    'finishedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    'buildId': os.environ.get('BUILD_BUILDID', ''),
+    'buildNumber': os.environ.get('BUILD_BUILDNUMBER', ''),
+    'pipeline': os.environ.get('SYSTEM_DEFINITIONNAME', ''),
+    'jobName': os.environ.get('AGENT_JOBNAME', ''),
+    'branch': os.environ.get('ACL_SCRIPTS_REF', '') or os.environ.get('BUILD_SOURCEBRANCH', ''),
+    'commit': os.environ.get('BUILD_SOURCEVERSION', ''),
+    'ladder': os.environ.get('ACL_LADDER', '').split(),
+}
+
+# Nested `suites` mirrors critest's own shape and will churn as critest changes.
+# `metrics` is the flat, denormalized view a dashboard should ingest: one row per
+# measured operation, with every key it needs to group by already on the row.
+# Adding a suite or an operation appends rows instead of reshaping the document.
+metrics = []
+for body in suites.values():
+    common = {
+        'suite': body['suite'],
+        'image': body['variant'],
+        'snapshotter': node['activeSnapshotter'],
+        'nodeImage': node['image'],
+        'containerd': node['containerd'],
+    }
+    for name, stats in body['operations'].items():
+        metrics.append(dict(common, operation=name, unit='ms', **stats))
+    metrics.append(dict(common, operation='TOTAL', unit='ms',
+                        n=body['samples'], minMs=None,
+                        p50Ms=body['totalP50Ms'], p95Ms=body['totalP95Ms'],
+                        maxMs=None))
+metrics.sort(key=lambda m: (m['suite'], m['image'], m['operation']))
+
+document = {
+    'schemaVersion': 1,
+    'critestRc': rc,
+    'run': run,
+    'node': node,
+    'metrics': metrics,
+    'suites': suites,
+}
+
+try:
+    with open(results_path, 'w') as fh:
+        json.dump(document, fh, indent=2, sort_keys=True)
+    print(f"\nResults written to {results_path} ({len(metrics)} metric rows)")
+except OSError as exc:
+    print(f"\ncould not write {results_path}: {exc}", file=sys.stderr)
+
+# Single line, no embedded newlines: the pipeline runs this on a remote VM and
+# recovers the payload by grepping this prefix out of the job log.
+print("ACL_PERF_RESULTS=" + json.dumps(document, sort_keys=True))
 
 if rc != 0:
     print(f"critest exited {rc}", file=sys.stderr)
