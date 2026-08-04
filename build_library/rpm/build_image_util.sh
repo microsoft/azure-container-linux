@@ -1011,6 +1011,12 @@ _configure_misc_rpm() {
             "${root_fs_dir}/etc/systemd/system/${service}.service.d/20-after-sysext.conf"
     done
 
+    info "RPM mode: Installing post-sysext SELinux context probe"
+    sudo install -m 0644 \
+        "${BUILD_LIBRARY_DIR}/rpm/additional_files/acl-sysext-context-probe.service" \
+        "${root_fs_dir}/etc/systemd/system/acl-sysext-context-probe.service"
+    systemd_enable "${root_fs_dir}" sysinit.target acl-sysext-context-probe.service
+
     # NOTE: in permissive/enforcing mode, the ACL IPE policy loader is installed
     # as an initramfs dracut module (99acl-ipe-load) in dracut_install.sh, not as
     # a real-root service. It must run before switch_root: once the real root's

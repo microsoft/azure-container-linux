@@ -1,0 +1,15 @@
+[Unit]
+Description=Report SELinux contexts after the system extension merge
+DefaultDependencies=no
+After=local-fs.target
+Before=systemd-sysext.service
+ConditionSecurity=selinux
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'exec 3</usr/bin/stat 4</usr/bin/sleep; while [[ ! -e /usr/.systemd-sysext/extensions ]]; do /proc/self/fd/4 0.1; done; /proc/self/fd/3 -L -c "SYSEXT CONTEXT: %%n %%C" /usr /usr/.systemd-sysext /usr/lib/systemd/systemd-networkd /usr/lib/systemd/systemd-resolved /usr/lib/systemd/systemd-timesyncd'
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=sysinit.target
