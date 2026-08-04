@@ -164,6 +164,13 @@ get_vm_size_family() {
     fi
 }
 
+get_boot_diagnostics_storage_name() {
+    local vm_rg_name="$1"
+    local digest
+    digest=$(printf '%s' "${AZ_SUB_ID}:${vm_rg_name}" | sha256sum)
+    printf 'bootdiag%s\n' "${digest:0:16}"
+}
+
 create_vm_resource_group() {
     local vm_rg_name="$1"
     local region="$2"
@@ -191,6 +198,24 @@ create_vm_resource_group() {
         az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
         return 1
     fi
+
+    # azure-cli 2.88 cannot request managed diagnostics during `az vm create`
+    # (Azure/azure-cli#30340), so use an account co-located with each VM attempt.
+    local boot_diagnostics_storage_name
+    boot_diagnostics_storage_name=$(get_boot_diagnostics_storage_name "$vm_rg_name")
+    info "Creating boot diagnostics storage account: $boot_diagnostics_storage_name"
+    if ! az storage account create \
+        --name "$boot_diagnostics_storage_name" \
+        --resource-group "$vm_rg_name" \
+        --location "$region" \
+        --sku Standard_LRS \
+        --kind StorageV2 \
+        --min-tls-version TLS1_2 \
+        --allow-blob-public-access false \
+        --tags "${tags[@]}"; then
+        az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
+        return 1
+    fi
 }
 
 capture_failed_vm_boot_diagnostics() {
@@ -199,17 +224,21 @@ capture_failed_vm_boot_diagnostics() {
     local vm_size="$3"
     local region="$4"
 
-    if ! az vm show -g "$vm_rg_name" -n "$vm_name" &>/dev/null; then
+    local diagnostics_enabled
+    if ! diagnostics_enabled=$(az vm show \
+        -g "$vm_rg_name" -n "$vm_name" \
+        --query 'diagnosticsProfile.bootDiagnostics.enabled' -o tsv 2>/dev/null); then
         info "No VM resource available for boot diagnostics"
         return 0
     fi
 
-    # azure-cli 2.88 cannot enable managed diagnostics in `az vm create`
-    # (Azure/azure-cli#30340), so earlier boot output may be unavailable.
-    warn "Attempting post-failure boot diagnostics: SKU=${vm_size} Region=${region}"
-    az vm boot-diagnostics enable \
-        --resource-group "$vm_rg_name" \
-        --name "$vm_name" &>/dev/null || true
+    warn "Retrieving failed VM boot diagnostics: SKU=${vm_size} Region=${region}"
+    if [[ "${diagnostics_enabled,,}" != "true" ]]; then
+        warn "Boot diagnostics were not enabled during provisioning; attempting post-failure enablement"
+        az vm boot-diagnostics enable \
+            --resource-group "$vm_rg_name" \
+            --name "$vm_name" &>/dev/null || true
+    fi
 
     local boot_log_err_file
     if ! boot_log_err_file=$(mktemp); then
@@ -590,7 +619,8 @@ _try_vm_create() {
     local image_id="$3"
     local vm_size="$4"
     local region="$5"
-    shift 5
+    local boot_diagnostics_storage_name="$6"
+    shift 6
     local -a extra_tags=("$@")
     _VM_CREATE_RESULT=""
     _enforce_arm_security_contract || return 2
@@ -607,6 +637,7 @@ _try_vm_create() {
         --image "$image_id"
         --location "$region"
         --public-ip-address ""
+        --boot-diagnostics-storage "$boot_diagnostics_storage_name"
         --tags "${extra_tags[@]}"
     )
 
@@ -685,7 +716,6 @@ _try_vm_create() {
             return 1
         fi
         # Detect candidate-specific errors so the caller can move on to the
-        # next SKU/region instead of aborting.
         # next SKU/region instead of aborting.
         #   - SkuNotAvailable / AllocationFailed → regional capacity restriction
         #   - OperationNotAllowed + quota/cores   → subscription quota restriction
@@ -955,6 +985,8 @@ create_vm_azure() {
     local provisioning_timeout_count=0
     local provisioning_timeout_combos=()
     local -A timed_out_families=()
+    local current_rg_region=""
+    local boot_diagnostics_storage_name=""
 
     info "VM SKU fallback candidates:"
     info "  SKUs:    ${unique_skus[*]}"
@@ -1001,53 +1033,36 @@ create_vm_azure() {
             continue
         fi
 
-        # The prior region's last attempted candidate already deleted its RG.
+        if [[ -n "$vm_rg_name" && -n "$current_rg_region" && "$current_rg_region" != "$region" ]]; then
+            info "Switching from ${current_rg_region} to ${region}; recreating resource group"
+            az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
+            vm_rg_name=""
+            VM_RG=""
+            current_rg_region=""
+        fi
         if [[ -z "$vm_rg_name" ]]; then
             vm_rg_name=$(get_vm_rg_name)
         fi
-        if ! create_vm_resource_group \
-            "$vm_rg_name" "$region" "$public_ip_name" "${all_tags[@]}"; then
-            error "Failed to prepare resource group '${vm_rg_name}'"
-            return 1
+        if [[ "$current_rg_region" != "$region" ]]; then
+            if ! create_vm_resource_group \
+                "$vm_rg_name" "$region" "$public_ip_name" "${all_tags[@]}"; then
+                error "Failed to prepare resource group '${vm_rg_name}'"
+                return 1
+            fi
+            VM_RG="$vm_rg_name"
+            current_rg_region="$region"
+            boot_diagnostics_storage_name=$(get_boot_diagnostics_storage_name "$vm_rg_name")
         fi
-        VM_RG="$vm_rg_name"
 
         local sku_index sku sku_family
         for ((sku_index = 0; sku_index < ${#region_skus[@]}; sku_index++)); do
             sku="${region_skus[$sku_index]}"
             sku_family=$(get_vm_size_family "$sku")
             tried_combos+=("${sku}@${region}")
-            local attempt=1
-            local max_attempts=2
             local result rc
-
-            while [[ $attempt -le $max_attempts ]]; do
-                info "Attempting VM creation: SKU=${sku} Region=${region} Attempt=${attempt}/${max_attempts}..."
-
-                # Invoke directly so this shell owns the background Azure CLI
-                # process and can clean it up if the validator is interrupted.
-                if _try_vm_create "$vm_rg_name" "$VM_NAME" "$image_id" "$sku" "$region" "${all_tags[@]}"; then
-                    rc=0
-                else
-                    rc=$?
-                fi
-                result="$_VM_CREATE_RESULT"
-
-                if [[ $rc -ne 0 && ( $rc -ne 1 || "$result" != "SKU_NOT_AVAILABLE" ) ]]; then
-                    _collect_failed_vm_diagnostics \
-                        "$vm_rg_name" "$VM_NAME" \
-                        "${sku}-${region}-attempt${attempt}"
-                fi
-
-                if [[ ( $rc -eq 3 || $rc -eq 4 ) && $attempt -lt $max_attempts ]]; then
-                    warn "Retryable VM creation failure for ${sku} in ${region}; recreating the full resource group before one retry"
-                    _replace_vm_rg "$vm_rg_name" "$region" "${all_tags[@]}"
-                    vm_rg_name="$VM_RG"
-                    attempt=$(( attempt + 1 ))
-                    continue
-                fi
-                break
-            done
+            result=$(_try_vm_create \
+                "$vm_rg_name" "$VM_NAME" "$image_id" "$sku" "$region" \
+                "$boot_diagnostics_storage_name" "${all_tags[@]}") && rc=0 || rc=$?
 
             if [[ $rc -eq 0 ]]; then
                 echo "$result"  # Print the az vm create JSON output
@@ -1083,15 +1098,20 @@ create_vm_azure() {
                     timed_out_families[$sku_family]=1
                     provisioning_timeout_combos+=("${sku}@${region}")
                     warn "✗ OS provisioning timed out: ${sku} in ${region} (family ${sku_family}, ${provisioning_timeout_count}/${AZ_MAX_PROVISIONING_TIMEOUTS})"
+
+                    # A timeout may leave a VM, NIC, disk, or deployment behind.
+                    # Isolate the next attempt instead of racing their deletion.
+                    capture_failed_vm_boot_diagnostics \
+                        "$vm_rg_name" "$VM_NAME" "$sku" "$region" || true
+                    az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
+                    vm_rg_name=""
+                    VM_RG=""
+                    current_rg_region=""
+                    boot_diagnostics_storage_name=""
                 else
                     warn "✗ Retryable VM creation failure: ${sku} in ${region} — trying next candidate"
+                    az vm delete -g "$vm_rg_name" -n "$VM_NAME" -y --no-wait 2>/dev/null || true
                 fi
-                # A provisioning timeout may leave a VM, NIC, disk, or deployment
-                # behind. Isolate the next attempt instead of racing their deletion.
-                capture_failed_vm_boot_diagnostics \
-                    "$vm_rg_name" "$VM_NAME" "$sku" "$region" || true
-                az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
-                vm_rg_name=""
 
                 if ((provisioning_timeout_count >= AZ_MAX_PROVISIONING_TIMEOUTS)); then
                     error "VM provisioning timed out on ${provisioning_timeout_count} distinct SKU families; likely image boot failure"
@@ -1108,7 +1128,7 @@ create_vm_azure() {
                         break
                     fi
                 done
-                if [[ "$has_remaining_candidate" == "true" ]]; then
+                if [[ "$has_remaining_candidate" == "true" && -z "$vm_rg_name" ]]; then
                     vm_rg_name=$(get_vm_rg_name)
                     if ! create_vm_resource_group \
                         "$vm_rg_name" "$region" "$public_ip_name" "${all_tags[@]}"; then
@@ -1116,6 +1136,8 @@ create_vm_azure() {
                         return 1
                     fi
                     VM_RG="$vm_rg_name"
+                    current_rg_region="$region"
+                    boot_diagnostics_storage_name=$(get_boot_diagnostics_storage_name "$vm_rg_name")
                 fi
                 continue
             else
@@ -1138,6 +1160,7 @@ create_vm_azure() {
 
     if [[ "$all_families_timed_out" == "true" ]]; then
         error "All configured VM SKU families timed out provisioning; likely image boot failure"
+        error "  Note: a family that times out is skipped in all remaining regions"
         error "  Timed out: ${provisioning_timeout_combos[*]}"
     else
         error "No VM candidate succeeded across all candidate regions"
