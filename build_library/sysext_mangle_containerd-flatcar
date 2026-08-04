@@ -2,22 +2,27 @@
 
 set -euo pipefail
 rootfs="${1}"
-
-pushd "${rootfs}"
+: "${PACKAGE_SOURCE_MODE:=PORTAGE}"
 
 # No manpages on Flatcar, no need to ship "stress" tool
-rm -rf ./usr/{bin/{containerd-stress,gen-manpages},lib/debug/}
+rm -rf "${rootfs:?}"/usr/{bin/{containerd-stress,gen-manpages},lib/debug/}
 
-dir=$(dirname "${BASH_SOURCE[0]}")
-files_dir="${dir}/../sdk_container/src/third_party/coreos-overlay/coreos/sysext/containerd"
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+  # RPM mode ships the Azure Linux unit and config as installed by the RPM. The
+  # ACL-specific behaviour that the Flatcar files carry is layered on top as a
+  # systemd drop-in, so none of the Flatcar files are copied in.
+  "$(dirname "$0")/rpm/sysext_mangle_containerd-flatcar.sh" "${rootfs}"
+else
+  script_root="$(cd "$(dirname "$0")/../"; pwd)"
+  files_dir="${script_root}/sdk_container/src/third_party/coreos-overlay/coreos/sysext/containerd"
 
-echo ">>> NOTICE $0: installing extra files from '${files_dir}'"
-# ATTENTION: don't preserve ownership as repo is owned by sdk user
-cp -vdR --preserve=mode,timestamps "${files_dir}/"* ./
+  echo ">>> NOTICE $0: installing extra files from '${files_dir}'"
+  # ATTENTION: don't preserve ownership as repo is owned by sdk user
+  cp -vdR --preserve=mode,timestamps "${files_dir}/"* "${rootfs}"
+fi
 
-install -D -m0644 /dev/stdin ./usr/lib/systemd/system/multi-user.target.d/10-containerd-service.conf <<EOF
+install -D -m0644 /dev/stdin "${rootfs}/usr/lib/systemd/system/multi-user.target.d/10-containerd-service.conf" <<EOF
 [Unit]
 Upholds=containerd.service
 EOF
 
-popd
