@@ -13,6 +13,9 @@
 #   CRITEST_IMAGES    image benchmark iterations           (default 10)
 #   CRITEST_IMAGE_SET  space-separated "label=imageref" variants to benchmark
 #   CRITEST_TIMEOUT   overall wall-clock budget in seconds (default 2400)
+#   ACL_CNI_BIN_DIR   where CNI plugin binaries live       (default /opt/cni/bin)
+#   ACL_CNI_VERSION   containernetworking/plugins release  (default v1.6.2)
+#   ACL_CNI_TARBALL   pre-staged plugins tarball; skips the download entirely
 
 # No `set -e`: critest's exit code must survive to the summarizer below, which
 # reports the collected datapoints before deciding pass/fail.
@@ -104,10 +107,64 @@ STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 command -v critest >/dev/null 2>&1 || { echo "critest is not installed" >&2; exit 1; }
 systemctl is-active --quiet containerd || { echo "containerd is not active" >&2; exit 1; }
 
-# critest's pod sandbox benchmarks need a usable CNI network. The image ships
-# containernetworking-plugins but no default config, so drop in a minimal
-# bridge conflist. Guarded: never clobber a real network configuration.
-if [ -z "$(ls -A /etc/cni/net.d 2>/dev/null)" ]; then
+# critest's pod and container suites need a working CNI network; the image
+# suites do not. ACL ships no CNI plugins at all -- on a real node AKS installs
+# them at provisioning time -- so a bare test VM has an empty /opt/cni/bin and
+# every RunPodSandbox fails with `failed to find plugin "bridge" in path`.
+# Stage the upstream plugins ourselves, pinned and checksummed. /usr is
+# read-only (dm-verity + sysext) so this has to land in /opt, which is writable.
+CNI_BIN_DIR="${ACL_CNI_BIN_DIR:-/opt/cni/bin}"
+CNI_VERSION="${ACL_CNI_VERSION:-v1.6.2}"
+CNI_PLUGINS="bridge host-local loopback portmap"
+CNI_AVAILABLE=1
+
+case "$(uname -m)" in
+    x86_64)  CNI_ARCH=amd64; CNI_SHA256=b8e811578fb66023f90d2e238d80cec3bdfca4b44049af74c374d4fae0f9c090 ;;
+    aarch64) CNI_ARCH=arm64; CNI_SHA256=01e0e22acc7f7004e4588c1fe1871cc86d7ab562cd858e1761c4641d89ebfaa4 ;;
+    *)       CNI_ARCH=""; CNI_SHA256="" ;;
+esac
+
+missing_cni_plugins() {
+    local p missing=""
+    for p in $CNI_PLUGINS; do
+        [ -x "${CNI_BIN_DIR}/${p}" ] || missing="${missing} ${p}"
+    done
+    printf '%s' "${missing# }"
+}
+
+install_cni_plugins() {
+    local tarball="${ACL_CNI_TARBALL:-}" tmp
+    if [ -z "$tarball" ]; then
+        [ -n "$CNI_ARCH" ] || { echo "no CNI build for $(uname -m)" >&2; return 1; }
+        tmp="$(mktemp -d)"
+        tarball="${tmp}/cni-plugins.tgz"
+        curl -sSL --retry 3 --retry-delay 2 -m 120 -o "$tarball" \
+            "https://github.com/containernetworking/plugins/releases/download/${CNI_VERSION}/cni-plugins-linux-${CNI_ARCH}-${CNI_VERSION}.tgz" \
+            || { echo "could not download CNI plugins ${CNI_VERSION}/${CNI_ARCH}" >&2; return 1; }
+        # Verify before extracting: this is a network artifact being unpacked as
+        # root into a directory containerd will exec from.
+        echo "${CNI_SHA256}  ${tarball}" | sha256sum -c - >/dev/null 2>&1 \
+            || { echo "CNI plugins checksum mismatch; refusing to install" >&2; return 1; }
+    fi
+    mkdir -p "$CNI_BIN_DIR"
+    tar -xzf "$tarball" -C "$CNI_BIN_DIR" $(printf './%s ' $CNI_PLUGINS) \
+        || { echo "could not extract CNI plugins" >&2; return 1; }
+    return 0
+}
+
+if [ -n "$(missing_cni_plugins)" ]; then
+    echo "CNI plugins missing from ${CNI_BIN_DIR} ($(missing_cni_plugins)); installing ${CNI_VERSION}"
+    install_cni_plugins || CNI_AVAILABLE=0
+    still_missing="$(missing_cni_plugins)"
+    if [ "$CNI_AVAILABLE" = 1 ] && [ -n "$still_missing" ]; then
+        echo "CNI plugins still missing after install:${still_missing}" >&2
+        CNI_AVAILABLE=0
+    fi
+fi
+
+# Drop in a minimal bridge conflist. Guarded: never clobber a real network
+# configuration, and never advertise a config whose plugins we could not stage.
+if [ "$CNI_AVAILABLE" = 1 ] && [ -z "$(ls -A /etc/cni/net.d 2>/dev/null)" ]; then
     mkdir -p /etc/cni/net.d
     cat >/etc/cni/net.d/10-aclperf-bridge.conflist <<'CNI_EOF'
 {
@@ -132,6 +189,29 @@ if [ -z "$(ls -A /etc/cni/net.d 2>/dev/null)" ]; then
 CNI_EOF
 fi
 
+# Every plugin type named by the active conflist must resolve to a binary.
+# containerd reports NetworkReady once it has *parsed* a conflist -- it never
+# checks that the referenced plugins exist -- so NetworkReady alone is a false
+# green. That is exactly how a whole benchmark run got to exec time before
+# failing on a missing bridge plugin.
+cni_types_resolve() {
+    local conf types t
+    conf="$(ls -1 /etc/cni/net.d/*.conflist /etc/cni/net.d/*.conf 2>/dev/null | head -1)"
+    [ -n "$conf" ] || { echo "no CNI configuration in /etc/cni/net.d" >&2; return 1; }
+    types="$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+for p in d.get("plugins", [d]):
+    if p.get("type"): print(p["type"])
+    ipam = p.get("ipam") or {}
+    if ipam.get("type"): print(ipam["type"])
+' "$conf" 2>/dev/null)" || { echo "could not parse ${conf}" >&2; return 1; }
+    for t in $types; do
+        [ -x "${CNI_BIN_DIR}/${t}" ] || { echo "CNI config ${conf} needs plugin '${t}', absent from ${CNI_BIN_DIR}" >&2; return 1; }
+    done
+    return 0
+}
+
 # Wait for containerd to report the network as ready rather than sleeping a
 # fixed interval. containerd watches conf_dir with fsnotify, and starting a
 # benchmark while that reload is still in flight makes CNI plugin execs fail
@@ -147,13 +227,28 @@ sys.exit(0 if any(c.get("type") == "NetworkReady" and c.get("status") for c in c
 '
 }
 
-for _ in $(seq 1 30); do
-    network_ready && break
-    sleep 2
-done
-if ! network_ready; then
-    echo "containerd never reported NetworkReady; CNI config is not usable" >&2
-    exit 1
+if [ "$CNI_AVAILABLE" = 1 ]; then
+    for _ in $(seq 1 30); do
+        network_ready && break
+        sleep 2
+    done
+    if ! network_ready; then
+        echo "containerd never reported NetworkReady" >&2
+        CNI_AVAILABLE=0
+    elif ! cni_types_resolve; then
+        CNI_AVAILABLE=0
+    fi
+fi
+
+# Degrade instead of failing the build. The image suites need no sandbox, and
+# PullImage is the headline erofs metric, so a node without usable networking
+# still produces the numbers this benchmark exists to collect. The results
+# document records cniAvailable so a consumer can tell "not measured" apart
+# from "measured as zero".
+if [ "$CNI_AVAILABLE" != 1 ]; then
+    echo "WARNING: no usable CNI; skipping pod and container suites, image suites still run" >&2
+    POD_SAMPLES=0
+    CONTAINER_SAMPLES=0
 fi
 
 rm -rf "$OUT"; mkdir -p "$OUT"
@@ -226,6 +321,20 @@ detect_snapshotter() {
     SNAP_PROBE_AFTER="$(snapshot_counts)"
     purge_rung "$probe"
 }
+
+# Sandboxes and containers left behind by an earlier run hold references to
+# committed snapshots, so `crictl rmi` removes the image record but cannot
+# release the snapshot. Everything downstream then silently degrades: the
+# snapshotter probe sees a zero delta because its pull reuses the surviving
+# snapshot, and purge_rung stops isolating variants, so a later rung is
+# credited with an unpack that never happened. Clear the runtime before
+# measuring anything.
+reset_runtime_state() {
+    crictl -r "$ENDPOINT" rmp -fa >/dev/null 2>&1 || true
+    crictl -r "$ENDPOINT" rm -fa >/dev/null 2>&1 || true
+}
+
+reset_runtime_state
 
 first_image="${IMAGE_SET%% *}"; first_image="${first_image#*=}"
 detect_snapshotter "$first_image"
@@ -302,14 +411,32 @@ imageListingBenchmarkImages:
 PARAMS_EOF
 
     echo "--- variant ${label}: ${image}"
+    # critest's "start a container from scratch" spec builds its own sandbox and
+    # is not gated by podsNumber, so podsNumber=0 does not stop it from running
+    # and failing on a node with no usable CNI. Skip it explicitly instead.
+    skip_arg=()
+    if [ "$CNI_AVAILABLE" != 1 ]; then
+        skip_arg=(-ginkgo.skip 'start a container from scratch')
+    fi
+    # Keep the whole run: on failure critest prints the reason *above* its
+    # summary, so tailing the output discards exactly the lines that explain
+    # what went wrong. Show a tail when it passes, the full log when it does not.
+    variant_log="${OUT}/${label}.critest.log"
     timeout "$BUDGET" critest -benchmark \
         -runtime-endpoint "$ENDPOINT" \
         -image-endpoint "$ENDPOINT" \
         "${images_arg[@]}" \
+        "${skip_arg[@]}" \
         -benchmarking-params-file /var/tmp/critest-params.yaml \
-        -benchmarking-output-dir "${OUT}/${label}" 2>&1 | tail -15
-    rc=${PIPESTATUS[0]}
-    [ "$rc" -ne 0 ] && CRITEST_RC=$rc
+        -benchmarking-output-dir "${OUT}/${label}" >"$variant_log" 2>&1
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        CRITEST_RC=$rc
+        echo "--- critest FAILED for ${label} (exit ${rc}); full output follows:"
+        cat "$variant_log"
+    else
+        tail -15 "$variant_log"
+    fi
 
     # Leave nothing cached for the next variant, for the same reason as the
     # purge above.
@@ -329,6 +456,7 @@ ACL_SNAP_AFTER="$SNAP_PROBE_AFTER" \
 ACL_CONTAINERD="$(containerd --version 2>/dev/null | awk '{print $3}')" \
 ACL_STARTED_AT="$STARTED_AT" \
 ACL_LADDER="$LADDER" \
+ACL_CNI_AVAILABLE="$CNI_AVAILABLE" \
 python3 - "$OUT" "$CRITEST_RC" "$RESULTS_JSON" <<'PY'
 import glob, json, os, sys, time
 
@@ -411,14 +539,32 @@ node = {
     'containerd': os.environ.get('ACL_CONTAINERD', ''),
     'selinux': os.environ.get('ACL_SELINUX', ''),
     'imageRepo': os.environ.get('ACL_REPO', ''),
+    # False means the pod and container suites were skipped for lack of a
+    # usable CNI, not that they measured zero.
+    'cniAvailable': os.environ.get('ACL_CNI_AVAILABLE', '1') == '1',
     'snapshotters': snap_delta(os.environ.get('ACL_SNAP_BEFORE', ''),
                                os.environ.get('ACL_SNAP_AFTER', '')),
 }
 
 # The snapshotter that gained snapshots is the one that served the run. Stated
 # explicitly so a result can never be attributed to the wrong storage path.
+# The probe delta is the primary signal, but it goes blind if a pull was served
+# from a snapshot that survived the purge. Absolute counts still answer the
+# question in that case, so fall back to them rather than reporting 'unknown'
+# and losing the attribution the whole A/B matrix depends on. How it was
+# decided is recorded, so a consumer never has to guess how much to trust it.
 active = [k for k, v in node['snapshotters'].items() if v['delta'] > 0]
-node['activeSnapshotter'] = active[0] if len(active) == 1 else (active or ['unknown'])
+if len(active) == 1:
+    node['activeSnapshotter'] = active[0]
+    node['activeSnapshotterSource'] = 'probeDelta'
+else:
+    nonzero = [k for k, v in node['snapshotters'].items() if v['after'] > 0]
+    if len(nonzero) == 1:
+        node['activeSnapshotter'] = nonzero[0]
+        node['activeSnapshotterSource'] = 'absoluteCount'
+    else:
+        node['activeSnapshotter'] = active or nonzero or ['unknown']
+        node['activeSnapshotterSource'] = 'ambiguous'
 
 def table(title, suite_name, op):
     rows = {}
