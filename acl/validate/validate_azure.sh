@@ -224,21 +224,12 @@ capture_failed_vm_boot_diagnostics() {
     local vm_size="$3"
     local region="$4"
 
-    local diagnostics_enabled
-    if ! diagnostics_enabled=$(az vm show \
-        -g "$vm_rg_name" -n "$vm_name" \
-        --query 'diagnosticsProfile.bootDiagnostics.enabled' -o tsv 2>/dev/null); then
+    if ! az vm show -g "$vm_rg_name" -n "$vm_name" &>/dev/null; then
         info "No VM resource available for boot diagnostics"
         return 0
     fi
 
     warn "Retrieving failed VM boot diagnostics: SKU=${vm_size} Region=${region}"
-    if [[ "${diagnostics_enabled,,}" != "true" ]]; then
-        warn "Boot diagnostics were not enabled during provisioning; attempting post-failure enablement"
-        az vm boot-diagnostics enable \
-            --resource-group "$vm_rg_name" \
-            --name "$vm_name" &>/dev/null || true
-    fi
 
     local boot_log_err_file
     if ! boot_log_err_file=$(mktemp); then
@@ -619,11 +610,12 @@ _try_vm_create() {
     local image_id="$3"
     local vm_size="$4"
     local region="$5"
-    local boot_diagnostics_storage_name="$6"
-    shift 6
+    shift 5
     local -a extra_tags=("$@")
     _VM_CREATE_RESULT=""
     _enforce_arm_security_contract || return 2
+    local boot_diagnostics_storage_name
+    boot_diagnostics_storage_name=$(get_boot_diagnostics_storage_name "$vm_rg_name")
 
     local vm_create_args=(
         --resource-group "$vm_rg_name"
@@ -986,7 +978,6 @@ create_vm_azure() {
     local provisioning_timeout_combos=()
     local -A timed_out_families=()
     local current_rg_region=""
-    local boot_diagnostics_storage_name=""
 
     info "VM SKU fallback candidates:"
     info "  SKUs:    ${unique_skus[*]}"
@@ -1040,29 +1031,27 @@ create_vm_azure() {
             VM_RG=""
             current_rg_region=""
         fi
-        if [[ -z "$vm_rg_name" ]]; then
-            vm_rg_name=$(get_vm_rg_name)
-        fi
-        if [[ "$current_rg_region" != "$region" ]]; then
-            if ! create_vm_resource_group \
-                "$vm_rg_name" "$region" "$public_ip_name" "${all_tags[@]}"; then
-                error "Failed to prepare resource group '${vm_rg_name}'"
-                return 1
-            fi
-            VM_RG="$vm_rg_name"
-            current_rg_region="$region"
-            boot_diagnostics_storage_name=$(get_boot_diagnostics_storage_name "$vm_rg_name")
-        fi
 
-        local sku_index sku sku_family
-        for ((sku_index = 0; sku_index < ${#region_skus[@]}; sku_index++)); do
-            sku="${region_skus[$sku_index]}"
+        local sku sku_family
+        for sku in "${region_skus[@]}"; do
             sku_family=$(get_vm_size_family "$sku")
+            if [[ -z "$vm_rg_name" ]]; then
+                vm_rg_name=$(get_vm_rg_name)
+            fi
+            if [[ "$current_rg_region" != "$region" ]]; then
+                if ! create_vm_resource_group \
+                    "$vm_rg_name" "$region" "$public_ip_name" "${all_tags[@]}"; then
+                    error "Failed to prepare resource group '${vm_rg_name}'"
+                    return 1
+                fi
+                VM_RG="$vm_rg_name"
+                current_rg_region="$region"
+            fi
             tried_combos+=("${sku}@${region}")
             local result rc
             result=$(_try_vm_create \
                 "$vm_rg_name" "$VM_NAME" "$image_id" "$sku" "$region" \
-                "$boot_diagnostics_storage_name" "${all_tags[@]}") && rc=0 || rc=$?
+                "${all_tags[@]}") && rc=0 || rc=$?
 
             if [[ $rc -eq 0 ]]; then
                 echo "$result"  # Print the az vm create JSON output
@@ -1085,12 +1074,7 @@ create_vm_azure() {
                     --nic-name "$nic_name" \
                     --resource-group "$vm_rg_name" \
                     --name "$ip_config_name" \
-                    --public-ip-address "${VM_NAME}PublicIP"
-
-                info "Enabling boot diagnostics..."
-                az vm boot-diagnostics enable \
-                    --name "$VM_NAME" \
-                    --resource-group "$vm_rg_name"
+                    --public-ip-address "$public_ip_name"
                 return 0
             elif [[ $rc -eq 1 && ( "$result" == "RETRYABLE_VM_CREATE_ERROR" || "$result" == "PROVISIONING_TIMEOUT" ) ]]; then
                 if [[ "$result" == "PROVISIONING_TIMEOUT" ]]; then
@@ -1107,7 +1091,6 @@ create_vm_azure() {
                     vm_rg_name=""
                     VM_RG=""
                     current_rg_region=""
-                    boot_diagnostics_storage_name=""
                 else
                     warn "✗ Retryable VM creation failure: ${sku} in ${region} — trying next candidate"
                     az vm delete -g "$vm_rg_name" -n "$VM_NAME" -y --no-wait 2>/dev/null || true
@@ -1117,27 +1100,6 @@ create_vm_azure() {
                     error "VM provisioning timed out on ${provisioning_timeout_count} distinct SKU families; likely image boot failure"
                     error "  Timed out: ${provisioning_timeout_combos[*]}"
                     return 1
-                fi
-
-                local has_remaining_candidate=false
-                local next_index next_family
-                for ((next_index = sku_index + 1; next_index < ${#region_skus[@]}; next_index++)); do
-                    next_family=$(get_vm_size_family "${region_skus[$next_index]}")
-                    if [[ -z "${timed_out_families[$next_family]:-}" ]]; then
-                        has_remaining_candidate=true
-                        break
-                    fi
-                done
-                if [[ "$has_remaining_candidate" == "true" && -z "$vm_rg_name" ]]; then
-                    vm_rg_name=$(get_vm_rg_name)
-                    if ! create_vm_resource_group \
-                        "$vm_rg_name" "$region" "$public_ip_name" "${all_tags[@]}"; then
-                        error "Failed to prepare a clean resource group before retrying"
-                        return 1
-                    fi
-                    VM_RG="$vm_rg_name"
-                    current_rg_region="$region"
-                    boot_diagnostics_storage_name=$(get_boot_diagnostics_storage_name "$vm_rg_name")
                 fi
                 continue
             else

@@ -28,9 +28,10 @@ SECURE_BOOT_ENABLED=false
 AZ_ERROR_CODE=""
 AZ_ERROR_MESSAGE=""
 AZ_ERROR_TARGET=""
+TEST_BOOT_DIAGNOSTICS_STORAGE=$(get_boot_diagnostics_storage_name test-rg)
 
 az() {
-    if [[ " $* " != *" --boot-diagnostics-storage test-boot-diag "* ]]; then
+    if [[ " $* " != *" --boot-diagnostics-storage ${TEST_BOOT_DIAGNOSTICS_STORAGE} "* ]]; then
         printf 'missing create-time boot diagnostics storage argument\n' >&2
         return 2
     fi
@@ -58,7 +59,7 @@ assert_classification() {
     local rc=0
     local result
     result=$(_try_vm_create \
-        test-rg test-vm test-image test-sku test-region test-boot-diag 2>/dev/null) || rc=$?
+        test-rg test-vm test-image test-sku test-region 2>/dev/null) || rc=$?
 
     if [[ ${rc} -ne ${expected_rc} || "${result}" != "${expected_result}" ]]; then
         printf 'FAIL: %s returned rc=%s result=%q; expected rc=%s result=%q\n' \
@@ -158,11 +159,6 @@ assert_failed_vm_boot_diagnostics() {
         case "${1:-} ${2:-} ${3:-}" in
             "vm show -g")
                 printf 'vm:show\n' >> "${events_file}"
-                printf 'true\n'
-                return 0
-                ;;
-            "vm boot-diagnostics enable")
-                printf 'diagnostics:enable\n' >> "${events_file}"
                 return 0
                 ;;
             "vm boot-diagnostics get-boot-log")
@@ -550,9 +546,6 @@ assert_fallback_uses_clean_resource_group() {
             "network nic ip-config update")
                 return 0
                 ;;
-            "vm boot-diagnostics enable "*)
-                return 0
-                ;;
             *)
                 printf 'Unexpected az command: %q\n' "$*" >&2
                 return 1
@@ -658,7 +651,7 @@ assert_control_plane_failure_reuses_resource_group() {
                 fi
                 return 0
                 ;;
-            "network nic ip-config update"|"vm boot-diagnostics enable "*)
+            "network nic ip-config update")
                 return 0
                 ;;
             "group delete "*)
@@ -1008,7 +1001,7 @@ assert_final_candidate_moves_directly_to_backup_region() {
                 fi
                 return 0
                 ;;
-            "network nic ip-config update"|"vm boot-diagnostics enable "*)
+            "network nic ip-config update")
                 return 0
                 ;;
             *)
