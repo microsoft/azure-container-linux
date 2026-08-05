@@ -363,6 +363,13 @@ for path in sorted(glob.glob(os.path.join(out_dir, '*', '*.json'))):
                 'p50Ms': pct(ordered, 50),
                 'p95Ms': pct(ordered, 95),
                 'maxMs': pct(ordered, 100),
+                # Keep every sample. critest's raw JSON stays on the VM and dies
+                # with it, and at these counts a p95 is not a tail estimate --
+                # with n<=10, which is what the image suite runs, the p95 index
+                # rounds onto the maximum. Carrying the samples is what lets a
+                # reader recompute honestly and lets a dashboard aggregate
+                # across runs rather than averaging averages.
+                'samplesMs': [round(v / 1e6, 2) for v in ordered],
             }
     ordered_totals = sorted(totals)
     variant = os.path.basename(os.path.dirname(path))
@@ -427,6 +434,12 @@ def table(title, suite_name, op):
     for rung in sorted(rows, key=lambda r: rows[r]['p50Ms'] or 0):
         s = rows[rung]
         print(f"      {rung:<36} {s['n']:>4} {s['p50Ms']:>10} {s['p95Ms']:>10} {s['maxMs']:>10}")
+    # At n<=10 the p95 index rounds onto the last sample, so the column repeats
+    # the maximum instead of estimating a tail. The image suite runs n=10, so
+    # this fires exactly where it matters most -- PullImage.
+    if max(s['n'] for s in rows.values()) <= 10:
+        print(f"      note: n<=10, so p95 lands on the maximum and is not a tail "
+              f"estimate; raw samples are in the results JSON")
 
 table('PullImage', 'image_lifecycle', 'PullImage')
 for op in ('CreateContainer', 'StartContainer'):
