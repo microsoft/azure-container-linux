@@ -129,8 +129,46 @@ main() {
     NODE_SELINUX=$(ssh_cmd 'getenforce 2>/dev/null || echo unknown' 2>/dev/null | tr -d '\r')
     NODE_CONTAINERD=$(ssh_cmd 'containerd --version 2>/dev/null | awk "{print \$3}"' 2>/dev/null | tr -d '\r')
 
+    # Which cell of the IPE x EROFS matrix this node actually is. Boot time is
+    # the one suite where both axes are expected to move the number and neither
+    # is otherwise visible in the output, so without this a run of I1E1 and a run
+    # of I0E0 produce results that are impossible to tell apart afterwards.
+    #
+    # Both are measured on the node rather than read from the build parameters.
+    # A parameter says what was requested; only the node says what shipped, and
+    # the whole failure mode being guarded against here is the two disagreeing.
+    NODE_IPE=$(ssh_cmd 'b=/sys/kernel/security/ipe
+        if [ -d "$b" ]; then
+            e=$(cat "$b/enforce" 2>/dev/null || echo "?")
+            s=$(cat "$b/success_audit" 2>/dev/null || echo "?")
+            a=$(for p in "$b"/policies/*/; do
+                    [ -f "${p}active" ] || continue
+                    [ "$(cat "${p}active" 2>/dev/null)" = "1" ] || continue
+                    basename "$p"
+                done | paste -sd, -)
+            echo "on enforce=${e} success_audit=${s} policies=${a:-none}"
+        else
+            echo "off"
+        fi' 2>/dev/null | tr -d '\r')
+    # The 90-acl-profile.conf drop-in ships only in the containerd2-erofs
+    # subpackage, so its presence is exactly the EROFS axis -- and unlike a
+    # snapshotter probe it needs no image pull, which this suite never does.
+    NODE_EROFS=$(ssh_cmd 'if [ -e /usr/lib/systemd/system/containerd.service.d/90-acl-profile.conf ]; then echo on; else echo off; fi' 2>/dev/null | tr -d '\r')
+
+    # "off" is a legitimate arm; blank is not. A blank value means the probe
+    # itself failed, and an unlabelled boot number is worse than no number --
+    # it will sit in a results table looking like data.
+    if [[ -z "${NODE_IPE}" || -z "${NODE_EROFS}" ]]; then
+        error "could not determine the IPE/EROFS matrix cell for this node" \
+              "(ipe='${NODE_IPE}' erofs='${NODE_EROFS}')"
+        error "refusing to publish boot numbers that cannot be attributed to an arm"
+        exit 1
+    fi
+
     info "Node image: ${NODE_IMAGE}"
     info "Kernel:     ${NODE_KERNEL}"
+    info "IPE:        ${NODE_IPE}"
+    info "EROFS:      ${NODE_EROFS}"
 
     # The boot that is already running is the provisioning boot: it carries
     # first-boot work (cloud-init, disk growth, image specialization) that never
@@ -166,6 +204,8 @@ main() {
     ACL_KERNEL="$NODE_KERNEL" \
     ACL_SELINUX="$NODE_SELINUX" \
     ACL_CONTAINERD="$NODE_CONTAINERD" \
+    ACL_IPE="$NODE_IPE" \
+    ACL_EROFS="$NODE_EROFS" \
     ACL_STARTED_AT="$STARTED_AT" \
     ACL_BOOT_UNITS="$BOOT_UNITS" \
     python3 - "$SAMPLES_RAW" "$RESULTS_JSON" <<'PY'
@@ -280,6 +320,14 @@ node = {
     'kernel': os.environ.get('ACL_KERNEL', ''),
     'containerd': os.environ.get('ACL_CONTAINERD', ''),
     'selinux': os.environ.get('ACL_SELINUX', ''),
+    # The matrix cell, as measured on the node. 'ipe' is the raw probe string
+    # rather than a bool because "IPE is loaded but enforce=0 and no policy is
+    # active" is a distinct and very easy state to mistake for a working arm.
+    'ipe': os.environ.get('ACL_IPE', ''),
+    'erofs': os.environ.get('ACL_EROFS', ''),
+    'matrixCell': 'I{}E{}'.format(
+        1 if os.environ.get('ACL_IPE', '').startswith('on') else 0,
+        1 if os.environ.get('ACL_EROFS', '') == 'on' else 0),
 }
 
 # Phases first and in boot order, then units; sorting alphabetically would put
@@ -296,7 +344,12 @@ for name in sorted(series, key=rank):
         'suite': 'boot',
         'image': '',
         'operation': name,
+        # This suite pulls no images, so there is no snapshotter to report --
+        # leaving it blank is the honest answer. The arm is carried by
+        # matrixCell instead, on every row, so a flattened results table cannot
+        # lose which configuration produced the number.
         'snapshotter': '',
+        'matrixCell': node['matrixCell'],
         'nodeImage': node['image'],
         'containerd': node['containerd'],
         'unit': 'ms',
@@ -310,7 +363,8 @@ for name in sorted(series, key=rank):
     })
 
 print(f"\n--- Boot time over {len(series.get('Total', []))} reboots "
-      f"(node: {node['image'] or 'unknown'})")
+      f"(node: {node['image'] or 'unknown'}, arm: {node['matrixCell']})")
+print(f"      IPE: {node['ipe']}   EROFS: {node['erofs']}")
 print(f"      {'phase':<28} {'n':>3} {'min ms':>10} {'med ms':>10} {'max ms':>10}   samples (ms)")
 for row in metrics:
     print(f"      {row['operation']:<28} {row['n']:>3} {row['minMs']:>10} "
