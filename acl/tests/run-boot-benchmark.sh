@@ -56,14 +56,24 @@ reboot_and_wait() {
     local old new
     old=$(boot_id) || { error "Cannot read boot_id — VM unreachable?"; return 1; }
     info "Rebooting ${VM_NAME} (old boot_id=${old})..."
+    # Host-side wall clock brackets the whole reboot, including the segments the
+    # guest cannot see: shutdown, platform firmware, systemd-boot and the UKI
+    # stub all run while no monotonic clock exists. Without this the results
+    # would silently exclude several seconds and give no way to notice.
+    local t0 t1
+    t0=$(date +%s.%N)
     ssh_cmd "sudo systemctl reboot" || true
     local deadline=$(( $(date +%s) + VM_SSH_TIMEOUT ))
     while (( $(date +%s) < deadline )); do
         new=$(boot_id) && [[ -n "$new" && "$new" != "$old" ]] && {
-            info "Back up (new boot_id=${new})"
+            t1=$(date +%s.%N)
+            REBOOT_WALL_MS=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f",(b-a)*1000}')
+            info "Back up (new boot_id=${new}, wall clock ${REBOOT_WALL_MS} ms)"
             return 0
         }
-        sleep 2
+        # Poll interval bounds how much this overstates the reboot, so keep it
+        # short: the wall clock is only useful as a tight upper bound.
+        sleep 1
     done
     error "VM did not come back within ${VM_SSH_TIMEOUT}s"
     return 1
@@ -140,6 +150,7 @@ main() {
         fi
         {
             echo "=== SAMPLE ${i}"
+            echo "RebootWallClockMs=${REBOOT_WALL_MS:-0}"
             collect_sample
         } >> "$SAMPLES_RAW"
         collected=$(( collected + 1 ))
@@ -214,6 +225,21 @@ def phases(sample):
     # "since kernel start" and would disagree with what `systemd-analyze time`
     # prints on the very same machine.
     out['Total'] = finish + out.get('Firmware', 0) + out.get('Loader', 0)
+
+    # Host-observed wall clock for the whole reboot. It is a superset of Total:
+    # it also covers shutdown and the pre-kernel segments (platform firmware,
+    # systemd-boot, UKI stub) that run before any monotonic clock exists and
+    # that systemd therefore cannot report on this platform. Keeping it means
+    # the unaccounted time is visible as Wallclock - Total instead of being
+    # silently dropped.
+    wall = sample.get('RebootWallClockMs')
+    if wall:
+        try:
+            wall_usec = float(wall) * 1000.0
+            if wall_usec > 0:
+                out['RebootWallClock'] = wall_usec
+        except ValueError:
+            pass
     return out
 
 # Unit readiness, keyed by the unit's own Id so a missing unit cannot silently
@@ -258,7 +284,8 @@ node = {
 
 # Phases first and in boot order, then units; sorting alphabetically would put
 # Userspace before Kernel and make the table read as nonsense.
-ORDER = ['Firmware', 'Loader', 'Kernel', 'Initrd', 'Userspace', 'Total']
+ORDER = ['Firmware', 'Loader', 'Kernel', 'Initrd', 'Userspace', 'Total',
+         'RebootWallClock']
 def rank(name):
     return (ORDER.index(name), '') if name in ORDER else (len(ORDER), name)
 
@@ -295,12 +322,19 @@ for row in metrics:
 # absence is a property of the platform rather than a fast boot -- and without
 # saying so, a Total that begins at kernel start is indistinguishable from one
 # that begins at power-on.
-covered = [row['operation'] for row in metrics]
+covered = {row['operation']: row for row in metrics}
 if 'Firmware' in covered or 'Loader' in covered:
     print("      coverage: Total includes firmware/loader (EFI loader variables present)")
 else:
     print("      coverage: no EFI loader variables on this platform, so Total covers "
           "kernel onward and excludes firmware/boot-loader time")
+    # Quantify what is missing rather than only naming it. The gap is shutdown
+    # plus firmware, systemd-boot and the UKI stub; reporting it means a reader
+    # can judge whether the blind spot is material instead of assuming.
+    if 'RebootWallClock' in covered and 'Total' in covered:
+        gap = round(covered['RebootWallClock']['p50Ms'] - covered['Total']['p50Ms'], 2)
+        print(f"      coverage: RebootWallClock - Total = {gap} ms unaccounted at the "
+              f"median (shutdown + firmware + boot loader + UKI stub)")
 
 document = {
     'schemaVersion': 1,
