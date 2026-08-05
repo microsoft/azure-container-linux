@@ -28,31 +28,35 @@ guaranteed to survive. The file exists for anyone running the script by hand.
   "node": { "image": "...", "kernel": "...", "containerd": "...",
             "selinux": "...", "activeSnapshotter": "erofs" },
   "metrics": [ { "suite": "...", "operation": "...", "unit": "ms",
-                 "n": 30, "minMs": 1.0, "p50Ms": 2.0,
-                 "p95Ms": 3.0, "maxMs": 4.0,
+                 "n": 30, "minMs": 1.0, "p50Ms": 2.0, "maxMs": 4.0,
                  "samplesMs": [1.0, 2.0, 3.0] } ],
   "suites": { }
 }
 ```
 
-### Percentiles, and why the raw samples are kept
+### Raw numbers, not percentiles
 
-`p50Ms` is the median — the typical case. `p95Ms` is nominally the tail. Both are
-reported instead of a mean because these distributions are right-skewed: one
-slow sample from a page-cache miss or a noisy neighbour moves a mean and leaves
-a median alone, so a mean would make runs look different when only the noise
-differed.
+Phase 1 reports `minMs`, `p50Ms` (median) and `maxMs`, plus `samplesMs` — every
+individual measurement. Each of those three is an actual observation rather than
+an interpolation, so nothing in the summary is synthesised.
 
-**At small sample counts `p95Ms` is not a tail estimate.** The index rounds onto
-the last sample whenever n is 10 or fewer, so `p95Ms` simply repeats `maxMs` —
-which is the case for the image suite (n=10) and the boot suite (n=5). Only the
-n=30 suites produce a p95 distinct from the maximum. The console tables print a
-note wherever this applies.
+There is deliberately **no p95**. The percentile index rounds onto the last
+sample whenever n is 10 or fewer, so a p95 column would have silently repeated
+`maxMs` for the boot suite (n=5) and the image suite (n=10) — including
+`PullImage`, the metric the erofs comparison turns on. A single unlucky pull
+would have been presented as a tail estimate. Only the n=30 suites could produce
+an honest p95, and a column that means one thing in two suites and another in
+the rest is worse than no column.
 
-This is why `samplesMs` carries every measurement. It lets a reader recompute
-any statistic honestly, lets a dashboard aggregate across runs instead of
-averaging averages, and it is the only copy that survives: critest's own raw
-JSON stays on the VM and dies with it.
+A median is still reported alongside min/max because these distributions are
+right-skewed: one slow sample from a page-cache miss or a noisy neighbour moves
+a mean and leaves a median alone, so a mean would make runs look different when
+only the noise differed.
+
+`samplesMs` carries every measurement. It lets a reader recompute any statistic
+honestly — including a percentile later, once sample counts justify one — lets a
+dashboard aggregate across runs instead of averaging averages, and it is the only
+copy that survives: critest's own raw JSON stays on the VM and dies with it.
 
 `metrics` is the array a dashboard should ingest. It is deliberately flat and
 denormalized: one row per measured operation, each row carrying every key needed
@@ -65,11 +69,46 @@ tooling output and will churn as that tooling changes — do not build on it.
 
 ### Required row keys
 
-The merge validates `suite`, `operation`, `unit`, `n`, `p50Ms`, `p95Ms` on every
-row, and rejects any document whose `schemaVersion` is not 1. This is enforcement
-rather than documentation: a producer that drifts fails the build instead of
-quietly emitting a half-shaped document that a dashboard would misread months
-later.
+The merge validates `suite`, `operation`, `unit`, `n`, `p50Ms`, `samplesMs` on
+every row, and rejects any document whose `schemaVersion` is not 1. This is
+enforcement rather than documentation: a producer that drifts fails the build
+instead of quietly emitting a half-shaped document that a dashboard would
+misread months later.
+
+## What the `boot` suite measures
+
+Rows are phases (`Firmware`, `Loader`, `Kernel`, `Initrd`, `Userspace`, `Total`)
+plus a `unit:<name>` row per interesting unit. Values come from systemd's own
+timestamps via `systemctl show`, not from `systemd-analyze time` prose, whose
+wording changes between releases.
+
+systemd cannot *observe* most of a boot — `CLOCK_MONOTONIC` starts at kernel
+start, so it reconstructs. The kernel's duration is the monotonic clock read the
+instant PID 1 starts in the initrd; the initrd's is serialized across
+`switch-root`. Firmware and boot loader run *before* the clock exists, so systemd
+cannot time them at all — it reads `LoaderTimeInitUSec` / `LoaderTimeExecUSec`,
+EFI variables written by the boot loader.
+
+**`Total` therefore depends on the platform**, and the script prints a coverage
+line saying which case applied:
+
+- EFI variables present — `Total` spans firmware through default-target and
+  matches `systemd-analyze time` on the same machine. ACL builds
+  `bootloaderMode=uki` and systemd-stub writes these variables, so this is the
+  expected case.
+- EFI variables absent (no efivarfs at runtime) — the `Firmware` and `Loader`
+  rows are **omitted rather than reported as 0**, and `Total` covers kernel
+  onward. A zero would claim instantaneous firmware; an absent row admits the
+  measurement was unavailable.
+
+Two limits apply either way. `Total` ends at default-target, which is **not**
+node-ready — containerd, kubelet and CNI come up after it, which is what the
+`unit:` rows are for. And it measures *guest* boot only: hypervisor and VM
+provisioning are outside it, so this is not `az vm create` → ready.
+
+The current boot is discarded rather than sampled: it is the provisioning boot,
+carrying cloud-init and disk-growth work that never recurs, so counting it would
+bias every run by a constant nobody experiences twice.
 
 ## Identity
 
