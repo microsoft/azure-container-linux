@@ -10,6 +10,7 @@ artifact and **fails the merge** if a producer drifts from this contract.
 | script | suites | where it runs |
 |---|---|---|
 | `run-critest-benchmark.sh` | `PodSandbox`, `container`, `image_lifecycle` | in the VM |
+| `run-fsexec-benchmark.sh` | `filesystem`, `exec` | in the VM |
 | `run-boot-benchmark.sh` | `boot` | on the host, against the VM |
 
 ## Emission
@@ -133,6 +134,64 @@ The current boot is discarded rather than sampled: it is the provisioning boot,
 carrying cloud-init and disk-growth work that never recurs. Measured on a
 `Standard_D2s_v5`, that boot took 27.3 s against ~9.4 s for subsequent reboots,
 so counting it would have biased every run by roughly 18 s of one-time work.
+
+## What the `filesystem` and `exec` suites measure
+
+These are the general-perf counterpart to the container benchmark: no
+containerd, no CNI, no registry. They exist because a `PullImage` number folds
+network, unpack, hashing and mount into a single figure, so when it moves there
+is no way to say which of them moved. Here each row is one syscall in a loop.
+
+Rows are `read_cold`, `read_warm`, `read_random_cold` and `stat_cold`, each
+suffixed `:image` or `:control`, plus a single `fork_exec` row. Each row also
+carries `fstype`, `device`, `path`, `bytes` and `files`, because the matrix arms
+deliberately differ in what backs `/usr` and a timing whose filesystem is
+unknown cannot be compared with anything.
+
+The two axes land in different places. **EROFS and dm-verity tax the read
+path**: every block coming off the image is checked against the Merkle tree
+before userspace sees it, and on a compressed image it is decompressed as well.
+**IPE taxes the exec path**: every `execve` is evaluated against policy.
+
+### The control corpus
+
+A cold read of `/usr` on its own says only "this VM's disk was this fast today".
+Azure disk throughput varies between runs by more than the effect being looked
+for, so the same bytes — files of exactly the same sizes, in the same order —
+are written to the writable filesystem and read back identically in the same
+run. Both corpora sit on the same underlying disk, so the `image / control`
+ratio the script prints cancels the disk and leaves the filesystem.
+
+`read_warm` doubles as a check on that reasoning. Both warm rows are served from
+the page cache, so they should land close to 1.00x regardless of filesystem; a
+warm ratio far from 1 means something other than the filesystem is differing and
+the cold ratio should not be trusted either.
+
+The byte count is clipped to land exactly on the budget rather than taking whole
+files. Otherwise one large binary overshoots by tens of megabytes, and since the
+arms ship different binaries each would read a different total — leaving
+throughput as the only comparable column. Clipping keeps `bytes` identical
+everywhere, so the raw milliseconds compare too.
+
+### Why there is no exec control
+
+IPE's purpose is to refuse anything that is not verity-backed, so a binary
+copied to the writable filesystem is *blocked* rather than slow on exactly the
+arms where IPE is enabled — an in-run control would measure a denial, not a
+cost. The exec comparison is therefore across arms (IPE on vs off), not within
+a run. `fork_exec` includes the surrounding `fork` and `wait`, which are
+constant overhead on every arm and cancel in that comparison.
+
+### Cold measurements can be unavailable
+
+Cold rows require dropping the page cache, which needs root or passwordless
+sudo. Where that fails the cold rows are **omitted and a note is printed**,
+rather than reported from a warm cache — a warm read presented as cold would
+look like the filesystem had become dramatically faster. This follows the same
+rule as the absent `Firmware` and `Loader` rows in the boot suite: a missing
+measurement is stated, never substituted.
+
+
 
 ## Identity
 
