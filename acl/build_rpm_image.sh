@@ -180,6 +180,18 @@ export ACL_PERF_TOOLS="${ACL_PERF_TOOLS:-0}"
 # Enable the permissive IPE policy loader by default. Callers can explicitly
 # set ACL_IPE_ENABLE=0 to build an image without the runtime policy.
 export ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-1}"
+# Include the EROFS/dm-verity containerd profile (the containerd2-erofs
+# subpackage) in the embedded containerd sysext. On by default; set
+# ACL_EROFS_ENABLE=0 to build the overlayfs control arm of the perf matrix.
+export ACL_EROFS_ENABLE="${ACL_EROFS_ENABLE:-1}"
+# Feature gates consumed by the per-package 'feature' filter in acl/sysexts.yaml.
+# Composed from the per-axis booleans above so that callers and the pipeline UI
+# only ever deal with one flag per axis.
+ACL_FEATURES="${ACL_FEATURES:-}"
+if [[ "${ACL_EROFS_ENABLE}" == "1" ]]; then
+    ACL_FEATURES="${ACL_FEATURES:+${ACL_FEATURES},}erofs"
+fi
+export ACL_FEATURES
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"

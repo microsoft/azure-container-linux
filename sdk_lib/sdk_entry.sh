@@ -120,6 +120,12 @@ if [[ -n "${ACL_IPE_ENABLE:-}" ]]; then
     echo "export ACL_IPE_ENABLE='${ACL_IPE_ENABLE}'" >> /home/sdk/.bashrc
 fi
 
+# Forward sysext package feature gates (see acl/sysexts.yaml) into commands run
+# as the sdk user. Always rewritten, including when empty, so that a build with
+# a feature turned off cannot inherit a stale value from a reused container.
+sed -i -e '/export ACL_FEATURES=/d' /home/sdk/.bashrc 2>/dev/null || true
+echo "export ACL_FEATURES='${ACL_FEATURES:-}'" >> /home/sdk/.bashrc
+
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"
     echo -n "exec bash -l -i -c '" >"$cmd"

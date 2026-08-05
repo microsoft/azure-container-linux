@@ -188,4 +188,5 @@ call_docker exec "${tty[@]}" -i \
     -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" \
     -e ACL_PERF_TOOLS="${ACL_PERF_TOOLS:-}" \
     -e ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-}" \
+    -e ACL_FEATURES="${ACL_FEATURES:-}" \
     "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"

@@ -27,6 +27,15 @@
 #                    - qemu-img              # installed on all architectures
 #                    - name: qemu-kvm        # installed only on amd64
 #                      archs: [amd64]
+#                  An entry may also carry a 'feature' field, which gates the
+#                  package on an opt-in feature name.  The package is installed
+#                  only when that name appears in the ACL_FEATURES environment
+#                  variable (comma-separated).  Unlike 'archs', 'feature'
+#                  defaults to OFF — a package with no 'feature' field is always
+#                  installed.  Used to build A/B matrix images from one branch:
+#                    - name: containerd2-erofs   # only when ACL_FEATURES=erofs
+#                      feature: erofs
+#                  Applies to embedded and standalone sysexts alike.
 #      mode      — "embedded" or "standalone" (required).
 #                  "embedded" sysexts are placed on the /usr filesystem inside the
 #                  image and activated at boot.  "standalone" sysexts are built as
@@ -60,7 +69,14 @@ sysexts:
       # Activates the EROFS/dm-verity profile. Subpackages are not pulled in
       # implicitly by the catalog mapping above, so this must be listed
       # explicitly or the ACL profile is simply absent from the image.
-      - containerd2-erofs
+      #
+      # Gated on the 'erofs' feature so that a single branch can produce both
+      # arms of the IPE x EROFS perf matrix. Set ACL_EROFS_ENABLE=1 (which the
+      # image build translates into ACL_FEATURES=erofs) to include it. With the
+      # feature off, the base containerd2 package still ships its stock
+      # /etc/containerd/config.toml, so the image boots on overlayfs.
+      - name: containerd2-erofs
+        feature: erofs
 
  # --- scenario-specific sysexts -----------------------------------------
   - name: docker
