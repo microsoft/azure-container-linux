@@ -306,7 +306,12 @@ echo "Kernel:     $(uname -r)"
 echo "Runtime:    $(ctr --version 2>/dev/null || echo unknown)"
 echo "SELinux:    ${NODE_SELINUX}"
 echo "Image repo: ${REPO}"
-echo "Samples:    ${POD_SAMPLES} pods (first rung), ${CONTAINER_SAMPLES} containers/rung, ${IMAGES} image iterations"
+if [ -n "$CONTAINER_RUNG" ]; then
+    container_line="${CONTAINER_SAMPLES} containers on ${CONTAINER_RUNG}"
+else
+    container_line="no container rung"
+fi
+echo "Samples:    ${POD_SAMPLES} pods (first rung), ${container_line}, ${IMAGES} image iterations"
 echo "Rungs:      $(echo $IMAGE_SET | wc -w)"
 echo
 
