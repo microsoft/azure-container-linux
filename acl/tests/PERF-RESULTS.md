@@ -173,6 +173,29 @@ arms ship different binaries each would read a different total — leaving
 throughput as the only comparable column. Clipping keeps `bytes` identical
 everywhere, so the raw milliseconds compare too.
 
+The metadata corpus is mirrored the same way, as empty files at the same
+relative paths, so the control stat walk covers the same number of entries in
+the same tree shape. Mirroring only the data files would leave the control
+walking a couple of dozen entries against the image's thousands, and the
+resulting ratio would report that count difference rather than anything about
+the filesystem.
+
+### Reading the output
+
+The raw per-arm milliseconds are the product; the ratios are scaffolding. A
+single run of a single arm has nothing to compare against, so the script prints
+the rows meant to be diffed across the matrix — `read_cold`, `read_random_cold`,
+`stat_cold`, `fork_exec` — together with what each one prices, and keeps the
+control ratios in a separate section labelled as a disk-speed correction rather
+than a result. The control answers "how does the image filesystem compare to
+whatever the writable one happens to be", which is a different question from the
+one the matrix asks.
+
+`/usr` on ACL is a stacked mount — a sysext overlay over the dm-verity backing
+store. The backing store is what the rows report, because that is the axis the
+matrix varies, but the full stack is recorded in `mountStack` and called out in
+a note: the upper layers sit in the image read path and not in the control's.
+
 ### Why there is no exec control
 
 IPE's purpose is to refuse anything that is not verity-backed, so a binary
