@@ -77,10 +77,10 @@ misread months later.
 
 ## What the `boot` suite measures
 
-Rows are phases (`Firmware`, `Loader`, `Kernel`, `Initrd`, `Userspace`, `Total`)
-plus a `unit:<name>` row per interesting unit. Values come from systemd's own
-timestamps via `systemctl show`, not from `systemd-analyze time` prose, whose
-wording changes between releases.
+Rows are phases (`Firmware`, `Loader`, `Kernel`, `Initrd`, `Userspace`, `Total`,
+`RebootWallClock`) plus a `unit:<name>` row per interesting unit. Phase values
+come from systemd's own timestamps via `systemctl show`, not from
+`systemd-analyze time` prose, whose wording changes between releases.
 
 systemd cannot *observe* most of a boot — `CLOCK_MONOTONIC` starts at kernel
 start, so it reconstructs. The kernel's duration is the monotonic clock read the
@@ -89,26 +89,50 @@ instant PID 1 starts in the initrd; the initrd's is serialized across
 cannot time them at all — it reads `LoaderTimeInitUSec` / `LoaderTimeExecUSec`,
 EFI variables written by the boot loader.
 
-**`Total` therefore depends on the platform**, and the script prints a coverage
-line saying which case applied:
+**On Azure Gen2 those variables are not published.** ACL boots systemd-boot 255
+launching a UKI, and `bootctl` confirms the stub measures the image, but the
+Hyper-V firmware gives systemd-boot no usable timestamp source, so it publishes
+`Loader*` identity variables without the `LoaderTime*` timing ones.
+`systemd-analyze time` on the same VM likewise prints no firmware/loader line.
+This is a platform limitation, not a build option — so `Firmware` and `Loader`
+rows are **omitted rather than reported as 0** (a zero would claim instantaneous
+firmware; an absent row admits the measurement was unavailable), and `Total`
+covers kernel onward. The script prints a coverage line stating which case
+applied.
 
-- EFI variables present — `Total` spans firmware through default-target and
-  matches `systemd-analyze time` on the same machine. ACL builds
-  `bootloaderMode=uki` and systemd-stub writes these variables, so this is the
-  expected case.
-- EFI variables absent (no efivarfs at runtime) — the `Firmware` and `Loader`
-  rows are **omitted rather than reported as 0**, and `Total` covers kernel
-  onward. A zero would claim instantaneous firmware; an absent row admits the
-  measurement was unavailable.
+`RebootWallClock` exists so that blindness is bounded rather than silent. It is
+measured host-side from issuing the reboot to the VM answering with a new
+`boot_id`, so it covers everything: shutdown, platform firmware, systemd-boot,
+the UKI stub, and the guest boot itself. `RebootWallClock - Total` is therefore
+the unaccounted time, and the coverage line prints it. On a `Standard_D2s_v5` it
+runs about 5.5 s against a ~9.2 s `Total`. It is an **upper bound**: it inherits
+the reboot poll interval and the SSH reconnect, so treat it as a bracket, not a
+precise firmware measurement.
 
-Two limits apply either way. `Total` ends at default-target, which is **not**
-node-ready — containerd, kubelet and CNI come up after it, which is what the
-`unit:` rows are for. And it measures *guest* boot only: hypervisor and VM
-provisioning are outside it, so this is not `az vm create` → ready.
+### Is that good enough?
+
+For the IPE and EROFS comparison, yes. The unaccounted segment is dominated by
+Azure firmware and boot-loader time, which depends on the platform and VM size
+rather than on image contents, so it is very close to a constant that cancels
+when two variants are differenced. More importantly, **the work those axes
+actually do is inside the measured window**: IPE loads its policy and
+`systemd-veritysetup` activates the verity device during the initrd, and `Initrd`
+is measured directly. The one part that can move with image content is the stub's
+load and TPM measurement of the UKI — the UKI embeds the initramfs, so a larger
+initramfs costs slightly more there — and that lands in the unaccounted segment.
+`RebootWallClock` is what catches it: if a variant grows the initramfs enough to
+matter, the wall clock moves while `Total` does not.
+
+For an absolute "time until this node can run a pod", no. `Total` ends at
+default-target, which is **not** node-ready — containerd, kubelet and CNI come
+after, which is what the `unit:` rows are for — and neither number includes
+hypervisor scheduling or VM provisioning, so this is *guest* boot, not
+`az vm create` → ready.
 
 The current boot is discarded rather than sampled: it is the provisioning boot,
-carrying cloud-init and disk-growth work that never recurs, so counting it would
-bias every run by a constant nobody experiences twice.
+carrying cloud-init and disk-growth work that never recurs. Measured on a
+`Standard_D2s_v5`, that boot took 27.3 s against ~9.4 s for subsequent reboots,
+so counting it would have biased every run by roughly 18 s of one-time work.
 
 ## Identity
 
