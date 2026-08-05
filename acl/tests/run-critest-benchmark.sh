@@ -84,17 +84,36 @@ CONTAINER_SAMPLES="${CRITEST_CONTAINER_SAMPLES:-${CRITEST_SAMPLES:-30}}"
 # image and is published through the same pipeline, so it measures container
 # start without leaving the upstream path.
 #
-# Empty by default because this needs a containerd carrying the EROFS SELinux
-# layer-sharing fix. An EROFS layer is shared by every container using it, but
-# all those mounts resolve to one superblock, and containerd labels each with
-# the consuming container's MCS pair -- so the second container to want a layer
-# is rejected with "SELinux: mount invalid. Same superblock, different security
-# settings". Overlayfs is unaffected, since each container gets its own overlay
-# superblock, which is why this went unnoticed: every container benchmarked
-# before now came from an overlayfs snapshot.
+# This was empty until containerd2-2.2.4-6017.verity. An EROFS layer is shared
+# by every container using it, but all those mounts resolve to one superblock,
+# and two containerd paths disagreed about the security settings to mount it
+# with -- so the second container to want a layer was rejected with "SELinux:
+# mount invalid. Same superblock, different security settings". Overlayfs is
+# unaffected, since each container gets its own overlay superblock, which is why
+# this went unnoticed for so long: every container benchmarked before then came
+# from an overlayfs snapshot.
 #
-# Set CRITEST_CONTAINER_RUNG=busybox on a node whose containerd has the fix.
-CONTAINER_RUNG="${CRITEST_CONTAINER_RUNG:-}"
+# It defaults on now, and deliberately on every arm rather than only the EROFS
+# ones. A container-start number from an EROFS node means nothing on its own;
+# it is only readable against the same number from an overlayfs node. Gating
+# this to the arms that have a snapshotter to show off would leave the
+# comparison with nothing to compare against.
+#
+# Set CRITEST_CONTAINER_RUNG= (empty) to skip it -- needed on a node whose
+# containerd predates the fix, where the second container start would fail.
+CONTAINER_RUNG="${CRITEST_CONTAINER_RUNG-busybox}"
+
+# A rung naming an image the ladder does not carry would match no variant, and
+# the container suite would then never run while the document still claimed to
+# have measured everything it was asked to. Since the rung defaults on, that
+# would most likely happen to someone who narrowed CRITEST_LADDER for a quick
+# run and did not realise busybox was load-bearing. Say so instead.
+if [ -n "$CONTAINER_RUNG" ]; then
+    case " $(for r in $LADDER; do printf '%s ' "${r%%:*}"; done)" in
+        *" $CONTAINER_RUNG "*) ;;
+        *) echo "WARNING: CRITEST_CONTAINER_RUNG='$CONTAINER_RUNG' matches no rung in the ladder; the container suite will not run" >&2 ;;
+    esac
+fi
 ENDPOINT="unix:///run/containerd/containerd.sock"
 OUT=/var/tmp/critest-out
 
