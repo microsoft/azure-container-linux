@@ -619,7 +619,10 @@ _delete_vm_rg_sync() {
         return 0
     fi
 
-    if ! exists=$(az group exists --name "$vm_rg_name" -o tsv); then
+    if ! exists=$(az group exists \
+        --subscription "$AZ_SUB_ID" \
+        --name "$vm_rg_name" \
+        -o tsv); then
         error "Failed to determine whether VM resource group exists: $vm_rg_name"
         return 1
     fi
@@ -628,7 +631,10 @@ _delete_vm_rg_sync() {
     fi
 
     info "Deleting failed VM resource group: $vm_rg_name"
-    az group delete --name "$vm_rg_name" --yes
+    az group delete \
+        --subscription "$AZ_SUB_ID" \
+        --name "$vm_rg_name" \
+        --yes
 }
 
 _validate_arm_vm_size() {
