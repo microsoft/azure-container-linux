@@ -181,6 +181,15 @@ if [[ -v ACL_IPE_ASSET_MODE ]]; then
 fi
 ACL_IPE_ASSET_MODE="${ACL_IPE_ASSET_MODE:-disabled}"
 ACL_IPE_POLICY_PATH="${ACL_IPE_POLICY_PATH:-}"
+# Include the EROFS/dm-verity containerd profile (the containerd2-erofs
+# subpackage) in the embedded containerd sysext. On by default; set
+# ACL_EROFS_ENABLE=0 to use the base containerd configuration.
+export ACL_EROFS_ENABLE="${ACL_EROFS_ENABLE:-1}"
+ACL_FEATURES="${ACL_FEATURES:-}"
+if [[ "${ACL_EROFS_ENABLE}" == "1" ]]; then
+    ACL_FEATURES="${ACL_FEATURES:+${ACL_FEATURES},}erofs"
+fi
+export ACL_FEATURES
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"

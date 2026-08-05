@@ -79,7 +79,7 @@ _parse_sysexts_yaml() {
     fi
 
     local result
-    result=$(ARCHVAL="${arch}" TAGVALS="${tag_vals}" \
+    result=$(ARCHVAL="${arch}" TAGVALS="${tag_vals}" FEATUREVALS="${ACL_FEATURES:-}" \
     yq eval -r "
         .sysexts[]
         ${mode_select}
@@ -87,6 +87,7 @@ _parse_sysexts_yaml() {
         ${tag_select}
         | .name + \"|\" + ([.packages[]
             | select(tag == \"!!str\" or .archs == null or (.archs[] | select(. == env(ARCHVAL))))
+            | select(tag == \"!!str\" or .feature == null or ([.feature | select(. as \$f | strenv(FEATUREVALS) | split(\",\") | map(sub(\"^\\\\s+\",\"\") | sub(\"\\\\s+\$\",\"\")) | .[] | select(. == \$f))] | length > 0))
             | (select(tag == \"!!str\") // .name)]
             | join(\"&\"))
     " "${yaml_file}")
