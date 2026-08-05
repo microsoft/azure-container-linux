@@ -198,7 +198,7 @@ suppression notice marks the count as a floor.
 
 ### Why stress-ng, and why `spawn`
 
-The measurement is stress-ng, which already ships in the image, rather than a
+The measurement is stress-ng rather than a
 hand-rolled exec loop. Its manual says it is "never intended to be used as a
 precise benchmark test suite" but sanctions exactly this use: "useful to observe
 performance changes across different operating system releases". So the suite
@@ -252,6 +252,27 @@ refused rather than audited, so the row is not comparable), when success
 auditing is on (the verity row is then not an audit-free baseline), and when
 both binaries land on the same backing device, which would make the comparison
 meaningless.
+
+### stress-ng has to be in the image, not a sysext
+
+The suite needs stress-ng on the dm-verity-backed `/usr`, which means building
+the image with `ACL_PERF_TOOLS=1`. The pipeline sets it whenever `runPerfTests`
+is on; it is off otherwise, since a benchmarking tool has no place on a
+production node.
+
+A sysext looks like it would do the job and does not. Sysexts are plain
+squashfs images overlaid onto `/usr` with no verity beneath them, so a
+stress-ng merged from `lisa-testing` resolves on `PATH` and runs, but satisfies
+neither `boot_verified=TRUE` nor `dmverity_signature=TRUE`. Both arms of the
+comparison would then be unverified, the delta would collapse to zero, and the
+suite would report that IPE costs nothing — a broken measurement that reads
+exactly like a clean result. Installing at runtime fails for the same reason
+the property is worth having: `/usr` is read-only.
+
+The suite therefore checks that its binary is genuinely on a dm-verity device
+(`findmnt` for the backing store, then `dmsetup table` for the target type) and
+drops the `spawn_*` rows with a note if it is not. The check is recorded as
+`devices.verityBacked` in the document.
 
 
 ## Identity

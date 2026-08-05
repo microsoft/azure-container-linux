@@ -55,9 +55,9 @@
 # ---------------------------------------------------------------------------
 # Why stress-ng, and why the `spawn` stressor specifically
 #
-# The measurement is stress-ng, which already ships in the image, rather than a
-# hand-rolled exec loop. Its own manual says it is "never intended to be used as
-# a precise benchmark test suite", but sanctions exactly the use here: "useful to
+# The measurement is stress-ng rather than a hand-rolled exec loop. Its own
+# manual says it is "never intended to be used as a precise benchmark test
+# suite", but sanctions exactly the use here: "useful to
 # observe performance changes across different operating system releases". So
 # this reports *relative* differences between two configurations on one machine
 # and does not claim absolute per-execve latency. For an absolute figure the
@@ -119,6 +119,10 @@ echo "  node:    ${NODE_IMAGE} (kernel ${NODE_KERNEL})"
 
 if ! command -v stress-ng >/dev/null 2>&1; then
     echo "[WARN] stress-ng not present; exec benchmark cannot run"
+    echo "[WARN] it must be on the verity-backed rootfs, which means building"
+    echo "[WARN] the image with ACL_PERF_TOOLS=1. A sysext will not do: the"
+    echo "[WARN] binary would resolve but would not be verity-backed, and the"
+    echo "[WARN] suite would report a zero IPE cost that is pure artifact."
 fi
 
 ACL_NODE_IMAGE="$NODE_IMAGE" \
@@ -223,6 +227,30 @@ def backing_device(path):
     if rc != 0 or not out.strip():
         return None
     return out.strip().splitlines()[0].strip()
+
+
+def verity_backed(path):
+    """Whether a path is actually on a dm-verity device.
+
+    The verity arm is only a verity arm if the kernel really verified the bytes.
+    Everything about this benchmark reads the same whether that is true or not:
+    the binary still resolves under /usr, still runs, still produces timings --
+    the delta just quietly goes to zero, and a zero delta is indistinguishable
+    from "IPE costs nothing". A sysext is the way this goes wrong in practice,
+    since it merges over /usr as an overlay with no verity beneath it.
+
+    Returns True, False, or None when it cannot be determined."""
+    rc, out, _ = run(['findmnt', '-n', '-o', 'SOURCE', '--target', path], timeout=30)
+    if rc != 0 or not out.strip():
+        return None
+    source = out.strip().splitlines()[0].strip()
+    rc, out, _ = run(['dmsetup', 'table', os.path.basename(source)], timeout=30)
+    if rc != 0:
+        # Not a device-mapper device at all: an overlay, a loop, a plain
+        # partition. None of those are verity, so this is an answer.
+        return False
+    fields = out.split()
+    return len(fields) >= 3 and fields[2] == 'verity'
 
 
 # ------------------------------------------------------------ audit accounting
@@ -391,6 +419,7 @@ copy_path = None
 # to produce a document.
 audit = {'ipeRecords': None, 'printkSuppressed': False}
 devices = {}
+verity_ok = None
 
 if binary and version:
     # fork is the floor every spawn sample also pays for. Measured on the same
@@ -405,7 +434,17 @@ if binary and version:
 
 if binary and version and spawn_ok:
     devices['verity'] = backing_device(binary)
+    verity_ok = verity_backed(binary)
+    devices['verityBacked'] = verity_ok
 
+if binary and version and spawn_ok and verity_ok is not True:
+    notes.append('the stress-ng being measured is not on a dm-verity device '
+                 '(backing store: %s), so the "verity" arm would not actually '
+                 'be verified and the comparison would report a zero delta for '
+                 'the wrong reason; no spawn rows were produced'
+                 % (devices.get('verity') or 'unknown'))
+
+if binary and version and spawn_ok and verity_ok is True:
     samples, issues = sample(binary, ['--spawn', '1', '--spawn-ops', str(EXEC_OPS)],
                              EXEC_OPS, REPS)
     row = summarise('exec', 'spawn_verity', samples)

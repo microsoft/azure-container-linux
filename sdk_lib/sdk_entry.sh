@@ -108,6 +108,12 @@ fi
 sed -i -e '/export INJECT_DOCKER_SYSEXT=/d' /home/sdk/.bashrc 2>/dev/null || true
 echo "export INJECT_DOCKER_SYSEXT='${INJECT_DOCKER_SYSEXT:-false}'" >> /home/sdk/.bashrc
 
+# Forward the optional perf-tooling image feature into commands run as the sdk user.
+sed -i -e '/export ACL_PERF_TOOLS=/d' /home/sdk/.bashrc 2>/dev/null || true
+if [[ -n "${ACL_PERF_TOOLS:-}" ]]; then
+    echo "export ACL_PERF_TOOLS='${ACL_PERF_TOOLS}'" >> /home/sdk/.bashrc
+fi
+
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"
     echo -n "exec bash -l -i -c '" >"$cmd"

@@ -171,6 +171,12 @@ export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
+# Install benchmarking tools (stress-ng) onto the verity-backed rootfs. Off by
+# default -- they have no place on a production node -- and turned on by the
+# pipeline for builds that run the perf suites. The exec benchmark needs its
+# binary on dm-verity-protected /usr to have anything to measure, and a sysext
+# cannot provide that, so it has to be decided here at image build time.
+export ACL_PERF_TOOLS="${ACL_PERF_TOOLS:-0}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"

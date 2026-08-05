@@ -103,8 +103,39 @@ start_image_rpm() {
     download_bootloader_packages_rpm "${root_fs_dir}"
 }
 
+# The exec benchmark measures what IPE costs on the exec path, and that
+# measurement is only valid if the binary it execs is one IPE actually
+# verifies. /usr is the dm-verity-protected USR-A partition, so a binary
+# installed here satisfies boot_verified=TRUE and is allowed without an audit
+# record -- that is the baseline the unverified arm gets compared against.
+#
+# It cannot be delivered any other way. A sysext is a plain squashfs .raw with
+# no verity, so a stress-ng merged over /usr would satisfy neither
+# boot_verified nor dmverity_signature; both arms of the comparison would then
+# be unverified, the delta would collapse, and the suite would report no
+# measurable IPE cost -- which reads as a result rather than as a broken
+# measurement. Installing at runtime is impossible for the same reason it is
+# desirable: /usr is read-only. The base rootfs, before the image is sealed and
+# hashed, is the only place this can go.
+#
+# Off unless asked for. This is a benchmarking tool and has no business on a
+# production node; the pipeline turns it on for builds that run perf tests.
+_install_perf_tools_rpm() {
+    local root_fs_dir="$1"
+
+    [[ "${ACL_PERF_TOOLS:-0}" == "1" ]] || return 0
+
+    info "ACL_PERF_TOOLS=1: installing benchmark tools onto the verity-backed /usr"
+    rpm_install_package "${root_fs_dir}" stress-ng || {
+        error "Failed to install perf benchmark tools"
+        return 1
+    }
+}
+
 finish_image_rpm() {
   local root_fs_dir="$1"
+
+    _install_perf_tools_rpm "${root_fs_dir}" || return 1
 
     # Create /usr/share/oem -> ../../oem symlink for backward compatibility
     # The OEM partition is mounted at /oem, but legacy configs reference /usr/share/oem
