@@ -167,7 +167,7 @@ get_vm_size_family() {
 get_boot_diagnostics_storage_name() {
     local vm_rg_name="$1"
     local digest
-    digest=$(printf '%s' "${AZ_SUB_ID}:${vm_rg_name}" | sha256sum)
+    read -r digest _ < <(printf '%s' "${AZ_SUB_ID}:${vm_rg_name}" | sha256sum)
     printf 'bootdiag%s\n' "${digest:0:16}"
 }
 
