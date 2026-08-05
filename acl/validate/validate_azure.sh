@@ -471,8 +471,16 @@ _cancel_vm_create() {
     trap - INT TERM
     kill -TERM "$create_pid" 2>/dev/null || true
     wait "$create_pid" 2>/dev/null || true
-    rm -f "$output_file"
-    _delete_vm_rg_sync "$vm_rg_name" || true
+    rm -f "$output_file" || warn "Failed to remove Azure VM creation output file: $output_file"
+    if ! _delete_vm_rg_sync "$vm_rg_name"; then
+        warn "Synchronous deletion failed for ${vm_rg_name}; scheduling asynchronous cleanup"
+        az group delete \
+            --name "$vm_rg_name" \
+            --subscription "$AZ_SUB_ID" \
+            --yes \
+            --no-wait \
+            || warn "Could not schedule asynchronous deletion of ${vm_rg_name}; manual cleanup may be required"
+    fi
     exit "$status"
 }
 
@@ -505,20 +513,17 @@ _try_vm_create() {
         --tags "${extra_tags[@]}"
     )
 
-    vm_create_args+=(--enable-secure-boot "$SECURE_BOOT_ENABLED")
+    vm_create_args+=(--enable-secure-boot "${SECURE_BOOT_ENABLED:-true}")
 
     if [[ -n "$AZ_VM_ARGS" ]]; then
         vm_create_args+=($AZ_VM_ARGS)
     fi
 
     local output output_file create_pid rc
-    local previous_int_trap previous_term_trap
     if ! output_file=$(mktemp "${TMPDIR:-/tmp}/acl-vm-create.XXXXXX"); then
         echo "Failed to create temporary file for Azure VM creation output" >&2
         return 2
     fi
-    previous_int_trap=$(trap -p INT)
-    previous_term_trap=$(trap -p TERM)
 
     az vm create "${vm_create_args[@]}" >"$output_file" 2>&1 &
     create_pid=$!
@@ -528,17 +533,30 @@ _try_vm_create() {
     # The CLI cannot request managed boot diagnostics directly on `vm create`.
     # Enable it as soon as the VM resource exists, while provisioning is still
     # running, so OS provisioning failures retain their serial console output.
-    while kill -0 "$create_pid" 2>/dev/null; do
-        if az vm show --resource-group "$vm_rg_name" --name "$vm_name" \
-            --only-show-errors >/dev/null 2>&1; then
-            if az vm boot-diagnostics enable \
-                --resource-group "$vm_rg_name" \
-                --name "$vm_name" \
+    local diagnostics_elapsed=0
+    local diagnostics_next_probe=0
+    local diagnostics_backoff=2
+    local diagnostics_poll_interval=2
+    local diagnostics_max_wait=300
+    while kill -0 "$create_pid" 2>/dev/null && [[ $diagnostics_elapsed -lt $diagnostics_max_wait ]]; do
+        if [[ $diagnostics_elapsed -ge $diagnostics_next_probe ]]; then
+            if az vm show --resource-group "$vm_rg_name" --name "$vm_name" \
                 --only-show-errors >/dev/null 2>&1; then
-                break
+                if az vm boot-diagnostics enable \
+                    --resource-group "$vm_rg_name" \
+                    --name "$vm_name" \
+                    --only-show-errors >/dev/null 2>&1; then
+                    break
+                fi
+            fi
+            diagnostics_next_probe=$(( diagnostics_elapsed + diagnostics_backoff ))
+            diagnostics_backoff=$(( diagnostics_backoff * 2 ))
+            if [[ $diagnostics_backoff -gt 30 ]]; then
+                diagnostics_backoff=30
             fi
         fi
-        sleep 2
+        sleep "$diagnostics_poll_interval"
+        diagnostics_elapsed=$(( diagnostics_elapsed + diagnostics_poll_interval ))
     done
 
     if wait "$create_pid"; then
@@ -547,18 +565,15 @@ _try_vm_create() {
         rc=$?
     fi
     trap - INT TERM
-    [[ -n "$previous_int_trap" ]] && eval "$previous_int_trap"
-    [[ -n "$previous_term_trap" ]] && eval "$previous_term_trap"
 
     if [[ ! -r "$output_file" ]]; then
         echo "Failed to read Azure VM creation output from $output_file" >&2
-        rm -f "$output_file"
+        rm -f "$output_file" || warn "Failed to remove Azure VM creation output file: $output_file"
         return 2
     fi
     output=$(<"$output_file")
     if ! rm -f "$output_file"; then
-        echo "Failed to remove Azure VM creation output file: $output_file" >&2
-        return 2
+        warn "Failed to remove Azure VM creation output file: $output_file"
     fi
 
     if [[ $rc -eq 0 ]]; then
@@ -598,6 +613,12 @@ _delete_vm_rg_sync() {
     local vm_rg_name="$1"
     local exists
 
+    [[ -n "$vm_rg_name" ]] || return 0
+    if [[ "$NO_CLEANUP" == "true" ]]; then
+        info "--no-cleanup: preserving VM resource group for triage: $vm_rg_name"
+        return 0
+    fi
+
     if ! exists=$(az group exists --name "$vm_rg_name" -o tsv); then
         error "Failed to determine whether VM resource group exists: $vm_rg_name"
         return 1
@@ -622,8 +643,8 @@ _validate_arm_vm_size() {
         --all \
         --query "[?name=='${vm_size}'] | [0].capabilities[?name=='CpuArchitectureType' || name=='HyperVGenerations' || name=='TrustedLaunchDisabled'].[name,value]" \
         --output tsv); then
-        warn "Could not query Azure capabilities for ${vm_size} in ${region}"
-        return 1
+        warn "Could not query Azure capabilities for ${vm_size} in ${region}; attempting VM creation without preflight validation"
+        return 0
     fi
 
     architecture=$(awk -F '\t' '$1 == "CpuArchitectureType" { print $2 }' <<< "$capabilities")
@@ -648,46 +669,80 @@ _collect_failed_vm_diagnostics() {
     local vm_rg_name="$1"
     local vm_name="$2"
     local label="$3"
-    local diagnostics_root="${DIAGNOSTICS_DIR:-${TMPDIR:-/tmp}/acl-vm-diagnostics}"
+    local diagnostics_base="${BUILD_ARTIFACTSTAGINGDIRECTORY:-${TMPDIR:-/tmp}}"
+    local diagnostics_root="${DIAGNOSTICS_DIR:-${diagnostics_base}/acl-vm-diagnostics}"
     local safe_label latest_deployment
+    local instance_view_file instance_view_error
+    local boot_log_file boot_log_error
+    local deployments_file deployments_error
+    local deployment_operations_file deployment_operations_error
 
     safe_label=$(printf '%s' "${vm_rg_name}-${label}" | tr -c '[:alnum:]_.-' '_')
+    instance_view_file="${diagnostics_root}/${safe_label}-instance-view.json"
+    instance_view_error="${diagnostics_root}/${safe_label}-instance-view.err"
+    boot_log_file="${diagnostics_root}/${safe_label}-boot.log"
+    boot_log_error="${diagnostics_root}/${safe_label}-boot.err"
+    deployments_file="${diagnostics_root}/${safe_label}-deployments.json"
+    deployments_error="${diagnostics_root}/${safe_label}-deployments.err"
+    deployment_operations_file="${diagnostics_root}/${safe_label}-deployment-operations.json"
+    deployment_operations_error="${diagnostics_root}/${safe_label}-deployment-operations.err"
+
     if ! mkdir -p "$diagnostics_root"; then
         warn "Could not create diagnostics directory ${diagnostics_root}; continuing with VM cleanup"
         return 0
     fi
     info "Collecting failed VM diagnostics in ${diagnostics_root}"
 
-    az vm get-instance-view \
+    if ! az vm get-instance-view \
         --resource-group "$vm_rg_name" \
         --name "$vm_name" \
         --output json \
-        >"${diagnostics_root}/${safe_label}-instance-view.json" \
-        2>"${diagnostics_root}/${safe_label}-instance-view.err" || true
+        >"$instance_view_file" \
+        2>"$instance_view_error"; then
+        warn "Could not collect instance view for ${label}; see ${instance_view_error}"
+    fi
 
-    az vm boot-diagnostics get-boot-log \
+    if ! az vm boot-diagnostics get-boot-log \
         --resource-group "$vm_rg_name" \
         --name "$vm_name" \
-        >"${diagnostics_root}/${safe_label}-boot.log" \
-        2>"${diagnostics_root}/${safe_label}-boot.err" || true
+        >"$boot_log_file" \
+        2>"$boot_log_error"; then
+        warn "Could not collect boot log for ${label}; see ${boot_log_error}"
+        if [[ -s "$boot_log_error" ]]; then
+            head -c 300 "$boot_log_error" >&2 || warn "Could not print boot-log error from ${boot_log_error}"
+            printf '\n' >&2
+        fi
+    elif [[ -s "$boot_log_file" ]]; then
+        info "--- Azure VM boot log (${label}), last 200 lines ---"
+        tail -n 200 "$boot_log_file" >&2 || warn "Could not print boot log from ${boot_log_file}"
+    else
+        warn "Azure returned an empty boot log for ${label}"
+    fi
 
-    az deployment group list \
+    if ! az deployment group list \
         --resource-group "$vm_rg_name" \
         --output json \
-        >"${diagnostics_root}/${safe_label}-deployments.json" \
-        2>"${diagnostics_root}/${safe_label}-deployments.err" || true
+        >"$deployments_file" \
+        2>"$deployments_error"; then
+        warn "Could not collect deployments for ${label}; see ${deployments_error}"
+    fi
 
-    latest_deployment=$(az deployment group list \
+    if ! latest_deployment=$(az deployment group list \
         --resource-group "$vm_rg_name" \
         --query "sort_by(@, &properties.timestamp)[-1].name" \
-        --output tsv 2>/dev/null || true)
+        --output tsv 2>"$deployment_operations_error"); then
+        warn "Could not identify the latest deployment for ${label}; see ${deployment_operations_error}"
+        latest_deployment=""
+    fi
     if [[ -n "$latest_deployment" ]]; then
-        az deployment operation group list \
+        if ! az deployment operation group list \
             --resource-group "$vm_rg_name" \
             --name "$latest_deployment" \
             --output json \
-            >"${diagnostics_root}/${safe_label}-deployment-operations.json" \
-            2>"${diagnostics_root}/${safe_label}-deployment-operations.err" || true
+            >"$deployment_operations_file" \
+            2>"$deployment_operations_error"; then
+            warn "Could not collect deployment operations for ${label}; see ${deployment_operations_error}"
+        fi
     fi
 }
 
@@ -721,7 +776,16 @@ _replace_vm_rg() {
     shift 2
     local -a all_tags=("$@")
 
-    _delete_vm_rg_sync "$old_vm_rg_name"
+    if ! _delete_vm_rg_sync "$old_vm_rg_name"; then
+        warn "Synchronous deletion failed for ${old_vm_rg_name}; scheduling asynchronous cleanup and continuing with a fresh resource group"
+        if ! az group delete \
+            --name "$old_vm_rg_name" \
+            --subscription "$AZ_SUB_ID" \
+            --yes \
+            --no-wait; then
+            warn "Could not schedule asynchronous deletion of ${old_vm_rg_name}; manual cleanup may be required"
+        fi
+    fi
     VM_RG=$(get_vm_rg_name)
     _create_vm_rg_resources "$VM_RG" "$region" "${all_tags[@]}"
 }
@@ -882,6 +946,9 @@ create_vm_azure() {
                 _replace_vm_rg "$vm_rg_name" "$region" "${all_tags[@]}"
                 vm_rg_name="$VM_RG"
                 continue
+            # Repeated allocation failures are regional capacity noise, so try
+            # another candidate. Repeated OS provisioning timeouts likely
+            # indicate an image defect and intentionally remain fatal.
             elif [[ $rc -eq 4 && "$result" == "RETRYABLE_ALLOCATION" ]]; then
                 warn "✗ Allocation failed twice for ${sku} in ${region} — trying next candidate"
                 _replace_vm_rg "$vm_rg_name" "$region" "${all_tags[@]}"

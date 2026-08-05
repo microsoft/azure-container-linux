@@ -348,10 +348,14 @@ always uses Trusted Launch with Secure Boot and vTPM enabled.
   --ssh-public-key=~/.ssh/id_ed25519.pub
 ```
 
-Successful attempts and non-target failures are deleted synchronously. The
-script stops on the first `OSProvisioningTimedOut`, preserves only that resource
-group, and prints commands for retrieving the boot log and instance view. Delete
-the preserved repro after triage with the command printed by the script.
+Successful attempts and confirmed non-target failures are deleted synchronously;
+if synchronous cleanup fails, the script requests asynchronous deletion and
+continues. After a local attempt timeout, the script queries the server-side ARM
+deployment. It preserves a deployment that is still running or cannot be queried,
+prints triage commands, and exits with status 2 rather than deleting potentially
+useful evidence. The first confirmed `OSProvisioningTimedOut` is also preserved
+and reported, with exit status 0. Delete a preserved resource group after triage
+with the command printed by the script.
 
 #### GPU Smoke Testing (Azure Only)
 

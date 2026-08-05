@@ -4,8 +4,9 @@
 # Licensed under the MIT License.
 
 # Repeatedly provision a control image until OSProvisioningTimedOut occurs.
-# Every successful or non-target attempt is deleted synchronously. The first
-# target failure is preserved for boot diagnostics and serial-console triage.
+# Cleanup is attempted synchronously after successful or non-target attempts.
+# Target failures and timed-out deployments with uncertain state are preserved
+# for boot diagnostics and serial-console triage.
 
 set -euo pipefail
 
@@ -104,16 +105,70 @@ delete_active_rg() {
     ACTIVE_RG=""
 }
 
+delete_active_rg_or_continue() {
+    local failed_rg="$ACTIVE_RG"
+
+    if delete_active_rg; then
+        return 0
+    fi
+
+    warn "Synchronous cleanup failed for ${failed_rg}; scheduling asynchronous deletion and continuing"
+    if az group delete \
+      --subscription "$SUBSCRIPTION_ID" \
+        --name "$failed_rg" \
+        --yes \
+        --no-wait; then
+        log "Scheduled asynchronous deletion of resource group: $failed_rg"
+    else
+        warn "Could not schedule deletion of ${failed_rg}; manual cleanup may be required"
+    fi
+    ACTIVE_RG=""
+}
+
+print_preserved_attempt() {
+    local outcome="$1"
+    local summary="$2"
+    local diagnostics_enabled="${3:-unknown}"
+
+    printf '\n[%s] %s\n' "$outcome" "$summary"
+    printf 'Resource group: %s\n' "$ACTIVE_RG"
+    printf 'VM:             %s\n' "$VM_NAME"
+    printf 'Deployment:     %s\n' "$DEPLOYMENT_NAME"
+    printf 'Boot diagnostics enabled: %s\n\n' "$diagnostics_enabled"
+    printf 'Inspect the preserved attempt with:\n'
+    printf '  az vm get-instance-view --subscription %q --resource-group %q --name %q --output jsonc\n' \
+      "$SUBSCRIPTION_ID" "$ACTIVE_RG" "$VM_NAME"
+    printf '  az vm boot-diagnostics get-boot-log --subscription %q --resource-group %q --name %q\n' \
+      "$SUBSCRIPTION_ID" "$ACTIVE_RG" "$VM_NAME"
+    printf '  az vm boot-diagnostics get-boot-log-uris --subscription %q --resource-group %q --name %q\n' \
+      "$SUBSCRIPTION_ID" "$ACTIVE_RG" "$VM_NAME"
+    printf '  az serial-console connect --subscription %q --resource-group %q --name %q\n' \
+      "$SUBSCRIPTION_ID" "$ACTIVE_RG" "$VM_NAME"
+    printf '  az deployment group show --subscription %q --resource-group %q --name %q --output jsonc\n' \
+      "$SUBSCRIPTION_ID" "$ACTIVE_RG" "$DEPLOYMENT_NAME"
+    printf '\nDelete it when triage is complete:\n'
+    printf '  az group delete --subscription %q --name %q --yes\n' \
+      "$SUBSCRIPTION_ID" "$ACTIVE_RG"
+}
+
 cleanup() {
     local status=$?
+    local output_file="$OUTPUT_FILE"
+    local template_file="$TEMPLATE_FILE"
     trap - EXIT INT TERM
 
     stop_deployment_process
-    [[ -n "$OUTPUT_FILE" ]] && rm -f "$OUTPUT_FILE"
-    [[ -n "$TEMPLATE_FILE" ]] && rm -f "$TEMPLATE_FILE"
+    OUTPUT_FILE=""
+    TEMPLATE_FILE=""
+    if [[ -n "$output_file" ]] && ! rm -f "$output_file"; then
+        warn "Could not remove deployment output file: $output_file"
+    fi
+    if [[ -n "$template_file" ]] && ! rm -f "$template_file"; then
+        warn "Could not remove deployment template file: $template_file"
+    fi
 
     if [[ "$PRESERVE_RG" != "true" ]] && [[ -n "$ACTIVE_RG" ]]; then
-        delete_active_rg || status=1
+        delete_active_rg_or_continue
     fi
 
     exit "$status"
@@ -187,7 +242,8 @@ if [[ -z "$RG_PREFIX" ]]; then
   RG_PREFIX="${owner}-acl-provision-repro"
 fi
 run_id="$(date -u +%Y%m%d%H%M%S)-$$"
-[[ "$RG_PREFIX" != *[^A-Za-z0-9_.\(\)-]* ]] || \
+rg_prefix_pattern='^[A-Za-z0-9_.()-]+$'
+[[ "$RG_PREFIX" =~ $rg_prefix_pattern ]] || \
   die "--resource-group-prefix may contain only ASCII letters, numbers, underscores, parentheses, periods, and hyphens"
 max_attempt_suffix="$MAX_ATTEMPTS"
 if [[ ${#max_attempt_suffix} -lt 2 ]]; then
@@ -442,11 +498,59 @@ for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
     DEPLOY_PID=""
 
     deployment_output=$(<"$OUTPUT_FILE")
-    rm -f "$OUTPUT_FILE"
+    deployment_output_file="$OUTPUT_FILE"
     OUTPUT_FILE=""
+    if ! rm -f "$deployment_output_file"; then
+        warn "Could not remove deployment output file: $deployment_output_file"
+    fi
 
     if [[ $deployment_rc -eq 124 || $deployment_rc -eq 137 ]]; then
-      warn "Attempt ${attempt} exceeded ${ATTEMPT_TIMEOUT_SECONDS}s; cleaning and continuing"
+        warn "Attempt ${attempt} exceeded ${ATTEMPT_TIMEOUT_SECONDS}s; querying the server-side deployment state"
+        if ! grep -qi "OSProvisioningTimedOut" <<< "$deployment_output"; then
+            deployment_state=""
+            if ! deployment_state=$(az deployment group show \
+              --subscription "$SUBSCRIPTION_ID" \
+                --resource-group "$ACTIVE_RG" \
+                --name "$DEPLOYMENT_NAME" \
+                --query "properties.provisioningState" \
+                --output tsv 2>/dev/null); then
+                PRESERVE_RG=true
+                print_preserved_attempt \
+                    "INCONCLUSIVE" \
+                    "Deployment timed out and its server-side state could not be queried on attempt ${attempt}"
+                exit 2
+            fi
+
+            case "${deployment_state,,}" in
+                succeeded)
+                    warn "Deployment completed successfully after the local timeout fired"
+                    deployment_rc=0
+                    ;;
+                failed)
+                    deployment_error=""
+                    if ! deployment_error=$(az deployment group show \
+                      --subscription "$SUBSCRIPTION_ID" \
+                        --resource-group "$ACTIVE_RG" \
+                        --name "$DEPLOYMENT_NAME" \
+                        --query "properties.error" \
+                        --output json 2>/dev/null); then
+                        PRESERVE_RG=true
+                        print_preserved_attempt \
+                            "INCONCLUSIVE" \
+                            "Deployment failed after timing out, but its error could not be queried on attempt ${attempt}"
+                        exit 2
+                    fi
+                    deployment_output+=$'\n'"$deployment_error"
+                    ;;
+                *)
+                    PRESERVE_RG=true
+                    print_preserved_attempt \
+                        "INCONCLUSIVE" \
+                        "Deployment remained ${deployment_state:-unknown} after timing out on attempt ${attempt}"
+                    exit 2
+                    ;;
+            esac
+        fi
     fi
 
     if [[ $deployment_rc -eq 0 ]]; then
@@ -460,7 +564,7 @@ for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
 
         successful_attempts=$(( successful_attempts + 1 ))
         log "Attempt ${attempt} provisioned successfully"
-        delete_active_rg
+        delete_active_rg_or_continue
         continue
     fi
 
@@ -474,31 +578,16 @@ for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
             --query "diagnosticsProfile.bootDiagnostics.enabled" \
             --output tsv 2>/dev/null || true)
 
-        printf '\n[REPRODUCED] OSProvisioningTimedOut on attempt %d\n' "$attempt"
-        printf 'Resource group: %s\n' "$ACTIVE_RG"
-        printf 'VM:             %s\n' "$VM_NAME"
-        printf 'Deployment:     %s\n' "$DEPLOYMENT_NAME"
-        printf 'Boot diagnostics enabled: %s\n\n' "${diagnostics_enabled:-unknown}"
-        printf 'Inspect the preserved repro with:\n'
-        printf '  az vm get-instance-view --subscription %q --resource-group %q --name %q --output jsonc\n' \
-          "$SUBSCRIPTION_ID" "$ACTIVE_RG" "$VM_NAME"
-        printf '  az vm boot-diagnostics get-boot-log --subscription %q --resource-group %q --name %q\n' \
-          "$SUBSCRIPTION_ID" "$ACTIVE_RG" "$VM_NAME"
-        printf '  az vm boot-diagnostics get-boot-log-uris --subscription %q --resource-group %q --name %q\n' \
-          "$SUBSCRIPTION_ID" "$ACTIVE_RG" "$VM_NAME"
-        printf '  az serial-console connect --subscription %q --resource-group %q --name %q\n' \
-          "$SUBSCRIPTION_ID" "$ACTIVE_RG" "$VM_NAME"
-        printf '  az deployment group show --subscription %q --resource-group %q --name %q --output jsonc\n' \
-          "$SUBSCRIPTION_ID" "$ACTIVE_RG" "$DEPLOYMENT_NAME"
-        printf '\nDelete it when triage is complete:\n'
-        printf '  az group delete --subscription %q --name %q --yes\n' \
-          "$SUBSCRIPTION_ID" "$ACTIVE_RG"
+        print_preserved_attempt \
+            "REPRODUCED" \
+            "OSProvisioningTimedOut on attempt ${attempt}" \
+            "${diagnostics_enabled:-unknown}"
         exit 0
     fi
 
     non_target_failures=$(( non_target_failures + 1 ))
     warn "Attempt ${attempt} failed without OSProvisioningTimedOut; cleaning and continuing"
-    delete_active_rg
+    delete_active_rg_or_continue
 done
 
 printf '\nNo OSProvisioningTimedOut reproduced in %d attempts (%d successful, %d other failures).\n' \
