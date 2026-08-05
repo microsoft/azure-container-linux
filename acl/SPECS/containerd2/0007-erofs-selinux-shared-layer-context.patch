@@ -5,47 +5,64 @@ Single commit on the ACL containerd branch:
 
   erofs: share layer mounts across containers under SELinux
 
-An EROFS layer is mounted once per container that uses it, but all those
-mounts resolve to a single block device and therefore a single superblock.
-context= is a superblock-wide setting, so the first container's label fixes
-it for everyone and the next one is rejected outright:
-
-  SELinux: mount invalid. Same superblock, different security settings
-           for (dev dm-1, type erofs)
-
-client.getRootFS appends the consuming container's mount label to every
-mount returned by the snapshotter, and that label carries a per-container
-MCS category pair, so two containers never agree on it. Any image used more
-than once fails to start on an enforcing node.
-
-This is not a corner case on a Kubernetes node: every pod sandbox shares the
-pause image, so only the first pod on a node can start. It is what fails the
-kubeadm kola tests -- all nine kubeadm.v1.{32.4,33.0,34.1}.{calico,cilium,
-flannel}.base cases lost five reruns each in build 1175150, and the captured
-journals show 274 superblock rejections against a single device carrying the
-pause layer, with 274 distinct MCS pairs requested against it.
-
-Strip the MCS categories from the shared layer's label so every consumer asks
-for the same superblock. This is what overlayfs already does: its lowerdirs
-sit on disk as container_ro_file_t:s0 with no categories, and the
-per-container label lives on the overlay above. Isolation is preserved for the
-same reason -- the overlay stacked on the layer still carries the full MCS
-pair, and that overlay is what the container actually sees.
-
-Verified on an enforcing ACL node by running two sandboxes off one image:
-stock 2.2.4 started 1 of 2 with one superblock rejection, the patched build
-started 2 of 2 with none and mounted the shared layer twice concurrently,
-while the overlays above kept their distinct MCS pairs.
-
-This touches only upstream code (plugins/mount/erofs/plugin_linux.go) and is
-independent of the dm-verity series, so it applies last and can be dropped on
-its own once the equivalent lands upstream.
+  
+  An EROFS layer is mounted once per consumer, but all those mounts resolve to
+  a single block device and therefore a single superblock. context= is a
+  superblock-wide setting, so the first mount fixes it for everyone and any
+  later mount that disagrees is rejected outright:
+  
+    SELinux: mount invalid. Same superblock, different security settings
+             for (dev dm-31, type erofs)
+  
+  Two containerd paths reach the mount handler with settings that disagree,
+  and they disagree in a way that rewriting the caller's label cannot fix:
+  
+    - container creation activates the layer with no context= at all;
+    - task creation goes through client.getRootFS, which appends the consuming
+      container's mount label, carrying a per-container MCS category pair.
+  
+  So normalising the label is not enough. An unlabelled mount and a labelled
+  one still differ however the label is rewritten, and two containers never
+  agree on an MCS pair either. Any image used by more than one running
+  container fails to start on an enforcing node.
+  
+  That is not a corner case on a Kubernetes node. Every pod sandbox shares the
+  pause image, and CoreDNS ships two replicas of one image by default, so it
+  reproduces on a stock cluster: all nine kubeadm.v1.{32.4,33.0,34.1}.{calico,
+  cilium,flannel}.base kola cases lost five reruns each in build 1175414. The
+  captured journals show the layer mounted successfully by the unlabelled path
+  and then rejected for the labelled one, 24 unlabelled activations against 4
+  labelled, all on the single device carrying the CoreDNS layer.
+  
+  Make every consumer request one synthesised label instead of deriving it
+  from whatever the caller happened to supply, which is the only way both
+  paths converge. The label is only applied when SELinux is enabled, since
+  mount(2) rejects context= outright otherwise.
+  
+  Isolation is preserved. The label covers the read-only shared layer only;
+  the per-container overlay stacked above it still carries the full MCS pair,
+  and that overlay, not the layer, is what the container sees. It is also what
+  overlayfs already does -- its lowerdirs sit on disk as container_ro_file_t:s0
+  with no categories.
+  
+  Only erofs is affected, which is why this went unnoticed: every container
+  benchmarked before now came from an overlayfs snapshot.
+  
+  
 
 diff --git a/plugins/mount/erofs/plugin_linux.go b/plugins/mount/erofs/plugin_linux.go
-index 728c800ec..745367c91 100644
+index 728c800ec..63dd67ca4 100644
 --- a/plugins/mount/erofs/plugin_linux.go
 +++ b/plugins/mount/erofs/plugin_linux.go
-@@ -63,6 +63,83 @@ func NewErofsMountHandler() mount.Handler {
+@@ -31,6 +31,7 @@ import (
+ 	"github.com/containerd/platforms"
+ 	"github.com/containerd/plugin"
+ 	"github.com/containerd/plugin/registry"
++	"github.com/opencontainers/selinux/go-selinux"
+ 
+ 	"github.com/containerd/containerd/v2/core/mount"
+ 	"github.com/containerd/containerd/v2/internal/dmverity"
+@@ -63,6 +64,69 @@ func NewErofsMountHandler() mount.Handler {
  // parallelism to win by sharding this per device name.
  var dmverityOpenMu sync.Mutex
  
@@ -54,101 +71,90 @@ index 728c800ec..745367c91 100644
 +// given device must agree on its value.
 +const selinuxContextOpt = "context="
 +
-+// shareSELinuxContext rewrites a "context=" mount option so that every container
-+// sharing a layer asks for the same superblock label.
++// sharedLayerContext is the one SELinux label every EROFS layer mount asks for.
 +//
 +// EROFS layers are shared by design: one image layer backs every container
-+// started from that image. Each container is a separate mount-manager
-+// activation, so the same block device gets mounted once per container, and the
++// started from that image. Each consumer is a separate mount-manager
++// activation, so the same block device is mounted once per consumer and the
 +// kernel hands out a single superblock for it. "context=" is a property of that
-+// superblock, so the first container's label wins and the next one is rejected:
++// superblock, so the first mount fixes it and any later mount that disagrees is
++// rejected outright:
 +//
 +//	SELinux: mount invalid. Same superblock, different security settings
-+//	         for (dev dm-1, type erofs)
++//	         for (dev dm-31, type erofs)
 +//
-+// The caller (client.getRootFS) appends the consuming container's mount label to
-+// every snapshotter mount, and that label carries a per-container MCS category
-+// pair -- so with more than one container per image the options are guaranteed to
-+// differ and the mount is guaranteed to fail.
++// Two containerd paths reach this handler with different settings, and they
++// cannot be reconciled by rewriting what the caller passed:
 +//
-+// Stripping the MCS categories makes the option identical for all consumers.
-+// This matches how overlayfs already shares layers: its lowerdirs sit on disk
-+// labelled container_ro_file_t:s0, with no categories, and the per-container
-+// label lives on the overlay above. Isolation is preserved for the same reason
-+// it is under overlayfs -- the overlay stacked on this layer still carries the
-+// full MCS label, and that overlay, not the read-only layer, is what the
-+// container sees.
-+func shareSELinuxContext(opt string) string {
-+	value := strings.TrimPrefix(opt, selinuxContextOpt)
-+
-+	// The value is normally quoted, since an MCS pair contains a comma and would
-+	// otherwise be parsed as a second mount option.
-+	quoted := len(value) > 1 && value[0] == '"' && value[len(value)-1] == '"'
-+	if quoted {
-+		value = value[1 : len(value)-1]
-+	}
-+
-+	shared := stripMCSCategories(value)
-+	if shared == value {
-+		return opt
-+	}
-+	if quoted {
-+		return selinuxContextOpt + `"` + shared + `"`
-+	}
-+	return selinuxContextOpt + shared
-+}
-+
-+// stripMCSCategories removes the category set from the level component of an
-+// SELinux label, turning "system_u:object_r:container_file_t:s0:c262,c637" into
-+// "system_u:object_r:container_file_t:s0".
++//   - container creation activates the layer with no context= at all;
++//   - task creation goes through client.getRootFS, which appends the consuming
++//     container's mount label, carrying a per-container MCS category pair.
 +//
-+// A label is user:role:type:level, and only the level may contain further
-+// colons, so a 4-way split isolates it. The level is either a single
-+// sensitivity ("s0:c1,c2") or a range ("s0-s0:c1.c1023"); categories are
-+// whatever follows the first colon on each side of the range.
-+func stripMCSCategories(label string) string {
-+	parts := strings.SplitN(label, ":", 4)
-+	if len(parts) < 4 {
-+		// No level component, so there are no categories to strip.
-+		return label
-+	}
++// Normalising the label is therefore not sufficient -- an unlabelled mount and a
++// labelled one still disagree no matter how the label is rewritten. The two
++// paths have to be made to agree on a single value, so the value is synthesised
++// here instead of being derived from whatever the caller happened to supply.
++//
++// Isolation is unaffected. This label applies to the read-only shared layer
++// only; the per-container overlay stacked above it still carries the full MCS
++// pair, and that overlay, not the layer, is what the container sees. It is also
++// what overlayfs already does -- its lowerdirs sit on disk as
++// container_ro_file_t:s0 with no categories.
++const sharedLayerContext = "system_u:object_r:container_file_t:s0"
 +
-+	low, high, isRange := strings.Cut(parts[3], "-")
-+	low, _, _ = strings.Cut(low, ":")
-+	if !isRange {
-+		parts[3] = low
-+	} else if high, _, _ = strings.Cut(high, ":"); low == high {
-+		parts[3] = low
-+	} else {
-+		parts[3] = low + "-" + high
++// sharedLayerMountOptions returns opts with the mount-manager bookkeeping
++// options removed and the per-consumer SELinux label replaced by the single
++// shared-layer label, so that every mount of a given layer requests byte
++// identical superblock settings.
++//
++// context= is dropped rather than rewritten because callers disagree on whether
++// to supply one at all; it is then re-added unconditionally so that labelled and
++// unlabelled callers converge on the same request. It is only re-added when
++// SELinux is enabled, since mount(2) rejects the option outright otherwise.
++func sharedLayerMountOptions(opts []string, selinuxEnabled bool) []string {
++	filtered := make([]string, 0, len(opts)+1)
++	for _, v := range opts {
++		// Skip loop option (handled by loop device setup) and dmverity mode option (already processed)
++		if v == "loop" || strings.HasPrefix(v, "X-containerd.dmverity=") {
++			continue
++		}
++		if strings.HasPrefix(v, selinuxContextOpt) {
++			continue
++		}
++		filtered = append(filtered, v)
 +	}
-+
-+	return strings.Join(parts, ":")
++	if selinuxEnabled {
++		filtered = append(filtered, selinuxContextOpt+`"`+sharedLayerContext+`"`)
++	}
++	return filtered
 +}
 +
  // openOrReuseDmverityDevice returns the /dev/mapper path for a layer, creating
  // the device if it does not already exist and validating it if it does.
  func openOrReuseDmverityDevice(ctx context.Context, source, deviceName string, metadata *dmverity.DmverityMetadata) (string, error) {
-@@ -188,6 +265,13 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
- 		if v == "loop" || strings.HasPrefix(v, "X-containerd.dmverity=") {
- 			continue
- 		}
-+		if strings.HasPrefix(v, selinuxContextOpt) {
-+			if shared := shareSELinuxContext(v); shared != v {
-+				log.G(ctx).WithField("from", v).WithField("to", shared).
-+					Debug("dropped MCS categories from shared EROFS layer label")
-+				v = shared
-+			}
-+		}
- 		filteredOptions = append(filteredOptions, v)
+@@ -182,15 +246,7 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
  	}
- 	m.Options = filteredOptions
+ 	// else: no metadata file, proceed with regular EROFS mount
+ 
+-	filteredOptions := make([]string, 0, len(m.Options))
+-	for _, v := range m.Options {
+-		// Skip loop option (handled by loop device setup) and dmverity mode option (already processed)
+-		if v == "loop" || strings.HasPrefix(v, "X-containerd.dmverity=") {
+-			continue
+-		}
+-		filteredOptions = append(filteredOptions, v)
+-	}
+-	m.Options = filteredOptions
++	m.Options = sharedLayerMountOptions(m.Options, selinux.GetEnabled())
+ 
+ 	if err := os.MkdirAll(mp, 0700); err != nil {
+ 		if dmverityDevice != "" {
 diff --git a/plugins/mount/erofs/plugin_linux_test.go b/plugins/mount/erofs/plugin_linux_test.go
 new file mode 100644
-index 000000000..9f98e7a5e
+index 000000000..0da9e3637
 --- /dev/null
 +++ b/plugins/mount/erofs/plugin_linux_test.go
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,114 @@
 +/*
 +   Copyright The containerd Authors.
 +
@@ -167,86 +173,99 @@ index 000000000..9f98e7a5e
 +
 +package erofs
 +
-+import "testing"
++import (
++	"slices"
++	"testing"
++)
 +
-+func TestShareSELinuxContext(t *testing.T) {
++func TestSharedLayerMountOptions(t *testing.T) {
++	const shared = `context="` + sharedLayerContext + `"`
++
 +	for _, tc := range []struct {
-+		name     string
-+		opt      string
-+		expected string
++		name           string
++		opts           []string
++		selinuxEnabled bool
++		expected       []string
 +	}{
 +		{
-+			name: "quoted MCS pair is the case containerd actually emits",
-+			// client.getRootFS quotes the label because the MCS pair contains a
-+			// comma, which would otherwise split into a second mount option.
-+			opt:      `context="system_u:object_r:container_file_t:s0:c262,c637"`,
-+			expected: `context="system_u:object_r:container_file_t:s0"`,
++			// The task-creation path: client.getRootFS appends the consuming
++			// container's mount label, quoted because the MCS pair contains a
++			// comma that would otherwise split into a second mount option.
++			name:           "per-container label is replaced by the shared one",
++			opts:           []string{"ro", "loop", `context="system_u:object_r:container_file_t:s0:c262,c637"`},
++			selinuxEnabled: true,
++			expected:       []string{"ro", shared},
 +		},
 +		{
-+			name:     "unquoted label is rewritten too",
-+			opt:      "context=system_u:object_r:container_file_t:s0:c262,c637",
-+			expected: "context=system_u:object_r:container_file_t:s0",
++			// The container-creation path, which supplies no label at all. This
++			// is the case that a rewrite-only fix cannot reconcile.
++			name:           "unlabelled mount is given the shared label",
++			opts:           []string{"ro", "loop"},
++			selinuxEnabled: true,
++			expected:       []string{"ro", shared},
 +		},
 +		{
-+			name:     "single category",
-+			opt:      `context="system_u:object_r:container_file_t:s0:c262"`,
-+			expected: `context="system_u:object_r:container_file_t:s0"`,
++			// The two paths above have to end up byte identical, which is the
++			// whole point: the kernel compares superblock settings exactly.
++			name:           "unquoted label is replaced too",
++			opts:           []string{"ro", "context=system_u:object_r:container_file_t:s0:c262,c637"},
++			selinuxEnabled: true,
++			expected:       []string{"ro", shared},
 +		},
 +		{
-+			name: "degenerate range collapses",
-+			opt:  `context="system_u:object_r:container_file_t:s0-s0:c1.c1023"`,
-+			// s0-s0 carries no more information than s0, and collapsing it keeps
-+			// the value equal to what a non-range mount of the same layer asks for.
-+			expected: `context="system_u:object_r:container_file_t:s0"`,
++			name:           "already shared label is preserved",
++			opts:           []string{"ro", shared},
++			selinuxEnabled: true,
++			expected:       []string{"ro", shared},
 +		},
 +		{
-+			name:     "real range is preserved, minus categories",
-+			opt:      `context="system_u:object_r:container_file_t:s0-s15:c0.c1023"`,
-+			expected: `context="system_u:object_r:container_file_t:s0-s15"`,
++			// mount(2) rejects context= when SELinux is off, so it must not be
++			// synthesised there.
++			name:           "no label is added when selinux is disabled",
++			opts:           []string{"ro", "loop"},
++			selinuxEnabled: false,
++			expected:       []string{"ro"},
 +		},
 +		{
-+			name: "already category-less is returned untouched",
-+			// The identity case matters: it is what makes two containers agree on
-+			// the superblock label.
-+			opt:      `context="system_u:object_r:container_ro_file_t:s0"`,
-+			expected: `context="system_u:object_r:container_ro_file_t:s0"`,
++			name:           "stale label is dropped when selinux is disabled",
++			opts:           []string{"ro", `context="system_u:object_r:container_file_t:s0:c1,c2"`},
++			selinuxEnabled: false,
++			expected:       []string{"ro"},
 +		},
 +		{
-+			name:     "label without a level is left alone",
-+			opt:      "context=system_u:object_r:container_file_t",
-+			expected: "context=system_u:object_r:container_file_t",
-+		},
-+		{
-+			name:     "empty value is left alone",
-+			opt:      "context=",
-+			expected: "context=",
++			// Bookkeeping options consumed earlier in Mount must not reach the
++			// kernel.
++			name:           "loop and dmverity options are dropped",
++			opts:           []string{"ro", "loop", "X-containerd.dmverity=auto"},
++			selinuxEnabled: false,
++			expected:       []string{"ro"},
 +		},
 +	} {
 +		t.Run(tc.name, func(t *testing.T) {
-+			if got := shareSELinuxContext(tc.opt); got != tc.expected {
-+				t.Errorf("shareSELinuxContext(%q) = %q, want %q", tc.opt, got, tc.expected)
++			got := sharedLayerMountOptions(tc.opts, tc.selinuxEnabled)
++			if !slices.Equal(got, tc.expected) {
++				t.Errorf("sharedLayerMountOptions(%q, %v) = %q, want %q",
++					tc.opts, tc.selinuxEnabled, got, tc.expected)
 +			}
 +		})
 +	}
 +}
 +
-+// TestShareSELinuxContextConverges is the property the fix actually depends on:
-+// two containers with different MCS pairs must end up asking for the same
-+// superblock label, or the second mount of a shared layer is rejected.
-+func TestShareSELinuxContextConverges(t *testing.T) {
-+	first := shareSELinuxContext(`context="system_u:object_r:container_file_t:s0:c262,c637"`)
-+	second := shareSELinuxContext(`context="system_u:object_r:container_file_t:s0:c154,c335"`)
++// TestSharedLayerMountOptionsConverge is the regression this exists for: the
++// labelled and unlabelled callers of the same layer must produce identical
++// options, or the kernel rejects the second mount with "Same superblock,
++// different security settings" and only one pod per image can start.
++func TestSharedLayerMountOptionsConverge(t *testing.T) {
++	taskPath := sharedLayerMountOptions(
++		[]string{"ro", "loop", `context="system_u:object_r:container_file_t:s0:c646,c927"`}, true)
++	containerPath := sharedLayerMountOptions([]string{"ro", "loop"}, true)
++	otherPod := sharedLayerMountOptions(
++		[]string{"ro", "loop", `context="system_u:object_r:container_file_t:s0:c154,c335"`}, true)
 +
-+	if first != second {
-+		t.Errorf("labels did not converge: %q != %q", first, second)
++	if !slices.Equal(taskPath, containerPath) {
++		t.Errorf("task path %q and container path %q disagree", taskPath, containerPath)
 +	}
-+}
-+
-+func TestStripMCSCategoriesIsIdempotent(t *testing.T) {
-+	const label = "system_u:object_r:container_file_t:s0:c262,c637"
-+
-+	once := stripMCSCategories(label)
-+	if twice := stripMCSCategories(once); twice != once {
-+		t.Errorf("not idempotent: %q then %q", once, twice)
++	if !slices.Equal(taskPath, otherPod) {
++		t.Errorf("two pods disagree: %q vs %q", taskPath, otherPod)
 +	}
 +}

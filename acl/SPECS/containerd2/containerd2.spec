@@ -31,7 +31,7 @@ Version: 2.2.4
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 6016.verity%{?dist}
+Release: 6017.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -233,6 +233,21 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Wed Aug 05 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6017.verity
+- Patch11: synthesise the shared EROFS layer label instead of rewriting the
+  caller's. 6016.verity stripped the MCS categories from context=, which fixed
+  the all-labelled case (the pause image, 274 rejections in build 1175150) but
+  not the general one: container creation activates a layer with no context= at
+  all, while task creation appends the consuming container's label, so an
+  unlabelled mount and a labelled one still disagreed however the label was
+  rewritten. Build 1175414 still lost all nine kubeadm kola cases through five
+  reruns each, with 24 unlabelled activations against 4 labelled on the single
+  device carrying the CoreDNS layer -- CoreDNS ships two replicas of one image,
+  so it reproduces on a stock cluster. Request one synthesised label from every
+  consumer, applied only when SELinux is enabled since mount(2) rejects
+  context= otherwise. Isolation is unchanged: the per-container overlay stacked
+  above the layer still carries the full MCS pair.
+
 * Tue Aug 04 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6016.verity
 - Patch11: share EROFS layer mounts across containers under SELinux. context=
   is a superblock-wide option and an EROFS layer is one block device, so the
