@@ -73,8 +73,10 @@ sysexts:
       # Gated on the 'erofs' feature so that a single branch can produce both
       # arms of the IPE x EROFS perf matrix. Set ACL_EROFS_ENABLE=1 (which the
       # image build translates into ACL_FEATURES=erofs) to include it. With the
-      # feature off, the base containerd2 package still ships its stock
-      # /etc/containerd/config.toml, so the image boots on overlayfs.
+      # feature off, containerd keeps the CONTAINERD_CONFIG value set by the
+      # 10-acl.conf drop-in -- the stock Azure Linux config relocated to
+      # /usr/share/containerd/config.toml -- and the node runs on overlayfs.
+      # That is the control arm, and it needs no separate branch.
       - name: containerd2-erofs
         feature: erofs
 
