@@ -204,6 +204,88 @@ connect_vm_ssh() {
     ssh $ssh_opts "${VM_SSH_USER}@${ip}"
 }
 
+# ── Diagnostics capture ────────────────────────────────────────────
+
+# Collect whatever record survives of a node that stopped responding.
+#
+# The resource group is deleted at the end of every run, so the Azure serial
+# console is the only place a kernel-level fault is still readable afterwards.
+# Capturing it has to happen here, at the point of failure, not during teardown.
+# Boot diagnostics is enabled at VM create time (validate_azure.sh), so the log
+# is already being recorded — nothing was ever reading it.
+capture_vm_diagnostics() {
+    local ip="$1"
+    local reason="${2:-failure}"
+
+    local diag_dir="${DIAGNOSTICS_DIR:-/tmp}"
+    mkdir -p "$diag_dir"
+    local prefix="${diag_dir}/$(date +%Y%m%d-%H%M%S)-${VM_NAME}-${reason//[^a-zA-Z0-9._-]/_}"
+
+    if [[ -n "${VM_RG:-}" ]] && command -v az >/dev/null 2>&1; then
+        info "Capturing Azure instance view and serial console..."
+        az vm get-instance-view --resource-group "$VM_RG" --name "$VM_NAME" \
+            --query 'instanceView.{statuses:statuses,vmAgent:vmAgent.statuses}' \
+            -o json >"${prefix}-instance-view.json" 2>&1 || true
+        # The boot log comes back as a JSON string and needs unescaping. `jq`
+        # is not guaranteed on every agent, and silently losing the log to a
+        # missing dependency would defeat the point of collecting it, so fall
+        # back through python3 to the raw bytes.
+        local raw="${prefix}-serial.raw"
+        az vm boot-diagnostics get-boot-log \
+            --resource-group "$VM_RG" --name "$VM_NAME" >"$raw" 2>/dev/null || true
+        if command -v jq >/dev/null 2>&1 && jq -r . <"$raw" >"${prefix}-serial.log" 2>/dev/null; then
+            :
+        elif command -v python3 >/dev/null 2>&1 && python3 -c 'import json,sys
+d = sys.stdin.read()
+try:
+    sys.stdout.write(json.loads(d))
+except Exception:
+    sys.stdout.write(d)' <"$raw" >"${prefix}-serial.log" 2>/dev/null; then
+            :
+        else
+            cp "$raw" "${prefix}-serial.log" 2>/dev/null || true
+        fi
+        rm -f "$raw"
+
+        if [[ -s "${prefix}-serial.log" ]]; then
+            info "Serial log: ${prefix}-serial.log ($(wc -c <"${prefix}-serial.log") bytes)"
+            # Surface the fault directly in the pipeline log — the artifact
+            # is easy to miss and this is the whole reason we collected it.
+            if grep -qiE 'kernel panic|BUG:|Oops:|general protection fault|Call Trace:|out of memory|oom-kill' \
+                 "${prefix}-serial.log"; then
+                error "Serial console contains a kernel fault:"
+                grep -iE -B 5 -A 30 \
+                    'kernel panic|BUG:|Oops:|general protection fault|Call Trace:|out of memory|oom-kill' \
+                    "${prefix}-serial.log" | sed 's/^/  [serial] /' | head -80 || true
+            else
+                info "No kernel fault matched; last 100 serial lines:"
+                tail -100 "${prefix}-serial.log" | sed 's/^/  [serial] /' || true
+            fi
+        else
+            warn "Serial console log was empty or unavailable"
+        fi
+    fi
+
+    # A node that answers again rebooted rather than hung, which means the
+    # fault is in the *previous* boot's kernel log.
+    local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    ssh_opts+=" -o ConnectTimeout=15 -o BatchMode=yes -i $VM_SSH_KEY"
+    if ssh $ssh_opts "${VM_SSH_USER}@${ip}" true 2>/dev/null; then
+        warn "Node is reachable again — it rebooted rather than hung"
+        ssh $ssh_opts "${VM_SSH_USER}@${ip}" \
+            "sudo journalctl -k -b -1 --no-pager 2>/dev/null | tail -300" \
+            >"${prefix}-prevboot-kernel.log" 2>&1 || true
+        if [[ -s "${prefix}-prevboot-kernel.log" ]]; then
+            info "Previous-boot kernel log, last 60 lines:"
+            tail -60 "${prefix}-prevboot-kernel.log" | sed 's/^/  [prevboot] /' || true
+        fi
+    else
+        warn "Node is still unreachable — it hung or is powered off"
+    fi
+
+    info "Diagnostics written with prefix ${prefix}"
+}
+
 # ── Script execution (SSH) ─────────────────────────────────────────
 
 run_scripts_on_vm() {
@@ -212,7 +294,11 @@ run_scripts_on_vm() {
     local scripts=("$@")
     local failed=0
 
+    # Benchmarks run for minutes at a time with no output. Without keepalives
+    # an idle NAT/firewall timeout looks identical to a dead node, and ssh
+    # blocks indefinitely against a hung one. 15s x 8 fails after ~2m of silence.
     local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+    ssh_opts+=" -o ServerAliveInterval=15 -o ServerAliveCountMax=8"
     ssh_opts+=" -i $VM_SSH_KEY"
 
     for script in "${scripts[@]}"; do
@@ -226,8 +312,18 @@ run_scripts_on_vm() {
                 failed=1
                 continue
             fi
-            if ! ssh $ssh_opts "${VM_SSH_USER}@${ip}" "chmod +x ${remote_script} && sudo ${remote_script}"; then
-                error "Script failed: $script"
+            local rc=0
+            ssh $ssh_opts "${VM_SSH_USER}@${ip}" "chmod +x ${remote_script} && sudo ${remote_script}" || rc=$?
+            if [[ $rc -ne 0 ]]; then
+                error "Script failed: $script (exit ${rc})"
+                # 255 is ssh's own code for a connection that failed or was
+                # closed, as distinct from a non-zero exit of the script itself.
+                # A node that drops mid-run leaves no other trace once the
+                # resource group is deleted, so collect evidence right here.
+                if [[ $rc -eq 255 ]]; then
+                    error "SSH connection lost — node died or hung, not a test failure"
+                    capture_vm_diagnostics "$ip" "$(basename "$script")"
+                fi
                 SCRIPT_RESULTS_NAMES+=("$script")
                 SCRIPT_RESULTS_STATUS+=(1)
                 failed=1
