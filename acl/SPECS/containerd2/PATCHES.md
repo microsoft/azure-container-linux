@@ -11,7 +11,7 @@ history, and triage notes live here so the `.spec` stays terse.
 | Patch8    | dm-verity baseline | Upstream `add-signature-support` (aadagarwal). Split off by author so it can be dropped once it merges into azurelinux, leaving Patch9-10 unchanged. |
 | Patch9    | ACL integration | Derives referrer discovery and snapshotter-side formatting from the erofs differ's capability, and adds the ACL entry points. Leaves Patch8's defaults untouched. |
 | Patch10   | precomputed artifacts | Consumes signed precomputed EROFS/Merkle bundles and selects the newest. |
-| Patch11   | EROFS SELinux sharing | Strips the MCS categories from the shared layer's `context=` so one EROFS layer can be mounted by more than one container. Independent of dm-verity; touches only upstream code. |
+| Patch11   | EROFS SELinux sharing | Makes every consumer of an EROFS layer request one synthesised `context=`, so a layer can be mounted by more than one container. Independent of dm-verity; touches only upstream code. |
 
 ## Source of truth
 
@@ -30,7 +30,7 @@ v2.2.4  193637f7ee8ae5f5aa5248f49e7baa3e6164966e   ( == %define commit_hash )
           ├─ 02191af08  erofs: support dm-verity referrers on OCI-layout imports
           ├─ 492478354  erofs: consume signed precomputed EROFS and dm-verity artifacts
           ├─ d04b266f5  erofs: select the newest precomputed bundle and fail closed
-          └─ f347a5052  erofs: share layer mounts across containers under SELinux
+          └─ 2b81b1336  erofs: share layer mounts across containers under SELinux
 ```
 
 The SHAs above are informational; the **trailers** are what the export commands
@@ -49,7 +49,7 @@ review and bisect, the patch files exist so the spec stays maintainable.
 |---|---|---|
 | `acl-dmverity-integration` | `9e59efb49`, `02191af08` | Patch9 |
 | `acl-dmverity-precomputed` | `492478354`, `d04b266f5` | Patch10 |
-| `acl-erofs-selinux` | `f347a5052` | Patch11 |
+| `acl-erofs-selinux` | `2b81b1336` | Patch11 |
 
 containerd does **not** inspect IPE policy. Layer signatures are passed to the
 kernel whenever they are present and the feature is enabled; the kernel alone
@@ -204,28 +204,32 @@ and can be dropped on its own the moment an equivalent lands upstream.
 `context=` is a **superblock-wide** SELinux mount option, and an EROFS layer is
 a single block device, so every container that uses a given image shares one
 superblock for that layer. The mount manager creates a new activation per
-container and `client.getRootFS` appends the consuming container's mount label
-to every mount it gets back from the snapshotter — and that label carries a
-per-container MCS category pair. So the first container's label fixes the
-superblock and the next one is rejected:
+consumer, and the two containerd paths that reach the handler disagree about
+what to ask for:
+
+- **container creation** activates the layer with no `context=` at all;
+- **task creation** goes through `client.getRootFS`, which appends the consuming
+  container's mount label, carrying a per-container MCS category pair.
+
+So the first mount fixes the superblock and any later one that disagrees is
+rejected:
 
 ```
-SELinux: mount invalid.  Same superblock, different security settings for (dev dm-1, type erofs)
+SELinux: mount invalid.  Same superblock, different security settings for (dev dm-31, type erofs)
 ```
 
 containerd surfaces this as a bare `EINVAL` from the mount handler.
 
 This is fatal on a Kubernetes node rather than merely inconvenient, because
-**every pod sandbox shares the pause image**: only the first pod on a node can
-start. It is what failed all nine
-`kubeadm.v1.{32.4,33.0,34.1}.{calico,cilium,flannel}.base` kola cases in build
-1175150, through five reruns each. The captured journals show 274 superblock
-rejections against a single device carrying the pause layer, with 274 distinct
-MCS pairs requested against it. Single-container tests passed, which fits — the
-defect needs two consumers of one layer before it can fire.
+**every pod sandbox shares the pause image** and **CoreDNS ships two replicas of
+one image by default** — so it reproduces on a stock cluster. It failed all nine
+`kubeadm.v1.{32.4,33.0,34.1}.{calico,cilium,flannel}.base` kola cases in builds
+1175150 and 1175414, through five reruns each. Single-container tests passed,
+which fits — the defect needs two live consumers of one layer before it can fire,
+and that is also why `cl.verity` and critest stayed green throughout.
 
-The fix strips the MCS categories from the shared layer's label so every
-consumer requests an identical superblock. **Isolation is unaffected**, for the
+The fix makes every consumer request **one synthesised label** rather than
+rewriting whatever the caller supplied. **Isolation is unaffected**, for the
 same reason overlayfs is unaffected: the per-container overlay stacked above the
 layer still carries the full MCS pair, and that overlay is what the container
 actually sees. Overlayfs lowerdirs already sit on disk as
@@ -233,28 +237,41 @@ actually sees. Overlayfs lowerdirs already sit on disk as
 `matchpathcon` — so the EROFS layer was the outlier, and this brings it to
 parity rather than loosening anything.
 
-Details that matter if you touch `stripMCSCategories`:
+### Why rewriting the caller's label was not enough
 
-- A label is `user:role:type:level` and only `level` may contain further colons,
-  so `SplitN(label, ":", 4)` is what isolates it.
-- Categories are whatever follows the first colon on each side of a `-` range,
-  so `s0-s0:c1,c2` and `s0:c1,c2` both reduce to `s0`.
-- A degenerate range `s0-s0` collapses to `s0` so it matches what a
-  non-range mount asks for. Without that, two consumers can still disagree.
-- Quoting is preserved. The kernel quotes labels containing commas; a useful
-  tell when reading `/proc/mounts` is that stripped labels appear **unquoted**
-  and unstripped ones **quoted**.
+6016.verity stripped the MCS categories from `context=`. That is sufficient when
+every consumer supplies a label, so it fixed the pause-image case: rejections on
+build 1175414 fell from 274 to 7. It cannot fix the general case, because an
+**unlabelled** mount and a **labelled** one disagree no matter how the label is
+rewritten. The 1175414 journals show exactly that residue — 24 unlabelled
+activations from container creation against 4 labelled ones from task creation,
+all on the one device carrying the CoreDNS layer, mounting and being rejected in
+alternation.
 
-`plugin_linux_test.go` covers all of the above, plus the convergence property
-the fix actually depends on — that any two labels differing only in categories
-strip to the same string — and idempotency.
+Synthesising the value is therefore not a stylistic choice; it is the only way
+both paths converge. Details that matter if you touch `sharedLayerMountOptions`:
+
+- `context=` is **dropped and re-added**, never edited in place. Editing only
+  normalises labels that exist, which is the bug above.
+- It is re-added **only when SELinux is enabled** — `mount(2)` rejects
+  `context=` outright otherwise, so synthesising it unconditionally would break
+  every EROFS mount on a permissive-disabled node.
+- The value is quoted. The kernel needs quoting for labels containing commas,
+  and quoting unconditionally keeps the emitted option byte-identical between
+  the two paths, which is what the superblock comparison actually requires.
+- `loop` and `X-containerd.dmverity=` are consumed earlier in `Mount` and must
+  still be filtered out here.
+
+`plugin_linux_test.go` covers each of the above and asserts the property the fix
+depends on: the labelled path, the unlabelled path, and a second pod with a
+different MCS pair all produce identical option slices.
 
 Verified on an enforcing ACL node by starting two sandboxes from one image from
 a known-clean state, with the running binary's version asserted per arm: stock
-2.2.4 started 1 of 2 with one superblock rejection, the patched build started
-2 of 2 with none and mounted the shared layer twice concurrently, while the
-overlays above kept their distinct MCS pairs. **Not yet reproven through kola**
-— that needs a build carrying this patch.
+2.2.4 started 1 of 2 with one superblock rejection, while the overlays above kept
+their distinct MCS pairs. **Not yet reproven through kola** — that needs a build
+carrying 6017.verity, and kola is the gate that matters, since 6016.verity passed
+node-level validation and still lost every kubeadm case.
 
 ## Regeneration procedure
 
