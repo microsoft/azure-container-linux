@@ -304,7 +304,6 @@ else:
 
 document = {
     'schemaVersion': 1,
-    'critestRc': 0,
     'run': {
         'startedAt': os.environ.get('ACL_STARTED_AT', ''),
         'finishedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
