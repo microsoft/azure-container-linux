@@ -120,11 +120,31 @@ def mount_info(path):
     compared against another run."""
     rc, out = run(['findmnt', '-no', 'FSTYPE,SOURCE,TARGET', '--target', path])
     if rc == 0 and out:
-        parts = out.split()
-        while len(parts) < 3:
-            parts.append('')
-        return {'fstype': parts[0], 'source': parts[1], 'target': parts[2]}
-    return {'fstype': 'unknown', 'source': '', 'target': ''}
+        layers = []
+        for line in out.splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            while len(parts) < 3:
+                parts.append('')
+            layers.append({'fstype': parts[0], 'source': parts[1],
+                           'target': parts[2]})
+        if layers:
+            # findmnt prints one line per mount at the target, backing store
+            # first. ACL stacks a sysext overlay over the dm-verity /usr, so
+            # this is routinely more than one line. The backing store is
+            # reported as the filesystem because that is the axis the matrix
+            # varies (erofs vs btrfs, verity vs not), but the layers above it
+            # are kept: an overlay in the read path costs something, and a
+            # number that silently ignored it would not be comparable against
+            # an arm mounted without one.
+            info = dict(layers[0])
+            info['stack'] = ['%s:%s' % (l['fstype'], l['source'])
+                             for l in layers]
+            info['stacked'] = len(layers) > 1
+            return info
+    return {'fstype': 'unknown', 'source': '', 'target': '',
+            'stack': [], 'stacked': False}
 
 def drop_caches():
     """Page cache, dentries and inodes. Without this a 'cold' read is a memcpy
@@ -174,10 +194,16 @@ def collect_corpus(root):
                 return data, data_bytes, meta
     return data, data_bytes, meta
 
-def build_control(dirpath, sizes):
+def build_control(dirpath, sizes, meta_rel):
     """Mirror the image corpus onto the writable filesystem: same file count,
     same sizes, same order. Real bytes, never a sparse file, or the control
-    would read back without touching the disk at all."""
+    would read back without touching the disk at all.
+
+    The metadata corpus is mirrored too, as empty files at the same relative
+    paths. Matching only the data files would leave the control stat walk
+    covering a couple of dozen entries while the image walk covered thousands,
+    and the resulting ratio would report the count difference rather than
+    anything about the filesystem."""
     shutil.rmtree(dirpath, ignore_errors=True)
     os.makedirs(dirpath, exist_ok=True)
     block = os.urandom(READ_CHUNK)
@@ -194,11 +220,24 @@ def build_control(dirpath, sizes):
             continue
         out.append((path, size))
         total += size
+    # Empty files: stat() reads the inode, so the tree shape and entry count
+    # are what matter here, not the contents.
+    meta_root = os.path.join(dirpath, 'meta')
+    meta_out = []
+    for rel in meta_rel:
+        path = os.path.join(meta_root, rel)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'wb'):
+                pass
+        except OSError:
+            continue
+        meta_out.append(path)
     try:
         os.sync()
     except Exception:
         pass
-    return out, total
+    return out, total, meta_out
 
 def read_sequential(files):
     total = 0
@@ -343,20 +382,23 @@ if data_files:
         notes.append(f'control path {CONTROL_PATH} is on the same filesystem as '
                      f'{IMAGE_PATH} ({control_mount["source"]}) -- control rows omitted')
     else:
-        control_files, control_bytes = build_control(
-            CONTROL_PATH, [size for _, size in data_files])
+        control_files, control_bytes, control_meta = build_control(
+            CONTROL_PATH, [size for _, size in data_files],
+            [os.path.relpath(p, IMAGE_PATH) for p in meta_files])
         print(f"      control {CONTROL_PATH}: {len(control_files)} files, "
-              f"{control_bytes / 1048576:.1f} MiB "
-              f"[{control_mount['fstype']} on {control_mount['source']}]")
+              f"{control_bytes / 1048576:.1f} MiB, {len(control_meta)} files "
+              f"for stat [{control_mount['fstype']} on "
+              f"{control_mount['source']}]")
         if control_files:
             targets.append(('control', CONTROL_PATH, control_files, control_bytes,
-                            [p for p, _ in control_files], control_mount))
+                            control_meta, control_mount))
 
 for label, path, files, total_bytes, meta, mnt in targets:
     context = {
         'path': path,
         'fstype': mnt.get('fstype', ''),
         'device': mnt.get('source', ''),
+        'mountStack': mnt.get('stack', []),
         'bytes': total_bytes,
         'files': len(files),
     }
@@ -443,15 +485,56 @@ for row in metrics:
           f"{row['minMs']:>10} {row['p50Ms']:>10} {row['maxMs']:>10} "
           f"{row.get('throughputMBps', ''):>9}")
 
-# The ratio is the point of the control, so compute it here rather than leaving
-# every reader to do it: it is the number that survives a noisy disk.
 by_op = {row['operation']: row for row in metrics}
-for kind in ('read_cold', 'read_warm', 'read_random_cold', 'stat_cold'):
-    img, ctl = by_op.get(f'{kind}:image'), by_op.get(f'{kind}:control')
-    if img and ctl and ctl['p50Ms'] > 0:
-        ratio = img['p50Ms'] / ctl['p50Ms']
-        print(f"      {kind}: image is {ratio:.2f}x the control "
-              f"({img['fstype']} vs {ctl['fstype']})")
+
+# A single run of a single arm has nothing to compare against, so spell out
+# which rows are the ones meant to be diffed across the matrix and what each
+# one prices. Without this the table reads as eight interchangeable numbers.
+print("\n--- The numbers to diff across matrix arms")
+headline = [
+    ('read_cold:image', 'bulk read from disk, caches dropped',
+     'erofs decompression + dm-verity hashing'),
+    ('read_random_cold:image', 'scattered 4 KiB reads',
+     'dm-verity Merkle-tree walks -- verity worst case'),
+    ('stat_cold:image', 'metadata-only walk',
+     'filesystem metadata layout'),
+    ('fork_exec', 'fork + execv + wait',
+     'IPE policy evaluation per execve'),
+]
+for op, what, prices in headline:
+    row = by_op.get(op)
+    if row:
+        print(f"      {op:<24} {row['p50Ms']:>10} ms   {what}")
+        print(f"      {'':<24} {'':>10}      prices: {prices}")
+
+# The control exists to cancel disk speed so numbers stay comparable across
+# runs, regions and agents. It is scaffolding, not a result: it compares the
+# image filesystem against whatever the writable one happens to be, which is a
+# different question from the one the matrix asks.
+if any(op.endswith(':control') for op in by_op):
+    print("\n--- Control on the writable filesystem (cancels disk speed, not a result)")
+    for kind in ('read_cold', 'read_warm', 'read_random_cold', 'stat_cold'):
+        img, ctl = by_op.get(f'{kind}:image'), by_op.get(f'{kind}:control')
+        if img and ctl and ctl['p50Ms'] > 0:
+            ratio = img['p50Ms'] / ctl['p50Ms']
+            flag = ''
+            if kind == 'read_warm':
+                # Both warm rows are served from RAM, so this ratio isolates
+                # the software cost of the mount stack. Far from 1.00x means
+                # something other than the disk differs between the two paths,
+                # and the cold ratios carry that difference too.
+                flag = ('  <- self-check: both from RAM, expect ~1.00x'
+                        if abs(ratio - 1.0) < 0.05
+                        else '  <- self-check FAILED: both are RAM reads, so '
+                             'this gap is mount-stack overhead that also '
+                             'inflates the cold ratios')
+            print(f"      {kind:<20} image/control {ratio:>6.2f}x  "
+                  f"({img['fstype']} vs {ctl['fstype']}){flag}")
+
+if image_mount.get('stacked'):
+    notes.append(f'{IMAGE_PATH} is a stacked mount '
+                 f'({" + ".join(image_mount["stack"])}); the upper layers are '
+                 f'in the image read path but not the control path')
 
 for note in notes:
     print(f"      note: {note}")
