@@ -209,7 +209,11 @@ def phases(sample):
     else:
         out['Kernel'] = userspace_start
     out['Userspace'] = finish - userspace_start
-    out['Total'] = finish
+    # systemd-analyze counts firmware and loader toward the total, so include
+    # them when the platform exposed them. Otherwise 'Total' quietly means
+    # "since kernel start" and would disagree with what `systemd-analyze time`
+    # prints on the very same machine.
+    out['Total'] = finish + out.get('Firmware', 0) + out.get('Loader', 0)
     return out
 
 # Unit readiness, keyed by the unit's own Id so a missing unit cannot silently
@@ -274,14 +278,25 @@ for name in sorted(series, key=rank):
         'p50Ms': pct(ordered, 50),
         'p95Ms': pct(ordered, 95),
         'maxMs': pct(ordered, 100),
+        # Every sample, not just the summary. At these sample counts a p95 is
+        # not a real tail estimate -- with n<=10 it lands on the maximum -- so
+        # keeping the raw values is what lets a reader recompute honestly, and
+        # lets a dashboard aggregate across runs instead of averaging averages.
+        'samplesMs': [round(v / 1e3, 2) for v in ordered],
     })
 
 print(f"\n--- Boot time over {len(series.get('Total', []))} reboots "
       f"(node: {node['image'] or 'unknown'})")
-print(f"      {'phase':<36} {'n':>4} {'p50 ms':>10} {'p95 ms':>10} {'max ms':>10}")
+print(f"      {'phase':<36} {'n':>4} {'min ms':>10} {'p50 ms':>10} {'p95 ms':>10} {'max ms':>10}")
 for row in metrics:
-    print(f"      {row['operation']:<36} {row['n']:>4} {row['p50Ms']:>10} "
-          f"{row['p95Ms']:>10} {row['maxMs']:>10}")
+    print(f"      {row['operation']:<36} {row['n']:>4} {row['minMs']:>10} "
+          f"{row['p50Ms']:>10} {row['p95Ms']:>10} {row['maxMs']:>10}")
+# At n<=10 the p95 index rounds onto the last sample, so the column repeats the
+# maximum rather than estimating a tail. Say so, rather than letting the number
+# be read as something it is not.
+if metrics and max(row['n'] for row in metrics) <= 10:
+    print(f"      note: n<=10, so p95 lands on the maximum and is not a tail "
+          f"estimate; raw samples are in the results JSON")
 
 document = {
     'schemaVersion': 1,

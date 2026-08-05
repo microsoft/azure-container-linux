@@ -29,10 +29,30 @@ guaranteed to survive. The file exists for anyone running the script by hand.
             "selinux": "...", "activeSnapshotter": "erofs" },
   "metrics": [ { "suite": "...", "operation": "...", "unit": "ms",
                  "n": 30, "minMs": 1.0, "p50Ms": 2.0,
-                 "p95Ms": 3.0, "maxMs": 4.0 } ],
+                 "p95Ms": 3.0, "maxMs": 4.0,
+                 "samplesMs": [1.0, 2.0, 3.0] } ],
   "suites": { }
 }
 ```
+
+### Percentiles, and why the raw samples are kept
+
+`p50Ms` is the median — the typical case. `p95Ms` is nominally the tail. Both are
+reported instead of a mean because these distributions are right-skewed: one
+slow sample from a page-cache miss or a noisy neighbour moves a mean and leaves
+a median alone, so a mean would make runs look different when only the noise
+differed.
+
+**At small sample counts `p95Ms` is not a tail estimate.** The index rounds onto
+the last sample whenever n is 10 or fewer, so `p95Ms` simply repeats `maxMs` —
+which is the case for the image suite (n=10) and the boot suite (n=5). Only the
+n=30 suites produce a p95 distinct from the maximum. The console tables print a
+note wherever this applies.
+
+This is why `samplesMs` carries every measurement. It lets a reader recompute
+any statistic honestly, lets a dashboard aggregate across runs instead of
+averaging averages, and it is the only copy that survives: critest's own raw
+JSON stays on the VM and dies with it.
 
 `metrics` is the array a dashboard should ingest. It is deliberately flat and
 denormalized: one row per measured operation, each row carrying every key needed
