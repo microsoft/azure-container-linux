@@ -10,7 +10,7 @@ artifact and **fails the merge** if a producer drifts from this contract.
 | script | suites | where it runs |
 |---|---|---|
 | `run-critest-benchmark.sh` | `PodSandbox`, `container`, `image_lifecycle` | in the VM |
-| `run-fsexec-benchmark.sh` | `filesystem`, `exec` | in the VM |
+| `run-exec-benchmark.sh` | `exec` | in the VM |
 | `run-boot-benchmark.sh` | `boot` | on the host, against the VM |
 
 ## Emission
@@ -135,85 +135,123 @@ carrying cloud-init and disk-growth work that never recurs. Measured on a
 `Standard_D2s_v5`, that boot took 27.3 s against ~9.4 s for subsequent reboots,
 so counting it would have biased every run by roughly 18 s of one-time work.
 
-## What the `filesystem` and `exec` suites measure
+## What the `exec` suite measures
 
-These are the general-perf counterpart to the container benchmark: no
-containerd, no CNI, no registry. They exist because a `PullImage` number folds
-network, unpack, hashing and mount into a single figure, so when it moves there
-is no way to say which of them moved. Here each row is one syscall in a loop.
+This is the general-perf counterpart to the container benchmark: no containerd,
+no CNI, no registry. It exists because a `PullImage` number folds network,
+unpack, hashing and mount into a single figure, so when it moves there is no way
+to say which part moved.
 
-Rows are `read_cold`, `read_warm`, `read_random_cold` and `stat_cold`, each
-suffixed `:image` or `:control`, plus a single `fork_exec` row. Each row also
-carries `fstype`, `device`, `path`, `bytes` and `files`, because the matrix arms
-deliberately differ in what backs `/usr` and a timing whose filesystem is
-unknown cannot be compared with anything.
+The suite measures the exec path and nothing else, because that is the entire
+surface IPE taxes. The kernel documentation is explicit: enforcement "is
+triggered automatically by the kernel during `execve()`, `execveat()`, `mmap()`
+and `mprotect()` syscalls when loading executable content."
 
-The two axes land in different places. **EROFS and dm-verity tax the read
-path**: every block coming off the image is checked against the Merkle tree
-before userspace sees it, and on a compressed image it is decompressed as well.
-**IPE taxes the exec path**: every `execve` is evaluated against policy.
+Rows are `fork`, `spawn_verity`, `spawn_unverified` and `dynlib`.
 
-### The control corpus
+### Why there are no read or stat rows
 
-A cold read of `/usr` on its own says only "this VM's disk was this fast today".
-Azure disk throughput varies between runs by more than the effect being looked
-for, so the same bytes — files of exactly the same sizes, in the same order —
-are written to the writable filesystem and read back identically in the same
-run. Both corpora sit on the same underlying disk, so the `image / control`
-ratio the script prints cancels the disk and leaves the filesystem.
+An earlier revision measured cold and warm reads of `/usr` and presented them as
+an IPE and EROFS metric. They were neither, and the rows have been removed
+rather than relabelled.
 
-`read_warm` doubles as a check on that reasoning. Both warm rows are served from
-the page cache, so they should land close to 1.00x regardless of filesystem; a
-warm ratio far from 1 means something other than the filesystem is differing and
-the cold ratio should not be trusted either.
+* **IPE has no hook on `read()` or `stat()`.** Toggling IPE cannot move a read
+  number.
+* **dm-verity hashes blocks at the device-mapper layer** whether IPE is loaded
+  or not, so its cost is present on every arm equally.
+* **EROFS in this matrix is a containerd *snapshotter* choice.** It applies to
+  container layers under the snapshotter root, not to the host rootfs. `/usr` is
+  byte-identical on all four arms, so those rows could only ever have reported
+  disk noise — while being labelled as the numbers to compare across arms.
 
-The byte count is clipped to land exactly on the budget rather than taking whole
-files. Otherwise one large binary overshoots by tens of megabytes, and since the
-arms ship different binaries each would read a different total — leaving
-throughput as the only comparable column. Clipping keeps `bytes` identical
-everywhere, so the raw milliseconds compare too.
+### The two exec paths
 
-The metadata corpus is mirrored the same way, as empty files at the same
-relative paths, so the control stat walk covers the same number of entries in
-the same tree shape. Mirroring only the data files would leave the control
-walking a couple of dozen entries against the image's thousands, and the
-resulting ratio would report that count difference rather than anything about
-the filesystem.
+What ACL ships decides the shape of the measurement. `uki_install.sh` boots with
+`ipe.enforce=0 ipe.success_audit=0`: permissive, and allowed execs are not
+audited. Against the shipped policy:
+
+```
+DEFAULT                             action=ALLOW
+DEFAULT op=EXECUTE                  action=DENY
+op=EXECUTE boot_verified=TRUE       action=ALLOW
+op=EXECUTE dmverity_signature=TRUE  action=ALLOW
+```
+
+that yields two different exec paths on one machine:
+
+| row | binary | policy outcome | cost |
+|---|---|---|---|
+| `spawn_verity` | stress-ng on `/usr` | `dmverity_signature=TRUE` → ALLOW | rule evaluation only, nothing audited |
+| `spawn_unverified` | a copy on a writable filesystem | no ALLOW rule matches → `DEFAULT` DENY, permissive so it still runs | rule evaluation **plus an audit record** |
+
+`spawn_unverified - spawn_verity` is therefore the cost of an IPE audit event,
+measured within a single run on a single VM. That in-run control is the point:
+it cancels VM, disk and noisy-neighbour variation instead of relying on
+comparing absolute numbers across arms that ran on different machines on
+different days. `fork` is measured alongside as the floor, since every spawn
+also pays for a process creation.
+
+ACL ships no auditd, so those records go to printk and land in the kernel ring
+buffer — the same place `run-selinux-avc-test.sh` looks for AVC denials. printk
+is rate limited, so `auditRecords` is reported next to the timing and a
+suppression notice marks the count as a floor.
+
+### Why stress-ng, and why `spawn`
+
+The measurement is stress-ng, which already ships in the image, rather than a
+hand-rolled exec loop. Its manual says it is "never intended to be used as a
+precise benchmark test suite" but sanctions exactly this use: "useful to observe
+performance changes across different operating system releases". So the suite
+reports *relative* differences between two configurations on one machine and
+makes no claim about absolute per-`execve` latency. The canonical tools for an
+absolute figure are lmbench `lat_proc` and `perf bench syscall execve`; neither
+is packaged for Azure Linux today.
+
+The stressor choice is not cosmetic. There is no `--exec-path` in the packaged
+0.17.06, so both `exec` and `spawn` re-execute `/proc/self/exe` — which is why
+running a *copy* of stress-ng is what moves the exec off the verity device. But
+`strace` shows the `exec` stressor also writes a temporary copy of itself into
+the working directory and execs that, roughly one exec in five:
+
+```
+327 execve("/tmp/sng-copy/stress-ng"
+ 73 execve("./tmp-stress-ng-exec-<pid>-0/stress-ng-exec-...")
+```
+
+That temp copy necessarily lives on a writable filesystem, so it is unverified
+even when the stressor binary is on `/usr`, and it would have mixed audited
+execs into the supposedly clean baseline. `spawn` has no such behaviour: one
+bogo op is exactly one `execve` of the binary's own resolved path.
+
+`dynlib` exercises the `mmap` hook rather than the `execve` hook. IPE checks
+both, and a binary linking many libraries pays the check once per library, so
+this is the row that scales with how much a workload links. Its libraries come
+off `/usr` either way, so it compares across arms rather than within a run.
 
 ### Reading the output
 
-The raw per-arm milliseconds are the product; the ratios are scaffolding. A
-single run of a single arm has nothing to compare against, so the script prints
-the rows meant to be diffed across the matrix — `read_cold`, `read_random_cold`,
-`stat_cold`, `fork_exec` — together with what each one prices, and keeps the
-control ratios in a separate section labelled as a disk-speed correction rather
-than a result. The control answers "how does the image filesystem compare to
-whatever the writable one happens to be", which is a different question from the
-one the matrix asks.
+A spawn re-executes the whole stress-ng binary, so one op costs milliseconds
+while an IPE check may cost microseconds. The delta is therefore compared
+against the spread of the baseline's own repetitions, and when it does not clear
+that spread the run prints **NOT RESOLVABLE** and says to treat the result as
+"no measurable cost" rather than as the printed number. `auditCostResolvable`
+and `baselineSpreadMs` carry the same judgement in the document.
 
-`/usr` on ACL is a stacked mount — a sysext overlay over the dm-verity backing
-store. The backing store is what the rows report, because that is the axis the
-matrix varies, but the full stack is recorded in `mountStack` and called out in
-a note: the upper layers sit in the image read path and not in the control's.
+That guard exists because the previous revision of this suite reported a `53.03x`
+filesystem result that was purely an artifact of the two corpora walking
+different numbers of files.
 
-### Why there is no exec control
+### Rows can be unavailable
 
-IPE's purpose is to refuse anything that is not verity-backed, so a binary
-copied to the writable filesystem is *blocked* rather than slow on exactly the
-arms where IPE is enabled — an in-run control would measure a denial, not a
-cost. The exec comparison is therefore across arms (IPE on vs off), not within
-a run. `fork_exec` includes the surrounding `fork` and `wait`, which are
-constant overhead on every arm and cancel in that comparison.
-
-### Cold measurements can be unavailable
-
-Cold rows require dropping the page cache, which needs root or passwordless
-sudo. Where that fails the cold rows are **omitted and a note is printed**,
-rather than reported from a warm cache — a warm read presented as cold would
-look like the filesystem had become dramatically faster. This follows the same
-rule as the absent `Firmware` and `Loader` rows in the boot suite: a missing
-measurement is stated, never substituted.
-
+The suite drops rows and prints a note rather than substituting a number it did
+not measure — the same rule as the absent `Firmware` and `Loader` rows in the
+boot suite. Rows are omitted when stress-ng is missing, when it has no usable
+`spawn` stressor, or when the writable copy cannot be executed. Notes are also
+emitted when IPE is absent, when it is enforcing (an unverified binary is then
+refused rather than audited, so the row is not comparable), when success
+auditing is on (the verity row is then not an audit-free baseline), and when
+both binaries land on the same backing device, which would make the comparison
+meaningless.
 
 
 ## Identity
