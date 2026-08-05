@@ -903,7 +903,7 @@ create_vm_azure() {
                 fi
                 result="$_VM_CREATE_RESULT"
 
-                if [[ $rc -ne 0 ]]; then
+                if [[ $rc -ne 0 && ( $rc -ne 1 || "$result" != "SKU_NOT_AVAILABLE" ) ]]; then
                     _collect_failed_vm_diagnostics \
                         "$vm_rg_name" "$VM_NAME" \
                         "${sku}-${region}-attempt${attempt}"
