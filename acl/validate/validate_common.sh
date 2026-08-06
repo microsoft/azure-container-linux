@@ -204,6 +204,74 @@ connect_vm_ssh() {
     ssh $ssh_opts "${VM_SSH_USER}@${ip}"
 }
 
+# ── Host-side VM interaction ───────────────────────────────────────
+#
+# Host-side tests run on the agent and drive an already-provisioned VM over
+# ssh, rather than being copied into the VM and executed there. Rebooting and
+# waiting for the node to come back is the common shape of that work, so it
+# lives here: a test that wants to reboot a VM should not have to own the
+# retry, the liveness proof, or the failure diagnostics.
+
+SSH_OPTS=()
+
+setup_ssh_opts() {
+    SSH_OPTS=(
+        -o StrictHostKeyChecking=no
+        -o UserKnownHostsFile=/dev/null
+        -o BatchMode=yes
+        -o ConnectTimeout=10
+        -i "$VM_SSH_KEY"
+    )
+}
+
+ssh_cmd() {
+    [[ ${#SSH_OPTS[@]} -eq 0 ]] && setup_ssh_opts
+    ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" "$@"
+}
+
+# The kernel boot ID. Changes on every real boot, which is what makes it a
+# usable liveness proof.
+boot_id() { ssh_cmd 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null; }
+
+# Reboot and wait for the boot_id to change.
+#
+# Waiting on SSH alone is not enough: the outgoing sshd can still answer while
+# the machine is shutting down, so a caller that only checked reachability
+# could attribute the previous boot to the new one.
+#
+# Sets REBOOT_WALL_MS to the host-observed duration. Callers that only care
+# that the node came back can ignore it; the boot benchmark needs it because
+# host-side wall clock is the only thing that brackets the segments the guest
+# cannot see -- shutdown, platform firmware, systemd-boot and the UKI stub all
+# run while no guest monotonic clock exists.
+REBOOT_WALL_MS=""
+reboot_and_wait() {
+    local old new t0 t1
+    old=$(boot_id) || { error "Cannot read boot_id — VM unreachable?"; return 1; }
+    info "Rebooting ${VM_NAME} (old boot_id=${old})..."
+    t0=$(date +%s.%N)
+    ssh_cmd "sudo systemctl reboot" || true
+    local deadline=$(( $(date +%s) + VM_SSH_TIMEOUT ))
+    while (( $(date +%s) < deadline )); do
+        new=$(boot_id) && [[ -n "$new" && "$new" != "$old" ]] && {
+            t1=$(date +%s.%N)
+            REBOOT_WALL_MS=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f",(b-a)*1000}')
+            info "Back up (new boot_id=${new}, wall clock ${REBOOT_WALL_MS} ms)"
+            return 0
+        }
+        # The poll interval bounds how much the wall clock overstates the
+        # reboot, so keep it short: that number is only useful as a tight
+        # upper bound.
+        sleep 1
+    done
+    error "VM did not come back within ${VM_SSH_TIMEOUT}s"
+    # A reboot that never completes is the most informative failure a host-side
+    # test can hit: the serial console holds whatever the kernel printed on the
+    # way down or while failing to come up.
+    capture_vm_diagnostics "$VM_IP" "${1:-reboot-hang}"
+    return 1
+}
+
 # ── Diagnostics capture ────────────────────────────────────────────
 
 # Collect whatever record survives of a node that stopped responding.

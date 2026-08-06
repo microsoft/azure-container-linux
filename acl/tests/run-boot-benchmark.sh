@@ -34,55 +34,6 @@ STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 SAMPLES_RAW="$(mktemp)"
 trap 'rm -f "$SAMPLES_RAW"' EXIT
 
-SSH_OPTS=()
-setup_ssh_opts() {
-    SSH_OPTS=(
-        -o StrictHostKeyChecking=no
-        -o UserKnownHostsFile=/dev/null
-        -o BatchMode=yes
-        -o ConnectTimeout=10
-        -i "$VM_SSH_KEY"
-    )
-}
-
-ssh_cmd() { ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" "$@"; }
-
-boot_id() { ssh_cmd 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null; }
-
-# Reboot and wait for the boot_id to change. Waiting on SSH alone is not enough:
-# the outgoing sshd can still answer while the machine is shutting down, which
-# would attribute the previous boot's numbers to this sample.
-reboot_and_wait() {
-    local old new
-    old=$(boot_id) || { error "Cannot read boot_id — VM unreachable?"; return 1; }
-    info "Rebooting ${VM_NAME} (old boot_id=${old})..."
-    # Host-side wall clock brackets the whole reboot, including the segments the
-    # guest cannot see: shutdown, platform firmware, systemd-boot and the UKI
-    # stub all run while no monotonic clock exists. Without this the results
-    # would silently exclude several seconds and give no way to notice.
-    local t0 t1
-    t0=$(date +%s.%N)
-    ssh_cmd "sudo systemctl reboot" || true
-    local deadline=$(( $(date +%s) + VM_SSH_TIMEOUT ))
-    while (( $(date +%s) < deadline )); do
-        new=$(boot_id) && [[ -n "$new" && "$new" != "$old" ]] && {
-            t1=$(date +%s.%N)
-            REBOOT_WALL_MS=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f",(b-a)*1000}')
-            info "Back up (new boot_id=${new}, wall clock ${REBOOT_WALL_MS} ms)"
-            return 0
-        }
-        # Poll interval bounds how much this overstates the reboot, so keep it
-        # short: the wall clock is only useful as a tight upper bound.
-        sleep 1
-    done
-    error "VM did not come back within ${VM_SSH_TIMEOUT}s"
-    # A reboot that never completes is the most informative failure this suite
-    # can hit: the serial console holds whatever the kernel printed on the way
-    # down or while failing to come up.
-    capture_vm_diagnostics "$VM_IP" "boot-benchmark-reboot-hang"
-    return 1
-}
-
 # systemd only publishes FinishTimestampMonotonic once startup has settled, so
 # reading too early yields 0 and would silently look like an impossibly fast boot.
 wait_for_boot_complete() {

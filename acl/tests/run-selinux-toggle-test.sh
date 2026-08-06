@@ -8,22 +8,6 @@ source "${SCRIPT_DIR}/acl/validate/validate_common.sh"
 
 # ── Helpers ────────────────────────────────────────────────────────
 
-SSH_OPTS=()
-
-setup_ssh_opts() {
-    SSH_OPTS=(
-        -o StrictHostKeyChecking=no
-        -o UserKnownHostsFile=/dev/null
-        -o BatchMode=yes
-        -o ConnectTimeout=10
-        -i "$VM_SSH_KEY"
-    )
-}
-
-ssh_cmd() {
-    ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" "$@"
-}
-
 # Get current SELinux mode via getenforce.
 get_selinux_mode() {
     ssh_cmd "sudo getenforce" 2>/dev/null | tr '[:upper:]' '[:lower:]'
@@ -37,11 +21,6 @@ imds_tag() {
         'http://169.254.169.254/metadata/instance/compute/tagsList?api-version=2021-02-01'" \
         2>/dev/null) || return 1
     jq -r '.[] | select(.name=="acl-node-security-profile") | .value' <<<"$raw"
-}
-
-# Read the kernel boot ID from the VM. Changes on every real boot.
-boot_id() {
-    ssh_cmd 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null
 }
 
 # Set (or remove) the tag on the VM, then wait for in-guest IMDS to converge.
@@ -78,38 +57,6 @@ set_selinux_tag() {
     return 1
 }
 
-# Reboot the VM and wait until the kernel boot_id changes — proves SSH is back
-# AND it's the new kernel (the old sshd can briefly answer mid-shutdown).
-reboot_and_wait() {
-    local old new
-    old=$(boot_id) || { error "Cannot read boot_id — VM unreachable?"; return 1; }
-    info "Rebooting VM ${VM_NAME} via SSH (old boot_id=${old})..."
-    ssh_cmd "sudo reboot" || true
-    local deadline=$(( $(date +%s) + VM_SSH_TIMEOUT ))
-    while (( $(date +%s) < deadline )); do
-        new=$(boot_id) && [[ "$new" != "$old" ]] && {
-            info "VM rebooted (new boot_id=${new})"
-            return 0
-        }
-        sleep 2
-    done
-    warn "VM did not come back after reboot within ${VM_SSH_TIMEOUT}s — capturing VM diagnostics"
-
-    local diag_dir="${DIAGNOSTICS_DIR:-/tmp}"
-    mkdir -p "$diag_dir"
-    local prefix="${diag_dir}/$(date +%Y%m%d-%H%M%S)-${VM_NAME}"
-    az vm get-instance-view --resource-group "$VM_RG" --name "$VM_NAME" \
-        --query 'instanceView.{statuses:statuses,vmAgent:vmAgent.statuses}' \
-        -o json 2>&1 | tee "${prefix}-instance-view.json" || true
-    az vm boot-diagnostics get-boot-log --resource-group "$VM_RG" --name "$VM_NAME" 2>&1 \
-        | jq -r . > "${prefix}-serial.log" || true
-
-    info "Full serial log: ${prefix}-serial.log ($(wc -c <"${prefix}-serial.log") bytes); last 200 lines:"
-    tail -200 "${prefix}-serial.log" | sed 's/^/  [serial] /' || true
-    info "Diagnostics saved to ${prefix}-{instance-view.json,serial.log}"
-    error "VM did not come back after reboot"
-    return 1
-}
 
 # Assert that SELinux is in the expected mode.
 assert_selinux_mode() {
