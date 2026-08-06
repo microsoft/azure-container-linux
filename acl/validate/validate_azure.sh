@@ -440,6 +440,76 @@ create_gallery_image_version() {
 
 # ── Azure VM creation ─────────────────────────────────────────────
 
+# Keep SSH reachable once Azure Policy hardens the NSG.
+#
+# A deployIfNotExists policy injects NRMS-Rule-101..109 into every NSG in the
+# subscription a few minutes after the resource group appears. NRMS-Rule-106
+# denies tcp/22 and 3389 from Internet, and `az vm create` places its own
+# default-allow-ssh at priority 1000 -- so the deny wins.
+#
+# Two things make this specifically a long-suite problem. The deny rules land
+# before the matching CorpNet allow rules (observed ~3 minutes apart), leaving a
+# window where every source is blocked; and an established session survives on
+# `ctstate RELATED,ESTABLISHED` while new connections do not. Short smoke tests
+# finish before any of it happens. The perf suite is still running, and the boot
+# benchmark -- which reboots and must reconnect from scratch -- is exactly where
+# it shows up.
+#
+# A rule below 105 outranks the deny and covers both the transient window and an
+# agent whose egress is not classified as CorpNet.
+#
+# Scoped to the /24 holding this agent's egress address, not a single /32: the
+# egress is a NAT pool and the address rotates between connections (observed
+# moving across 70.37.26.58-.63 within a couple of minutes). A /32 would survive
+# only until the next rotation, which is a worse failure than none -- it would
+# work intermittently and look like a flaky network. A /24 is still far narrower
+# than opening 22 to the internet.
+_allow_ssh_above_nrms() {
+    local vm_rg_name="$1"
+    local nsg_name="${VM_NAME}NSG"
+
+    if ! az network nsg show -g "$vm_rg_name" -n "$nsg_name" &>/dev/null; then
+        warn "NSG ${nsg_name} not found — skipping the NRMS SSH allow rule"
+        return 0
+    fi
+
+    local egress_ip=""
+    local svc
+    for svc in "https://ifconfig.me/ip" "https://api.ipify.org" "https://icanhazip.com"; do
+        egress_ip=$(curl -fsS --max-time 10 "$svc" 2>/dev/null | tr -d '[:space:]')
+        [[ "$egress_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && break
+        egress_ip=""
+    done
+
+    if [[ -z "$egress_ip" ]]; then
+        warn "Could not determine this agent's egress IP; skipping the NRMS SSH allow rule."
+        warn "If SSH dies partway through a long suite, NRMS-Rule-106 is the first thing to check."
+        return 0
+    fi
+
+    local egress_cidr="${egress_ip%.*}.0/24"
+
+    info "Adding SSH allow for ${egress_cidr} (egress ${egress_ip}) above NRMS deny rules (priority 100)..."
+    # Best-effort: a run whose NSG cannot be edited should still get as far as it
+    # can and fail on its own terms, rather than here.
+    if az network nsg rule create \
+            --resource-group "$vm_rg_name" \
+            --nsg-name "$nsg_name" \
+            --name "acl-allow-ssh-agent" \
+            --priority 100 \
+            --direction Inbound \
+            --access Allow \
+            --protocol Tcp \
+            --source-address-prefixes "$egress_cidr" \
+            --destination-port-ranges 22 \
+            --description "Outranks NRMS-Rule-106 (deny tcp/22 from Internet) so long-running suites keep SSH." \
+            --output none 2>/dev/null; then
+        info "✓ SSH allow rule created for ${egress_cidr}"
+    else
+        warn "Could not create the SSH allow rule — continuing without it"
+    fi
+}
+
 # Attempt a single az vm create.  Returns 0 on success or 1 on failure.
 # On SkuNotAvailable, prints "SKU_NOT_AVAILABLE" to stdout so the caller
 # can distinguish capacity errors from other failures.
@@ -625,6 +695,8 @@ create_vm_azure() {
                 az vm boot-diagnostics enable \
                     --name "$VM_NAME" \
                     --resource-group "$vm_rg_name"
+
+                _allow_ssh_above_nrms "$vm_rg_name"
                 return 0
             elif [[ $rc -eq 1 && "$result" == "SKU_NOT_AVAILABLE" ]]; then
                 warn "✗ SKU incompatible or unavailable: ${sku} in ${region} — trying next candidate"

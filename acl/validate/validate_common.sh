@@ -222,6 +222,51 @@ capture_vm_diagnostics() {
     local prefix="${diag_dir}/$(date +%Y%m%d-%H%M%S)-${VM_NAME}-${reason//[^a-zA-Z0-9._-]/_}"
 
     if [[ -n "${VM_RG:-}" ]] && command -v az >/dev/null 2>&1; then
+        # Check first whether the node is actually down. An unreachable VM that
+        # Azure still reports as running is usually a network-path problem, and
+        # the serial console will show a perfectly healthy boot -- which reads
+        # as "no evidence" unless the power state is stated alongside it.
+        local power_state
+        power_state=$(az vm get-instance-view --resource-group "$VM_RG" --name "$VM_NAME" \
+            --query "instanceView.statuses[?starts_with(code,'PowerState')].code | [0]" \
+            -o tsv 2>/dev/null | tr -d '\r')
+        info "Azure power state: ${power_state:-unknown}"
+
+        if [[ "$power_state" == "PowerState/running" ]]; then
+            warn "The VM is still running — this is a connectivity failure, not a dead node."
+            # The guest agent rides a different path than SSH, so it usually
+            # still answers when the NSG has closed port 22.
+            # NRMS-Rule-106 (deny tcp/22 from Internet) is injected into every
+            # NSG by an Azure Policy a few minutes after the resource group is
+            # created, and it outranks the default-allow-ssh that az vm create
+            # writes at priority 1000. It only ever bites suites long enough to
+            # still be running when the policy lands.
+            local nsg_name="${VM_NAME}NSG"
+            az network nsg rule list --resource-group "$VM_RG" --nsg-name "$nsg_name" \
+                --query "sort_by([].{priority:priority,name:name,access:access,direction:direction,protocol:protocol,source:sourceAddressPrefix,ports:destinationPortRanges},&priority)" \
+                -o json >"${prefix}-nsg-rules.json" 2>/dev/null || true
+            local ssh_deny
+            ssh_deny=$(az network nsg rule list --resource-group "$VM_RG" --nsg-name "$nsg_name" \
+                --query "[?access=='Deny' && direction=='Inbound' && contains(to_string(destinationPortRanges),'22')].name" \
+                -o tsv 2>/dev/null | tr -d '\r' | tr '\n' ' ')
+            if [[ -n "$ssh_deny" ]]; then
+                error "NSG ${nsg_name} denies inbound tcp/22 via: ${ssh_deny}"
+                error "SSH was blocked by policy, not by anything this test did."
+            fi
+            # az run-command caps its reply at ~4KB and keeps the tail, and IPE
+            # audit lines are long enough to blow that budget on their own. Put
+            # the noisy kernel log first and filtered, so the compact summary is
+            # what survives if anything gets cut.
+            info "Collecting guest state via the Azure guest agent..."
+            az vm run-command invoke --resource-group "$VM_RG" --name "$VM_NAME" \
+                --command-id RunShellScript \
+                --scripts 'dmesg | grep -iE "error|fail|panic|oom-kill|blocked for more than" | tail -15; echo "--- summary ---"; uptime; free -m; df -h /; echo "dm devices: $(dmsetup ls 2>/dev/null | wc -l), loop: $(losetup -a 2>/dev/null | wc -l)"; systemctl is-system-running; systemctl list-units --state=failed --no-pager --no-legend' \
+                --query 'value[0].message' -o tsv >"${prefix}-guest-state.log" 2>/dev/null || true
+            if [[ -s "${prefix}-guest-state.log" ]]; then
+                info "Guest state captured to ${prefix}-guest-state.log"
+            fi
+        fi
+
         info "Capturing Azure instance view and serial console..."
         az vm get-instance-view --resource-group "$VM_RG" --name "$VM_NAME" \
             --query 'instanceView.{statuses:statuses,vmAgent:vmAgent.statuses}' \
