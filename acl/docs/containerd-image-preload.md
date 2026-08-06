@@ -283,19 +283,37 @@ the image, but not that containerd will accept it -- for that, boot it.
 
 ### Local boot check
 
-This is a normal boot: systemd starts, merges the containerd sysext, and the
-CRI plugin recovers the store, which is exactly the path being validated. Two
-concessions are made to make the VM reachable locally:
+systemd starts, merges the containerd sysext, and the CRI plugin recovers the
+store, which is exactly the path being validated. Three concessions are made to
+run this locally:
 
 - ACL has no default console login, so systemd's debug shell is enabled on a
   second serial port.
 - The image boots from a signed UKI, so kernel arguments cannot be appended
   without re-signing it. Booting the extracted kernel and initrd directly with
   `-kernel`/`-initrd` sidesteps that.
+- Because the UKI's baked-in command line contains neither `ignition.firstboot`
+  nor `flatcar.oem.id=azure`, this takes the *subsequent* boot path
+  (`ignition-subsequent.target`) and the Azure OEM sysext is not selected. No
+  provisioning agent runs and nothing contacts IMDS or the wireserver. Those
+  arguments come from the first-boot and OEM-selection UKI addons on the ESP
+  (see [Architecture](architecture.md#boot-partitions-and-provisioning)), which
+  `-kernel`/`-initrd` bypasses.
 
-Neither changes what containerd does, but both mean this is a functional check
-rather than a test of the exact boot path a real VM takes. Validate that by
-deploying the published gallery image version (below) as an Azure VM.
+None of these change what containerd does, so this remains a valid check that
+the preloaded store is recovered. It is not a test of the boot path a real
+Azure VM takes -- see the note below.
+
+> **Note**
+> Appending `flatcar.oem.id=azure ignition.firstboot=1` does not make this
+> faithful either. The `oem-azure` sysext then merges and `waagent.service`
+> starts, but under plain QEMU it cannot mount the OVF DVD or reach the
+> wireserver, so it retries and gives up; units gated on
+> `ConditionVirtualization=microsoft` are still skipped. The boot itself does
+> not fail -- it reaches `multi-user.target` and containerd still loads the
+> store -- but provisioning never completes. Provisioning behaviour can only be
+> validated by deploying the published gallery image version (below) as an
+> Azure VM.
 
 Extract the kernel, initrd, and command line from the UKI on the ESP:
 
@@ -342,8 +360,10 @@ containerd successfully booted
 ImageUpdate name:"mcr.microsoft.com/oss/v2/kubernetes/pause:v3.10" io.cri-containerd.pinned=pinned
 ```
 
-That the images survive the first boot confirms ACL does not reset `/var`
-during provisioning.
+This confirms the image's own containerd accepts the preloaded store. Whether
+`/var` survives a real provisioning cycle is a separate question that this check
+does not answer -- deploy the gallery image version as an Azure VM and re-run
+`ctr images ls` to confirm it.
 
 ## 4. Publish to an Azure Compute Gallery
 
