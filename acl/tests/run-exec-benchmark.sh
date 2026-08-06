@@ -591,4 +591,27 @@ if notes:
 
 print()
 print('ACL_PERF_RESULTS=' + json.dumps(document, separators=(',', ':')))
+
+# A benchmark that measured nothing must not report success. Every path that
+# leaves `metrics` empty -- stress-ng missing, no usable spawn stressor -- means
+# the IPE exec axis has no data at all, and a green result here is worse than a
+# red one: it is indistinguishable from a real run that found no IPE cost, so
+# the gap silently persists across every future run. Build 1176362 reported this
+# suite as PASSED while measuring nothing.
+#
+# Emptiness is the right trigger rather than a missing delta. The no-IPE arms
+# legitimately produce no delta, but they still produce exec rows; zero rows
+# only happens when the measurement itself could not be taken.
+#
+# No env escape hatch: run_scripts_on_vm invokes this as a bare `sudo <script>`
+# with no environment passed through, so one would be unreachable from the
+# pipeline anyway. Skipping the suite is what ACL_RUN_PERF_TESTS is for.
+if not metrics:
+    print()
+    print('[ERROR] exec benchmark produced no metrics, so nothing was measured.')
+    for note in notes:
+        print(f'[ERROR]   - {note}')
+    print('[ERROR] Rebuild the image with ACL_PERF_TOOLS=1, or turn the perf')
+    print('[ERROR] suite off; do not read this run as "no IPE cost".')
+    sys.exit(1)
 PY
