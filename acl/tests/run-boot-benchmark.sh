@@ -146,13 +146,17 @@ main() {
     # Both are measured on the node rather than read from the build parameters.
     # A parameter says what was requested; only the node says what shipped, and
     # the whole failure mode being guarded against here is the two disagreeing.
+    # Read under sudo: securityfs directories are traversable but the attribute
+    # files themselves are root-only, so an unprivileged probe still globs the
+    # policy directory and then fails every read -- reporting "enforce=?
+    # success_audit=? policies=none" on a node whose IPE is loaded and active.
     NODE_IPE=$(ssh_cmd 'b=/sys/kernel/security/ipe
         if [ -d "$b" ]; then
-            e=$(cat "$b/enforce" 2>/dev/null || echo "?")
-            s=$(cat "$b/success_audit" 2>/dev/null || echo "?")
+            e=$(sudo cat "$b/enforce" 2>/dev/null || echo "?")
+            s=$(sudo cat "$b/success_audit" 2>/dev/null || echo "?")
             a=$(for p in "$b"/policies/*/; do
                     [ -f "${p}active" ] || continue
-                    [ "$(cat "${p}active" 2>/dev/null)" = "1" ] || continue
+                    [ "$(sudo cat "${p}active" 2>/dev/null)" = "1" ] || continue
                     basename "$p"
                 done | paste -sd, -)
             echo "on enforce=${e} success_audit=${s} policies=${a:-none}"
@@ -170,6 +174,17 @@ main() {
     if [[ -z "${NODE_IPE}" || -z "${NODE_EROFS}" ]]; then
         error "could not determine the IPE/EROFS matrix cell for this node" \
               "(ipe='${NODE_IPE}' erofs='${NODE_EROFS}')"
+        error "refusing to publish boot numbers that cannot be attributed to an arm"
+        exit 1
+    fi
+
+    # A "?" is the probe reporting that a read failed, which the blank check
+    # above does not catch: the string is non-empty and looks like an answer.
+    # "policies=none" is deliberately not fatal here -- IPE present with nothing
+    # loaded is a real arm -- but an unreadable enforce leaves the IPE axis
+    # genuinely unknown, which is the one thing this label exists to record.
+    if [[ "${NODE_IPE}" == *"=?"* ]]; then
+        error "IPE state could not be read from this node: '${NODE_IPE}'"
         error "refusing to publish boot numbers that cannot be attributed to an arm"
         exit 1
     fi
