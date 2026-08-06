@@ -36,7 +36,12 @@ tests:
       - platforms: [azure]
         reason: Azure version depends on discovery.etcd.io, which is unmaintained.
       - imageVariants: [acl-t]
-        reason: etcd-member ships as a sysext on stock acl; acl-t drops sysexts and does not package etcd-member as an RPM.
+        reason: |
+          The test's etcd server runs in a docker container
+          (etcd-member.service via etcd-wrapper), and acl-t has no
+          docker daemon — the standalone `docker` sysext is not carried
+          and docker has no RPM replacement (same as docker.*) — so no
+          etcd server can start for the test to drive.
 
   - name: acl.flannel.udp
     exceptions:
@@ -45,7 +50,12 @@ tests:
       - platforms: [azure]
         reason: Azure version depends on discovery.etcd.io, which is unmaintained.
       - imageVariants: [acl-t]
-        reason: flannel-docker sysext removed on acl-t (moby-containerd RPM replaces containerd sysext but ships no flannel bits).
+        reason: |
+          flanneld runs in a docker container (flanneld.service via
+          flannel-wrapper) and the test drives docker on each node;
+          acl-t has no docker daemon — the standalone `docker` sysext is
+          not carried and docker has no RPM replacement (same as
+          docker.*) — so flanneld cannot start.
   - name: acl.flannel.vxlan
     exceptions:
       - platforms: [qemu]
@@ -54,7 +64,12 @@ tests:
       - platforms: [azure]
         reason: Azure version depends on discovery.etcd.io, which is unmaintained.
       - imageVariants: [acl-t]
-        reason: flannel-docker sysext removed on acl-t (moby-containerd RPM replaces containerd sysext but ships no flannel bits).
+        reason: |
+          flanneld runs in a docker container (flanneld.service via
+          flannel-wrapper) and the test drives docker on each node;
+          acl-t has no docker daemon — the standalone `docker` sysext is
+          not carried and docker has no RPM replacement (same as
+          docker.*) — so flanneld cannot start.
 
   - name: acl.internet
     exceptions:
@@ -68,11 +83,12 @@ tests:
           (NSG-on-NIC keeping the PIP, or a NAT Gateway on the kola subnet).
       - imageVariants: [acl-t]
         reason: |
-          All three subtests are non-viable on acl-t: DockerPing/DockerEcho
-          need docker (same reason as docker.*), and NTPDate needs the
-          ntpdate binary (chrony is acl-t's time daemon; same reason as
-          linux.ntp). Covered by the containerd and chrony follow-up tests
-          tracked there.
+          All three subtests are non-viable on acl-t: DockerPing and
+          DockerEcho need the docker daemon from the standalone `docker`
+          sysext (same missing sysext as docker.*), and NTPDate needs
+          the ntpdate binary (chrony is acl-t's time daemon; same reason
+          as linux.ntp). Covered by the containerd and chrony follow-up
+          tests tracked there.
 
   # TEMPORARY (AB#22249): acl.kdump and acl.kdump.grub are disabled on the ACL
   # distro in mantle (ExcludeDistros: [acl]), so kola never selects them and the
@@ -97,18 +113,24 @@ tests:
     exceptions:
       - imageVariants: [acl-t]
         reason: |
-          acl-t ships no docker — the containerd sysext is replaced by the
-          moby-containerd RPM (containerd/ctr only), so there is no docker
-          sysext for mantle to inject; containerd-native (ctr) replacement
-          tests are tracked as a follow-up.
+          acl-t does not carry the standalone `docker` sysext, so the
+          docker daemon/CLI this test drives does not exist: the
+          flattened image replaces sysext content with signed Azure
+          Linux RPMs, and docker has no RPM replacement — moby-containerd
+          ships containerd/ctr only (containerd-only runtime, matching
+          AKS). containerd-native (ctr) replacement tests are tracked as
+          a follow-up.
   - name: bpf.local-gadget
     exceptions:
       - imageVariants: [acl-t]
         reason: |
-          acl-t ships no docker — the containerd sysext is replaced by the
-          moby-containerd RPM (containerd/ctr only), so there is no docker
-          sysext for mantle to inject; containerd-native (ctr) replacement
-          tests are tracked as a follow-up.
+          acl-t does not carry the standalone `docker` sysext, so the
+          docker daemon/CLI this test drives does not exist: the
+          flattened image replaces sysext content with signed Azure
+          Linux RPMs, and docker has no RPM replacement — moby-containerd
+          ships containerd/ctr only (containerd-only runtime, matching
+          AKS). containerd-native (ctr) replacement tests are tracked as
+          a follow-up.
 
   - name: cl.cloudinit.basic
   - name: cl.cloudinit.multipart-mime
@@ -150,13 +172,23 @@ tests:
   - name: cl.etcd-member.etcdctlv3
     exceptions:
       - imageVariants: [acl-t]
-        reason: etcd-member ships as a sysext on stock acl; acl-t drops sysexts and does not package etcd-member as an RPM.
+        reason: |
+          The test's etcd server runs in a docker container
+          (etcd-member.service via etcd-wrapper), and acl-t has no
+          docker daemon — the standalone `docker` sysext is not carried
+          and docker has no RPM replacement (same as docker.*) — so no
+          etcd server can start for the test to drive.
   - name: cl.etcd-member.v2-backup-restore
     exceptions:
       - platforms: [azure]
         reason: Azure version depends on discovery.etcd.io, which is unmaintained.
       - imageVariants: [acl-t]
-        reason: etcd-member ships as a sysext on stock acl; acl-t drops sysexts and does not package etcd-member as an RPM.
+        reason: |
+          The test's etcd server runs in a docker container
+          (etcd-member.service via etcd-wrapper), and acl-t has no
+          docker daemon — the standalone `docker` sysext is not carried
+          and docker has no RPM replacement (same as docker.*) — so no
+          etcd server can start for the test to drive.
 
   - name: cl.filesystem
     exceptions:
@@ -245,7 +277,13 @@ tests:
       - platforms: [azure]
         reason: Test uses custom OEM files and should not run on cloud platforms
       - imageVariants: [acl-t]
-        reason: acl-t ships no sysexts — containerd and oem-azure are replaced by first-class RPMs, so there is no sysext machinery to exercise.
+        reason: |
+          The test exercises the boot machinery that activates OEM
+          sysexts (active-oem-<id> markers, oem-<id>-<version>.raw);
+          acl-t provides the `oem-azure` sysext content (WALinuxAgent,
+          hyperv-daemons, chrony, ...) as signed Azure Linux RPMs and
+          deletes the .raw and marker files, so there is nothing left
+          for that machinery to activate.
   - name: cl.users.shells
   - name: cl.verity
 
@@ -282,34 +320,46 @@ tests:
         reason: Flakiness on TCG-emulated arm64, failures due to slow device enumeration.
       - imageVariants: [acl-t]
         reason: |
-          acl-t ships no docker — the containerd sysext is replaced by the
-          moby-containerd RPM (containerd/ctr only), so there is no docker
-          sysext for mantle to inject; containerd-native (ctr) replacement
-          tests are tracked as a follow-up.
+          acl-t does not carry the standalone `docker` sysext, so the
+          docker daemon/CLI this test drives does not exist: the
+          flattened image replaces sysext content with signed Azure
+          Linux RPMs, and docker has no RPM replacement — moby-containerd
+          ships containerd/ctr only (containerd-only runtime, matching
+          AKS). containerd-native (ctr) replacement tests are tracked as
+          a follow-up.
   - name: docker.btrfs-storage
     exceptions:
       - imageVariants: [acl-t]
         reason: |
-          acl-t ships no docker — the containerd sysext is replaced by the
-          moby-containerd RPM (containerd/ctr only), so there is no docker
-          sysext for mantle to inject; containerd-native (ctr) replacement
-          tests are tracked as a follow-up.
+          acl-t does not carry the standalone `docker` sysext, so the
+          docker daemon/CLI this test drives does not exist: the
+          flattened image replaces sysext content with signed Azure
+          Linux RPMs, and docker has no RPM replacement — moby-containerd
+          ships containerd/ctr only (containerd-only runtime, matching
+          AKS). containerd-native (ctr) replacement tests are tracked as
+          a follow-up.
   - name: docker.containerd-restart
     exceptions:
       - imageVariants: [acl-t]
         reason: |
-          acl-t ships no docker — the containerd sysext is replaced by the
-          moby-containerd RPM (containerd/ctr only), so there is no docker
-          sysext for mantle to inject; containerd-native (ctr) replacement
-          tests are tracked as a follow-up.
+          acl-t does not carry the standalone `docker` sysext, so the
+          docker daemon/CLI this test drives does not exist: the
+          flattened image replaces sysext content with signed Azure
+          Linux RPMs, and docker has no RPM replacement — moby-containerd
+          ships containerd/ctr only (containerd-only runtime, matching
+          AKS). containerd-native (ctr) replacement tests are tracked as
+          a follow-up.
   - name: docker.enable-service.sysext
     exceptions:
       - imageVariants: [acl-t]
         reason: |
-          acl-t ships no docker — the containerd sysext is replaced by the
-          moby-containerd RPM (containerd/ctr only), so there is no docker
-          sysext for mantle to inject; containerd-native (ctr) replacement
-          tests are tracked as a follow-up.
+          acl-t does not carry the standalone `docker` sysext, so the
+          docker daemon/CLI this test drives does not exist: the
+          flattened image replaces sysext content with signed Azure
+          Linux RPMs, and docker has no RPM replacement — moby-containerd
+          ships containerd/ctr only (containerd-only runtime, matching
+          AKS). containerd-native (ctr) replacement tests are tracked as
+          a follow-up.
   - name: docker.selinux
     exceptions:
       - platforms: [qemu]
@@ -317,18 +367,24 @@ tests:
         reason: Slow emulation causes this test to hit the duplicate journal entry bug (azure coverage doesn't exhibit this)
       - imageVariants: [acl-t]
         reason: |
-          acl-t ships no docker — the containerd sysext is replaced by the
-          moby-containerd RPM (containerd/ctr only), so there is no docker
-          sysext for mantle to inject; containerd-native (ctr) replacement
-          tests are tracked as a follow-up.
+          acl-t does not carry the standalone `docker` sysext, so the
+          docker daemon/CLI this test drives does not exist: the
+          flattened image replaces sysext content with signed Azure
+          Linux RPMs, and docker has no RPM replacement — moby-containerd
+          ships containerd/ctr only (containerd-only runtime, matching
+          AKS). containerd-native (ctr) replacement tests are tracked as
+          a follow-up.
   - name: docker.userns
     exceptions:
       - imageVariants: [acl-t]
         reason: |
-          acl-t ships no docker — the containerd sysext is replaced by the
-          moby-containerd RPM (containerd/ctr only), so there is no docker
-          sysext for mantle to inject; containerd-native (ctr) replacement
-          tests are tracked as a follow-up.
+          acl-t does not carry the standalone `docker` sysext, so the
+          docker daemon/CLI this test drives does not exist: the
+          flattened image replaces sysext content with signed Azure
+          Linux RPMs, and docker has no RPM replacement — moby-containerd
+          ships containerd/ctr only (containerd-only runtime, matching
+          AKS). containerd-native (ctr) replacement tests are tracked as
+          a follow-up.
 
   - name: kubeadm.v1.32.4.calico.base
     exceptions:
@@ -336,63 +392,108 @@ tests:
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
       - imageVariants: [acl-t]
-        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
+        reason: |
+          The kubeadm cluster provisions an etcd node that runs etcd in
+          a docker container (etcd-member.service via etcd-wrapper);
+          acl-t has no docker daemon — the standalone `docker` sysext is
+          not carried and docker has no RPM replacement (same as
+          docker.*) — so the control plane cannot bootstrap.
   - name: kubeadm.v1.32.4.cilium.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
       - imageVariants: [acl-t]
-        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
+        reason: |
+          The kubeadm cluster provisions an etcd node that runs etcd in
+          a docker container (etcd-member.service via etcd-wrapper);
+          acl-t has no docker daemon — the standalone `docker` sysext is
+          not carried and docker has no RPM replacement (same as
+          docker.*) — so the control plane cannot bootstrap.
   - name: kubeadm.v1.32.4.flannel.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
       - imageVariants: [acl-t]
-        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
+        reason: |
+          The kubeadm cluster provisions an etcd node that runs etcd in
+          a docker container (etcd-member.service via etcd-wrapper);
+          acl-t has no docker daemon — the standalone `docker` sysext is
+          not carried and docker has no RPM replacement (same as
+          docker.*) — so the control plane cannot bootstrap.
   - name: kubeadm.v1.33.0.calico.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
       - imageVariants: [acl-t]
-        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
+        reason: |
+          The kubeadm cluster provisions an etcd node that runs etcd in
+          a docker container (etcd-member.service via etcd-wrapper);
+          acl-t has no docker daemon — the standalone `docker` sysext is
+          not carried and docker has no RPM replacement (same as
+          docker.*) — so the control plane cannot bootstrap.
   - name: kubeadm.v1.33.0.cilium.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
       - imageVariants: [acl-t]
-        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
+        reason: |
+          The kubeadm cluster provisions an etcd node that runs etcd in
+          a docker container (etcd-member.service via etcd-wrapper);
+          acl-t has no docker daemon — the standalone `docker` sysext is
+          not carried and docker has no RPM replacement (same as
+          docker.*) — so the control plane cannot bootstrap.
   - name: kubeadm.v1.33.0.flannel.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
       - imageVariants: [acl-t]
-        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
+        reason: |
+          The kubeadm cluster provisions an etcd node that runs etcd in
+          a docker container (etcd-member.service via etcd-wrapper);
+          acl-t has no docker daemon — the standalone `docker` sysext is
+          not carried and docker has no RPM replacement (same as
+          docker.*) — so the control plane cannot bootstrap.
   - name: kubeadm.v1.34.1.calico.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
       - imageVariants: [acl-t]
-        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
+        reason: |
+          The kubeadm cluster provisions an etcd node that runs etcd in
+          a docker container (etcd-member.service via etcd-wrapper);
+          acl-t has no docker daemon — the standalone `docker` sysext is
+          not carried and docker has no RPM replacement (same as
+          docker.*) — so the control plane cannot bootstrap.
   - name: kubeadm.v1.34.1.cilium.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
       - imageVariants: [acl-t]
-        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
+        reason: |
+          The kubeadm cluster provisions an etcd node that runs etcd in
+          a docker container (etcd-member.service via etcd-wrapper);
+          acl-t has no docker daemon — the standalone `docker` sysext is
+          not carried and docker has no RPM replacement (same as
+          docker.*) — so the control plane cannot bootstrap.
   - name: kubeadm.v1.34.1.flannel.base
     exceptions:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: kubectl wait timeouts on emulated arm64 QEMU
       - imageVariants: [acl-t]
-        reason: kubeadm requires etcd-member + docker sysexts to bootstrap the control plane; acl-t drops both sysexts and does not package them as RPMs.
+        reason: |
+          The kubeadm cluster provisions an etcd node that runs etcd in
+          a docker container (etcd-member.service via etcd-wrapper);
+          acl-t has no docker daemon — the standalone `docker` sysext is
+          not carried and docker has no RPM replacement (same as
+          docker.*) — so the control plane cannot bootstrap.
 
   - name: linux.nfs.v3
     exceptions:
@@ -418,19 +519,38 @@ tests:
   - name: sysext.custom-docker.sysext
     exceptions:
       - imageVariants: [acl-t]
-        reason: acl-t ships no sysexts — containerd and oem-azure are replaced by first-class RPMs, so there is no sysext machinery to exercise.
+        reason: |
+          The test swaps in freshly-baked `docker` + `containerd`
+          sysexts and verifies docker starts working; on acl-t there is
+          no docker baseline and containerd is an RPM in the
+          verity-protected /usr rather than a swappable sysext, so the
+          swap scenario does not exist.
   - name: sysext.disable-containerd
     exceptions:
       - imageVariants: [acl-t]
-        reason: acl-t ships no sysexts — containerd and oem-azure are replaced by first-class RPMs, so there is no sysext machinery to exercise.
+        reason: |
+          The test masks the embedded `containerd` sysext and asserts
+          /usr/bin/containerd disappears; on acl-t containerd is the
+          moby-containerd RPM baked into the verity-protected /usr, so
+          masking is a no-op and the binary can never be absent.
   - name: sysext.disable-docker
     exceptions:
       - imageVariants: [acl-t]
-        reason: acl-t ships no sysexts — containerd and oem-azure are replaced by first-class RPMs, so there is no sysext machinery to exercise.
+        reason: |
+          The test masks the standalone `docker` sysext and asserts
+          /usr/bin/docker is absent; acl-t never carries a docker sysext
+          (docker is not part of the product), so there is nothing to
+          mask and the scenario is vacuous.
   - name: sysext.simple
     exceptions:
       - imageVariants: [acl-t]
-        reason: acl-t ships no sysexts — containerd and oem-azure are replaced by first-class RPMs, so there is no sysext machinery to exercise.
+        reason: |
+          The test merges a synthetic Ignition-provided extension via
+          systemd-sysext — no shipped sysext is involved; exempted
+          because sysext-delivered content is outside acl-t's supported
+          surface (everything comes from signed RPMs). Candidate to
+          re-enable if generic sysext support on acl-t becomes a
+          requirement.
 
   - name: systemd.journal.remote
     exceptions:
