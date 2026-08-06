@@ -938,6 +938,13 @@ _configure_misc_rpm() {
         sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/audit-rules.service" "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service"
     fi
 
+    # Disable auditd.service if present (it is pulled in transitively by trident RPMs).
+    if [[ -f "${root_fs_dir}/usr/lib/systemd/system/auditd.service" ]]; then
+        info "RPM mode: Disabling auditd.service (left disabled by default, matching portage-mode ACL images)"
+        sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/auditd.service"
+        sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/auditd.service"
+    fi
+
     # Create tmpfiles.d entry for logrotate state directory.
     # The Azure Linux 3 logrotate RPM doesn't ship a tmpfiles.d drop-in,
     # so /var/lib/logrotate is not recreated at boot on ACL's immutable rootfs.
