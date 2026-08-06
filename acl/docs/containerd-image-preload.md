@@ -292,28 +292,36 @@ run this locally:
 - The image boots from a signed UKI, so kernel arguments cannot be appended
   without re-signing it. Booting the extracted kernel and initrd directly with
   `-kernel`/`-initrd` sidesteps that.
-- Because the UKI's baked-in command line contains neither `ignition.firstboot`
-  nor `flatcar.oem.id=azure`, this takes the *subsequent* boot path
-  (`ignition-subsequent.target`) and the Azure OEM sysext is not selected. No
-  provisioning agent runs and nothing contacts IMDS or the wireserver. Those
-  arguments come from the first-boot and OEM-selection UKI addons on the ESP
-  (see [Architecture](architecture.md#boot-partitions-and-provisioning)), which
-  `-kernel`/`-initrd` bypasses.
+- The image's first-boot and OEM-selection UKI addons live on the ESP in
+  `EFI/Linux/<uki>.efi.extra.d/` and are merged into the command line by
+  systemd-stub. Booting with `-kernel`/`-initrd` bypasses systemd-stub, so the
+  kernel sees only the UKI's baked-in command line. The boot therefore takes
+  the *subsequent* boot path (`ignition-subsequent.target`), no OEM is
+  selected, and no provisioning runs.
 
 None of these change what containerd does, so this remains a valid check that
 the preloaded store is recovered. It is not a test of the boot path a real
-Azure VM takes -- see the note below.
+Azure VM takes.
 
 > **Note**
-> Appending `flatcar.oem.id=azure ignition.firstboot=1` does not make this
-> faithful either. The `oem-azure` sysext then merges and `waagent.service`
-> starts, but under plain QEMU it cannot mount the OVF DVD or reach the
-> wireserver, so it retries and gives up; units gated on
-> `ConditionVirtualization=microsoft` are still skipped. The boot itself does
-> not fail -- it reaches `multi-user.target` and containerd still loads the
-> store -- but provisioning never completes. Provisioning behaviour can only be
-> validated by deploying the published gallery image version (below) as an
-> Azure VM.
+> The addons are present and intact in the customized image -- Image Customizer
+> does not disturb them, and a real Azure deployment boots through
+> systemd-boot and picks them up:
+>
+> | ESP path                                          | Injects                              |
+> | ------------------------------------------------- | ------------------------------------ |
+> | `EFI/Linux/<uki>.efi.extra.d/firstboot.addon.efi` | `flatcar.first_boot=detected`        |
+> | `EFI/Linux/<uki>.efi.extra.d/oem.addon.efi`       | `flatcar.oem.id=azure`, console args |
+>
+> Do not try to make the local check "more realistic" by appending these by
+> hand. Ignition then runs for real, resolves the `azure` platform, and blocks
+> fetching `http://169.254.169.254/metadata/instance/compute/userData`.
+> `ignition-fetch.service` has no timeout, so under plain QEMU the boot hangs
+> in the initrd indefinitely and never reaches `multi-user.target`. Bypassing
+> the addons is what makes the local check usable at all.
+>
+> Provisioning behaviour can only be validated by deploying the published
+> gallery image version (below) as an Azure VM.
 
 Extract the kernel, initrd, and command line from the UKI on the ESP:
 
