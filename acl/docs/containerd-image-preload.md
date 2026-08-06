@@ -208,11 +208,14 @@ with `content:` instead. Scripts run under `/bin/sh` by default.
 # The build directory MUST live on its own mount -- see the note below.
 sudo mount -t tmpfs -o size=70G tmpfs /mnt/bd
 
+# docker run reuses a cached tag, so refresh it explicitly.
+sudo docker pull mcr.microsoft.com/azurelinux/imagecustomizer:latest
+
 sudo docker run --rm --privileged=true \
   -v /dev:/dev \
   -v /mnt/bd:/mnt/bd \
   -v "$PWD/staging:/staging" \
-  mcr.microsoft.com/azurelinux/imagecustomizer:1.5.0-2 \
+  mcr.microsoft.com/azurelinux/imagecustomizer:latest \
   customize \
   --image-file /staging/acl.vhd \
   --config-file /staging/config.yaml \
@@ -220,6 +223,9 @@ sudo docker run --rm --privileged=true \
   --output-image-format vhd-fixed \
   --output-image-file /staging/out/acl-preloaded.vhd
 ```
+
+ACL support needs Image Customizer 1.5.0 or newer. `latest` currently satisfies
+that; pin an explicit tag instead if the build needs to be reproducible.
 
 Use `vhd-fixed`, not `vhd`, if the result is destined for an Azure Compute
 Gallery: Azure only accepts fixed-size VHDs, and requires the virtual size to be
@@ -248,14 +254,14 @@ The `ctr images ls` output from inside the chroot appears in IC's log at
 
 ### Known issues and workarounds
 
-| Symptom                                                                            | Cause                                                                                                                                                                                                          | Workaround                                                                                          |
-| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `too many levels of symbolic links` (`ELOOP`) during partition mount               | IC synthesizes ACL's missing mount directories with `lowerdir=<build-dir>/rootmountdirsdir:/`. Because the build directory is a descendant of `/`, the lowerdirs overlap, which overlayfs rejects as `-ELOOP`. | Put `--build-dir` on a separate mount, e.g. a tmpfs at `/mnt/bd`. A fix is in flight upstream.      |
-| `failed to find rootfs partition`                                                  | A locally cached `:latest` image that predates ACL support. `docker run` never re-pulls a tag it already has.                                                                                                  | `docker pull mcr.microsoft.com/azurelinux/imagecustomizer:latest`, or pin an explicit tag as below. |
-| `e2fsck` exits 12, `unsupported feature(s): FEATURE_C12`                           | Host `e2fsprogs` is older than 1.47 and does not understand ext4 `orphan_file`.                                                                                                                                | Run IC from the container image.                                                                    |
-| `tls: failed to verify certificate: x509: certificate signed by unknown authority` | `/etc` is empty during `postCustomization`; the CA trust store is generated on first boot.                                                                                                                     | `export SSL_CERT_FILE=/usr/share/distro/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`.          |
-| `chown: invalid user 'root:root'`                                                  | `/etc` is empty during `postCustomization`; ACL's `passwd` lives under `/usr/share/distro/etc` and is not materialized at `/etc` until first boot, so name lookups fail.                                       | Use numeric IDs: `chown 0:0`.                                                                       |
-| `source (.../snapshots/1/fs/bin) is not a file`                                    | `os.additionalDirs` cannot copy symlinks (relevant only to the offline variant below).                                                                                                                         | Ship a tarball via `os.additionalFiles` and unpack it in a `postCustomization` script.              |
+| Symptom                                                                            | Cause                                                                                                                                                                                                          | Workaround                                                                                     |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `too many levels of symbolic links` (`ELOOP`) during partition mount               | IC synthesizes ACL's missing mount directories with `lowerdir=<build-dir>/rootmountdirsdir:/`. Because the build directory is a descendant of `/`, the lowerdirs overlap, which overlayfs rejects as `-ELOOP`. | Put `--build-dir` on a separate mount, e.g. a tmpfs at `/mnt/bd`. A fix is in flight upstream. |
+| `failed to find rootfs partition`                                                  | A locally cached `:latest` image that predates ACL support. `docker run` never re-pulls a tag it already has.                                                                                                  | `docker pull mcr.microsoft.com/azurelinux/imagecustomizer:latest`.                             |
+| `e2fsck` exits 12, `unsupported feature(s): FEATURE_C12`                           | Host `e2fsprogs` is older than 1.47 and does not understand ext4 `orphan_file`.                                                                                                                                | Run IC from the container image.                                                               |
+| `tls: failed to verify certificate: x509: certificate signed by unknown authority` | `/etc` is empty during `postCustomization`; the CA trust store is generated on first boot.                                                                                                                     | `export SSL_CERT_FILE=/usr/share/distro/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`.     |
+| `chown: invalid user 'root:root'`                                                  | `/etc` is empty during `postCustomization`; ACL's `passwd` lives under `/usr/share/distro/etc` and is not materialized at `/etc` until first boot, so name lookups fail.                                       | Use numeric IDs: `chown 0:0`.                                                                  |
+| `source (.../snapshots/1/fs/bin) is not a file`                                    | `os.additionalDirs` cannot copy symlinks (relevant only to the offline variant below).                                                                                                                         | Ship a tarball via `os.additionalFiles` and unpack it in a `postCustomization` script.         |
 
 ACL images also require `preview-distro-version` in `previewFeatures`, and the
 Docker invocation needs `--privileged=true -v /dev:/dev`.
