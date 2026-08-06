@@ -76,6 +76,10 @@ reboot_and_wait() {
         sleep 1
     done
     error "VM did not come back within ${VM_SSH_TIMEOUT}s"
+    # A reboot that never completes is the most informative failure this suite
+    # can hit: the serial console holds whatever the kernel printed on the way
+    # down or while failing to come up.
+    capture_vm_diagnostics "$VM_IP" "boot-benchmark-reboot-hang"
     return 1
 }
 
@@ -119,6 +123,11 @@ main() {
 
     if ! wait_for_ssh "$VM_IP" "$VM_SSH_TIMEOUT"; then
         error "Cannot reach VM via SSH"
+        # The VM was alive moments ago — the benchmarks that ran before this
+        # one used it. Something took it down in between, and the resource
+        # group is deleted as soon as the suite finishes, so the serial
+        # console has to be read now or the evidence is gone.
+        capture_vm_diagnostics "$VM_IP" "boot-benchmark-unreachable"
         exit 1
     fi
 
