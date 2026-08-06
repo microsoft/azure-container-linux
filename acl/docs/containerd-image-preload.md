@@ -24,7 +24,7 @@ into `/var/lib/containerd`.
    [Download an Azure Marketplace Image][dl] for the export procedure.
 2. Run IC with a single `postCustomization` script that starts the image's own
    containerd inside the chroot, pulls the images, and pins them.
-3. Verify offline, then boot and confirm with `ctr` / `crictl`.
+3. Inspect the output image, then boot it and confirm with `ctr` / `crictl`.
 4. Publish the result to an Azure Compute Gallery.
 
 The script must use the **containerd binaries shipped in the target image**. The
@@ -101,7 +101,24 @@ mount -o ro,loop "$SYSEXT" "$SX"
 "$SX/usr/bin/containerd" --root /var/lib/containerd --state /run/ctrd \
   --address "$SOCK" > /tmp/ctrd.log 2>&1 &
 CTRD_PID=$!
-sleep 8
+
+# Poll until the API answers rather than sleeping a fixed interval, and bail
+# out immediately if containerd dies during startup.
+i=0
+until "$SX/usr/bin/ctr" -a "$SOCK" version >/dev/null 2>&1; do
+  if ! kill -0 "$CTRD_PID" 2>/dev/null; then
+    echo "containerd exited during startup" >&2
+    cat /tmp/ctrd.log >&2
+    exit 1
+  fi
+  i=$((i + 1))
+  if [ "$i" -ge 60 ]; then
+    echo "containerd did not become ready within 60s" >&2
+    cat /tmp/ctrd.log >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 for ref in $IMAGES; do
   "$SX/usr/bin/ctr" -a "$SOCK" -n k8s.io images pull \
@@ -112,12 +129,31 @@ done
 
 "$SX/usr/bin/ctr" -a "$SOCK" -n k8s.io images ls
 
-kill "$CTRD_PID"; sleep 3
+# Wait for containerd to exit before unmounting. The metadata store is a bolt
+# database; killing it mid-write can leave the store unrecoverable.
+kill "$CTRD_PID"
+i=0
+while kill -0 "$CTRD_PID" 2>/dev/null; do
+  i=$((i + 1))
+  if [ "$i" -ge 30 ]; then
+    echo "containerd did not exit within 30s" >&2
+    exit 1
+  fi
+  sleep 1
+done
+wait "$CTRD_PID" 2>/dev/null || true
+
 umount "$SX"; rmdir "$SX"
 rm -rf /run/ctrd /tmp/ctrd.log
 
-# Use numeric IDs: the ACL root partition has no /etc/passwd, so a symbolic
-# `chown root:root` fails with "invalid user".
+# Use numeric IDs. ACL's factory /etc is staged under /usr/share/distro/etc and
+# is only materialized at /etc on first boot, so name lookups fail here and a
+# symbolic `chown root:root` reports "invalid user".
+#
+# Neither of these is recursive, and deliberately so: containerd already owns
+# everything it created, and the snapshot tree holds extracted image layers
+# whose per-file uid/gid and modes come from the image itself. A recursive
+# `chown`/`chmod` would rewrite those and corrupt the preloaded images.
 chown 0:0 /var/lib/containerd
 chmod 700 /var/lib/containerd
 ```
@@ -164,6 +200,9 @@ scripts:
   postCustomization:
     - path: preload.sh
 ```
+
+`path` is used here because the script is long; shorter scripts can be inlined
+with `content:` instead. Scripts run under `/bin/sh` by default.
 
 ```sh
 # The build directory MUST live on its own mount -- see the note below.
@@ -215,7 +254,7 @@ The `ctr images ls` output from inside the chroot appears in IC's log at
 | `failed to find rootfs partition`                                                  | The `:latest` tag on MCR is stale (v1.1.0) and predates ACL support.                                                                                                                                           | Pin an explicit tag, e.g. `1.5.0-2`.                                                       |
 | `e2fsck` exits 12, `unsupported feature(s): FEATURE_C12`                           | Host `e2fsprogs` is older than 1.47 and does not understand ext4 `orphan_file`.                                                                                                                                | Run IC from the container image.                                                           |
 | `tls: failed to verify certificate: x509: certificate signed by unknown authority` | `/etc` is empty during `postCustomization`; the CA trust store is generated on first boot.                                                                                                                     | `export SSL_CERT_FILE=/usr/share/distro/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem`. |
-| `chown: invalid user 'root:root'`                                                  | The ACL root partition ships no `/etc/passwd`.                                                                                                                                                                 | Use numeric IDs: `chown 0:0`.                                                              |
+| `chown: invalid user 'root:root'`                                                  | `/etc` is empty during `postCustomization`; ACL's `passwd` lives under `/usr/share/distro/etc` and is not materialized at `/etc` until first boot, so name lookups fail.                                       | Use numeric IDs: `chown 0:0`.                                                              |
 | `source (.../snapshots/1/fs/bin) is not a file`                                    | `os.additionalDirs` cannot copy symlinks (relevant only to the offline variant below).                                                                                                                         | Ship a tarball via `os.additionalFiles` and unpack it in a `postCustomization` script.     |
 
 ACL images also require `preview-distro-version` in `previewFeatures`, and the
@@ -223,9 +262,11 @@ Docker invocation needs `--privileged=true -v /dev:/dev`.
 
 ## 3. Verify
 
-### Offline
+Two checks, in increasing order of cost. The first needs no VM and is cheap
+enough to run on every build; the second confirms the image's own containerd
+actually recovers the store.
 
-Mount the output image and check the injected tree:
+### Inspect the output image without booting
 
 ```sh
 sudo modprobe nbd max_part=8
@@ -237,13 +278,24 @@ strings /mnt/verify/var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db \
   | grep -E 'mcr\.microsoft\.com|pinned'
 ```
 
-Confirm the directory is `0700` `root:root`.
+Confirm the directory is `0700` `root:root`. This proves the content landed in
+the image, but not that containerd will accept it -- for that, boot it.
 
-### Boot test
+### Local boot check
 
-ACL has no default console login, and under `init=/bin/bash` the containerd
-sysext is not merged, so `ctr` does not exist. Boot normally and use systemd's
-debug shell on a second serial port instead.
+This is a normal boot: systemd starts, merges the containerd sysext, and the
+CRI plugin recovers the store, which is exactly the path being validated. Two
+concessions are made to make the VM reachable locally:
+
+- ACL has no default console login, so systemd's debug shell is enabled on a
+  second serial port.
+- The image boots from a signed UKI, so kernel arguments cannot be appended
+  without re-signing it. Booting the extracted kernel and initrd directly with
+  `-kernel`/`-initrd` sidesteps that.
+
+Neither changes what containerd does, but both mean this is a functional check
+rather than a test of the exact boot path a real VM takes. Validate that by
+deploying the published gallery image version (below) as an Azure VM.
 
 Extract the kernel, initrd, and command line from the UKI on the ESP:
 
@@ -295,30 +347,26 @@ during provisioning.
 
 ## 4. Publish to an Azure Compute Gallery
 
-Upload the fixed VHD into an empty managed disk, then use that disk as the
+Upload the fixed VHD as a page blob, then reference that blob directly as the
 source for a gallery image version.
 
 ```sh
 RG=my-images
 LOC=westus3
-DISK=acl-preloaded
+SA=myimagestorage
+CONTAINER=vhds
+BLOB=acl-preloaded.vhd
 
-# --upload-size-bytes is the size of the file on disk, footer included.
-BYTES=$(stat -c %s out/acl-preloaded.vhd)
+az storage account create -g "$RG" -n "$SA" -l "$LOC" --sku Standard_LRS
+az storage container create --account-name "$SA" -n "$CONTAINER" --auth-mode login
 
-az disk create -g "$RG" -n "$DISK" -l "$LOC" \
-  --os-type Linux --hyper-v-generation V2 \
-  --upload-type Upload --upload-size-bytes "$BYTES" \
-  --sku Standard_LRS
-
-SAS=$(az disk grant-access -g "$RG" -n "$DISK" \
-        --access-level Write --duration-in-seconds 86400 \
-        --query accessSAS -o tsv)
-
-azcopy copy out/acl-preloaded.vhd "$SAS" --blob-type PageBlob
-
-az disk revoke-access -g "$RG" -n "$DISK" -o none
+azcopy copy out/acl-preloaded.vhd \
+  "https://$SA.blob.core.windows.net/$CONTAINER/$BLOB" \
+  --blob-type PageBlob
 ```
+
+`azcopy` skips the unwritten extents of the sparse file, so the upload moves
+roughly the size on disk rather than the full 30 GB.
 
 Create the image definition once, matching the architecture and generation of
 the image you customized, then add a version per build:
@@ -330,15 +378,21 @@ az sig image-definition create -g "$RG" \
   --os-type Linux --os-state generalized \
   --hyper-v-generation V2 --architecture x64      # or Arm64
 
+SA_ID=$(az storage account show -g "$RG" -n "$SA" --query id -o tsv)
+
 az sig image-version create -g "$RG" \
   --gallery-name mygallery --gallery-image-definition acl-preloaded \
   --gallery-image-version 1.0.0 \
-  --os-snapshot "$DISK"
+  --os-vhd-storage-account "$SA_ID" \
+  --os-vhd-uri "https://$SA.blob.core.windows.net/$CONTAINER/$BLOB"
 ```
 
-`--upload-size-bytes` must match the file exactly or the upload is rejected,
-which is why `vhd-fixed` matters: a dynamic VHD's file size does not have the
-fixed `virtual size + 512` relationship Azure expects.
+This is why `vhd-fixed` matters. Azure accepts only fixed-size VHDs whose
+virtual size is a whole number of MiB; a dynamic VHD is rejected.
+
+> A managed disk created with `--upload-type Upload` works as a source too, via
+> `--os-snapshot`, but it requires passing the exact byte count through
+> `--upload-size-bytes`. Uploading to a blob avoids that step.
 
 ## Appendix: offline (air-gapped) variant
 
@@ -366,8 +420,36 @@ sudo umount /mnt/sysext /mnt/usr
 sudo qemu-nbd --disconnect /dev/nbd0
 ```
 
-Hydrate a scratch data root with the same `pull` / `label` sequence as the
-in-chroot script, then tar it, preserving ownership and extended attributes:
+Hydrate a scratch data root on the host with the extracted binaries, using the
+same pull and label sequence as the in-chroot script:
+
+```sh
+SOCK=/run/ctrd-host/c.sock
+PLATFORM=linux/amd64
+IMAGES="mcr.microsoft.com/oss/v2/kubernetes/pause:v3.10 mcr.microsoft.com/azurelinux/base/core:3.0"
+
+sudo mkdir -p /run/ctrd-host staging/ctrd-root
+sudo work/bin/containerd --root "$PWD/staging/ctrd-root" \
+  --state /run/ctrd-host --address "$SOCK" > /tmp/ctrd-host.log 2>&1 &
+CTRD_PID=$!
+
+until sudo work/bin/ctr -a "$SOCK" version >/dev/null 2>&1; do
+  kill -0 "$CTRD_PID" 2>/dev/null || { cat /tmp/ctrd-host.log >&2; exit 1; }
+  sleep 1
+done
+
+for ref in $IMAGES; do
+  sudo work/bin/ctr -a "$SOCK" -n k8s.io images pull \
+    --snapshotter overlayfs --platform "$PLATFORM" "$ref"
+  sudo work/bin/ctr -a "$SOCK" -n k8s.io images label \
+    "$ref" io.cri-containerd.pinned=pinned
+done
+
+sudo kill "$CTRD_PID"
+while kill -0 "$CTRD_PID" 2>/dev/null; do sleep 1; done
+```
+
+Tar the result, preserving ownership and extended attributes:
 
 ```sh
 sudo tar --numeric-owner --xattrs --xattrs-include='*' --acls \
@@ -375,7 +457,8 @@ sudo tar --numeric-owner --xattrs --xattrs-include='*' --acls \
 ```
 
 Ship it via `os.additionalFiles` (not `additionalDirs`, which cannot copy
-symlinks) and unpack it in `postCustomization`:
+symlinks) and unpack it in `postCustomization`. The unpack script is short
+enough to inline with `content:` rather than shipping a separate file:
 
 ```yaml
 os:
@@ -386,19 +469,16 @@ os:
 
 scripts:
   postCustomization:
-    - path: extract.sh
-```
-
-```sh
-#!/bin/sh
-set -eux
-rm -rf /var/lib/containerd
-tar --numeric-owner --xattrs --xattrs-include='*' --acls \
-  -xf /ctrd-root.tar -C /var/lib
-mv /var/lib/ctrd-root /var/lib/containerd
-chown 0:0 /var/lib/containerd
-chmod 700 /var/lib/containerd
-rm -f /ctrd-root.tar
+    - name: extract-containerd-root
+      content: |
+        set -eux
+        rm -rf /var/lib/containerd
+        tar --numeric-owner --xattrs --xattrs-include='*' --acls \
+          -xf /ctrd-root.tar -C /var/lib
+        mv /var/lib/ctrd-root /var/lib/containerd
+        chown 0:0 /var/lib/containerd
+        chmod 700 /var/lib/containerd
+        rm -f /ctrd-root.tar
 ```
 
 Both variants produce an equivalent store; the in-chroot flow is preferred
