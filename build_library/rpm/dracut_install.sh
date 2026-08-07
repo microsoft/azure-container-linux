@@ -249,6 +249,10 @@ _dracut_patch_bootengine_modules() {
 _dracut_install_initramfs_assets() {
     local root_fs_dir="$1"
 
+    if [[ "${ACL_DMVERITY_KEYRING_ENABLE:-}" == "1" && "${BOOTLOADER_MODE:-uki}" != "uki" ]]; then
+        die "RPM mode: dm-verity keyring provisioning requires a signed UKI command line"
+    fi
+
     # Create sysroot-oem.mount unit matching Flatcar's diskless-generator behavior.
     # This unit is created but NOT added to initrd-root-fs.target.requires, so it
     # won't be automatically started. Instead, ignition-files.service has:
@@ -306,6 +310,49 @@ SETUP_EOF
         "${selinux_toggle_module}/acl-selinux-toggle.service"
     sudo chmod +x "${selinux_toggle_module}/module-setup.sh"
     sudo chmod +x "${selinux_toggle_module}/acl-selinux-toggle.sh"
+
+    if [[ "${ACL_DMVERITY_KEYRING_ENABLE:-}" == "1" ]]; then
+        info "RPM mode: Creating acl-dmverity-keyring dracut module"
+        local dmverity_keyring_source="${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-dmverity-keyring"
+        local dmverity_keyring_module="${root_fs_dir}/usr/lib/dracut/modules.d/30acl-dmverity-keyring"
+        sudo mkdir -p "${dmverity_keyring_module}"
+        sudo cp "${dmverity_keyring_source}/module-setup.sh" \
+            "${dmverity_keyring_module}/module-setup.sh"
+        sudo cp "${dmverity_keyring_source}/acl-dmverity-keyring-load.sh" \
+            "${dmverity_keyring_module}/acl-dmverity-keyring-load.sh"
+        sudo cp "${dmverity_keyring_source}/acl-dmverity-keyring-load.service" \
+            "${dmverity_keyring_module}/acl-dmverity-keyring-load.service"
+        sudo cp "${dmverity_keyring_source}/osguard-signer.der.b64" \
+            "${dmverity_keyring_module}/osguard-signer.der.b64"
+        sudo cp "${dmverity_keyring_source}/seal-probe.der.b64" \
+            "${dmverity_keyring_module}/seal-probe.der.b64"
+        sudo cp "${dmverity_keyring_source}/certs.sha256" \
+            "${dmverity_keyring_module}/certs.sha256"
+        sudo chmod +x "${dmverity_keyring_module}/module-setup.sh"
+        sudo chmod +x "${dmverity_keyring_module}/acl-dmverity-keyring-load.sh"
+
+        # The initramfs performs the authoritative provisioning. The rootfs
+        # verifier gates containerd so a lost, replaced, or unsealed keyring
+        # cannot silently weaken container image verification after switch-root.
+        sudo mkdir -p \
+            "${root_fs_dir}/usr/lib/acl/dmverity-keyring" \
+            "${root_fs_dir}/usr/libexec" \
+            "${root_fs_dir}/usr/lib/systemd/system" \
+            "${root_fs_dir}/usr/lib/systemd/system/containerd.service.d"
+        sudo cp "${dmverity_keyring_source}/osguard-signer.der.b64" \
+            "${root_fs_dir}/usr/lib/acl/dmverity-keyring/osguard-signer.der.b64"
+        sudo cp "${dmverity_keyring_source}/seal-probe.der.b64" \
+            "${root_fs_dir}/usr/lib/acl/dmverity-keyring/seal-probe.der.b64"
+        sudo cp "${dmverity_keyring_source}/certs.sha256" \
+            "${root_fs_dir}/usr/lib/acl/dmverity-keyring/certs.sha256"
+        sudo cp "${dmverity_keyring_source}/acl-dmverity-keyring-verify.sh" \
+            "${root_fs_dir}/usr/libexec/acl-dmverity-keyring-verify"
+        sudo cp "${dmverity_keyring_source}/acl-dmverity-keyring-verify.service" \
+            "${root_fs_dir}/usr/lib/systemd/system/acl-dmverity-keyring-verify.service"
+        sudo cp "${dmverity_keyring_source}/containerd-dmverity-keyring.conf" \
+            "${root_fs_dir}/usr/lib/systemd/system/containerd.service.d/20-acl-dmverity-keyring.conf"
+        sudo chmod +x "${root_fs_dir}/usr/libexec/acl-dmverity-keyring-verify"
+    fi
 
     if [[ "${ACL_IPE_ENABLE:-}" == "1" ]]; then
         info "RPM mode: Creating acl-ipe-load dracut module"

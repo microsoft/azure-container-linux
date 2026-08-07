@@ -178,6 +178,9 @@ OSREL
     if [[ "${ACL_IPE_ENABLE:-}" == "1" ]]; then
         cmdline+=" ipe.enforce=0 ipe.success_audit=0"
     fi
+    if [[ "${ACL_DMVERITY_KEYRING_ENABLE:-}" == "1" ]]; then
+        cmdline+=" dm_verity.keyring_unsealed=1"
+    fi
     # NOTE: crashkernel=256M is delivered via a UKI addon (kdump.addon.efi)
     # rather than baked into the main UKI cmdline.  This allows disabling
     # kdump by removing the addon from the ESP without rebuilding the UKI.

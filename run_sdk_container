@@ -160,6 +160,7 @@ if [[ -z ${stat} ]] ; then
         -e IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
         -e IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
         -e EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
+        -e ACL_DMVERITY_KEYRING_ENABLE="${ACL_DMVERITY_KEYRING_ENABLE:-}"
         --name="${name}"
         --hostname="${hostname}"
         --entrypoint /bin/bash
@@ -188,5 +189,6 @@ call_docker exec "${tty[@]}" -i \
     -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" \
     -e ACL_PERF_TOOLS="${ACL_PERF_TOOLS:-}" \
     -e ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-}" \
+    -e ACL_DMVERITY_KEYRING_ENABLE="${ACL_DMVERITY_KEYRING_ENABLE:-}" \
     -e ACL_FEATURES="${ACL_FEATURES:-}" \
     "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"

@@ -33,3 +33,4 @@ packages:
   - selinux-policy      # SELinux reference policy (ACL-specific modules)
 
   - containerd2         # Container runtime (ACL EROFS/dm-verity profile)
+  - kernel              # Stock Azure Linux kernel plus upstream dm-verity keyring backport

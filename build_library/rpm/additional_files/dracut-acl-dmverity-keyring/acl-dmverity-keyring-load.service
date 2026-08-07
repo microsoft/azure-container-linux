@@ -1,0 +1,15 @@
+[Unit]
+Description=Populate and seal the ACL dm-verity keyring
+Documentation=https://github.com/torvalds/linux/commit/033724b1c627885aed049f775e4b10583d895af6
+DefaultDependencies=no
+Before=initrd.target ignition-fetch.service ignition-disks.service ignition-mount.service ignition-files.service ignition-complete.target
+Before=initrd-setup-root.service initrd-root-fs.target initrd-parse-etc.service acl-ipe-load.service initrd-switch-root.target initrd-switch-root.service
+OnFailure=emergency.target
+OnFailureJobMode=isolate
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/acl-dmverity-keyring-load
+StandardOutput=journal+console
+StandardError=journal+console

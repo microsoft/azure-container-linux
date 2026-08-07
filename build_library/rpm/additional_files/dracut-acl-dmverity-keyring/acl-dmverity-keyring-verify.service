@@ -1,0 +1,10 @@
+[Unit]
+Description=Verify the sealed ACL dm-verity keyring
+After=local-fs.target
+Before=containerd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/acl-dmverity-keyring-verify
+StandardOutput=journal+console
+StandardError=journal+console

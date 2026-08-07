@@ -102,6 +102,12 @@ create_prod_image() {
         info "RPM mode: Installed systemd-boot RPM into image rootfs (stubs on /usr)"
     fi
 
+    if [[ "${ACL_DMVERITY_KEYRING_ENABLE:-0}" == "1" ]]; then
+        rpm_install_package "${root_fs_dir}" keyutils || \
+            die "RPM mode: Failed to install keyutils for dm-verity keyring provisioning"
+        info "RPM mode: Installed keyutils for dm-verity keyring provisioning"
+    fi
+
     test_image_content "${root_fs_dir}"
   fi
   

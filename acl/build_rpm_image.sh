@@ -51,7 +51,8 @@
 #   --rebuild-and-test                   Rebuild image and run smoke tests (equivalent to
 #                                        --rebuild --build-vm-image --run-tests)
 #   --run-tests                          Start a VM and run a series of predefined tests on the VM after boot
-#                                        (includes run-secureboot-test.sh, run-container-test.sh,
+#                                        (includes run-secureboot-test.sh, run-dmverity-keyring-test.sh,
+#                                        run-container-test.sh,
 #                                        run-systemd-health-test.sh, run-dmesg-io-error-test.sh,
 #                                        run-selinux-avc-test.sh)
 #   --run-script=PATH                    Run script on VM after boot (can specify multiple times)
@@ -180,6 +181,14 @@ export ACL_PERF_TOOLS="${ACL_PERF_TOOLS:-0}"
 # Enable the permissive IPE policy loader by default. Callers can explicitly
 # set ACL_IPE_ENABLE=0 to build an image without the runtime policy.
 export ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-1}"
+# Provision the dedicated dm-verity verification keyring from the signed
+# initramfs. It is enabled by default for UKI images because the UKI signature
+# covers both the trust anchor and the command line that opens provisioning.
+if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
+    export ACL_DMVERITY_KEYRING_ENABLE="${ACL_DMVERITY_KEYRING_ENABLE:-1}"
+else
+    export ACL_DMVERITY_KEYRING_ENABLE="${ACL_DMVERITY_KEYRING_ENABLE:-0}"
+fi
 # Include the EROFS/dm-verity containerd profile (the containerd2-erofs
 # subpackage) in the embedded containerd sysext. On by default; set
 # ACL_EROFS_ENABLE=0 to build the overlayfs control arm of the perf matrix.
@@ -328,6 +337,7 @@ parse_args() {
                 START_VM=true
                 RUN_TESTS=true
                 RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
+                RUN_SCRIPTS+=("./acl/tests/run-dmverity-keyring-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-systemd-health-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-dmesg-io-error-test.sh")

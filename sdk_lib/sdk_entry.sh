@@ -120,6 +120,12 @@ if [[ -n "${ACL_IPE_ENABLE:-}" ]]; then
     echo "export ACL_IPE_ENABLE='${ACL_IPE_ENABLE}'" >> /home/sdk/.bashrc
 fi
 
+# Forward the optional dm-verity verification keyring feature.
+sed -i -e '/export ACL_DMVERITY_KEYRING_ENABLE=/d' /home/sdk/.bashrc 2>/dev/null || true
+if [[ -n "${ACL_DMVERITY_KEYRING_ENABLE:-}" ]]; then
+    echo "export ACL_DMVERITY_KEYRING_ENABLE='${ACL_DMVERITY_KEYRING_ENABLE}'" >> /home/sdk/.bashrc
+fi
+
 # Forward sysext package feature gates (see acl/sysexts.yaml) into commands run
 # as the sdk user. Always rewritten, including when empty, so that a build with
 # a feature turned off cannot inherit a stale value from a reused container.
