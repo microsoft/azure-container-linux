@@ -93,8 +93,17 @@ matters most for the sandbox (`pause`) image, since a mismatch there means every
 pod start reaches out to a registry even though a byte-identical image is
 already local. ACL's containerd configuration ships no `sandbox_image` setting,
 so the effective value comes from containerd's compiled-in default or from
-whatever the Kubernetes layer configures. Check the value in effect and preload
-that exact reference, retagging the example above if it differs:
+whatever the Kubernetes layer configures. On a stock ACL image the default
+applies, which for the containerd 2.x releases ACL ships is:
+
+```text
+registry.k8s.io/pause:3.10
+```
+
+Kubernetes distributions commonly override it -- AKS, for example, points it at
+`mcr.microsoft.com/oss/v2/kubernetes/pause:v3.10`, which is why the example list
+above uses that reference. Check the value actually in effect on your image and
+preload that exact reference, retagging the example if it differs:
 
 ```sh
 containerd config dump | grep sandbox_image
