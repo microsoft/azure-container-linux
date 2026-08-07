@@ -87,6 +87,19 @@ mcr.microsoft.com/oss/v2/kubernetes/pause:v3.10
 mcr.microsoft.com/azurelinux/base/core:3.0
 ```
 
+A preloaded image is only used if the reference matches the one the runtime
+actually requests -- the store is keyed by reference, not by content. This
+matters most for the sandbox (`pause`) image, since a mismatch there means every
+pod start reaches out to a registry even though a byte-identical image is
+already local. ACL's containerd configuration ships no `sandbox_image` setting,
+so the effective value comes from containerd's compiled-in default or from
+whatever the Kubernetes layer configures. Check the value in effect and preload
+that exact reference, retagging the example above if it differs:
+
+```sh
+containerd config dump | grep sandbox_image
+```
+
 `staging/preload.sh`:
 
 ```sh
@@ -229,6 +242,7 @@ with `content:` instead. Scripts run under `/bin/sh` by default.
 
 ```sh
 # The build directory MUST live on its own mount -- see the note below.
+sudo mkdir -p /mnt/bd
 sudo mount -t tmpfs -o size=70G tmpfs /mnt/bd
 
 # docker run reuses a cached tag, so refresh it explicitly.
@@ -256,7 +270,7 @@ a whole number of MiB. IC satisfies both -- the output carries a `conectix`
 footer, and the file is exactly the virtual size plus the 512-byte footer:
 
 ```console
-$ qemu-img info -f vpc out/acl-preloaded.vhd
+$ qemu-img info -f vpc staging/out/acl-preloaded.vhd
 file format: vpc
 virtual size: 30.4 GiB (32633782272 bytes)   # 31122 MiB exactly
 disk size: 624 MiB
@@ -300,7 +314,8 @@ actually recovers the store.
 
 ```sh
 sudo modprobe nbd max_part=8
-sudo qemu-nbd --connect=/dev/nbd0 --read-only -f vpc out/acl-preloaded.vhd
+sudo qemu-nbd --connect=/dev/nbd0 --read-only -f vpc staging/out/acl-preloaded.vhd
+sudo mkdir -p /mnt/verify
 sudo mount -o ro /dev/nbd0p5 /mnt/verify   # ROOT is the fifth partition
 
 ls -la /mnt/verify/var/lib/containerd
@@ -365,7 +380,7 @@ Boot a scratch copy (never the artifact itself -- the boot mutates it),
 appending the debug-shell options to the extracted command line:
 
 ```sh
-cp --sparse=always out/acl-preloaded.vhd test.vhd
+cp --sparse=always staging/out/acl-preloaded.vhd test.vhd
 
 qemu-system-x86_64 -machine q35,accel=kvm -cpu host -smp 4 -m 4096 \
   -drive file=test.vhd,format=vpc,if=virtio \
@@ -418,7 +433,7 @@ BLOB=acl-preloaded.vhd
 az storage account create -g "$RG" -n "$SA" -l "$LOC" --sku Standard_LRS
 az storage container create --account-name "$SA" -n "$CONTAINER" --auth-mode login
 
-azcopy copy out/acl-preloaded.vhd \
+azcopy copy staging/out/acl-preloaded.vhd \
   "https://$SA.blob.core.windows.net/$CONTAINER/$BLOB" \
   --blob-type PageBlob
 ```
@@ -466,6 +481,7 @@ sudo modprobe nbd max_part=8
 sudo qemu-nbd --connect=/dev/nbd0 --read-only -f vpc staging/acl.vhd
 
 # USR-A is the second partition on the ACL GPT layout.
+sudo mkdir -p /mnt/usr /mnt/sysext
 sudo mount -o ro /dev/nbd0p2 /mnt/usr
 
 # Copy the sysext out before mounting it; loop-mounting a file that lives on
@@ -479,19 +495,23 @@ sudo qemu-nbd --disconnect /dev/nbd0
 ```
 
 Hydrate a scratch data root on the host with the extracted binaries, using the
-same pull and label sequence as the in-chroot script:
+same pull and label sequence as the in-chroot script. The whole block runs under
+a single `sudo` so that containerd is a direct child of the shell: backgrounding
+`sudo containerd` instead would make `$!` the PID of `sudo` rather than of
+containerd, and the shutdown wait would then hang.
 
 ```sh
+sudo sh -eux <<'EOF'
 SOCK=/run/ctrd-host/c.sock
 PLATFORM=linux/amd64
 IMAGE_LIST=staging/images.txt
 
-sudo mkdir -p /run/ctrd-host staging/ctrd-root
-sudo work/bin/containerd --root "$PWD/staging/ctrd-root" \
+mkdir -p /run/ctrd-host staging/ctrd-root
+work/bin/containerd --root "$PWD/staging/ctrd-root" \
   --state /run/ctrd-host --address "$SOCK" > /tmp/ctrd-host.log 2>&1 &
 CTRD_PID=$!
 
-until sudo work/bin/ctr -a "$SOCK" version >/dev/null 2>&1; do
+until work/bin/ctr -a "$SOCK" version >/dev/null 2>&1; do
   kill -0 "$CTRD_PID" 2>/dev/null || { cat /tmp/ctrd-host.log >&2; exit 1; }
   sleep 1
 done
@@ -501,14 +521,15 @@ while read -r ref || [ -n "$ref" ]; do
   ref=$(echo "$ref" | tr -d '[:space:]')
   [ -n "$ref" ] || continue
 
-  sudo work/bin/ctr -a "$SOCK" -n k8s.io images pull \
+  work/bin/ctr -a "$SOCK" -n k8s.io images pull \
     --snapshotter overlayfs --platform "$PLATFORM" "$ref"
-  sudo work/bin/ctr -a "$SOCK" -n k8s.io images label \
+  work/bin/ctr -a "$SOCK" -n k8s.io images label \
     "$ref" io.cri-containerd.pinned=pinned
 done < "$IMAGE_LIST"
 
-sudo kill "$CTRD_PID"
-while kill -0 "$CTRD_PID" 2>/dev/null; do sleep 1; done
+kill "$CTRD_PID"
+wait "$CTRD_PID" 2>/dev/null || true
+EOF
 ```
 
 Tar the result, preserving ownership and extended attributes:
