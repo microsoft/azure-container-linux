@@ -272,8 +272,9 @@ IC expands the input to raw in the build directory regardless of the input
 format, so size the build mount for the image's full virtual size (~31 GB for
 ACL) rather than for the compressed file on disk.
 
-The `ctr images ls` output from inside the chroot appears in IC's log at
-`--log-level debug`, which is a useful early check that the pulls succeeded.
+The cached container images from `ctr images ls` (run inside the chroot) are
+listed in IC's `--log-level debug` output, which is a useful early check that
+the pulls succeeded.
 
 ### Known issues and workarounds
 
