@@ -76,6 +76,17 @@ A Linux host with:
 
 ## 1. Write the preload script
 
+The list of images to preload lives in its own file, one reference per line, so
+it can be edited without touching the script.
+
+`staging/images.txt`:
+
+```text
+# One image reference per line. Blank lines and # comments are ignored.
+mcr.microsoft.com/oss/v2/kubernetes/pause:v3.10
+mcr.microsoft.com/azurelinux/base/core:3.0
+```
+
 `staging/preload.sh`:
 
 ```sh
@@ -86,7 +97,10 @@ SYSEXT=/usr/share/distro/sysext/containerd.raw
 SX=/mnt/sx
 SOCK=/run/ctrd/c.sock
 PLATFORM=linux/amd64          # linux/arm64 for the Arm64 ACL SKU
-IMAGES="mcr.microsoft.com/oss/v2/kubernetes/pause:v3.10 mcr.microsoft.com/azurelinux/base/core:3.0"
+
+# IC bind-mounts the config file's parent directory at /_imageconfigs while
+# scripts run, so the image list is read from there rather than baked in.
+IMAGE_LIST=/_imageconfigs/images.txt
 
 # /etc is created empty by the Image Customizer, and the CA trust store is only
 # populated on first boot. The paths under /etc/pki are Fedora-style symlinks
@@ -120,12 +134,18 @@ until "$SX/usr/bin/ctr" -a "$SOCK" version >/dev/null 2>&1; do
   sleep 1
 done
 
-for ref in $IMAGES; do
+# Strip comments and blank lines. The final read returns non-zero if the file
+# has no trailing newline, so guard the loop with a `|| [ -n "$ref" ]`.
+while read -r ref || [ -n "$ref" ]; do
+  ref=${ref%%#*}
+  ref=$(echo "$ref" | tr -d '[:space:]')
+  [ -n "$ref" ] || continue
+
   "$SX/usr/bin/ctr" -a "$SOCK" -n k8s.io images pull \
     --snapshotter overlayfs --platform "$PLATFORM" "$ref"
   "$SX/usr/bin/ctr" -a "$SOCK" -n k8s.io images label \
     "$ref" io.cri-containerd.pinned=pinned
-done
+done < "$IMAGE_LIST"
 
 "$SX/usr/bin/ctr" -a "$SOCK" -n k8s.io images ls
 
@@ -160,6 +180,9 @@ chmod 700 /var/lib/containerd
 
 Notes:
 
+- `images.txt` sits next to `config.yaml`; IC bind-mounts that directory at
+  `/_imageconfigs` inside the chroot for the duration of the script, so nothing
+  needs to be copied into the image or cleaned up afterwards.
 - Images must be pulled into the `k8s.io` namespace, which is what the CRI
   plugin uses.
 - `ctr` 2.x unpacks the snapshot as part of `pull`; there is no separate
@@ -460,7 +483,7 @@ same pull and label sequence as the in-chroot script:
 ```sh
 SOCK=/run/ctrd-host/c.sock
 PLATFORM=linux/amd64
-IMAGES="mcr.microsoft.com/oss/v2/kubernetes/pause:v3.10 mcr.microsoft.com/azurelinux/base/core:3.0"
+IMAGE_LIST=staging/images.txt
 
 sudo mkdir -p /run/ctrd-host staging/ctrd-root
 sudo work/bin/containerd --root "$PWD/staging/ctrd-root" \
@@ -472,12 +495,16 @@ until sudo work/bin/ctr -a "$SOCK" version >/dev/null 2>&1; do
   sleep 1
 done
 
-for ref in $IMAGES; do
+while read -r ref || [ -n "$ref" ]; do
+  ref=${ref%%#*}
+  ref=$(echo "$ref" | tr -d '[:space:]')
+  [ -n "$ref" ] || continue
+
   sudo work/bin/ctr -a "$SOCK" -n k8s.io images pull \
     --snapshotter overlayfs --platform "$PLATFORM" "$ref"
   sudo work/bin/ctr -a "$SOCK" -n k8s.io images label \
     "$ref" io.cri-containerd.pinned=pinned
-done
+done < "$IMAGE_LIST"
 
 sudo kill "$CTRD_PID"
 while kill -0 "$CTRD_PID" 2>/dev/null; do sleep 1; done
