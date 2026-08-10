@@ -123,6 +123,10 @@ OUT=/var/tmp/critest-out
 RESULTS_JSON="${CRITEST_RESULTS_JSON:-/var/tmp/critest-results.json}"
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# How many times a variant may be re-run when, and only when, it trips the
+# known-transient loopback CNI failure described at the retry loop below.
+CRITEST_MAX_ATTEMPTS="${CRITEST_MAX_ATTEMPTS:-3}"
+
 command -v critest >/dev/null 2>&1 || { echo "critest is not installed" >&2; exit 1; }
 systemctl is-active --quiet containerd || { echo "containerd is not active" >&2; exit 1; }
 
@@ -446,19 +450,44 @@ PARAMS_EOF
     # summary, so tailing the output discards exactly the lines that explain
     # what went wrong. Show a tail when it passes, the full log when it does not.
     variant_log="${OUT}/${label}.critest.log"
-    timeout "$BUDGET" critest -benchmark \
-        -runtime-endpoint "$ENDPOINT" \
-        -image-endpoint "$ENDPOINT" \
-        "${images_arg[@]}" \
-        "${skip_arg[@]}" \
-        -benchmarking-params-file /var/tmp/critest-params.yaml \
-        -benchmarking-output-dir "${OUT}/${label}" >"$variant_log" 2>&1
-    rc=$?
+    # The loopback CNI plugin intermittently fails sandbox setup with EINTR,
+    # surfacing as `plugin type="loopback" failed (add): interrupted system
+    # call`. It is a netlink syscall interrupted by the Go runtime's async
+    # preemption signal, not a property of the image under test: neighbouring
+    # pods in the same critest run set up their networks fine. Failing the
+    # whole matrix on it throws away an otherwise good measurement, so retry
+    # that one signature a bounded number of times. Every other failure is
+    # still fatal on its first occurrence.
+    attempt=1
+    while :; do
+        timeout "$BUDGET" critest -benchmark \
+            -runtime-endpoint "$ENDPOINT" \
+            -image-endpoint "$ENDPOINT" \
+            "${images_arg[@]}" \
+            "${skip_arg[@]}" \
+            -benchmarking-params-file /var/tmp/critest-params.yaml \
+            -benchmarking-output-dir "${OUT}/${label}" >"$variant_log" 2>&1
+        rc=$?
+        [ "$rc" -eq 0 ] && break
+        grep -q 'interrupted system call' "$variant_log" || break
+        [ "$attempt" -ge "$CRITEST_MAX_ATTEMPTS" ] && break
+        echo "--- critest hit the loopback EINTR flake for ${label} (attempt ${attempt}/${CRITEST_MAX_ATTEMPTS}); retrying"
+        # A retry has to start as cold as the first attempt did. The failed run
+        # leaves its pulled image and committed snapshots behind, so without a
+        # purge the retry would measure the warm path and report a cold pull
+        # that never happened. Its partial datapoint files have to go too, or
+        # the summarizer below averages them in with the retry's.
+        purge_rung "$image"
+        rm -rf "${OUT:?}/${label}"
+        mkdir -p "${OUT}/${label}"
+        attempt=$((attempt + 1))
+    done
     if [ "$rc" -ne 0 ]; then
         CRITEST_RC=$rc
-        echo "--- critest FAILED for ${label} (exit ${rc}); full output follows:"
+        echo "--- critest FAILED for ${label} (exit ${rc}) after ${attempt} attempt(s); full output follows:"
         cat "$variant_log"
     else
+        [ "$attempt" -gt 1 ] && echo "--- critest passed for ${label} on attempt ${attempt}/${CRITEST_MAX_ATTEMPTS}"
         tail -15 "$variant_log"
     fi
 
