@@ -19,6 +19,22 @@ set -uo pipefail
 
 source "${SCRIPT_DIR}/acl/validate/validate_common.sh"
 
+# validate_common.sh sets `-euo pipefail`, so sourcing it silently turns on the
+# errexit this script deliberately left off two lines above. That matters here
+# more than anywhere else: every node probe below is a `$(ssh_cmd ... | tr)`
+# pipeline, and with errexit and pipefail both on, one transient SSH failure
+# kills the script mid-probe with no message at all -- not even from the guards
+# written to explain exactly that situation, because they never get to run.
+#
+# Build 1179949 died this way: 10.7 seconds of total silence between "SSH
+# connection established!" and the harness reporting a failed host script, with
+# nothing on stdout or stderr to say which probe failed or why.
+#
+# This script handles its own failures explicitly (see the guards below), so
+# restore the intended behaviour rather than removing the guards' reason to
+# exist.
+set +e
+
 # Each sample costs a full reboot plus SSH reconnect, so this trades wall clock
 # for confidence directly. Five is enough to see a p50 move without doubling the
 # stage runtime.
@@ -84,8 +100,16 @@ main() {
 
     # Node identity is read once, from the VM, for the same reason the critest
     # harness reads it: a number is only comparable if you know what produced it.
+    #
+    # Each probe records its SSH exit status. The `2>/dev/null` below is there to
+    # keep SSH's banner noise out of the values, but it also discards the reason
+    # a probe came back empty, and an empty value is exactly what the guards
+    # further down refuse to publish on. Keeping the status costs nothing and is
+    # the difference between "the IPE probe was blank" and "SSH exited 255".
     NODE_IMAGE=$(ssh_cmd '. /etc/os-release 2>/dev/null; echo "${IMAGE_ID:-${ID:-unknown}} ${IMAGE_VERSION:-${VERSION_ID:-}}"' 2>/dev/null | tr -d '\r')
+    local rc_image=$?
     NODE_KERNEL=$(ssh_cmd 'uname -r' 2>/dev/null | tr -d '\r')
+    local rc_kernel=$?
     NODE_SELINUX=$(ssh_cmd 'getenforce 2>/dev/null || echo unknown' 2>/dev/null | tr -d '\r')
     NODE_CONTAINERD=$(ssh_cmd 'containerd --version 2>/dev/null | awk "{print \$3}"' 2>/dev/null | tr -d '\r')
 
@@ -114,10 +138,12 @@ main() {
         else
             echo "off"
         fi' 2>/dev/null | tr -d '\r')
+    local rc_ipe=$?
     # The 90-acl-profile.conf drop-in ships only in the containerd2-erofs
     # subpackage, so its presence is exactly the EROFS axis -- and unlike a
     # snapshotter probe it needs no image pull, which this suite never does.
     NODE_EROFS=$(ssh_cmd 'if [ -e /usr/lib/systemd/system/containerd.service.d/90-acl-profile.conf ]; then echo on; else echo off; fi' 2>/dev/null | tr -d '\r')
+    local rc_erofs=$?
 
     # "off" is a legitimate arm; blank is not. A blank value means the probe
     # itself failed, and an unlabelled boot number is worse than no number --
@@ -125,6 +151,8 @@ main() {
     if [[ -z "${NODE_IPE}" || -z "${NODE_EROFS}" ]]; then
         error "could not determine the IPE/EROFS matrix cell for this node" \
               "(ipe='${NODE_IPE}' erofs='${NODE_EROFS}')"
+        error "probe ssh exit status: image=${rc_image} kernel=${rc_kernel}" \
+              "ipe=${rc_ipe} erofs=${rc_erofs} (255 means SSH itself failed)"
         error "refusing to publish boot numbers that cannot be attributed to an arm"
         exit 1
     fi
