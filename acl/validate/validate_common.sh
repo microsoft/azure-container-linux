@@ -177,6 +177,121 @@ is_azure_linux_3() {
 
 # ── SSH / connect helpers ──────────────────────────────────────────
 
+# Every /24 this agent has egressed from, and the RG holding the NSG to edit.
+#
+# These live here rather than in validate_azure.sh because host-side test
+# scripts (run-boot-benchmark.sh and friends) run in their own process and
+# source only this module. Keeping the rule here is what lets them re-assert
+# it; a copy in the azure module would simply be undefined for them, and the
+# re-assert would silently do nothing on the one path that needs it most.
+ACL_SSH_ALLOW_CIDRS=()
+ACL_SSH_NSG_RG=""
+
+# Resolve this agent's current public egress address.
+_current_egress_ip() {
+    local svc egress_ip=""
+    for svc in "https://ifconfig.me/ip" "https://api.ipify.org" "https://icanhazip.com"; do
+        egress_ip=$(curl -fsS --max-time 10 "$svc" 2>/dev/null | tr -d '[:space:]')
+        if [[ "$egress_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+            printf '%s' "$egress_ip"
+            return 0
+        fi
+    done
+    return 1
+}
+
+_ssh_allow_cidr_known() {
+    local candidate="$1" known
+    for known in ${ACL_SSH_ALLOW_CIDRS[@]+"${ACL_SSH_ALLOW_CIDRS[@]}"}; do
+        if [[ "$known" == "$candidate" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Idempotent, and safe to call repeatedly mid-suite.
+#
+# Creating the rule once at provisioning time is not enough. The egress NAT
+# pool rotates across /24 boundaries, not just within one -- a run that
+# provisioned from 20.112.84.82 can be reconnecting from a different /24 an
+# hour later, at which point the original allow no longer matches and
+# NRMS-Rule-106 takes over again. That is exactly how build 1179334's boot
+# benchmark lost SSH despite the rule having been created successfully.
+#
+# So accumulate: every CIDR we have ever egressed from stays in the rule. The
+# set is tiny in practice and each entry was genuinely ours.
+reassert_ssh_nsg_allow() {
+    [[ "${VM_TYPE:-}" == "azure" ]] || return 0
+
+    # ACL_SSH_NSG_RG is set at provisioning time, but host-side scripts run in a
+    # fresh process and only have what .vm-state.env gave them.
+    local vm_rg_name="${1:-${ACL_SSH_NSG_RG:-${VM_RG:-}}}"
+    [[ -z "$vm_rg_name" ]] && return 0
+
+    local nsg_name="${VM_NAME}NSG"
+    if ! az network nsg show -g "$vm_rg_name" -n "$nsg_name" &>/dev/null; then
+        warn "NSG ${nsg_name} not found — skipping the NRMS SSH allow rule"
+        return 0
+    fi
+
+    local egress_ip
+    if ! egress_ip=$(_current_egress_ip); then
+        warn "Could not determine this agent's egress IP; skipping the NRMS SSH allow rule."
+        warn "If SSH dies partway through a long suite, NRMS-Rule-106 is the first thing to check."
+        return 0
+    fi
+
+    local egress_cidr="${egress_ip%.*}.0/24"
+
+    # A host-side script starts with an empty set, but the rule itself may
+    # already carry CIDRs written by the provisioning process. Seed from the
+    # live rule first: without this, an update would *replace* the earlier
+    # prefixes rather than widen them, quietly un-allowing a range we still
+    # rotate back into.
+    local action=create existing_prefixes="" prefix
+    if existing_prefixes=$(az network nsg rule show -g "$vm_rg_name" \
+            --nsg-name "$nsg_name" -n "acl-allow-ssh-agent" \
+            --query "sourceAddressPrefixes" -o tsv 2>/dev/null); then
+        action=update
+        for prefix in $(printf '%s' "$existing_prefixes" | tr '\t,' '\n\n'); do
+            if [[ -n "$prefix" ]] && ! _ssh_allow_cidr_known "$prefix"; then
+                ACL_SSH_ALLOW_CIDRS+=("$prefix")
+            fi
+        done
+    fi
+
+    if _ssh_allow_cidr_known "$egress_cidr"; then
+        return 0
+    fi
+    ACL_SSH_ALLOW_CIDRS+=("$egress_cidr")
+
+    if (( ${#ACL_SSH_ALLOW_CIDRS[@]} > 1 )); then
+        info "Egress moved to ${egress_ip}; widening SSH allow to ${#ACL_SSH_ALLOW_CIDRS[@]} CIDRs (${ACL_SSH_ALLOW_CIDRS[*]})..."
+    else
+        info "Adding SSH allow for ${egress_cidr} (egress ${egress_ip}) above NRMS deny rules (priority 100)..."
+    fi
+
+    # Best-effort: a run whose NSG cannot be edited should still get as far as it
+    # can and fail on its own terms, rather than here.
+    if az network nsg rule "$action" \
+            --resource-group "$vm_rg_name" \
+            --nsg-name "$nsg_name" \
+            --name "acl-allow-ssh-agent" \
+            --priority 100 \
+            --direction Inbound \
+            --access Allow \
+            --protocol Tcp \
+            --source-address-prefixes ${ACL_SSH_ALLOW_CIDRS[@]+"${ACL_SSH_ALLOW_CIDRS[@]}"} \
+            --destination-port-ranges 22 \
+            --description "Outranks NRMS-Rule-106 (deny tcp/22 from Internet) so long-running suites keep SSH." \
+            --output none 2>/dev/null; then
+        info "✓ SSH allow rule ${action}d for ${ACL_SSH_ALLOW_CIDRS[*]}"
+    else
+        warn "Could not ${action} the SSH allow rule — continuing without it"
+    fi
+}
+
 wait_for_ssh() {
     local ip="$1"
     local timeout="$2"
@@ -185,10 +300,25 @@ wait_for_ssh() {
     info "Waiting for SSH to become available on $ip (timeout: ${timeout}s)..."
     local start_time=$(date +%s)
     local end_time=$((start_time + timeout))
+    local last_reassert=0
     while [[ $(date +%s) -lt $end_time ]]; do
         if ssh $ssh_opts "${VM_SSH_USER}@${ip}" "echo 'SSH ready'" &>/dev/null; then
             info "SSH connection established!"
             return 0
+        fi
+        # A VM that is merely still booting comes back within the first several
+        # seconds. Past that, the likelier cause is the NSG: NRMS re-hardened it,
+        # or this agent's SNAT egress rotated out of the /24 we allowed at
+        # provisioning time. Re-assert the allow rule with the current address
+        # rather than burning the whole timeout against a closed port.
+        #
+        # No-ops on qemu, and cheap on azure: it only calls into az when the
+        # egress /24 is one we have not already allowed.
+        local waited=$(( $(date +%s) - start_time ))
+        local since_reassert=$(( $(date +%s) - last_reassert ))
+        if (( waited >= 45 && since_reassert >= 60 )); then
+            last_reassert=$(date +%s)
+            reassert_ssh_nsg_allow || true
         fi
         sleep 5
     done

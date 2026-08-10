@@ -464,50 +464,19 @@ create_gallery_image_version() {
 # only until the next rotation, which is a worse failure than none -- it would
 # work intermittently and look like a flaky network. A /24 is still far narrower
 # than opening 22 to the internet.
+#
+# A single /24 captured at provisioning time is still not enough, because the
+# pool also rotates *across* /24s over the life of a long suite. The rule is
+# therefore re-asserted from wait_for_ssh and accumulates every CIDR we have
+# egressed from -- see reassert_ssh_nsg_allow in validate_common.sh.
+
+# Provisioning-time entry point. The rule itself is maintained in
+# validate_common.sh so that host-side test scripts -- which source only that
+# module, in their own process -- can re-assert it as the egress rotates.
 _allow_ssh_above_nrms() {
     local vm_rg_name="$1"
-    local nsg_name="${VM_NAME}NSG"
-
-    if ! az network nsg show -g "$vm_rg_name" -n "$nsg_name" &>/dev/null; then
-        warn "NSG ${nsg_name} not found — skipping the NRMS SSH allow rule"
-        return 0
-    fi
-
-    local egress_ip=""
-    local svc
-    for svc in "https://ifconfig.me/ip" "https://api.ipify.org" "https://icanhazip.com"; do
-        egress_ip=$(curl -fsS --max-time 10 "$svc" 2>/dev/null | tr -d '[:space:]')
-        [[ "$egress_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && break
-        egress_ip=""
-    done
-
-    if [[ -z "$egress_ip" ]]; then
-        warn "Could not determine this agent's egress IP; skipping the NRMS SSH allow rule."
-        warn "If SSH dies partway through a long suite, NRMS-Rule-106 is the first thing to check."
-        return 0
-    fi
-
-    local egress_cidr="${egress_ip%.*}.0/24"
-
-    info "Adding SSH allow for ${egress_cidr} (egress ${egress_ip}) above NRMS deny rules (priority 100)..."
-    # Best-effort: a run whose NSG cannot be edited should still get as far as it
-    # can and fail on its own terms, rather than here.
-    if az network nsg rule create \
-            --resource-group "$vm_rg_name" \
-            --nsg-name "$nsg_name" \
-            --name "acl-allow-ssh-agent" \
-            --priority 100 \
-            --direction Inbound \
-            --access Allow \
-            --protocol Tcp \
-            --source-address-prefixes "$egress_cidr" \
-            --destination-port-ranges 22 \
-            --description "Outranks NRMS-Rule-106 (deny tcp/22 from Internet) so long-running suites keep SSH." \
-            --output none 2>/dev/null; then
-        info "✓ SSH allow rule created for ${egress_cidr}"
-    else
-        warn "Could not create the SSH allow rule — continuing without it"
-    fi
+    ACL_SSH_NSG_RG="$vm_rg_name"
+    reassert_ssh_nsg_allow "$vm_rg_name"
 }
 
 # Attempt a single az vm create.  Returns 0 on success or 1 on failure.
