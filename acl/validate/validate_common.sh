@@ -544,6 +544,22 @@ run_scripts_on_vm() {
     ssh_opts+=" -o ServerAliveInterval=15 -o ServerAliveCountMax=8"
     ssh_opts+=" -i $VM_SSH_KEY"
 
+    # Test knobs set on the agent do not otherwise reach the guest: the script is
+    # copied over and run through sudo, which builds a fresh environment. Without
+    # this, every CRITEST_* override is silently ignored and the run quietly
+    # measures the defaults instead of what it was asked to measure.
+    #
+    # An explicit prefix whitelist rather than the whole environment, because on a
+    # pipeline agent that also holds service-connection secrets, and this ships
+    # them to a throwaway VM. printf %q quotes each value for the remote bash, so
+    # a value containing spaces (an image set is a space-separated list) survives.
+    local remote_env="" _v
+    for _v in $(compgen -v 2>/dev/null | grep -E '^(CRITEST_|ACL_PERF_)' | sort -u); do
+        [[ -n "${!_v+x}" ]] || continue
+        remote_env+="$(printf '%s=%q ' "$_v" "${!_v}")"
+    done
+    [[ -n "$remote_env" ]] && remote_env="env ${remote_env}"
+
     for script in "${scripts[@]}"; do
         if [[ -f "$script" ]]; then
             info "Running script: $script"
@@ -556,7 +572,7 @@ run_scripts_on_vm() {
                 continue
             fi
             local rc=0
-            ssh $ssh_opts "${VM_SSH_USER}@${ip}" "chmod +x ${remote_script} && sudo ${remote_script}" || rc=$?
+            ssh $ssh_opts "${VM_SSH_USER}@${ip}" "chmod +x ${remote_script} && sudo ${remote_env}${remote_script}" || rc=$?
             if [[ $rc -ne 0 ]]; then
                 error "Script failed: $script (exit ${rc})"
                 # 255 is ssh's own code for a connection that failed or was
