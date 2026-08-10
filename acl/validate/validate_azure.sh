@@ -371,6 +371,37 @@ create_gallery_image_version() {
             target_regions_json+="{\"name\": \"${region}\", \"regionalReplicaCount\": 1, \"storageAccountType\": \"Standard_LRS\"}"
         done
 
+        # db carries the UKI signing cert (what Secure Boot checks at boot) and,
+        # separately, the dm-verity root-hash trust anchor.
+        #
+        # The anchor has to arrive this way. The kernel verifies a layer's PKCS#7
+        # root-hash signature against .builtin_trusted_keys, .secondary_trusted_keys
+        # and -- because AzureLinux sets DM_VERITY_VERIFY_ROOTHASH_SIG_PLATFORM_KEYRING
+        # -- .platform, which LOAD_UEFI_KEYS populates from db at boot. Nothing is
+        # baked in: CONFIG_SYSTEM_TRUSTED_KEYS is empty, so without a db entry the
+        # kernel has no anchor for any signed layer. Shipping the CA inside the image
+        # would prove nothing anyway; the image is the artifact being verified.
+        #
+        # Two entries rather than one with two values, matching the shape
+        # mariner-aks-pipelines/scripts/sig-security-profile.bicep already uses for
+        # the AKS images.
+        local db_entries="{\"type\": \"x509\", \"value\": [\"${cert_b64}\"]}"
+        local osguard_ca="${ACL_OSGUARD_CA_PEM:-$(dirname "${BASH_SOURCE[0]}")/osguard-signer-ca.pem}"
+        if [[ "${INJECT_OSGUARD_CA:-true}" != "true" ]]; then
+            info "OS Guard CA injection disabled; signed dm-verity layers will fail the table load"
+        elif [[ -f "${osguard_ca}" ]]; then
+            local osguard_b64
+            osguard_b64=$(grep -v '^-----' "${osguard_ca}" | tr -d '\n\r')
+            if [[ -z "${osguard_b64}" ]]; then
+                error "OS Guard CA payload is empty — check ${osguard_ca}"
+                exit 1
+            fi
+            db_entries+=", {\"type\": \"x509\", \"value\": [\"${osguard_b64}\"]}"
+            info "Enrolling OS Guard CA in UEFI db as the dm-verity root-hash anchor: ${osguard_ca}"
+        else
+            warn "OS Guard CA not found at ${osguard_ca}; dm-verity signed layers will fail with EKEYREJECTED"
+        fi
+
         az rest --method PUT \
             --url "${version_resource_id}?api-version=2023-07-03" \
             --body "{
@@ -392,7 +423,7 @@ create_gallery_image_version() {
                   \"uefiSettings\": {
                     \"signatureTemplateNames\": [\"MicrosoftUefiCertificateAuthorityTemplate\"],
                     \"additionalSignatures\": {
-                      \"db\": [{\"type\": \"x509\", \"value\": [\"${cert_b64}\"]}]
+                      \"db\": [${db_entries}]
                     }
                   }
                 }
