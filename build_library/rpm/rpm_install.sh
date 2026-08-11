@@ -519,8 +519,20 @@ rpm_query_packages() {
         return 0
     fi
 
-    # Use --dbpath only and simple -qa (default format is NVRA which is what we want)
-    sudo rpm --dbpath="${dbpath}" -qa 2>/dev/null | sort
+    # "rpm -qa" output contains gpg-pubkey-<hash>-<hash> entries that are not real packages, so filter them out.
+    #
+    # All packages should have an ARCH field, since even packages that aren't architecture-specific have ARCH=noarch, so
+    # the "%|ARCH?...|" filter never excludes packages. This filter, however, does not guarantee removal of all
+    # non-packages, since an entry may theoretically have ARCH set but still not be a package.
+    #
+    # We additionally use the "%{NEVRA}" format for two reasons:
+    #     1. to provide a stable API for readers: "rpm -qa" alone does not guarantee every line to be a NEVRA,
+    #        e.g. gpg-pubkey-<hash>-<hash>.
+    #     2. to include the epoch: "rpm -qa" returns NVRAs, not NEVRAs, for packages, and the epoch is sometimes needed
+    #        to completely identify a package, e.g. during security scanning, where the epoch is used to map packages to
+    #        vulnerabilities.
+    sudo rpm --dbpath="${dbpath}" -qa --qf '%|ARCH?{%{NEVRA}\n}:{}|' \
+        2>/dev/null | sort
 }
 
 # Get RPM package metadata
