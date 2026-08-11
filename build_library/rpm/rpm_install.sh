@@ -768,7 +768,7 @@ rpm_install_package_using_portage_name() {
             info "Backing up RPM package list to ${backup_file}"
             # Use sudo to remove any existing file (may be owned by root from previous run)
             sudo rm -f "${backup_file}" 2>/dev/null || true
-            # Query packages - use default format (no second argument to avoid format issues)
+            # Query packages
             rpm_query_packages "${root_fs_dir}" | sudo tee "${backup_file}" > /dev/null 2>/dev/null || true
             # Make it readable and writable by the current user for cleanup
             sudo chown "$(id -u):$(id -g)" "${backup_file}" 2>/dev/null || true
