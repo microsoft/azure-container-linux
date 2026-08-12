@@ -137,13 +137,20 @@ systemctl is-active --quiet containerd || { echo "containerd is not active" >&2;
 # Stage the upstream plugins ourselves, pinned and checksummed. /usr is
 # read-only (dm-verity + sysext) so this has to land in /opt, which is writable.
 CNI_BIN_DIR="${ACL_CNI_BIN_DIR:-/opt/cni/bin}"
-CNI_VERSION="${ACL_CNI_VERSION:-v1.6.2}"
+# v1.7.1 is the floor, not a preference. Anything older links
+# vishvananda/netlink v1.3.0, which reports a dump the kernel flagged with
+# NLM_F_DUMP_INTR as a plain EINTR -- and that is the "loopback failed (add):
+# interrupted system call" this suite kept dying on. See the retry loop below
+# for the full mechanism. v1.7.1 was the first release to pick up netlink
+# v1.3.1, where that condition became its own error type; v1.9.1 carries the
+# same netlink and is simply current.
+CNI_VERSION="${ACL_CNI_VERSION:-v1.9.1}"
 CNI_PLUGINS="bridge host-local loopback portmap"
 CNI_AVAILABLE=1
 
 case "$(uname -m)" in
-    x86_64)  CNI_ARCH=amd64; CNI_SHA256=b8e811578fb66023f90d2e238d80cec3bdfca4b44049af74c374d4fae0f9c090 ;;
-    aarch64) CNI_ARCH=arm64; CNI_SHA256=01e0e22acc7f7004e4588c1fe1871cc86d7ab562cd858e1761c4641d89ebfaa4 ;;
+    x86_64)  CNI_ARCH=amd64; CNI_SHA256=b98f74a0f8522f0a83867178729c1aa70f2158f90c45a2ca8fa791db1c76b303 ;;
+    aarch64) CNI_ARCH=arm64; CNI_SHA256=56171987d3947707c3563db2f4001bccaf50fd63468611b9f3cbecb1375ee7ec ;;
     *)       CNI_ARCH=""; CNI_SHA256="" ;;
 esac
 
@@ -450,13 +457,24 @@ PARAMS_EOF
     # summary, so tailing the output discards exactly the lines that explain
     # what went wrong. Show a tail when it passes, the full log when it does not.
     variant_log="${OUT}/${label}.critest.log"
-    # The loopback CNI plugin intermittently fails sandbox setup with EINTR,
-    # surfacing as `plugin type="loopback" failed (add): interrupted system
-    # call`. It is a netlink syscall interrupted by the Go runtime's async
-    # preemption signal, not a property of the image under test: neighbouring
-    # pods in the same critest run set up their networks fine. Failing the
-    # whole matrix on it throws away an otherwise good measurement, so retry
-    # that one signature a bounded number of times. Every other failure is
+    # The loopback CNI plugin can fail sandbox setup with `plugin
+    # type="loopback" failed (add): interrupted system call`. Despite the
+    # wording this is not a signal interrupting a syscall: the kernel sets
+    # NLM_F_DUMP_INTR on a netlink dump whose underlying table changed while
+    # it was being walked, and vishvananda/netlink up to v1.3.0 surfaced that
+    # flag as a bare EINTR, which the plugin treats as fatal. A benchmark that
+    # creates and tears down sandboxes back to back is close to a worst case
+    # for it -- one sandbox's veth teardown perturbs the dump another sandbox's
+    # setup is walking -- which is why it lands here far more often than in
+    # ordinary use, and why it is not a property of the image under test.
+    #
+    # Pinning CNI >= v1.7.1 above (netlink v1.3.1, where the condition became
+    # its own error type) is the actual fix. This retry stays as a backstop,
+    # but it was never a sufficient one: at the rate the old pin failed, three
+    # attempts still lost roughly a third of builds outright. Builds 1181555
+    # (failed 3/3) and 1181557 (failed 2, passed on the third) were the same
+    # code on the same day, differing only in luck -- which is what ruled out
+    # the IPE toggle they appeared to correlate with. Every other failure is
     # still fatal on its first occurrence.
     attempt=1
     while :; do
@@ -471,7 +489,7 @@ PARAMS_EOF
         [ "$rc" -eq 0 ] && break
         grep -q 'interrupted system call' "$variant_log" || break
         [ "$attempt" -ge "$CRITEST_MAX_ATTEMPTS" ] && break
-        echo "--- critest hit the loopback EINTR flake for ${label} (attempt ${attempt}/${CRITEST_MAX_ATTEMPTS}); retrying"
+        echo "--- critest hit the loopback netlink-dump EINTR for ${label} (attempt ${attempt}/${CRITEST_MAX_ATTEMPTS}); retrying"
         # A retry has to start as cold as the first attempt did. The failed run
         # leaves its pulled image and committed snapshots behind, so without a
         # purge the retry would measure the warm path and report a cold pull
