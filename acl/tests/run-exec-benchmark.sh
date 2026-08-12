@@ -438,11 +438,52 @@ if binary and version and spawn_ok:
     devices['verityBacked'] = verity_ok
 
 if binary and version and spawn_ok and verity_ok is not True:
+    # Not a reason to measure nothing. The policy ACL ships is
+    #
+    #   DEFAULT op=EXECUTE                  action=DENY
+    #   op=EXECUTE boot_verified=TRUE       action=ALLOW
+    #   op=EXECUTE dmverity_signature=TRUE  action=ALLOW
+    #
+    # so a binary that is on no verity device matches neither ALLOW rule,
+    # falls through to DEFAULT DENY and -- under enforce=0 -- runs anyway
+    # while emitting an AUDIT_IPE_ACCESS record. Every exec pays for an audit
+    # record. That is not a degraded measurement, it is IPE's worst case, and
+    # it is the whole cost the feature is suspected of imposing.
+    #
+    # It is also the only thing that can be measured on an E0 arm, where
+    # there is no dm-verity anywhere on the node by construction. Refusing to
+    # produce rows here left the erofs-off arms with no exec data at all --
+    # exactly the arms whose numbers the IPE comparison needs.
+    #
+    # What is genuinely lost is the *within-run* delta: with one binary there
+    # is no audit-free counterpart on the same machine, so machine-to-machine
+    # variation no longer cancels. The row is therefore named for what it
+    # actually is, and the comparison moves across runs (I1E0 against I0E0)
+    # rather than within one.
+    label = 'spawn_audited' if ipe.get('present') else 'spawn_no_ipe'
     notes.append('the stress-ng being measured is not on a dm-verity device '
-                 '(backing store: %s), so the "verity" arm would not actually '
-                 'be verified and the comparison would report a zero delta for '
-                 'the wrong reason; no spawn rows were produced'
-                 % (devices.get('verity') or 'unknown'))
+                 '(backing store: %s), so there is no audit-free counterpart '
+                 'on this machine and no within-run delta; measuring the '
+                 'single available path instead and reporting it as %s'
+                 % (devices.get('verity') or 'unknown', label))
+    if ipe.get('present') and ipe.get('enforce') != '1':
+        notes.append('every exec measured here falls through to DEFAULT DENY '
+                     'and is audited, so this row is IPE\'s worst case; compare '
+                     'it against the same row from an IPE-off build to get the '
+                     'audit cost')
+    cursor = journal_cursor()
+    samples, issues = sample(binary, ['--spawn', '1', '--spawn-ops', str(EXEC_OPS)],
+                             EXEC_OPS, REPS)
+    row = summarise('exec', label, samples)
+    if row:
+        metrics.append(row)
+    notes.extend(issues)
+    if ipe.get('present'):
+        audit = audit_delta(journal_since(cursor))
+        if audit['printkSuppressed']:
+            notes.append('printk rate limiting suppressed messages during this '
+                         'run, so the audit record count is a floor rather than '
+                         'a total')
 
 if binary and version and spawn_ok and verity_ok is True:
     samples, issues = sample(binary, ['--spawn', '1', '--spawn-ops', str(EXEC_OPS)],
