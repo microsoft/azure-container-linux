@@ -145,6 +145,39 @@ main() {
     NODE_EROFS=$(ssh_cmd 'if [ -e /usr/lib/systemd/system/containerd.service.d/90-acl-profile.conf ]; then echo on; else echo off; fi' 2>/dev/null | tr -d '\r')
     local rc_erofs=$?
 
+    # Whether the dm-verity trust anchor actually reached the running kernel.
+    # validate_azure.sh enrolls the OS Guard CA into the SIG image version's
+    # UEFI db, and LOAD_UEFI_KEYS is then supposed to import db into .platform
+    # at boot. AzureLinux leaves CONFIG_SYSTEM_TRUSTED_KEYS empty and sets
+    # DM_VERITY_VERIFY_ROOTHASH_SIG_PLATFORM_KEYRING, so .platform is the only
+    # keyring a signed layer's root-hash signature can be checked against.
+    #
+    # Every link in that chain has been assumed rather than measured. It is
+    # worth measuring because a missing anchor does not fail at boot: the layer
+    # signature is only checked when the verity table is loaded, so it surfaces
+    # much later as EKEYREJECTED at container start, which reads like an
+    # unrelated runtime fault. Recording it here attributes it in one line.
+    #
+    # awk rather than `grep -c` on purpose: grep prints 0 and *also* exits 1
+    # when it matches nothing, which is the common case being probed for.
+    NODE_ANCHOR=$(ssh_cmd 'if ! command -v keyctl >/dev/null 2>&1; then
+            echo "unknown (keyctl absent)"
+        elif ! k=$(sudo keyctl list %:.platform 2>/dev/null); then
+            echo "unknown (.platform unreadable)"
+        else
+            n=$(printf "%s\n" "$k" | awk "/OS Guard CA/{c++} END{print c+0}")
+            t=$(printf "%s\n" "$k" | awk "/asymmetric/{c++} END{print c+0}")
+            if [ "$n" -gt 0 ]; then echo "present (${n} of ${t} keys)"
+            else echo "absent (${t} keys in .platform)"; fi
+        fi' 2>/dev/null | tr -d '\r')
+
+    # Verity devices actually active. On an E1 arm with signed layers this is
+    # the difference between "erofs is configured" -- which is all the
+    # 90-acl-profile.conf probe above can tell you -- and "erofs is verifying".
+    NODE_VERITY=$(ssh_cmd 'if command -v dmsetup >/dev/null 2>&1; then
+            sudo dmsetup ls --target verity 2>/dev/null | awk "!/No devices/&&NF{c++} END{print c+0}"
+        else echo unknown; fi' 2>/dev/null | tr -d '\r')
+
     # "off" is a legitimate arm; blank is not. A blank value means the probe
     # itself failed, and an unlabelled boot number is worse than no number --
     # it will sit in a results table looking like data.
@@ -172,6 +205,16 @@ main() {
     info "Kernel:     ${NODE_KERNEL}"
     info "IPE:        ${NODE_IPE}"
     info "EROFS:      ${NODE_EROFS}"
+    info "Anchor:     ${NODE_ANCHOR:-unknown} (OS Guard CA in .platform)"
+    info "Verity dev: ${NODE_VERITY:-unknown}"
+    # Not fatal: "no anchor" is the correct state on an E0 arm, and on an E1 arm
+    # it is a finding to record rather than a reason to throw away good boot
+    # numbers. Warn loudly instead, because the failure it predicts appears far
+    # from here.
+    if [[ "${NODE_EROFS}" == "on" && "${NODE_ANCHOR}" == absent* ]]; then
+        warn "EROFS is on but the OS Guard CA is not in .platform:" \
+             "signed dm-verity layers will fail the table load with EKEYREJECTED"
+    fi
 
     # The boot that is already running is the provisioning boot: it carries
     # first-boot work (cloud-init, disk growth, image specialization) that never
@@ -209,6 +252,8 @@ main() {
     ACL_CONTAINERD="$NODE_CONTAINERD" \
     ACL_IPE="$NODE_IPE" \
     ACL_EROFS="$NODE_EROFS" \
+    ACL_ANCHOR="$NODE_ANCHOR" \
+    ACL_VERITY="$NODE_VERITY" \
     ACL_STARTED_AT="$STARTED_AT" \
     ACL_BOOT_UNITS="$BOOT_UNITS" \
     python3 - "$SAMPLES_RAW" "$RESULTS_JSON" <<'PY'
@@ -328,6 +373,12 @@ node = {
     # active" is a distinct and very easy state to mistake for a working arm.
     'ipe': os.environ.get('ACL_IPE', ''),
     'erofs': os.environ.get('ACL_EROFS', ''),
+    # Whether the dm-verity root-hash anchor and any verified device were
+    # actually observed, as opposed to merely configured. Kept as raw strings
+    # for the same reason as 'ipe': "unknown" and "absent" are different
+    # answers, and collapsing either to a bool loses the one that matters.
+    'verityAnchor': os.environ.get('ACL_ANCHOR', ''),
+    'verityDevices': os.environ.get('ACL_VERITY', ''),
     'matrixCell': 'I{}E{}'.format(
         1 if os.environ.get('ACL_IPE', '').startswith('on') else 0,
         1 if os.environ.get('ACL_EROFS', '') == 'on' else 0),
@@ -368,6 +419,8 @@ for name in sorted(series, key=rank):
 print(f"\n--- Boot time over {len(series.get('Total', []))} reboots "
       f"(node: {node['image'] or 'unknown'}, arm: {node['matrixCell']})")
 print(f"      IPE: {node['ipe']}   EROFS: {node['erofs']}")
+print(f"      dm-verity anchor: {node['verityAnchor'] or 'unknown'}"
+      f"   active verity devices: {node['verityDevices'] or 'unknown'}")
 print(f"      {'phase':<28} {'n':>3} {'min ms':>10} {'med ms':>10} {'max ms':>10}   samples (ms)")
 for row in metrics:
     print(f"      {row['operation']:<28} {row['n']:>3} {row['minMs']:>10} "
