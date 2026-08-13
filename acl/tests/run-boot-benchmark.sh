@@ -379,8 +379,21 @@ node = {
     # answers, and collapsing either to a bool loses the one that matters.
     'verityAnchor': os.environ.get('ACL_ANCHOR', ''),
     'verityDevices': os.environ.get('ACL_VERITY', ''),
+    # The I digit tracks whether IPE has an *active policy*, not whether the
+    # subsystem is present. Deriving it from the probe string starting with
+    # "on" -- which is the obvious reading, and what this did -- labels both
+    # arms I1: a build with enableIpe=false still reports
+    # "on enforce=1 success_audit=0 policies=none", because IPE is compiled in
+    # and merely has nothing loaded. Builds 1181555 (enableIpe=True) and
+    # 1181557 (enableIpe=false) both emitted matrixCell I1E0 for exactly that
+    # reason, so anything keyed on the cell silently merged the two arms it
+    # was supposed to separate.
+    #
+    # With no policy loaded IPE evaluates nothing whatever the enforce flag
+    # says, so "policies=none" is the honest definition of the off arm.
     'matrixCell': 'I{}E{}'.format(
-        1 if os.environ.get('ACL_IPE', '').startswith('on') else 0,
+        1 if (os.environ.get('ACL_IPE', '').startswith('on')
+              and 'policies=none' not in os.environ.get('ACL_IPE', '')) else 0,
         1 if os.environ.get('ACL_EROFS', '') == 'on' else 0),
 }
 
