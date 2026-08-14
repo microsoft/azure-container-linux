@@ -296,8 +296,35 @@ SETUP_EOF
         "${selinux_toggle_module}/acl-selinux-toggle.sh"
     sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-selinux-toggle/acl-selinux-toggle.service" \
         "${selinux_toggle_module}/acl-selinux-toggle.service"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/acl-node-security-profile.sh" \
+        "${selinux_toggle_module}/acl-node-security-profile.sh"
     sudo chmod +x "${selinux_toggle_module}/module-setup.sh"
     sudo chmod +x "${selinux_toggle_module}/acl-selinux-toggle.sh"
+
+    # Optional ACL IPE policy loader. Capable images always carry the loader,
+    # but it leaves the policy inactive unless Azure IMDS requests a mode.
+    case "${ACL_IPE_CAPABLE:-false}" in
+        false)
+            ;;
+        true)
+            info "RPM mode: Creating acl-ipe-load dracut module"
+            local ipe_load_module="${root_fs_dir}/usr/lib/dracut/modules.d/99acl-ipe-load"
+            sudo mkdir -p "${ipe_load_module}"
+            sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-ipe-load/module-setup.sh" \
+                "${ipe_load_module}/module-setup.sh"
+            sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.sh" \
+                "${ipe_load_module}/acl-ipe-load.sh"
+            sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.service" \
+                "${ipe_load_module}/acl-ipe-load.service"
+            sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/acl-node-security-profile.sh" \
+                "${ipe_load_module}/acl-node-security-profile.sh"
+            sudo chmod +x "${ipe_load_module}/module-setup.sh"
+            sudo chmod +x "${ipe_load_module}/acl-ipe-load.sh"
+            ;;
+        *)
+            die "Invalid ACL_IPE_CAPABLE: ${ACL_IPE_CAPABLE}"
+            ;;
+    esac
 
     # NOTE: /etc overlay is handled by bootengine's 99setup-root/initrd-setup-root
     # We need to create the required files BEFORE dracut runs so they get included in initramfs
