@@ -125,6 +125,21 @@ assert_vm_size_family_parsing() {
     printf 'PASS: VM size families preserve modifiers and generations\n'
 }
 
+assert_resource_group_name_generation() {
+    local name
+    VM_RG_PREFIX=test-prefix
+    if ! name=$(get_vm_rg_name); then
+        printf 'FAIL: resource-group name generation failed under pipefail\n' >&2
+        return 1
+    fi
+    if ! [[ "$name" =~ ^test-prefix-[0-9a-f]{8}$ ]]; then
+        printf 'FAIL: invalid generated resource-group name: %s\n' "$name" >&2
+        return 1
+    fi
+
+    printf 'PASS: resource-group name generation is pipefail-safe\n'
+}
+
 assert_timeout_configuration_validation() {
     error() { :; }
 
@@ -161,18 +176,36 @@ assert_failed_vm_boot_diagnostics() {
                 printf 'vm:show\n' >> "${events_file}"
                 return 0
                 ;;
-            "vm boot-diagnostics get-boot-log")
-                printf 'diagnostics:get-log\n' >> "${events_file}"
-                if [[ " $* " != *" -o tsv "* ]]; then
-                    printf 'FAIL: boot diagnostics must request raw TSV output\n' >&2
+            "vm boot-diagnostics get-boot-log-uris")
+                printf 'diagnostics:get-uris\n' >> "${events_file}"
+                if [[ " $* " != *" --query serialConsoleLogBlobUri "* ]]; then
+                    printf 'FAIL: boot diagnostics must request the serial log URI\n' >&2
+                    return 1
+                fi
+                printf 'https://teststorage.blob.core.windows.net/bootdiagnostics-test/serialconsole.log?sig=test-secret\n'
+                return 0
+                ;;
+            "storage blob download")
+                printf 'storage:download\n' >> "${events_file}"
+                if [[ " $* " != *" --blob-url https://teststorage.blob.core.windows.net/bootdiagnostics-test/serialconsole.log?sig=test-secret "* ]]; then
+                    printf 'FAIL: boot diagnostics used the wrong serial log URI\n' >&2
+                    return 1
+                fi
+                local destination=""
+                while [[ $# -gt 0 ]]; do
+                    if [[ "$1" == "--file" ]]; then
+                        destination="$2"
+                        break
+                    fi
+                    shift
+                done
+                if [[ -z "$destination" ]]; then
+                    printf 'FAIL: boot diagnostics download has no destination\n' >&2
                     return 1
                 fi
                 local line
-                for line in $(seq 1 25); do
-                    printf 'warning line %s\n' "$line" >&2
-                done
                 for line in $(seq 1 205); do
-                    printf 'serial line %s\n' "$line"
+                    printf 'serial line %s\n' "$line" >> "$destination"
                 done
                 return 0
                 ;;
@@ -188,7 +221,7 @@ assert_failed_vm_boot_diagnostics() {
         test-rg test-vm test-sku test-region 2>&1)
 
     local expected_events actual_events
-    expected_events=$'vm:show\ndiagnostics:get-log'
+    expected_events=$'vm:show\ndiagnostics:get-uris\nstorage:download'
     actual_events=$(cat "${events_file}")
     if [[ "${actual_events}" != "${expected_events}" ]]; then
         printf 'FAIL: boot diagnostics commands ran out of order\nExpected:\n%s\nActual:\n%s\n' \
@@ -201,10 +234,8 @@ assert_failed_vm_boot_diagnostics() {
         printf 'FAIL: boot diagnostics serial output was not logged\n' >&2
         return 1
     fi
-    if ! grep -qFx '  [az] warning line 25' <<< "$serial_output" || \
-        grep -qFx '  [az] warning line 5' <<< "$serial_output" || \
-        ! grep -qFx '  [az] warning line 6' <<< "$serial_output"; then
-        printf 'FAIL: boot diagnostics stderr was not logged separately\n' >&2
+    if grep -q 'test-secret' <<< "$serial_output"; then
+        printf 'FAIL: boot diagnostics exposed the SAS URI\n' >&2
         return 1
     fi
 
@@ -635,8 +666,8 @@ assert_control_plane_failure_reuses_resource_group() {
             "storage account create "*)
                 return 0
                 ;;
-            "vm delete -g "*)
-                printf 'vm:delete:%s\n' "$4" >> "${events_file}"
+            "vm list --resource-group "*)
+                printf 'vm:list:%s\n' "$4" >> "${events_file}"
                 return 0
                 ;;
             "vm show "*)
@@ -681,7 +712,7 @@ assert_control_plane_failure_reuses_resource_group() {
     fi
 
     local expected_events actual_events
-    expected_events=$'group:create:test-rg\ncreate:primary-sku@test-rg\nvm:delete:test-rg\ncreate:fallback-sku@test-rg'
+    expected_events=$'group:create:test-rg\ncreate:primary-sku@test-rg\nvm:list:test-rg\ncreate:fallback-sku@test-rg'
     actual_events=$(cat "${events_file}")
     if [[ "${actual_events}" != "${expected_events}" ]]; then
         printf 'FAIL: control-plane fallback did not reuse its resource group\nExpected:\n%s\nActual:\n%s\n' \
@@ -694,6 +725,325 @@ assert_control_plane_failure_reuses_resource_group() {
     fi
 
     printf 'PASS: control-plane fallback reuses its resource group\n'
+}
+
+assert_control_plane_failure_with_vm_rotates_resource_group() {
+    local events_file="${TEST_TMPDIR}/control-plane-vm-events"
+    local attempts_file="${TEST_TMPDIR}/control-plane-vm-attempts"
+    : > "${events_file}"
+    : > "${attempts_file}"
+
+    info() { :; }
+    warn() { :; }
+    error() { printf 'ERROR: %s\n' "$*" >&2; }
+    capture_failed_vm_boot_diagnostics() {
+        printf 'FAIL: control-plane rejection attempted boot diagnostics\n' >&2
+        return 1
+    }
+
+    _try_vm_create() {
+        local vm_rg_name="$1"
+        local vm_size="$4"
+        local attempt_count
+        attempt_count=$(wc -l < "${attempts_file}")
+        printf '%s\n' "${vm_size}" >> "${attempts_file}"
+        printf 'create:%s@%s\n' "${vm_size}" "${vm_rg_name}" >> "${events_file}"
+
+        if [[ ${attempt_count} -eq 0 ]]; then
+            echo "RETRYABLE_VM_CREATE_ERROR"
+            return 1
+        fi
+
+        [[ "${vm_rg_name}" == "test-rg-2" ]] || return 2
+        echo '{"powerState":"VM running"}'
+    }
+
+    az() {
+        case "${1:-} ${2:-} ${3:-} ${4:-}" in
+            "group create "*)
+                printf 'group:create:%s\n' "$4" >> "${events_file}"
+                return 0
+                ;;
+            "network public-ip create "*|"storage account create "*)
+                return 0
+                ;;
+            "vm list --resource-group "*)
+                printf 'vm:list:%s\n' "$4" >> "${events_file}"
+                echo "test-vm"
+                return 0
+                ;;
+            "group delete "*)
+                printf 'group:delete:%s\n' "$4" >> "${events_file}"
+                return 0
+                ;;
+            "vm show "*)
+                echo "/subscriptions/test/resourceGroups/test-rg-2/providers/Microsoft.Network/networkInterfaces/test-nic"
+                return 0
+                ;;
+            "network nic show "*)
+                if [[ "$*" == *"ipConfigurations[0].name"* ]]; then
+                    echo "test-ip-config"
+                else
+                    echo "test-nic"
+                fi
+                return 0
+                ;;
+            "network nic ip-config update")
+                return 0
+                ;;
+            *)
+                printf 'Unexpected az command: %q\n' "$*" >&2
+                return 1
+                ;;
+        esac
+    }
+
+    get_vm_rg_name() { echo "test-rg-2"; }
+
+    BOARD=amd64-usr
+    AZ_VM_SIZE=primary-sku
+    AZ_BACKUP_VM_SIZES_AMD64=fallback-sku
+    AZ_BACKUP_REGIONS=""
+    AZ_REGION=test-region
+    ACG_IMAGE_VERSION_ID=test-image-id
+    RESOURCE_TAGS=(createdBy=test)
+    VM_NAME=test-vm
+    VM_RG=test-rg-1
+
+    if ! create_vm_azure test-rg-1 test-image-id >/dev/null; then
+        printf 'FAIL: control-plane fallback did not rotate away from the residual VM\n' >&2
+        return 1
+    fi
+
+    local expected_events actual_events
+    expected_events=$'group:create:test-rg-1\ncreate:primary-sku@test-rg-1\nvm:list:test-rg-1\ngroup:delete:test-rg-1\ngroup:create:test-rg-2\ncreate:fallback-sku@test-rg-2'
+    actual_events=$(cat "${events_file}")
+    if [[ "${actual_events}" != "${expected_events}" ]]; then
+        printf 'FAIL: residual-VM fallback order was incorrect\nExpected:\n%s\nActual:\n%s\n' \
+            "${expected_events}" "${actual_events}" >&2
+        return 1
+    fi
+    if [[ "${VM_RG}" != "test-rg-2" ]]; then
+        printf 'FAIL: residual-VM fallback did not retain the replacement resource group\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: control-plane fallback rotates when a VM resource remains\n'
+}
+
+assert_no_cleanup_preserves_timeout_resource_group() {
+    local events_file="${TEST_TMPDIR}/no-cleanup-events"
+    local attempts_file="${TEST_TMPDIR}/no-cleanup-attempts"
+    : > "${events_file}"
+    : > "${attempts_file}"
+
+    info() { :; }
+    warn() { :; }
+    error() { :; }
+    capture_failed_vm_boot_diagnostics() {
+        printf 'diagnostics:capture:%s\n' "$1" >> "${events_file}"
+    }
+    _try_vm_create() {
+        printf '%s\n' "$4" >> "${attempts_file}"
+        printf 'create:%s@%s\n' "$4" "$1" >> "${events_file}"
+        echo "PROVISIONING_TIMEOUT"
+        return 1
+    }
+    az() {
+        case "${1:-} ${2:-} ${3:-} ${4:-}" in
+            "group create "*)
+                printf 'group:create:%s\n' "$4" >> "${events_file}"
+                return 0
+                ;;
+            "network public-ip create "*|"storage account create "*)
+                return 0
+                ;;
+            "group delete "*)
+                printf 'FAIL: --no-cleanup scheduled resource-group deletion\n' >&2
+                return 1
+                ;;
+            *)
+                printf 'Unexpected az command: %q\n' "$*" >&2
+                return 1
+                ;;
+        esac
+    }
+
+    BOARD=amd64-usr
+    AZ_VM_SIZE=primary-sku
+    AZ_BACKUP_VM_SIZES_AMD64=fallback-sku
+    AZ_BACKUP_REGIONS=""
+    AZ_REGION=test-region
+    AZ_MAX_PROVISIONING_TIMEOUTS=2
+    ACG_IMAGE_VERSION_ID=test-image-id
+    RESOURCE_TAGS=(createdBy=test)
+    VM_NAME=test-vm
+    VM_RG=test-rg-1
+    NO_CLEANUP=true
+
+    if create_vm_azure test-rg-1 test-image-id >/dev/null; then
+        printf 'FAIL: --no-cleanup timeout unexpectedly succeeded\n' >&2
+        return 1
+    fi
+
+    local expected_events actual_events
+    expected_events=$'group:create:test-rg-1\ncreate:primary-sku@test-rg-1\ndiagnostics:capture:test-rg-1'
+    actual_events=$(cat "${events_file}")
+    if [[ "${actual_events}" != "${expected_events}" ]]; then
+        printf 'FAIL: --no-cleanup did not preserve the first failed resource group\nExpected:\n%s\nActual:\n%s\n' \
+            "${expected_events}" "${actual_events}" >&2
+        return 1
+    fi
+    if [[ "$(wc -l < "${attempts_file}")" -ne 1 || "${VM_RG}" != "test-rg-1" ]]; then
+        printf 'FAIL: --no-cleanup continued fallback or lost resource-group ownership\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: --no-cleanup preserves the timed-out resource group\n'
+}
+
+assert_no_cleanup_preserves_resource_group_on_region_fallback() {
+    local events_file="${TEST_TMPDIR}/no-cleanup-region-events"
+    local attempts_file="${TEST_TMPDIR}/no-cleanup-region-attempts"
+    : > "${events_file}"
+    : > "${attempts_file}"
+
+    info() { :; }
+    warn() { :; }
+    error() { :; }
+    check_image_replicated_to_region() { return 0; }
+    _try_vm_create() {
+        printf '%s@%s\n' "$4" "$5" >> "${attempts_file}"
+        printf 'create:%s@%s/%s\n' "$4" "$1" "$5" >> "${events_file}"
+        echo "RETRYABLE_VM_CREATE_ERROR"
+        return 1
+    }
+    az() {
+        case "${1:-} ${2:-} ${3:-} ${4:-}" in
+            "group create "*)
+                printf 'group:create:%s\n' "$4" >> "${events_file}"
+                return 0
+                ;;
+            "network public-ip create "*|"storage account create "*)
+                return 0
+                ;;
+            "vm list --resource-group "*)
+                printf 'vm:list:%s\n' "$4" >> "${events_file}"
+                return 0
+                ;;
+            "group delete "*)
+                printf 'FAIL: --no-cleanup deleted the primary-region resource group\n' >&2
+                return 1
+                ;;
+            *)
+                printf 'Unexpected az command: %q\n' "$*" >&2
+                return 1
+                ;;
+        esac
+    }
+
+    BOARD=amd64-usr
+    AZ_VM_SIZE=only-sku
+    AZ_BACKUP_VM_SIZES_AMD64=""
+    AZ_BACKUP_REGIONS=backup-region
+    AZ_REGION=primary-region
+    ACG_IMAGE_VERSION_ID=test-image-id
+    RESOURCE_TAGS=(createdBy=test)
+    VM_NAME=test-vm
+    VM_RG=test-rg-1
+    NO_CLEANUP=true
+
+    if create_vm_azure test-rg-1 test-image-id >/dev/null; then
+        printf 'FAIL: --no-cleanup region fallback unexpectedly succeeded\n' >&2
+        return 1
+    fi
+
+    local expected_events actual_events
+    expected_events=$'group:create:test-rg-1\ncreate:only-sku@test-rg-1/primary-region\nvm:list:test-rg-1'
+    actual_events=$(cat "${events_file}")
+    if [[ "${actual_events}" != "${expected_events}" ]]; then
+        printf 'FAIL: --no-cleanup region fallback did not preserve the primary resource group\nExpected:\n%s\nActual:\n%s\n' \
+            "${expected_events}" "${actual_events}" >&2
+        return 1
+    fi
+    if [[ "$(wc -l < "${attempts_file}")" -ne 1 || "${VM_RG}" != "test-rg-1" ]]; then
+        printf 'FAIL: --no-cleanup attempted the backup region or lost resource-group ownership\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: --no-cleanup preserves the resource group across region fallback\n'
+}
+
+assert_cleanup_failure_preserves_resource_group() {
+    local events_file="${TEST_TMPDIR}/cleanup-failure-events"
+    local attempts_file="${TEST_TMPDIR}/cleanup-failure-attempts"
+    : > "${events_file}"
+    : > "${attempts_file}"
+
+    info() { :; }
+    warn() { :; }
+    error() { :; }
+    _try_vm_create() {
+        printf '%s\n' "$4" >> "${attempts_file}"
+        printf 'create:%s@%s\n' "$4" "$1" >> "${events_file}"
+        echo "RETRYABLE_VM_CREATE_ERROR"
+        return 1
+    }
+    az() {
+        case "${1:-} ${2:-} ${3:-} ${4:-}" in
+            "group create "*)
+                printf 'group:create:%s\n' "$4" >> "${events_file}"
+                return 0
+                ;;
+            "network public-ip create "*|"storage account create "*)
+                return 0
+                ;;
+            "vm list --resource-group "*)
+                printf 'vm:list:%s\n' "$4" >> "${events_file}"
+                echo "test-vm"
+                return 0
+                ;;
+            "group delete "*)
+                printf 'group:delete:failed:%s\n' "$4" >> "${events_file}"
+                return 1
+                ;;
+            *)
+                printf 'Unexpected az command: %q\n' "$*" >&2
+                return 1
+                ;;
+        esac
+    }
+
+    BOARD=amd64-usr
+    AZ_VM_SIZE=primary-sku
+    AZ_BACKUP_VM_SIZES_AMD64=fallback-sku
+    AZ_BACKUP_REGIONS=""
+    AZ_REGION=test-region
+    ACG_IMAGE_VERSION_ID=test-image-id
+    RESOURCE_TAGS=(createdBy=test)
+    VM_NAME=test-vm
+    VM_RG=test-rg-1
+    NO_CLEANUP=false
+
+    if create_vm_azure test-rg-1 test-image-id >/dev/null; then
+        printf 'FAIL: fallback continued after resource-group cleanup failed\n' >&2
+        return 1
+    fi
+
+    local expected_events actual_events
+    expected_events=$'group:create:test-rg-1\ncreate:primary-sku@test-rg-1\nvm:list:test-rg-1\ngroup:delete:failed:test-rg-1'
+    actual_events=$(cat "${events_file}")
+    if [[ "${actual_events}" != "${expected_events}" ]]; then
+        printf 'FAIL: cleanup failure did not stop with the original resource group\nExpected:\n%s\nActual:\n%s\n' \
+            "${expected_events}" "${actual_events}" >&2
+        return 1
+    fi
+    if [[ "$(wc -l < "${attempts_file}")" -ne 1 || "${VM_RG}" != "test-rg-1" ]]; then
+        printf 'FAIL: cleanup failure continued fallback or lost resource-group ownership\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: cleanup failure preserves resource-group ownership\n'
 }
 
 assert_resource_group_failure_stops_fallback() {
@@ -760,6 +1110,7 @@ assert_public_ip_failure_cleans_resource_group() {
     : > "${events_file}"
 
     info() { :; }
+    warn() { :; }
 
     az() {
         case "${1:-} ${2:-} ${3:-} ${4:-}" in
@@ -800,8 +1151,116 @@ assert_public_ip_failure_cleans_resource_group() {
             "${expected_events}" "${actual_events}" >&2
         return 1
     fi
+    if [[ -n "${VM_RG}" ]]; then
+        printf 'FAIL: successful partial resource-group cleanup retained ownership\n' >&2
+        return 1
+    fi
 
     printf 'PASS: public-IP failure cleans up its partial resource group\n'
+}
+
+assert_partial_resource_group_cleanup_failure_preserves_ownership() {
+    local events_file="${TEST_TMPDIR}/partial-cleanup-failure-events"
+    : > "${events_file}"
+
+    info() { :; }
+    warn() { :; }
+
+    az() {
+        case "${1:-} ${2:-} ${3:-} ${4:-}" in
+            "group create "*)
+                printf 'group:create:%s\n' "$4" >> "${events_file}"
+                return 0
+                ;;
+            "network public-ip create "*)
+                printf 'public-ip:create:failed\n' >> "${events_file}"
+                return 1
+                ;;
+            "group delete "*)
+                printf 'group:delete:failed:%s\n' "$4" >> "${events_file}"
+                return 1
+                ;;
+            *)
+                printf 'Unexpected az command: %q\n' "$*" >&2
+                return 1
+                ;;
+        esac
+    }
+
+    VM_RG=""
+    NO_CLEANUP=false
+    if create_vm_resource_group \
+        test-rg test-region test-public-ip createdBy=test; then
+        printf 'FAIL: partial resource-group setup unexpectedly succeeded\n' >&2
+        return 1
+    fi
+
+    local expected_events actual_events
+    expected_events=$'group:create:test-rg\npublic-ip:create:failed\ngroup:delete:failed:test-rg'
+    actual_events=$(cat "${events_file}")
+    if [[ "${actual_events}" != "${expected_events}" ]]; then
+        printf 'FAIL: partial cleanup failure had unexpected command order\nExpected:\n%s\nActual:\n%s\n' \
+            "${expected_events}" "${actual_events}" >&2
+        return 1
+    fi
+    if [[ "${VM_RG}" != "test-rg" ]]; then
+        printf 'FAIL: partial cleanup failure lost resource-group ownership\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: partial cleanup failure preserves resource-group ownership\n'
+}
+
+assert_no_cleanup_preserves_partial_resource_group() {
+    local events_file="${TEST_TMPDIR}/partial-no-cleanup-events"
+    : > "${events_file}"
+
+    info() { :; }
+    warn() { :; }
+
+    az() {
+        case "${1:-} ${2:-} ${3:-} ${4:-}" in
+            "group create "*)
+                printf 'group:create:%s\n' "$4" >> "${events_file}"
+                return 0
+                ;;
+            "network public-ip create "*)
+                printf 'public-ip:create:failed\n' >> "${events_file}"
+                return 1
+                ;;
+            "group delete "*)
+                printf 'FAIL: --no-cleanup deleted a partially configured resource group\n' >&2
+                return 1
+                ;;
+            *)
+                printf 'Unexpected az command: %q\n' "$*" >&2
+                return 1
+                ;;
+        esac
+    }
+
+    VM_RG=""
+    NO_CLEANUP=true
+    if create_vm_resource_group \
+        test-rg test-region test-public-ip createdBy=test; then
+        printf 'FAIL: partial resource-group setup unexpectedly succeeded\n' >&2
+        return 1
+    fi
+
+    local expected_events actual_events
+    expected_events=$'group:create:test-rg\npublic-ip:create:failed'
+    actual_events=$(cat "${events_file}")
+    if [[ "${actual_events}" != "${expected_events}" ]]; then
+        printf 'FAIL: --no-cleanup partial setup had unexpected command order\nExpected:\n%s\nActual:\n%s\n' \
+            "${expected_events}" "${actual_events}" >&2
+        return 1
+    fi
+    if [[ "${VM_RG}" != "test-rg" ]]; then
+        printf 'FAIL: --no-cleanup partial setup lost resource-group ownership\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: --no-cleanup preserves partially configured resource groups\n'
 }
 
 assert_boot_diagnostics_storage_is_provisioned() {
@@ -888,6 +1347,9 @@ assert_final_candidate_does_not_create_unused_resource_group() {
                 ;;
             "group delete "*)
                 printf 'group:delete:%s\n' "$4" >> "${events_file}"
+                return 0
+                ;;
+            "vm list --resource-group "*)
                 return 0
                 ;;
             *)
@@ -985,8 +1447,7 @@ assert_final_candidate_moves_directly_to_backup_region() {
                 printf 'group:delete:%s\n' "$4" >> "${events_file}"
                 return 0
                 ;;
-            "vm delete -g "*)
-                printf 'vm:delete:%s\n' "$4" >> "${events_file}"
+            "vm list --resource-group "*)
                 return 0
                 ;;
             "vm show "*)
@@ -1031,7 +1492,7 @@ assert_final_candidate_moves_directly_to_backup_region() {
     fi
 
     local expected_events actual_events
-    expected_events=$'group:create:test-rg-1/primary-region\ncreate:only-sku@test-rg-1/primary-region\nvm:delete:test-rg-1\ngroup:delete:test-rg-1\ngroup:create:test-rg-2/backup-region\ncreate:only-sku@test-rg-2/backup-region'
+    expected_events=$'group:create:test-rg-1/primary-region\ncreate:only-sku@test-rg-1/primary-region\ngroup:delete:test-rg-1\ngroup:create:test-rg-2/backup-region\ncreate:only-sku@test-rg-2/backup-region'
     actual_events=$(cat "${events_file}")
     if [[ "${actual_events}" != "${expected_events}" ]]; then
         printf 'FAIL: backup-region fallback created an intermediate resource group\nExpected:\n%s\nActual:\n%s\n' \
@@ -1048,6 +1509,7 @@ assert_final_candidate_moves_directly_to_backup_region() {
 
 ( assert_failed_vm_boot_diagnostics )
 ( assert_vm_size_family_parsing )
+( assert_resource_group_name_generation )
 ( assert_timeout_configuration_validation )
 ( assert_provisioning_timeouts_are_bounded )
 ( assert_single_provisioning_timeout_limit )
@@ -1055,8 +1517,14 @@ assert_final_candidate_moves_directly_to_backup_region() {
 ( assert_mixed_failures_keep_generic_terminal_error )
 ( assert_fallback_uses_clean_resource_group )
 ( assert_control_plane_failure_reuses_resource_group )
+( assert_control_plane_failure_with_vm_rotates_resource_group )
+( assert_no_cleanup_preserves_timeout_resource_group )
+( assert_no_cleanup_preserves_resource_group_on_region_fallback )
+( assert_cleanup_failure_preserves_resource_group )
 ( assert_resource_group_failure_stops_fallback )
 ( assert_public_ip_failure_cleans_resource_group )
+( assert_partial_resource_group_cleanup_failure_preserves_ownership )
+( assert_no_cleanup_preserves_partial_resource_group )
 ( assert_boot_diagnostics_storage_is_provisioned )
 ( assert_final_candidate_does_not_create_unused_resource_group )
 ( assert_final_candidate_moves_directly_to_backup_region )

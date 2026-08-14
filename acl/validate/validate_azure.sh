@@ -185,6 +185,7 @@ create_vm_resource_group() {
         --tags "${tags[@]}"; then
         return 1
     fi
+    VM_RG="$vm_rg_name"
 
     info "Creating public IP with policy-compliant tags: $public_ip_name"
     if ! az network public-ip create \
@@ -195,7 +196,10 @@ create_vm_resource_group() {
         --sku Standard \
         --ip-tags FirstPartyUsage=/NonProd \
         --tags "${tags[@]}"; then
-        az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
+        if schedule_failed_vm_rg_cleanup \
+            "$vm_rg_name" "public IP creation failure"; then
+            VM_RG=""
+        fi
         return 1
     fi
 
@@ -213,7 +217,10 @@ create_vm_resource_group() {
         --min-tls-version TLS1_2 \
         --allow-blob-public-access false \
         --tags "${tags[@]}"; then
-        az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
+        if schedule_failed_vm_rg_cleanup \
+            "$vm_rg_name" "boot diagnostics storage creation failure"; then
+            VM_RG=""
+        fi
         return 1
     fi
 }
@@ -231,36 +238,77 @@ capture_failed_vm_boot_diagnostics() {
 
     warn "Retrieving failed VM boot diagnostics: SKU=${vm_size} Region=${region}"
 
-    local boot_log_err_file
+    local boot_log_file boot_log_err_file
+    if ! boot_log_file=$(mktemp); then
+        warn "Unable to create temporary file for the boot log"
+        return 0
+    fi
     if ! boot_log_err_file=$(mktemp); then
-        warn "Unable to create temporary file for boot diagnostics"
+        warn "Unable to create temporary file for boot diagnostics errors"
+        rm -f "$boot_log_file" || true
         return 0
     fi
 
-    local boot_log
-    if boot_log=$(az vm boot-diagnostics get-boot-log \
+    local serial_log_uri
+    if ! serial_log_uri=$(az vm boot-diagnostics get-boot-log-uris \
         --resource-group "$vm_rg_name" \
-        --name "$vm_name" -o tsv 2>"$boot_log_err_file"); then
-        if [[ -s "$boot_log_err_file" ]]; then
-            warn "Azure CLI warnings while retrieving boot diagnostics:"
-            tail -20 "$boot_log_err_file" | sed 's/^/  [az] /' >&2 || true
-        fi
-        if [[ -n "$boot_log" ]]; then
+        --name "$vm_name" \
+        --query serialConsoleLogBlobUri \
+        -o tsv 2>"$boot_log_err_file"); then
+        warn "Could not retrieve the serial-console log URI"
+    elif [[ -z "$serial_log_uri" || "$serial_log_uri" == "null" ]]; then
+        warn "Azure returned no serial-console log URI"
+    elif az storage blob download \
+        --blob-url "$serial_log_uri" \
+        --file "$boot_log_file" \
+        --overwrite true \
+        --no-progress \
+        --only-show-errors \
+        --output none 2>>"$boot_log_err_file"; then
+        if [[ -s "$boot_log_file" ]]; then
             info "Failed VM serial console log (last 200 lines):"
-            tail -200 <<< "$boot_log" | sed 's/^/  [serial] /' >&2 || true
+            tail -200 "$boot_log_file" | sed 's/^/  [serial] /' >&2 || true
         else
             warn "Boot diagnostics returned an empty serial console log"
         fi
     else
-        local boot_log_error
-        boot_log_error=$(tail -20 "$boot_log_err_file" 2>/dev/null || true)
-        warn "Boot diagnostics unavailable${boot_log_error:+: $boot_log_error}"
-        if [[ -n "$boot_log" ]]; then
-            tail -200 <<< "$boot_log" | sed 's/^/  [serial] /' >&2 || true
-        fi
+        # Do not print the captured Azure CLI error because it may contain the SAS URI.
+        warn "Could not download the serial-console boot log"
     fi
-    rm -f "$boot_log_err_file" || true
+    rm -f "$boot_log_file" "$boot_log_err_file" || true
 
+    return 0
+}
+
+vm_resource_absent() {
+    local vm_rg_name="$1"
+    local vm_name="$2"
+    local vm_names
+
+    if ! vm_names=$(az vm list \
+        --resource-group "$vm_rg_name" \
+        --query '[].name' \
+        -o tsv 2>/dev/null); then
+        warn "Could not confirm whether VM ${vm_name} remains in ${vm_rg_name}"
+        return 1
+    fi
+
+    ! grep -qxF "$vm_name" <<< "$vm_names"
+}
+
+schedule_failed_vm_rg_cleanup() {
+    local vm_rg_name="$1"
+    local reason="$2"
+
+    if [[ "${NO_CLEANUP:-false}" == "true" ]]; then
+        warn "--no-cleanup: preserving resource group ${vm_rg_name} after ${reason}"
+        return 1
+    fi
+
+    if ! az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null; then
+        warn "Could not schedule deletion of ${vm_rg_name}; manual cleanup may be required"
+        return 1
+    fi
     return 0
 }
 
@@ -1026,7 +1074,11 @@ create_vm_azure() {
 
         if [[ -n "$vm_rg_name" && -n "$current_rg_region" && "$current_rg_region" != "$region" ]]; then
             info "Switching from ${current_rg_region} to ${region}; recreating resource group"
-            az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
+            if ! schedule_failed_vm_rg_cleanup \
+                "$vm_rg_name" "region fallback from ${current_rg_region} to ${region}"; then
+                error "Stopping fallback because resource group ${vm_rg_name} was preserved"
+                return 1
+            fi
             vm_rg_name=""
             VM_RG=""
             current_rg_region=""
@@ -1087,13 +1139,28 @@ create_vm_azure() {
                     # Isolate the next attempt instead of racing their deletion.
                     capture_failed_vm_boot_diagnostics \
                         "$vm_rg_name" "$VM_NAME" "$sku" "$region" || true
-                    az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null || true
+                    if ! schedule_failed_vm_rg_cleanup \
+                        "$vm_rg_name" "OS provisioning timeout"; then
+                        error "Stopping fallback because resource group ${vm_rg_name} was preserved"
+                        return 1
+                    fi
                     vm_rg_name=""
                     VM_RG=""
                     current_rg_region=""
                 else
-                    warn "✗ Retryable VM creation failure: ${sku} in ${region} — trying next candidate"
-                    az vm delete -g "$vm_rg_name" -n "$VM_NAME" -y --no-wait 2>/dev/null || true
+                    if vm_resource_absent "$vm_rg_name" "$VM_NAME"; then
+                        warn "✗ Retryable VM creation failure left no VM resource; reusing ${vm_rg_name}"
+                    else
+                        warn "✗ Retryable VM creation failure left a VM or could not confirm its absence; rotating resource groups"
+                        if ! schedule_failed_vm_rg_cleanup \
+                            "$vm_rg_name" "retryable VM creation failure"; then
+                            error "Stopping fallback because resource group ${vm_rg_name} was preserved"
+                            return 1
+                        fi
+                        vm_rg_name=""
+                        VM_RG=""
+                        current_rg_region=""
+                    fi
                 fi
 
                 if ((provisioning_timeout_count >= AZ_MAX_PROVISIONING_TIMEOUTS)); then
@@ -1136,7 +1203,7 @@ create_vm_azure() {
 
 get_vm_rg_name() {
     local suffix
-    suffix=$(tr -dc 'a-z0-9' </dev/urandom | head -c 8)
+    suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d '[:space:]')
     printf '%s-%s\n' "$VM_RG_PREFIX" "$suffix"
 }
 
