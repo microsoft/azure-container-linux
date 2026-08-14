@@ -1,0 +1,223 @@
+From: Dallas Delaney <dadelan@microsoft.com>
+Subject: [PATCH] erofs: hold the dm-verity lock across the mount, not just the create
+
+A shared dm-verity mapper was guarded only while it was being looked up and
+created. Everything after that -- the mount(2) that actually puts the device to
+use, and the removal on the unmount side -- ran unlocked. That left a window in
+which a device could be removed after another container had already verified it
+but before that container had mounted it.
+
+The kernel refuses DM_DEV_REMOVE with EBUSY while a filesystem holds the mapper
+open, so a device with live mounts was never at risk. The exposure is the
+moment the open count reaches zero:
+
+  container A: mount.Unmount(path)      -- open count drops to 0
+  container B: os.Stat(/dev/mapper/...) -- present
+  container B: DeviceStatus             -- ActivePresent
+  container A: RemoveDevice             -- succeeds, nothing holds it open
+  container B: TableStatus              -- ENXIO
+  container B: fails
+
+B's failure surfaces as
+
+  refusing to reuse existing dm-verity device "containerd-erofs-N":
+  dm-verity device "containerd-erofs-N" verification failed
+
+which reads as an integrity violation but is a device that was removed out from
+under a caller that was still setting it up. Reproduced on a burst of 10
+concurrent containers sharing one image (1 failure in 10); 20 sequential starts
+of the same image never hit it.
+
+Widening the guarded section to include the mount(2) closes the window. Once B
+holds the lock, A's removal either has not started -- B then finds the device
+absent and creates it -- or has already completed, and B's mount(2) has raised
+the open count so the kernel returns EBUSY. There is no longer a point at which
+the device is visible, unopened, and about to be removed.
+
+No reference count is introduced. The kernel's open count already is one, and it
+is the only one that survives a containerd restart: a userspace count would
+start at zero with mounts and mappers still live. EBUSY from Close is therefore
+the expected result for a device another container is still using, and is logged
+at debug rather than treated as a failure.
+
+openOrReuseDmverityDevice no longer takes the lock itself; its caller does, and
+holds it until the mount is complete. Go mutexes are not reentrant, so
+reinstating the inner Lock would deadlock every dm-verity mount on the node. The
+added test pins that contract by calling the helper with the lock already held.
+
+diff --git a/plugins/mount/erofs/plugin_linux.go b/plugins/mount/erofs/plugin_linux.go
+index 63dd67ca4..04b6ba5cb 100644
+--- a/plugins/mount/erofs/plugin_linux.go
++++ b/plugins/mount/erofs/plugin_linux.go
+@@ -50,8 +50,9 @@ func NewErofsMountHandler() mount.Handler {
+ 	return &erofsMountHandler{}
+ }
+ 
+-// dmverityOpenMu serializes the "does this device already exist?" check and the
+-// creation that follows it.
++// dmverityLifecycleMu serializes the whole lifetime of a shared dm-verity
++// mapper: inspect-or-create and the mount that follows it, against unmount and
++// the removal that follows that.
+ //
+ // Device-mapper names are derived from the snapshot ID, so two concurrent mounts
+ // of the same layer -- routine when several pods start from one image -- can both
+@@ -59,10 +60,39 @@ func NewErofsMountHandler() mount.Handler {
+ // DM_DEV_CREATE fails because the name is taken, and its cleanup then removes the
+ // winner's device out from under a live mount.
+ //
+-// One lock is enough. The guarded section is a handful of ioctls, and the kernel
+-// already serializes device-mapper creation internally, so there is little
+-// parallelism to win by sharding this per device name.
+-var dmverityOpenMu sync.Mutex
++// Covering only create was not enough, and shipped a bug. The kernel refuses
++// DM_DEV_REMOVE with EBUSY while any filesystem holds the mapper open, so a
++// mapper with live mounts is safe -- but verification does not open it. Between
++// the moment the last mount goes away and the moment a new mount(2) lands, the
++// open count is zero and removal succeeds. A starting container that has already
++// passed its existence check then finds the device gone mid-verify and fails with
++// what reads as an integrity error:
++//
++//	container A: mount.Unmount(path)                 -- open count drops to 0
++//	container B: os.Stat(/dev/mapper/...)            -- present
++//	container B: DeviceStatus                        -- ActivePresent
++//	container A: RemoveDevice                        -- succeeds, nothing has it open
++//	container B: TableStatus                         -- ENXIO
++//	container B: "refusing to reuse existing dm-verity device ... verification failed"
++//
++// Widening the guarded section to include the mount(2) closes that gap: B's mount
++// either happens before A's removal is allowed to run, in which case the open
++// count is non-zero and the kernel returns EBUSY, or after A has fully removed the
++// device, in which case B sees it absent and creates it. There is no longer a
++// window where the device is visible, unopened, and about to be removed.
++//
++// The kernel's open count is the authoritative reference count for a shared
++// mapper, which is why there is no userspace count here: a userspace count would
++// start at zero after a containerd restart while mounts and mappers are still
++// live. EBUSY from Close is the expected outcome for a device someone else is
++// using, not an error.
++//
++// One global lock is enough for now. The guarded section is a handful of ioctls
++// plus one mount(2), it is taken only by layers that actually carry dm-verity,
++// and same-device operations are the ones that must serialize anyway. If mount
++// convoying ever shows up in a burst benchmark, shard it per device name -- the
++// invariant is per-mapper, not global.
++var dmverityLifecycleMu sync.Mutex
+ 
+ // selinuxContextOpt is the superblock-wide SELinux mount option. Unlike
+ // defcontext=/rootcontext=, it labels the whole superblock, so every mount of a
+@@ -129,10 +159,11 @@ func sharedLayerMountOptions(opts []string, selinuxEnabled bool) []string {
+ 
+ // openOrReuseDmverityDevice returns the /dev/mapper path for a layer, creating
+ // the device if it does not already exist and validating it if it does.
++//
++// The caller must hold dmverityLifecycleMu, and must keep holding it until the
++// returned device has been mounted or rolled back. Returning while the device is
++// merely created is exactly the zero-open window described on the mutex.
+ func openOrReuseDmverityDevice(ctx context.Context, source, deviceName string, metadata *dmverity.DmverityMetadata) (string, error) {
+-	dmverityOpenMu.Lock()
+-	defer dmverityOpenMu.Unlock()
+-
+ 	devicePath := dmverity.DevicePath(deviceName)
+ 	if _, err := os.Stat(devicePath); !os.IsNotExist(err) {
+ 		// Device-mapper names are host-global while snapshot IDs are only
+@@ -226,6 +257,12 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ 	if metadata != nil {
+ 		log.G(ctx).WithField("source", m.Source).Debug("detected dm-verity metadata, setting up dm-verity device")
+ 
++		// Held until Mount returns, so it covers the mount(2) below and every
++		// rollback Close on the way out. Deferred inside this block on purpose:
++		// a layer with no dm-verity metadata never contends for it.
++		dmverityLifecycleMu.Lock()
++		defer dmverityLifecycleMu.Unlock()
++
+ 		supported, err := dmverity.IsSupported()
+ 		if err != nil || !supported {
+ 			return mount.ActiveMount{}, fmt.Errorf("layer requires dm-verity but system doesn't support it (dm_verity module not loaded): %w", err)
+@@ -340,11 +377,25 @@ func (h *erofsMountHandler) Unmount(ctx context.Context, path string) error {
+ 	err = mount.Unmount(path, 0)
+ 
+ 	if deviceName != "" {
++		// Only the removal needs the lock, not the unmount above. The window
++		// that caused the bug was a removal landing between another mounter's
++		// verify and its mount(2); holding the lock here and across that whole
++		// section on the mount side closes it. Once this lock is acquired the
++		// competing mounter has either not started (it will then find the
++		// device absent and create it) or has already completed its mount(2)
++		// (the open count is non-zero and the kernel returns EBUSY). Leaving
++		// mount.Unmount outside avoids serialising unmounts for no gain.
++		dmverityLifecycleMu.Lock()
++		defer dmverityLifecycleMu.Unlock()
++
+ 		log.G(ctx).WithFields(log.Fields{
+ 			"mount-point": path,
+ 			"device":      deviceName,
+ 		}).Debug("attempting to close dm-verity device")
+ 
++		// EBUSY here is the normal outcome when another container still has the
++		// layer mounted: the kernel's open count is the reference count, and it
++		// is refusing to remove a device in use. Debug, not error.
+ 		if closeErr := dmverity.Close(deviceName); closeErr != nil {
+ 			log.G(ctx).WithError(closeErr).WithField("device", deviceName).Debug("unable to close dm-verity device")
+ 		} else {
+diff --git a/plugins/mount/erofs/plugin_linux_test.go b/plugins/mount/erofs/plugin_linux_test.go
+index 0da9e3637..71dd20852 100644
+--- a/plugins/mount/erofs/plugin_linux_test.go
++++ b/plugins/mount/erofs/plugin_linux_test.go
+@@ -17,8 +17,14 @@
+ package erofs
+ 
+ import (
++	"context"
++	"path/filepath"
+ 	"slices"
++	"strings"
+ 	"testing"
++	"time"
++
++	"github.com/containerd/containerd/v2/internal/dmverity"
+ )
+ 
+ func TestSharedLayerMountOptions(t *testing.T) {
+@@ -112,3 +118,42 @@ func TestSharedLayerMountOptionsConverge(t *testing.T) {
+ 		t.Errorf("two pods disagree: %q vs %q", taskPath, otherPod)
+ 	}
+ }
++
++// TestOpenOrReuseDmverityDeviceDoesNotSelfLock guards the reentrancy hazard
++// introduced when dmverityLifecycleMu was widened from "guard the create" to
++// "guard the whole mount lifecycle".
++//
++// The lock is now taken by Mount, above the call to openOrReuseDmverityDevice,
++// and is held until Mount returns. Go mutexes are not reentrant, so if anyone
++// reinstates the Lock/Unlock pair that used to live inside the helper, every
++// dm-verity mount deadlocks permanently -- and it deadlocks in the field, on the
++// first layer that carries verity metadata, not in any test that does not hold
++// the lock first.
++//
++// This reproduces the caller's contract: acquire the lock, then call the helper.
++// The call is expected to fail (there is no such device and no privilege to
++// create one); all that matters is that it returns at all.
++func TestOpenOrReuseDmverityDeviceDoesNotSelfLock(t *testing.T) {
++	dmverityLifecycleMu.Lock()
++	defer dmverityLifecycleMu.Unlock()
++
++	done := make(chan struct{})
++	go func() {
++		defer close(done)
++		// Name is deliberately one that cannot exist, so the reuse branch is
++		// skipped and the create path is reached without touching real devices.
++		_, _ = openOrReuseDmverityDevice(
++			context.Background(),
++			filepath.Join(t.TempDir(), "layer.erofs"),
++			"containerd-erofs-selflock-probe-does-not-exist",
++			&dmverity.DmverityMetadata{RootHash: strings.Repeat("00", 32)},
++		)
++	}()
++
++	select {
++	case <-done:
++	case <-time.After(30 * time.Second):
++		t.Fatal("openOrReuseDmverityDevice blocked while the caller held dmverityLifecycleMu: " +
++			"it must not lock the mutex itself, the caller already holds it")
++	}
++}
