@@ -71,6 +71,11 @@ run_kola_tests() {
         image_arg="--azure-image-file=${AZURE_IMAGE_NAME}"
     fi
 
+    local trusted_launch_args=()
+    if [[ "${AZURE_TRUSTED_LAUNCH:-}" == "true" ]]; then
+        trusted_launch_args+=(--azure-trusted-launch --enable-secureboot)
+    fi
+
     timeout --signal=SIGQUIT 6h \
       kola run \
       ${debug_flag} \
@@ -86,6 +91,7 @@ run_kola_tests() {
       --azure-size="${instance_type}" \
       --azure-sku="${sku}" \
       --azure-hyper-v-generation="${hyperv_gen}" \
+      "${trusted_launch_args[@]}" \
       ${AZURE_USE_GALLERY} \
       ${AZURE_KOLA_VNET:+--azure-kola-vnet=${AZURE_KOLA_VNET}} \
       ${azure_vnet_subnet_name:+--azure-vnet-subnet-name=${azure_vnet_subnet_name}} \
