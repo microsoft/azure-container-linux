@@ -12,6 +12,7 @@ history, and triage notes live here so the `.spec` stays terse.
 | Patch9    | ACL integration | Derives referrer discovery and snapshotter-side formatting from the erofs differ's capability, and adds the ACL entry points. Leaves Patch8's defaults untouched. |
 | Patch10   | precomputed artifacts | Consumes signed precomputed EROFS/Merkle bundles and selects the newest. |
 | Patch11   | EROFS SELinux sharing | Makes every consumer of an EROFS layer request one synthesised `context=`, so a layer can be mounted by more than one container. Independent of dm-verity; touches only upstream code. |
+| Patch12   | dm-verity mount lock  | Widens the dm-verity mutex from "guard the create" to "guard the mount lifecycle", closing a window in which a mapper could be removed between another container's verify and its `mount(2)`. |
 
 ## Source of truth
 
@@ -50,6 +51,7 @@ review and bisect, the patch files exist so the spec stays maintainable.
 | `acl-dmverity-integration` | `9e59efb49`, `02191af08` | Patch9 |
 | `acl-dmverity-precomputed` | `492478354`, `d04b266f5` | Patch10 |
 | `acl-erofs-selinux` | `2b81b1336` | Patch11 |
+| `acl-dmverity-mount-lock` | `88f2a85a6` | Patch12 |
 
 containerd does **not** inspect IPE policy. Layer signatures are passed to the
 kernel whenever they are present and the feature is enabled; the kernel alone
@@ -289,7 +291,16 @@ git diff $BASE   $AADHAR  # -> Patch8   (prepend the From:/Subject: header)
 git diff $AADHAR $INT     # -> Patch9
 git diff $INT    $PRE     # -> Patch10
 git diff $PRE    $SEL     # -> Patch11
+git diff $LOCK^  $LOCK    # -> Patch12  (own commit only; see note below)
 ```
+
+`LOCK=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-mount-lock')`
+
+Patch12 is the **only** boundary that is not simply the previous group's tip.
+An ungrouped commit sits between Patch11 and it (see *Drift to monitor*), so
+`git diff $SEL $LOCK` would silently fold that commit into Patch12. Export
+Patch12 from its own commit alone -- `git diff 88f2a85a6^ 88f2a85a6` -- and
+verify with `patch -p1 --fuzz=0 --dry-run` against a tree at `$SEL`.
 
 Each boundary is the **last** commit carrying a given group trailer, so the
 groups must stay contiguous and in patch order on the branch.
@@ -365,6 +376,19 @@ Boltdb label-cap fix (rename `containerd.io/snapshot/dmverity.*` keys to
 `grep "containerd.io/dmverity/" 0004-*.patch` returning the expected hits.
 
 ## Drift to monitor
+
+- **`6e9236725` ("erofs: bind dm-verity enforcement to the selected applier") is on
+  the branch but is not in any patch, so it is not in the RPM.** It carries no
+  `Acl-Patch-Group:` trailer, so the regeneration procedure above skips it. It is
+  not cosmetic: per its own message it stops a *silent* verification downgrade
+  when CRI falls back to local pull, and it also fixes `IsSupported()` reporting
+  a `CONFIG_DM_VERITY=y` kernel as unsupported. It further makes the shared layer
+  SELinux label configurable, changing `sharedLayerContext` to
+  `defaultSharedLayerContext` and giving `sharedLayerMountOptions` a third
+  parameter -- which is why a patch exported from branch HEAD applies to the
+  packaged tree only with fuzz. Decide whether to export it as a patch or drop
+  it; until then, export anything after Patch11 from its own commit range, not
+  from `$SEL`.
 
 - AzureLinux 3.0-dev tracks `Release: 2` of containerd2-2.2.4. When AZL
   publishes new CVE backports or carry-patches, re-download the 8 baseline

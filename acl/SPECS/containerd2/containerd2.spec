@@ -31,7 +31,7 @@ Version: 2.2.4
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 6017.verity%{?dist}
+Release: 6018.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -98,6 +98,9 @@ Patch9:  0005-dm-verity-acl-integration.patch
 Patch10: 0006-dm-verity-precomputed-erofs-artifacts.patch
 # Independent of the dm-verity series; touches only upstream code.
 Patch11: 0007-erofs-selinux-shared-layer-context.patch
+# Concurrency fix for the dm-verity mount path. Kept separate from Patch8 so it
+# can be dropped or folded independently; belongs in 0004 once that settles.
+Patch12: 0008-erofs-dmverity-mount-lifecycle-lock.patch
 
 %{?systemd_requires}
 
@@ -233,6 +236,17 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Thu Aug 06 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6018.verity
+- Patch12: hold the dm-verity lock across the mount, not just the create. The
+  lock covered lookup-and-create only; the mount(2) that follows it and the
+  removal on the unmount side both ran unlocked. A device could therefore be
+  removed after another container had verified it but before that container had
+  mounted it, and the victim reported "verification failed" -- an integrity
+  error for what was really a device pulled out from under it. Live mounts were
+  never at risk (the kernel returns EBUSY while the mapper is open); the window
+  is the moment the open count reaches zero. Seen as 1 failure in a burst of 10
+  concurrent containers sharing one image, 0 in 20 sequential starts.
+
 * Wed Aug 05 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6017.verity
 - Patch11: synthesise the shared EROFS layer label instead of rewriting the
   caller's. 6016.verity stripped the MCS categories from context=, which fixed
