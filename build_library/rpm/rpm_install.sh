@@ -851,6 +851,116 @@ sslverify=1
 EOF
 }
 
+rpm_record_ipe_capability() {
+    local ipe_capable="$1"
+    [[ -n "${BUILD_DIR:-}" ]] || return 0
+    printf '%s\n' "${ipe_capable}" > "${BUILD_DIR}/acl-ipe-capable" ||
+        die "RPM mode: failed to record IPE capability"
+}
+
+rpm_validate_ipe_policy_source() {
+    local policy_src="$1"
+    [[ -f "${policy_src}" ]] ||
+        die "RPM mode: IPE policy source not found: ${policy_src}"
+    grep -Fq 'op=EXECUTE dmverity_signature=TRUE action=ALLOW' "${policy_src}" ||
+        die "RPM mode: IPE policy does not trust verified dm-verity signatures"
+    ! grep -q '@USR_VERITY_ROOT_HASH@' "${policy_src}" ||
+        die "RPM mode: stale root-hash placeholder remains in IPE policy"
+}
+
+rpm_prepare_ipe_policy_artifact() {
+    local policy_src="$1" policy_sig="$2" cert_dir="$3"
+    local policy_mode="$4" external_policy="$5"
+    local key="${cert_dir}/ca.key"
+    local cert="${cert_dir}/uki-signing-ca.pem"
+
+    case "${policy_mode}" in
+        ephemeral)
+            [[ -z "${external_policy}" ]] ||
+                die "RPM mode: ACL_IPE_POLICY_PATH is only valid in external mode"
+            "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" ||
+                die "RPM mode: IPE could not ensure ephemeral signing cert"
+            if ! openssl smime -sign -binary \
+                    -in "${policy_src}" \
+                    -signer "${cert}" \
+                    -inkey "${key}" \
+                    -noattr -nodetach -nosmimecap \
+                    -outform der \
+                    -out "${policy_sig}" 2>/dev/null || [[ ! -s "${policy_sig}" ]]; then
+                die "RPM mode: IPE failed to sign policy"
+            fi
+            ;;
+        external)
+            [[ -n "${external_policy}" ]] ||
+                die "RPM mode: external IPE policy mode requires ACL_IPE_POLICY_PATH"
+            [[ -s "${external_policy}" ]] ||
+                die "RPM mode: external IPE policy artifact is missing or empty: ${external_policy}"
+            cp "${external_policy}" "${policy_sig}" ||
+                die "RPM mode: failed to stage external IPE policy"
+            ;;
+        *)
+            die "RPM mode: invalid ACL_IPE_POLICY_MODE: ${policy_mode}"
+            ;;
+    esac
+}
+
+rpm_verify_ipe_policy_artifact() {
+    local policy_src="$1" policy_sig="$2" verified_policy="$3"
+    if ! openssl smime -verify -inform der -binary \
+            -in "${policy_sig}" -noverify \
+            -out "${verified_policy}" >/dev/null 2>&1; then
+        die "RPM mode: IPE policy is not a valid attached DER PKCS#7 artifact"
+    fi
+    cmp -s "${policy_src}" "${verified_policy}" ||
+        die "RPM mode: verified IPE policy content differs from source policy"
+}
+
+rpm_install_ipe_policy() {
+    local root_fs_dir="$1"
+    local ipe_capable="${ACL_IPE_CAPABLE:-false}"
+
+    case "${ipe_capable}" in
+        false)
+            rpm_record_ipe_capability false
+            return 0
+            ;;
+        true) ;;
+        *) die "Invalid ACL_IPE_CAPABLE: ${ipe_capable}" ;;
+    esac
+    [[ "${BOOTLOADER_MODE:-uki}" == "uki" ]] ||
+        die "RPM mode: IPE requires the UKI bootloader"
+    [[ -n "${BUILD_DIR:-}" ]] ||
+        die "RPM mode: BUILD_DIR is not set; cannot create IPE signing assets"
+
+    local policy_src="${BUILD_LIBRARY_DIR}/rpm/additional_files/ipe/acl-ipe-boot-policy.pol"
+    local policy_mode="${ACL_IPE_POLICY_MODE:-ephemeral}"
+    local external_policy="${ACL_IPE_POLICY_PATH:-}"
+    local cert_dir
+    local work_dir policy_sig verified_policy
+
+    rpm_validate_ipe_policy_source "${policy_src}"
+
+    cert_dir="$(readlink -f "${BUILD_DIR}")/acl-ipe-ephemeral"
+    work_dir="$(mktemp -d)"
+    policy_sig="${work_dir}/acl.pol.p7b"
+    verified_policy="${work_dir}/acl-ipe-boot-policy.verified.pol"
+
+    rpm_prepare_ipe_policy_artifact \
+        "${policy_src}" "${policy_sig}" "${cert_dir}" \
+        "${policy_mode}" "${external_policy}"
+    rpm_verify_ipe_policy_artifact \
+        "${policy_src}" "${policy_sig}" "${verified_policy}"
+
+    sudo install -D -m 0644 \
+        "${policy_sig}" \
+        "${root_fs_dir}/usr/lib/ipe/acl.pol.p7b"
+    sudo chroot "${root_fs_dir}" restorecon -RF /usr/lib/ipe
+    rm -rf "${work_dir}"
+    rpm_record_ipe_capability true
+
+    info "RPM mode: Installed ${policy_mode} signed IPE policy on verified /usr"
+}
+
 rpm_configure_selinux() {
     local root_fs_dir="$1"
 
@@ -1033,4 +1143,9 @@ export -f rpm_download_packages
 export -f rpm_use_official_repos
 export -f rpm_cleanup_build_dir
 export -f rpm_umount_pseudofs
+export -f rpm_record_ipe_capability
+export -f rpm_validate_ipe_policy_source
+export -f rpm_prepare_ipe_policy_artifact
+export -f rpm_verify_ipe_policy_artifact
+export -f rpm_install_ipe_policy
 export -f rpm_configure_selinux
