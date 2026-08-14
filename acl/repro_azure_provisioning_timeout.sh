@@ -216,7 +216,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$IMAGE_ID" ]] || die "--image-id is required"
-[[ "$IMAGE_ID" == /subscriptions/*/providers/Microsoft.Compute/galleries/*/images/*/versions/* ]] || \
+[[ "$IMAGE_ID" == /subscriptions/*/resourceGroups/*/providers/Microsoft.Compute/galleries/*/images/*/versions/* ]] || \
     die "--image-id must be a full Azure Compute Gallery image version resource ID"
 image_subscription_id="${IMAGE_ID#/subscriptions/}"
 image_subscription_id="${image_subscription_id%%/*}"
