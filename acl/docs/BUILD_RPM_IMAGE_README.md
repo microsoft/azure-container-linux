@@ -270,7 +270,7 @@ The script automatically configures libvirt (default network, URI) on Azure Linu
 # Just start the VM and observe the boot sequence, get access to interactive console.
 ./acl/build_rpm_image.sh --start-vm
 
-# Start a local QEMU VM without Secure Boot for development only
+# Start VM without secure boot (e.g. for UKI bootloader mode)
 ./acl/build_rpm_image.sh --start-vm --no-secure-boot
 
 # Boot the test image (with docker sysext) instead of the regular image
@@ -331,31 +331,6 @@ You can also use the `--run-script` flag to run tests on the Azure VM, just like
 - The script generates an Ignition ISO with your SSH public keys from `~/.ssh/id_*.pub`
 - SSH user: `azureuser` (default) - customize with `--ssh-user=USER`
 - Ignition runs on first boot only
-
-#### Reproducing Azure OS Provisioning Timeouts
-
-Use `repro_azure_provisioning_timeout.sh` to repeatedly deploy an existing
-Arm64 gallery image in Sweden Central. The tool accepts only ARM v6 SKUs and
-always uses Trusted Launch with Secure Boot and vTPM enabled.
-
-```bash
-./acl/repro_azure_provisioning_timeout.sh \
-  --image-id=/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Compute/galleries/<gallery>/images/<image>/versions/<version> \
-  --location=swedencentral \
-  --vm-size=Standard_D2ps_v6 \
-  --max-attempts=20 \
-  --attempt-timeout-seconds=1800 \
-  --ssh-public-key=~/.ssh/id_ed25519.pub
-```
-
-Successful attempts and confirmed non-target failures are deleted synchronously;
-if synchronous cleanup fails, the script requests asynchronous deletion and
-continues. After a local attempt timeout, the script queries the server-side ARM
-deployment. It preserves a deployment that is still running or cannot be queried,
-prints triage commands, and exits with status 2 rather than deleting potentially
-useful evidence. The first confirmed `OSProvisioningTimedOut` is also preserved
-and reported, with exit status 0. Delete a preserved resource group after triage
-with the command printed by the script.
 
 #### GPU Smoke Testing (Azure Only)
 
@@ -560,16 +535,13 @@ Efficient workflow for iterative development:
 
 ### Common Issues
 
-- **Issue**: A local QEMU VM fails to boot because its UKI is not signed
-  **Solution**: For local development only, use `--no-secure-boot`:
+- **Issue**: VM fails to boot with UKI bootloader mode
+  **Cause**: UKI images are not yet signed; secure boot rejects them.
+  **Solution**: Use `--no-secure-boot` flag (this is done automatically when `BOOTLOADER_MODE=uki`):
 
   ```bash
   ./acl/build_rpm_image.sh --start-vm --no-secure-boot
   ```
-
-  Azure Arm64 validation does not support this workaround. Publish the signed
-  image with its `uki-signing-ca.pem` certificate and use an ARM v6 Trusted
-  Launch SKU; Secure Boot and vTPM remain enabled.
 
 - **Issue**: Red block preceded by: `sudo: rpm: command not found`
   **Solution**: Ensure SDK container is rebuilt with RPM tools:
