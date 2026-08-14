@@ -211,6 +211,31 @@ Build the Flatcar production image using hybrid package sources.
 ./acl/build_rpm_image.sh --rebuild
 ```
 
+IPE-capable images use an ephemeral attached PKCS#7 policy signature by
+default, which is intended for development and test builds:
+
+```bash
+./acl/build_rpm_image.sh --rebuild --ipe-policy-mode=ephemeral
+```
+
+Production builds can consume an externally signed attached DER PKCS#7
+artifact. The artifact is mounted read-only into the SDK container, verified,
+and accepted only when its extracted content exactly matches
+`build_library/rpm/additional_files/ipe/acl-ipe-boot-policy.pol`:
+
+```bash
+./acl/build_rpm_image.sh --rebuild \
+  --ipe-policy-mode=external \
+  --ipe-policy-path=/secure/input/acl.pol.p7b
+```
+
+External mode never falls back to ephemeral policy signing and does not need
+the policy signing private key. The build still creates a separate ephemeral
+key for development Secure Boot and the dm-verity root-hash companion.
+
+IPE-capable VM images currently support only the Azure Secure Boot UKI path.
+QEMU image conversion must use `ACL_IPE_CAPABLE=false`.
+
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
 
 ### Phase 4: Build VM Image (Optional)
