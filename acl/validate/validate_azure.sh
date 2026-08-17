@@ -304,13 +304,17 @@ schedule_failed_vm_rg_cleanup() {
         return 1
     fi
 
-    if ! az group delete \
+    local cleanup_error
+    if ! cleanup_error=$(az group delete \
         -n "$vm_rg_name" \
         --subscription "$AZ_SUB_ID" \
         -y \
         --no-wait \
-        2>/dev/null; then
+        2>&1 >/dev/null); then
         warn "Could not schedule deletion of ${vm_rg_name}; manual cleanup may be required"
+        if [[ -n "$cleanup_error" ]]; then
+            warn "  az error: $cleanup_error"
+        fi
         return 1
     fi
     return 0

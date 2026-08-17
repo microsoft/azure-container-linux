@@ -1098,6 +1098,30 @@ assert_cleanup_uses_configured_subscription() {
     printf 'PASS: failed VM cleanup uses the configured subscription\n'
 }
 
+assert_cleanup_failure_logs_azure_error() {
+    local warnings_file="${TEST_TMPDIR}/cleanup-error-warnings"
+    : > "$warnings_file"
+
+    info() { :; }
+    warn() { printf '%s\n' "$*" >> "$warnings_file"; }
+    az() {
+        printf 'AuthorizationFailed: cleanup denied\n' >&2
+        return 1
+    }
+
+    NO_CLEANUP=false
+    if schedule_failed_vm_rg_cleanup test-rg "test failure"; then
+        printf 'FAIL: failed cleanup was reported as scheduled\n' >&2
+        return 1
+    fi
+    if ! grep -qF 'az error: AuthorizationFailed: cleanup denied' "$warnings_file"; then
+        printf 'FAIL: Azure cleanup error was not logged\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: failed VM cleanup logs the Azure CLI error\n'
+}
+
 assert_resource_group_failure_stops_fallback() {
     local attempts_file="${TEST_TMPDIR}/resource-group-failure-attempts"
     : > "${attempts_file}"
@@ -1574,6 +1598,7 @@ assert_final_candidate_moves_directly_to_backup_region() {
 ( assert_no_cleanup_preserves_resource_group_on_region_fallback )
 ( assert_cleanup_failure_preserves_resource_group )
 ( assert_cleanup_uses_configured_subscription )
+( assert_cleanup_failure_logs_azure_error )
 ( assert_resource_group_failure_stops_fallback )
 ( assert_public_ip_failure_cleans_resource_group )
 ( assert_partial_resource_group_cleanup_failure_preserves_ownership )
