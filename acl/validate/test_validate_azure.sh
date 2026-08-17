@@ -61,8 +61,14 @@ assert_classification() {
 
     local rc=0
     local result
-    result=$(_try_vm_create \
-        test-rg test-vm test-image test-sku test-region 2>/dev/null) || rc=$?
+    if _try_vm_create \
+        test-rg test-vm test-image test-sku test-region \
+        >/dev/null 2>&1; then
+        rc=0
+    else
+        rc=$?
+    fi
+    result="$_VM_CREATE_RESULT"
 
     if [[ ${rc} -ne ${expected_rc} || "${result}" != "${expected_result}" ]]; then
         printf 'FAIL: %s returned rc=%s result=%q; expected rc=%s result=%q\n' \
@@ -86,18 +92,51 @@ assert_successful_vm_create_returns_cli_output() {
         printf '{"id":"test-vm"}\n'
     }
 
-    local result
-    if ! result=$(_try_vm_create \
-        test-rg test-vm test-image test-sku test-region 2>/dev/null); then
+    if ! _try_vm_create \
+        test-rg test-vm test-image test-sku test-region \
+        >/dev/null 2>&1; then
         printf 'FAIL: successful VM creation returned a failure\n' >&2
         return 1
     fi
+    local result="$_VM_CREATE_RESULT"
     if [[ "$result" != '{"id":"test-vm"}' ]]; then
         printf 'FAIL: successful VM creation returned %q\n' "$result" >&2
         return 1
     fi
 
     printf 'PASS: successful VM creation returns Azure CLI output\n'
+}
+
+assert_arm_warning_does_not_corrupt_vm_result() {
+    local log_file="${TEST_TMPDIR}/arm-security-warning"
+    warn() { printf 'WARN: %s\n' "$*"; }
+
+    BOARD=arm64-usr
+    SECURE_BOOT_ENABLED=false
+    AZ_ERROR_CODE=OSProvisioningTimedOut
+    AZ_ERROR_MESSAGE="OS provisioning for the VM did not finish in the allotted time."
+    AZ_ERROR_TARGET=""
+
+    local rc=0
+    if _try_vm_create \
+        test-rg test-vm test-image Standard_D2ps_v6 test-region \
+        >"$log_file" 2>/dev/null; then
+        rc=0
+    else
+        rc=$?
+    fi
+
+    if [[ $rc -ne 1 || "$_VM_CREATE_RESULT" != "PROVISIONING_TIMEOUT" ]]; then
+        printf 'FAIL: ARM warning corrupted VM result: rc=%s result=%q\n' \
+            "$rc" "$_VM_CREATE_RESULT" >&2
+        return 1
+    fi
+    if ! grep -qF 'Ignoring disabled Secure Boot setting' "$log_file"; then
+        printf 'FAIL: ARM security warning was not emitted\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: ARM security warnings do not corrupt VM classification\n'
 }
 
 assert_classification SkuNotAvailable \
@@ -129,6 +168,7 @@ assert_classification AuthorizationFailed \
     "The client is not authorized to create this VM." \
     2 ""
 ( assert_successful_vm_create_returns_cli_output )
+( assert_arm_warning_does_not_corrupt_vm_result )
 
 assert_vm_size_family_parsing() {
     local test_case vm_size expected actual
@@ -218,8 +258,9 @@ assert_failed_vm_boot_diagnostics() {
                 ;;
             "storage blob download")
                 printf 'storage:download\n' >> "${events_file}"
-                if [[ " $* " != *" --blob-url https://teststorage.blob.core.windows.net/bootdiagnostics-test/serialconsole.log?sig=test-secret "* ]]; then
-                    printf 'FAIL: boot diagnostics used the wrong serial log URI\n' >&2
+                if [[ " $* " != *" --blob-url https://teststorage.blob.core.windows.net/bootdiagnostics-test/serialconsole.log "* ]] ||
+                    [[ "${AZURE_STORAGE_SAS_TOKEN:-}" != "sig=test-secret" ]]; then
+                    printf 'FAIL: boot diagnostics did not separate the serial log URI and SAS token\n' >&2
                     return 1
                 fi
                 local destination=""
@@ -316,7 +357,7 @@ assert_provisioning_timeouts_are_bounded() {
     _try_vm_create() {
         printf '%s\n' "$4" >> "${attempts_file}"
         printf 'create:%s@%s\n' "$4" "$1" >> "${events_file}"
-        echo "PROVISIONING_TIMEOUT"
+        _VM_CREATE_RESULT="PROVISIONING_TIMEOUT"
         return 1
     }
 
@@ -356,7 +397,7 @@ assert_provisioning_timeouts_are_bounded() {
 
     BOARD=amd64-usr
     AZ_VM_SIZE=Standard_D2s_v5
-    AZ_BACKUP_VM_SIZES_AMD64="Standard_D2as_v5 Standard_F2s_v2 Standard_B2s_v2"
+    AZ_BACKUP_VM_SIZES_AMD64="Standard_D4s_v5 Standard_F2s_v2 Standard_B2s_v2"
     AZ_BACKUP_REGIONS=backup-region
     AZ_REGION=primary-region
     AZ_MAX_PROVISIONING_TIMEOUTS=2
@@ -371,7 +412,7 @@ assert_provisioning_timeouts_are_bounded() {
     fi
 
     local expected_attempts actual_attempts
-    expected_attempts=$'Standard_D2s_v5\nStandard_D2as_v5'
+    expected_attempts=$'Standard_D2s_v5\nStandard_F2s_v2'
     actual_attempts=$(cat "${attempts_file}")
     if [[ "${actual_attempts}" != "${expected_attempts}" ]]; then
         printf 'FAIL: provisioning timeout attempts were not bounded across distinct families\nExpected:\n%s\nActual:\n%s\n' \
@@ -390,7 +431,7 @@ assert_provisioning_timeouts_are_bounded() {
         return 1
     fi
 
-    printf 'PASS: provisioning timeouts stop after two distinct SKU families\n'
+    printf 'PASS: provisioning timeouts skip duplicate families and stop at the configured limit\n'
 }
 
 assert_single_provisioning_timeout_limit() {
@@ -405,7 +446,7 @@ assert_single_provisioning_timeout_limit() {
     capture_failed_vm_boot_diagnostics() { :; }
     _try_vm_create() {
         printf '%s\n' "$4" >> "${attempts_file}"
-        echo "PROVISIONING_TIMEOUT"
+        _VM_CREATE_RESULT="PROVISIONING_TIMEOUT"
         return 1
     }
     az() {
@@ -450,7 +491,7 @@ assert_all_families_timeout_below_limit() {
     error() { printf '%s\n' "$*" >> "${errors_file}"; }
     capture_failed_vm_boot_diagnostics() { :; }
     _try_vm_create() {
-        echo "PROVISIONING_TIMEOUT"
+        _VM_CREATE_RESULT="PROVISIONING_TIMEOUT"
         return 1
     }
     az() {
@@ -498,9 +539,9 @@ assert_mixed_failures_keep_generic_terminal_error() {
         attempt_count=$(wc -l < "${attempts_file}")
         printf '%s\n' "$4" >> "${attempts_file}"
         if [[ $attempt_count -eq 0 ]]; then
-            echo "PROVISIONING_TIMEOUT"
+            _VM_CREATE_RESULT="PROVISIONING_TIMEOUT"
         else
-            echo "RETRYABLE_VM_CREATE_ERROR"
+            _VM_CREATE_RESULT="RETRYABLE_VM_CREATE_ERROR"
         fi
         return 1
     }
@@ -561,7 +602,7 @@ assert_fallback_uses_clean_resource_group() {
         printf 'create:%s@%s\n' "${vm_size}" "${vm_rg_name}" >> "${events_file}"
 
         if [[ ${attempt_count} -eq 0 ]]; then
-            echo "PROVISIONING_TIMEOUT"
+            _VM_CREATE_RESULT="PROVISIONING_TIMEOUT"
             return 1
         fi
 
@@ -570,7 +611,7 @@ assert_fallback_uses_clean_resource_group() {
             return 2
         fi
 
-        echo '{"powerState":"VM running"}'
+        _VM_CREATE_RESULT='{"powerState":"VM running"}'
     }
 
     az() {
@@ -677,12 +718,12 @@ assert_control_plane_failure_reuses_resource_group() {
         printf 'create:%s@%s\n' "${vm_size}" "${vm_rg_name}" >> "${events_file}"
 
         if [[ ${attempt_count} -eq 0 ]]; then
-            echo "RETRYABLE_VM_CREATE_ERROR"
+            _VM_CREATE_RESULT="RETRYABLE_VM_CREATE_ERROR"
             return 1
         fi
 
         [[ "${vm_rg_name}" == "test-rg" ]] || return 2
-        echo '{"powerState":"VM running"}'
+        _VM_CREATE_RESULT='{"powerState":"VM running"}'
     }
 
     az() {
@@ -781,12 +822,12 @@ assert_control_plane_failure_with_vm_rotates_resource_group() {
         printf 'create:%s@%s\n' "${vm_size}" "${vm_rg_name}" >> "${events_file}"
 
         if [[ ${attempt_count} -eq 0 ]]; then
-            echo "RETRYABLE_VM_CREATE_ERROR"
+            _VM_CREATE_RESULT="RETRYABLE_VM_CREATE_ERROR"
             return 1
         fi
 
         [[ "${vm_rg_name}" == "test-rg-2" ]] || return 2
-        echo '{"powerState":"VM running"}'
+        _VM_CREATE_RESULT='{"powerState":"VM running"}'
     }
 
     az() {
@@ -877,7 +918,7 @@ assert_no_cleanup_preserves_timeout_resource_group() {
     _try_vm_create() {
         printf '%s\n' "$4" >> "${attempts_file}"
         printf 'create:%s@%s\n' "$4" "$1" >> "${events_file}"
-        echo "PROVISIONING_TIMEOUT"
+        _VM_CREATE_RESULT="PROVISIONING_TIMEOUT"
         return 1
     }
     az() {
@@ -900,6 +941,12 @@ assert_no_cleanup_preserves_timeout_resource_group() {
         esac
     }
 
+    get_vm_rg_name() {
+        local group_count
+        group_count=$(grep -c '^group:create:' "${events_file}" || true)
+        printf 'test-rg-%s\n' "$((group_count + 1))"
+    }
+
     BOARD=amd64-usr
     AZ_VM_SIZE=primary-sku
     AZ_BACKUP_VM_SIZES_AMD64=fallback-sku
@@ -918,19 +965,19 @@ assert_no_cleanup_preserves_timeout_resource_group() {
     fi
 
     local expected_events actual_events
-    expected_events=$'group:create:test-rg-1\ncreate:primary-sku@test-rg-1\ndiagnostics:capture:test-rg-1'
+    expected_events=$'group:create:test-rg-1\ncreate:primary-sku@test-rg-1\ndiagnostics:capture:test-rg-1\ngroup:create:test-rg-2\ncreate:fallback-sku@test-rg-2\ndiagnostics:capture:test-rg-2'
     actual_events=$(cat "${events_file}")
     if [[ "${actual_events}" != "${expected_events}" ]]; then
         printf 'FAIL: --no-cleanup did not preserve the first failed resource group\nExpected:\n%s\nActual:\n%s\n' \
             "${expected_events}" "${actual_events}" >&2
         return 1
     fi
-    if [[ "$(wc -l < "${attempts_file}")" -ne 1 || "${VM_RG}" != "test-rg-1" ]]; then
-        printf 'FAIL: --no-cleanup continued fallback or lost resource-group ownership\n' >&2
+    if [[ "$(wc -l < "${attempts_file}")" -ne 2 || -n "${VM_RG}" ]]; then
+        printf 'FAIL: --no-cleanup did not continue through a fresh resource group\n' >&2
         return 1
     fi
 
-    printf 'PASS: --no-cleanup preserves the timed-out resource group\n'
+    printf 'PASS: --no-cleanup preserves timed-out resource groups and continues fallback\n'
 }
 
 assert_no_cleanup_preserves_resource_group_on_region_fallback() {
@@ -946,7 +993,7 @@ assert_no_cleanup_preserves_resource_group_on_region_fallback() {
     _try_vm_create() {
         printf '%s@%s\n' "$4" "$5" >> "${attempts_file}"
         printf 'create:%s@%s/%s\n' "$4" "$1" "$5" >> "${events_file}"
-        echo "RETRYABLE_VM_CREATE_ERROR"
+        _VM_CREATE_RESULT="RETRYABLE_VM_CREATE_ERROR"
         return 1
     }
     az() {
@@ -973,6 +1020,8 @@ assert_no_cleanup_preserves_resource_group_on_region_fallback() {
         esac
     }
 
+    get_vm_rg_name() { echo "test-rg-2"; }
+
     BOARD=amd64-usr
     AZ_VM_SIZE=only-sku
     AZ_BACKUP_VM_SIZES_AMD64=""
@@ -990,19 +1039,19 @@ assert_no_cleanup_preserves_resource_group_on_region_fallback() {
     fi
 
     local expected_events actual_events
-    expected_events=$'group:create:test-rg-1\ncreate:only-sku@test-rg-1/primary-region\nvm:list:test-rg-1'
+    expected_events=$'group:create:test-rg-1\ncreate:only-sku@test-rg-1/primary-region\nvm:list:test-rg-1\ngroup:create:test-rg-2\ncreate:only-sku@test-rg-2/backup-region\nvm:list:test-rg-2'
     actual_events=$(cat "${events_file}")
     if [[ "${actual_events}" != "${expected_events}" ]]; then
         printf 'FAIL: --no-cleanup region fallback did not preserve the primary resource group\nExpected:\n%s\nActual:\n%s\n' \
             "${expected_events}" "${actual_events}" >&2
         return 1
     fi
-    if [[ "$(wc -l < "${attempts_file}")" -ne 1 || "${VM_RG}" != "test-rg-1" ]]; then
-        printf 'FAIL: --no-cleanup attempted the backup region or lost resource-group ownership\n' >&2
+    if [[ "$(wc -l < "${attempts_file}")" -ne 2 || "${VM_RG}" != "test-rg-2" ]]; then
+        printf 'FAIL: --no-cleanup did not continue into a fresh backup-region resource group\n' >&2
         return 1
     fi
 
-    printf 'PASS: --no-cleanup preserves the resource group across region fallback\n'
+    printf 'PASS: --no-cleanup preserves failed resource groups across region fallback\n'
 }
 
 assert_cleanup_failure_preserves_resource_group() {
@@ -1017,7 +1066,7 @@ assert_cleanup_failure_preserves_resource_group() {
     _try_vm_create() {
         printf '%s\n' "$4" >> "${attempts_file}"
         printf 'create:%s@%s\n' "$4" "$1" >> "${events_file}"
-        echo "RETRYABLE_VM_CREATE_ERROR"
+        _VM_CREATE_RESULT="RETRYABLE_VM_CREATE_ERROR"
         return 1
     }
     az() {
@@ -1133,7 +1182,7 @@ assert_resource_group_failure_stops_fallback() {
 
     _try_vm_create() {
         printf '%s\n' "$4" >> "${attempts_file}"
-        echo "PROVISIONING_TIMEOUT"
+        _VM_CREATE_RESULT="PROVISIONING_TIMEOUT"
         return 1
     }
 
@@ -1394,6 +1443,38 @@ assert_boot_diagnostics_storage_is_provisioned() {
     printf 'PASS: boot diagnostics storage is provisioned with each VM resource group\n'
 }
 
+assert_exhaustion_skips_cleanup_for_uncreated_resource_group() {
+    info() { :; }
+    warn() { :; }
+    error() { :; }
+    _validate_arm_vm_size() { return 1; }
+    az() {
+        printf 'FAIL: exhaustion touched an uncreated resource group: %q\n' "$*" >&2
+        return 1
+    }
+
+    BOARD=arm64-usr
+    AZ_VM_SIZE=Standard_D2ps_v6
+    AZ_BACKUP_VM_SIZES_ARM64=""
+    AZ_BACKUP_REGIONS=""
+    AZ_REGION=test-region
+    ACG_IMAGE_VERSION_ID=test-image-id
+    RESOURCE_TAGS=(createdBy=test)
+    VM_NAME=test-vm
+    VM_RG=test-rg
+
+    if create_vm_azure test-rg test-image-id >/dev/null; then
+        printf 'FAIL: exhaustion without eligible SKUs unexpectedly succeeded\n' >&2
+        return 1
+    fi
+    if [[ -n "$VM_RG" ]]; then
+        printf 'FAIL: exhaustion retained ownership of an uncreated resource group\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: exhaustion skips cleanup for an uncreated resource group\n'
+}
+
 assert_final_candidate_cleans_reused_resource_group() {
     local events_file="${TEST_TMPDIR}/final-candidate-events"
     : > "${events_file}"
@@ -1405,7 +1486,7 @@ assert_final_candidate_cleans_reused_resource_group() {
 
     _try_vm_create() {
         printf 'create:%s@%s\n' "$4" "$1" >> "${events_file}"
-        echo "RETRYABLE_VM_CREATE_ERROR"
+        _VM_CREATE_RESULT="RETRYABLE_VM_CREATE_ERROR"
         return 1
     }
 
@@ -1491,11 +1572,11 @@ assert_final_candidate_moves_directly_to_backup_region() {
         printf 'create:%s@%s/%s\n' "${vm_size}" "${vm_rg_name}" "${region}" >> "${events_file}"
 
         if [[ ${attempt_count} -eq 0 ]]; then
-            echo "RETRYABLE_VM_CREATE_ERROR"
+            _VM_CREATE_RESULT="RETRYABLE_VM_CREATE_ERROR"
             return 1
         fi
 
-        echo '{"powerState":"VM running"}'
+        _VM_CREATE_RESULT='{"powerState":"VM running"}'
     }
 
     az() {
@@ -1604,6 +1685,7 @@ assert_final_candidate_moves_directly_to_backup_region() {
 ( assert_partial_resource_group_cleanup_failure_preserves_ownership )
 ( assert_no_cleanup_preserves_partial_resource_group )
 ( assert_boot_diagnostics_storage_is_provisioned )
+( assert_exhaustion_skips_cleanup_for_uncreated_resource_group )
 ( assert_final_candidate_cleans_reused_resource_group )
 ( assert_final_candidate_moves_directly_to_backup_region )
 )

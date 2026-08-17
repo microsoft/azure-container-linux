@@ -38,6 +38,7 @@ fi
 VM_RG_PREFIX="${VM_RG_PREFIX:-$(whoami)-acl-test-vm-rg}"
 VM_RG=""
 AZ_VM_ARGS="${AZ_VM_ARGS:-}"
+_VM_CREATE_RESULT=""
 AZ_MAX_PROVISIONING_TIMEOUTS="${AZ_MAX_PROVISIONING_TIMEOUTS:-2}"
 
 validate_azure_configuration() {
@@ -257,22 +258,28 @@ capture_failed_vm_boot_diagnostics() {
         warn "Could not retrieve the serial-console log URI"
     elif [[ -z "$serial_log_uri" || "$serial_log_uri" == "null" ]]; then
         warn "Azure returned no serial-console log URI"
-    elif az storage blob download \
-        --blob-url "$serial_log_uri" \
-        --file "$boot_log_file" \
-        --overwrite true \
-        --no-progress \
-        --only-show-errors \
-        --output none 2>>"$boot_log_err_file"; then
-        if [[ -s "$boot_log_file" ]]; then
-            info "Failed VM serial console log (last 200 lines):"
-            tail -200 "$boot_log_file" | sed 's/^/  [serial] /' >&2 || true
-        else
-            warn "Boot diagnostics returned an empty serial console log"
-        fi
+    elif [[ "$serial_log_uri" != *\?* ]]; then
+        warn "Azure returned a serial-console log URI without a SAS token"
     else
-        # Do not print the captured Azure CLI error because it may contain the SAS URI.
-        warn "Could not download the serial-console boot log"
+        local serial_log_url="${serial_log_uri%%\?*}"
+        local serial_log_sas="${serial_log_uri#*\?}"
+        if AZURE_STORAGE_SAS_TOKEN="$serial_log_sas" az storage blob download \
+            --blob-url "$serial_log_url" \
+            --file "$boot_log_file" \
+            --overwrite true \
+            --no-progress \
+            --only-show-errors \
+            --output none 2>>"$boot_log_err_file"; then
+            if [[ -s "$boot_log_file" ]]; then
+                info "Failed VM serial console log (last 200 lines):"
+                tail -200 "$boot_log_file" | sed 's/^/  [serial] /' >&2 || true
+            else
+                warn "Boot diagnostics returned an empty serial console log"
+            fi
+        else
+            # Do not print the captured Azure CLI error because it may contain the SAS URI.
+            warn "Could not download the serial-console boot log"
+        fi
     fi
     rm -f "$boot_log_file" "$boot_log_err_file" || true
 
@@ -318,6 +325,17 @@ schedule_failed_vm_rg_cleanup() {
         return 1
     fi
     return 0
+}
+
+release_failed_vm_rg() {
+    local vm_rg_name="$1"
+    local reason="$2"
+
+    if [[ "${NO_CLEANUP:-false}" == "true" ]]; then
+        warn "--no-cleanup: preserving resource group ${vm_rg_name} after ${reason}; continuing with a fresh resource group"
+        return 0
+    fi
+    schedule_failed_vm_rg_cleanup "$vm_rg_name" "$reason"
 }
 
 # ── Azure console ─────────────────────────────────────────────────
@@ -668,6 +686,7 @@ _try_vm_create() {
     local region="$5"
     shift 5
     local -a extra_tags=("$@")
+    _VM_CREATE_RESULT=""
     _enforce_arm_security_contract || return 2
     local boot_diagnostics_storage_name
     boot_diagnostics_storage_name=$(get_boot_diagnostics_storage_name "$vm_rg_name")
@@ -723,14 +742,14 @@ _try_vm_create() {
     fi
 
     if [[ $rc -eq 0 ]]; then
-        printf '%s\n' "$output"
+        _VM_CREATE_RESULT="$output"
         return 0
     else
         # A provisioning timeout usually points to a guest/image boot problem,
         # so let the caller apply a stricter retry limit than capacity errors.
         if echo "$output" | grep -qi "OSProvisioningTimedOut"; then
             echo "$output" | grep -i "OSProvisioningTimedOut" >&2 || true
-            echo "PROVISIONING_TIMEOUT"
+            _VM_CREATE_RESULT="PROVISIONING_TIMEOUT"
             return 1
         fi
         # Detect candidate-specific errors so the caller can move on to the
@@ -752,7 +771,7 @@ _try_vm_create() {
             # Log the error details to stderr so they appear in pipeline logs
             echo "$output" | grep -iE \
                 'SkuNotAvailable|AllocationFailed|ZonalAllocationFailed|OperationNotAllowed|Capacity|Quota|InvalidParameter|vmSize|TrustedLaunch|BadRequest' >&2 || true
-            echo "RETRYABLE_VM_CREATE_ERROR"
+            _VM_CREATE_RESULT="RETRYABLE_VM_CREATE_ERROR"
             return 1
         fi
         # Non-retryable error — print the full output so the caller sees it, then fail
@@ -872,7 +891,7 @@ _prepare_vm_attempt_resource_group() {
         -n "$_current_rg_region_ref" &&
         "$_current_rg_region_ref" != "$region" ]]; then
         info "Switching from ${_current_rg_region_ref} to ${region}; recreating resource group"
-        if ! schedule_failed_vm_rg_cleanup \
+        if ! release_failed_vm_rg \
             "$_vm_rg_name_ref" "region fallback from ${_current_rg_region_ref} to ${region}"; then
             error "Stopping fallback because resource group ${_vm_rg_name_ref} was preserved"
             return 1
@@ -945,7 +964,7 @@ _handle_provisioning_timeout() {
 
     capture_failed_vm_boot_diagnostics \
         "$_vm_rg_name_ref" "$VM_NAME" "$sku" "$region" || true
-    if ! schedule_failed_vm_rg_cleanup \
+    if ! release_failed_vm_rg \
         "$_vm_rg_name_ref" "OS provisioning timeout"; then
         error "Stopping fallback because resource group ${_vm_rg_name_ref} was preserved"
         return 1
@@ -971,7 +990,7 @@ _handle_retryable_vm_create_error() {
     fi
 
     warn "✗ Retryable VM creation failure left a VM or could not confirm its absence; rotating resource groups"
-    if ! schedule_failed_vm_rg_cleanup \
+    if ! release_failed_vm_rg \
         "$_vm_rg_name_ref" "retryable VM creation failure"; then
         error "Stopping fallback because resource group ${_vm_rg_name_ref} was preserved"
         return 1
@@ -1088,6 +1107,10 @@ create_vm_azure() {
         local sku sku_family
         for sku in "${region_skus[@]}"; do
             sku_family=$(get_vm_size_family "$sku")
+            if [[ -n "${timed_out_families[$sku_family]:-}" ]]; then
+                info "Skipping SKU=${sku}: family ${sku_family} already timed out provisioning"
+                continue
+            fi
             if ! _prepare_vm_attempt_resource_group \
                 vm_rg_name current_rg_region "$region" "$public_ip_name" \
                 "${all_tags[@]}"; then
@@ -1096,9 +1119,14 @@ create_vm_azure() {
 
             tried_combos+=("${sku}@${region}")
             local result rc
-            result=$(_try_vm_create \
+            if _try_vm_create \
                 "$vm_rg_name" "$VM_NAME" "$image_id" "$sku" "$region" \
-                "${all_tags[@]}") && rc=0 || rc=$?
+                "${all_tags[@]}"; then
+                rc=0
+            else
+                rc=$?
+            fi
+            result="$_VM_CREATE_RESULT"
 
             if [[ $rc -eq 0 ]]; then
                 echo "$result"  # Print the az vm create JSON output
@@ -1138,10 +1166,13 @@ create_vm_azure() {
         done
     done
 
-    if [[ -n "$vm_rg_name" ]] &&
-        schedule_failed_vm_rg_cleanup \
+    if [[ -n "$vm_rg_name" && -n "$current_rg_region" ]]; then
+        if schedule_failed_vm_rg_cleanup \
             "$vm_rg_name" "all VM candidates exhausted"; then
-        vm_rg_name=""
+            vm_rg_name=""
+            VM_RG=""
+        fi
+    else
         VM_RG=""
     fi
 
