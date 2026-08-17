@@ -53,9 +53,14 @@ function yell() {
 # Guess the SDK version from the current git commit.
 #
 function get_git_version() {
-    local tag="$(git tag --points-at HEAD)"
+    # A single commit can carry more than one tag (e.g. two ACL releases cut
+    # from the same commit). Callers expect a single-line version string -- a
+    # multi-line one leaks into the versionfile and into derived docker
+    # container names, which docker then rejects. Pick the highest version tag
+    # deterministically.
+    local tag="$(git tag --points-at HEAD | sort -V | tail -n 1)"
     if [ -z "$tag" ] ; then
-        git describe --tags
+        git describe --tags | head -n 1
     else
         echo "$tag"
     fi
@@ -89,7 +94,9 @@ function build_id_from_version() {
     local version="$1"
 
     # support vernums and versions ("alpha-"... is optional)
-    echo "${version}" | sed -n 's/^\([a-z]\+-\)\?[0-9.]\+[-+]\(.*\)$/\2/p'
+    # 'sed -n ...p' prints one line per match, so clamp to a single line to
+    # guarantee callers never get a multi-line version fragment.
+    echo "${version}" | sed -n 's/^\([a-z]\+-\)\?[0-9.]\+[-+]\(.*\)$/\2/p' | head -n 1
 }
 # --
 
@@ -118,7 +125,9 @@ function vernum_from_version() {
     local version="$1"
 
     # support vernums and versions ("alpha-"... is optional)
-    echo "${version}" | sed -n 's/^\([a-z]\+-\)\?\([0-9.]\+\).*/\2/p'
+    # 'sed -n ...p' prints one line per match, so clamp to a single line to
+    # guarantee callers never get a multi-line version fragment.
+    echo "${version}" | sed -n 's/^\([a-z]\+-\)\?\([0-9.]\+\).*/\2/p' | head -n 1
 }
 # --
 
