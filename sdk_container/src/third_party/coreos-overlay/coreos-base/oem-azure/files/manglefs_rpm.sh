@@ -55,18 +55,30 @@ if [[ -f "${rootfs}/usr/lib/systemd/system/chronyd.service" ]]; then
     sed -i \
         's|^ExecStart=/usr/sbin/chronyd $OPTIONS$|ExecStart=/usr/sbin/chronyd -f /usr/lib/chrony/chrony.conf $OPTIONS|' \
         "${rootfs}/usr/lib/systemd/system/chronyd.service"
+
+    # Azure Linux 3.0 adds remove-daemon-state, but its chrony-helper does not
+    # implement that command. Preserve update-daemon for DHCP-provided sources.
+    sed -i \
+        '\|^ExecStopPost=.*/chrony-helper remove-daemon-state$|d' \
+        "${rootfs}/usr/lib/systemd/system/chronyd.service"
 fi
 
 # Copy Azure-optimized chrony.conf from this directory.
 # Overwrites the RPM default that manglefs already moved from /etc.
-# Key differences: makestep 1.0 -1 (always-step), PTP refclock for Hyper-V clock.
+# Key differences: always-step, network fallback, and optional Hyper-V PTP.
 
 # Copy Azure-optimized chrony.conf to /usr/lib/chrony/chrony.conf
 if [[ -f "${script_dir}/chrony.conf" ]]; then
     cp "${script_dir}/chrony.conf" "${rootfs}/usr/lib/chrony/chrony.conf"
 fi
 
-# chronyd.service drop-in (Wants/After dev-ptp_hyperv.device)
+# Generate the optional Hyper-V PTP source before chronyd starts.
+if [[ -f "${script_dir}/chrony-azure-ptp" ]]; then
+    install -D -m 0755 "${script_dir}/chrony-azure-ptp" \
+        "${rootfs}/usr/libexec/chrony-azure-ptp"
+fi
+
+# chronyd.service drop-in for optional Hyper-V PTP configuration.
 if [[ -f "${script_dir}/chrony-hyperv.conf" ]]; then
     mkdir -p "${rootfs}/usr/lib/systemd/system/chronyd.service.d"
     cp "${script_dir}/chrony-hyperv.conf" \
