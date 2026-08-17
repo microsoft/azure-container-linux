@@ -2,7 +2,7 @@
 
 Name:           bootengine
 Version:        0.0.38
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        Flatcar bootengine dracut modules and helper utilities
 
 License:        BSD-2-Clause
@@ -12,6 +12,7 @@ URL:            https://github.com/flatcar/bootengine
 Source0:        https://github.com/flatcar/bootengine/archive/%{commit_hash}.tar.gz#/%{name}-%{version}.tar.gz
 Patch0:         0001-modify-tests.patch
 Patch1:         0002-delete-UKI-firstboot-addon-after-Ignition.patch
+Patch2:         0003-decrypt-root-fix-firstboot-ordering.patch
 BuildArch:      noarch
 BuildRequires:  dracut
 Requires:       util-linux
@@ -72,6 +73,11 @@ chmod +x \
 %{_sbindir}/update-bootengine
 
 %changelog
+* Mon Aug 17 2026 Mayank Singh <mayansingh@microsoft.com> - 0.0.38-3
+- decrypt-root: fix first-boot ordering race that dropped the decryption job
+  and fell through to the dracut emergency shell (Before= root-device/sysroot,
+  drop After=ignition-disks.service).
+
 * Tue May 06 2026 Lanze Liu <lanzeliu@microsoft.com> - 0.0.38-2
 - Update firstboot addon removal to use glob pattern for UAPI UKI naming
 
