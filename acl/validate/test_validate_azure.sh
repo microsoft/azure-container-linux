@@ -2,6 +2,9 @@
 
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
+#
+# Regression tests for Azure VM provisioning fallback, diagnostics, and cleanup.
+# The suite mocks Azure CLI calls so validation behavior can be tested locally.
 
 (
 set -euo pipefail
@@ -70,6 +73,33 @@ assert_classification() {
     printf 'PASS: %s\n' "${error_code}"
 }
 
+assert_successful_vm_create_returns_cli_output() {
+    az() {
+        if [[ "$*" != "vm create "* ]]; then
+            printf 'unexpected Azure CLI command: %s\n' "$*" >&2
+            return 1
+        fi
+        if [[ " $* " != *" --boot-diagnostics-storage ${TEST_BOOT_DIAGNOSTICS_STORAGE} "* ]]; then
+            printf 'missing create-time boot diagnostics storage argument\n' >&2
+            return 1
+        fi
+        printf '{"id":"test-vm"}\n'
+    }
+
+    local result
+    if ! result=$(_try_vm_create \
+        test-rg test-vm test-image test-sku test-region 2>/dev/null); then
+        printf 'FAIL: successful VM creation returned a failure\n' >&2
+        return 1
+    fi
+    if [[ "$result" != '{"id":"test-vm"}' ]]; then
+        printf 'FAIL: successful VM creation returned %q\n' "$result" >&2
+        return 1
+    fi
+
+    printf 'PASS: successful VM creation returns Azure CLI output\n'
+}
+
 assert_classification SkuNotAvailable \
     "The requested VM size is not available in this location." \
     1 RETRYABLE_VM_CREATE_ERROR
@@ -98,6 +128,7 @@ assert_classification OperationNotAllowed \
 assert_classification AuthorizationFailed \
     "The client is not authorized to create this VM." \
     2 ""
+( assert_successful_vm_create_returns_cli_output )
 
 assert_vm_size_family_parsing() {
     local test_case vm_size expected actual
