@@ -1,0 +1,16 @@
+#!/bin/bash
+
+set -euo pipefail
+
+config_dir="/run/chrony/conf.d"
+config_file="${config_dir}/azure-ptp.conf"
+
+install -d -m 0755 "${config_dir}"
+
+if [[ -e /dev/ptp_hyperv ]]; then
+    printf '%s\n' \
+        'refclock PHC /dev/ptp_hyperv poll 3 dpoll -2 offset 0 stratum 2 prefer' \
+        > "${config_file}"
+else
+    rm -f "${config_file}"
+fi
