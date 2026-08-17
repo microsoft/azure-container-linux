@@ -304,7 +304,12 @@ schedule_failed_vm_rg_cleanup() {
         return 1
     fi
 
-    if ! az group delete -n "$vm_rg_name" -y --no-wait 2>/dev/null; then
+    if ! az group delete \
+        -n "$vm_rg_name" \
+        --subscription "$AZ_SUB_ID" \
+        -y \
+        --no-wait \
+        2>/dev/null; then
         warn "Could not schedule deletion of ${vm_rg_name}; manual cleanup may be required"
         return 1
     fi
@@ -1128,6 +1133,13 @@ create_vm_azure() {
             fi
         done
     done
+
+    if [[ -n "$vm_rg_name" ]] &&
+        schedule_failed_vm_rg_cleanup \
+            "$vm_rg_name" "all VM candidates exhausted"; then
+        vm_rg_name=""
+        VM_RG=""
+    fi
 
     _report_vm_fallback_failure \
         unique_skus timed_out_families provisioning_timeout_combos \

@@ -1077,6 +1077,27 @@ assert_cleanup_failure_preserves_resource_group() {
     printf 'PASS: cleanup failure preserves resource-group ownership\n'
 }
 
+assert_cleanup_uses_configured_subscription() {
+    info() { :; }
+    warn() { :; }
+
+    az() {
+        local expected="group delete -n test-rg --subscription test-subscription -y --no-wait"
+        if [[ "$*" != "$expected" ]]; then
+            printf 'FAIL: cleanup command was %q; expected %q\n' "$*" "$expected" >&2
+            return 1
+        fi
+    }
+
+    NO_CLEANUP=false
+    if ! schedule_failed_vm_rg_cleanup test-rg "test failure"; then
+        printf 'FAIL: subscription-scoped cleanup was not scheduled\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: failed VM cleanup uses the configured subscription\n'
+}
+
 assert_resource_group_failure_stops_fallback() {
     local attempts_file="${TEST_TMPDIR}/resource-group-failure-attempts"
     : > "${attempts_file}"
@@ -1349,7 +1370,7 @@ assert_boot_diagnostics_storage_is_provisioned() {
     printf 'PASS: boot diagnostics storage is provisioned with each VM resource group\n'
 }
 
-assert_final_candidate_does_not_create_unused_resource_group() {
+assert_final_candidate_cleans_reused_resource_group() {
     local events_file="${TEST_TMPDIR}/final-candidate-events"
     : > "${events_file}"
 
@@ -1406,19 +1427,19 @@ assert_final_candidate_does_not_create_unused_resource_group() {
     fi
 
     local expected_events actual_events
-    expected_events=$'group:create:test-rg-1\ncreate:only-sku@test-rg-1'
+    expected_events=$'group:create:test-rg-1\ncreate:only-sku@test-rg-1\ngroup:delete:test-rg-1'
     actual_events=$(cat "${events_file}")
     if [[ "${actual_events}" != "${expected_events}" ]]; then
-        printf 'FAIL: final candidate created an unused replacement resource group\nExpected:\n%s\nActual:\n%s\n' \
+        printf 'FAIL: final candidate did not clean its reused resource group\nExpected:\n%s\nActual:\n%s\n' \
             "${expected_events}" "${actual_events}" >&2
         return 1
     fi
-    if [[ "${VM_RG}" != "test-rg-1" ]]; then
-        printf 'FAIL: final control-plane failure lost the owned resource group\n' >&2
+    if [[ -n "${VM_RG}" ]]; then
+        printf 'FAIL: final control-plane cleanup retained resource-group ownership\n' >&2
         return 1
     fi
 
-    printf 'PASS: final candidate does not create an unused resource group\n'
+    printf 'PASS: final candidate cleans its reused resource group\n'
 }
 
 assert_final_candidate_moves_directly_to_backup_region() {
@@ -1552,11 +1573,12 @@ assert_final_candidate_moves_directly_to_backup_region() {
 ( assert_no_cleanup_preserves_timeout_resource_group )
 ( assert_no_cleanup_preserves_resource_group_on_region_fallback )
 ( assert_cleanup_failure_preserves_resource_group )
+( assert_cleanup_uses_configured_subscription )
 ( assert_resource_group_failure_stops_fallback )
 ( assert_public_ip_failure_cleans_resource_group )
 ( assert_partial_resource_group_cleanup_failure_preserves_ownership )
 ( assert_no_cleanup_preserves_partial_resource_group )
 ( assert_boot_diagnostics_storage_is_provisioned )
-( assert_final_candidate_does_not_create_unused_resource_group )
+( assert_final_candidate_cleans_reused_resource_group )
 ( assert_final_candidate_moves_directly_to_backup_region )
 )
