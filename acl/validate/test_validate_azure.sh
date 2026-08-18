@@ -1396,11 +1396,15 @@ assert_boot_diagnostics_storage_is_provisioned() {
 
     az() {
         case "${1:-} ${2:-} ${3:-} ${4:-}" in
-            "group create "*|"network public-ip create "*)
-                return 0
-                ;;
-            "storage account create "*)
-                printf '%s\n' "$*" >> "${events_file}"
+            "group create "*|"network public-ip create "*|"storage account create "*)
+                if [[ " $* " != *" --subscription test-subscription "* ]]; then
+                    printf 'FAIL: Azure resource creation omitted the configured subscription: %s\n' \
+                        "$*" >&2
+                    return 1
+                fi
+                if [[ "${1:-} ${2:-} ${3:-}" == "storage account create" ]]; then
+                    printf '%s\n' "$*" >> "${events_file}"
+                fi
                 return 0
                 ;;
             "group delete "*)
@@ -1429,6 +1433,7 @@ assert_boot_diagnostics_storage_is_provisioned() {
         return 1
     fi
     if [[ " $storage_command " != *" --name $storage_name "* ||
+        " $storage_command " != *" --subscription test-subscription "* ||
         " $storage_command " != *" --resource-group test-rg "* ||
         " $storage_command " != *" --location test-region "* ||
         " $storage_command " != *" --sku Standard_LRS "* ||
@@ -1440,7 +1445,7 @@ assert_boot_diagnostics_storage_is_provisioned() {
         return 1
     fi
 
-    printf 'PASS: boot diagnostics storage is provisioned with each VM resource group\n'
+    printf 'PASS: VM resources are provisioned in the configured subscription\n'
 }
 
 assert_exhaustion_skips_cleanup_for_uncreated_resource_group() {

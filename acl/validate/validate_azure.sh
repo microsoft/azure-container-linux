@@ -181,6 +181,7 @@ create_vm_resource_group() {
     info "Creating VM RG: $vm_rg_name (location: $region)"
     if ! az group create \
         --name "$vm_rg_name" \
+        --subscription "$AZ_SUB_ID" \
         --location "$region" \
         --tags "${tags[@]}"; then
         return 1
@@ -190,6 +191,7 @@ create_vm_resource_group() {
     info "Creating public IP with policy-compliant tags: $public_ip_name"
     if ! az network public-ip create \
         --name "$public_ip_name" \
+        --subscription "$AZ_SUB_ID" \
         --resource-group "$vm_rg_name" \
         --location "$region" \
         --allocation-method Static \
@@ -210,6 +212,7 @@ create_vm_resource_group() {
     info "Creating boot diagnostics storage account: $boot_diagnostics_storage_name"
     if ! az storage account create \
         --name "$boot_diagnostics_storage_name" \
+        --subscription "$AZ_SUB_ID" \
         --resource-group "$vm_rg_name" \
         --location "$region" \
         --sku Standard_LRS \
