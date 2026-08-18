@@ -58,12 +58,17 @@ function yell() {
 # Guess the SDK version from the current git commit.
 #
 function get_git_version() {
-    local tag="$(git tag --points-at HEAD)"
-    if [ -z "$tag" ] ; then
+    local tags=()
+    mapfile -t tags < <(git tag --points-at HEAD --sort=-version:refname)
+    if [ "${#tags[@]}" -eq 0 ] ; then
         git describe --tags
-    else
-        echo "$tag"
+        return
     fi
+
+    if [ "${#tags[@]}" -gt 1 ] ; then
+        echo "WARNING: multiple tags point at HEAD; using highest version '${tags[0]}' (candidates: ${tags[*]})" >&2
+    fi
+    echo "${tags[0]}"
 }
 # --
 
