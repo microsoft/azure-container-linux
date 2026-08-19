@@ -77,8 +77,25 @@ test_ephemeral_mode_removes_stale_policy() {
         reused-container rm -f /tmp/acl-ipe-policy.p7b
 }
 
+test_untagged_checkout_version_fallback() {
+    local repo="${TEST_DIR}/untagged"
+    mkdir -p "${repo}/sdk_container/.repo/manifests"
+    printf 'FLATCAR_VERSION="9999.0.0"\n' \
+        > "${repo}/sdk_container/.repo/manifests/version.txt"
+    git -C "${repo}" init -q
+    git -C "${repo}" -c user.name=test -c user.email=test@example.com \
+        -c commit.gpgsign=false commit --allow-empty -qm initial
+
+    (
+        cd "${repo}"
+        source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
+        [[ "$(get_git_version)" == "9999.0.0" ]]
+    )
+}
+
 # Different inputs prove that a reused container receives the current policy.
 test_external_policy_refresh
 test_ephemeral_mode_removes_stale_policy
+test_untagged_checkout_version_fallback
 
 echo "run_sdk_container IPE policy reuse tests passed"
