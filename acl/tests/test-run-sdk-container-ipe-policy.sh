@@ -24,13 +24,23 @@ gnupg_ssh_gcloud_mount_opts() { :; }
 yell() { :; }
 
 call_docker() {
-    printf '%s' "$1" >> "${FAKE_DOCKER_LOG}"
+    local command="$1"
+
+    printf '%s' "${command}" >> "${FAKE_DOCKER_LOG}"
     shift
     printf '\t%s' "$@" >> "${FAKE_DOCKER_LOG}"
     printf '\n' >> "${FAKE_DOCKER_LOG}"
 
-    if [[ "${1:-}" == "--all" ]]; then
+    if [[ "${command}" == "ps" &&
+        "${FAKE_DOCKER_STATUS:-up}" == "up" ]]; then
         printf 'Up 1 second\n'
+    fi
+    if [[ "${command}" == "exec" &&
+        "${1:-}" == "-i" &&
+        "${2:-}" == "reused-container" &&
+        "${3:-}" == "sh" &&
+        "${4:-}" == "-c" ]]; then
+        cat > "${FAKE_DOCKER_POLICY_CAPTURE}"
     fi
 }
 EOF
@@ -48,12 +58,14 @@ assert_docker_call() {
 }
 
 run_container() {
-    local mode="$1" policy="$2" log="$3"
+    local mode="$1" policy="$2" log="$3" status="${4:-up}"
     (
         cd "${TEST_DIR}"
         ACL_IPE_POLICY_MODE="${mode}" \
         ACL_IPE_POLICY_PATH="${policy}" \
         FAKE_DOCKER_LOG="${log}" \
+        FAKE_DOCKER_POLICY_CAPTURE="${log}.policy" \
+        FAKE_DOCKER_STATUS="${status}" \
             ./run_sdk_container -C fake-sdk -n reused-container -- true
     )
 }
@@ -63,11 +75,26 @@ test_external_policy_refresh() {
 
     for policy in "${TEST_DIR}/policy-a.p7b" "${TEST_DIR}/policy-b.p7b"; do
         run_container external "${policy}" "${log}"
-        assert_docker_call "${log}" cp \
-            "${policy}" "reused-container:/tmp/acl-ipe-policy.p7b"
+        cmp -s "${policy}" "${log}.policy"
     done
-    [[ "$(grep -Fc $'exec\treused-container\tsh\t-c\tchmod 0644 "$1" && test -s "$1"\tsh\t/tmp/acl-ipe-policy.p7b' "${log}")" -eq 2 ]]
+    [[ "$(grep -Fc $'exec\t-i\treused-container\tsh\t-c\tcat > "$1" && chmod 0644 "$1" && test -s "$1"\tsh\t/tmp/acl-ipe-policy.p7b' "${log}")" -eq 2 ]]
+    ! grep -Fq $'cp\t' "${log}"
     ! grep -Fq $'create\t' "${log}"
+}
+
+test_external_policy_fresh_container() {
+    local log="${TEST_DIR}/fresh.log"
+    local create_line start_line stream_line
+
+    run_container external "${TEST_DIR}/policy-a.p7b" "${log}" missing
+    cmp -s "${TEST_DIR}/policy-a.p7b" "${log}.policy"
+
+    create_line="$(grep -nF $'create\t' "${log}" | cut -d: -f1)"
+    start_line="$(grep -nF $'start\treused-container' "${log}" | cut -d: -f1)"
+    stream_line="$(grep -nF $'exec\t-i\treused-container\tsh\t-c\tcat > "$1" && chmod 0644 "$1" && test -s "$1"\tsh\t/tmp/acl-ipe-policy.p7b' "${log}" | cut -d: -f1)"
+    [[ -n "${create_line}" && -n "${start_line}" && -n "${stream_line}" ]]
+    [[ "${create_line}" -lt "${start_line}" ]]
+    [[ "${start_line}" -lt "${stream_line}" ]]
 }
 
 test_ephemeral_mode_removes_stale_policy() {
@@ -95,6 +122,7 @@ test_untagged_checkout_version_fallback() {
 
 # Different inputs prove that a reused container receives the current policy.
 test_external_policy_refresh
+test_external_policy_fresh_container
 test_ephemeral_mode_removes_stale_policy
 test_untagged_checkout_version_fallback
 

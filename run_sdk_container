@@ -206,13 +206,14 @@ if [[ ${stat} != "Up" ]] ; then
 fi
 
 # Bind mounts are fixed when a container is created, but run_sdk_container
-# intentionally reuses existing containers. Copy the requested policy on every
-# invocation so external mode cannot read a missing or stale policy artifact.
+# intentionally reuses existing containers. Stream the requested policy into
+# the running container on every invocation so external mode cannot read a
+# missing or stale artifact. docker cp cannot reliably target the /tmp tmpfs.
 case "${ACL_IPE_POLICY_MODE}" in
     external)
-        call_docker cp "${ipe_policy_host_path}" "${name}:${ipe_policy_container_path}"
-        call_docker exec "${name}" sh -c \
-            'chmod 0644 "$1" && test -s "$1"' sh "${ipe_policy_container_path}"
+        call_docker exec -i "${name}" sh -c \
+            'cat > "$1" && chmod 0644 "$1" && test -s "$1"' \
+            sh "${ipe_policy_container_path}" < "${ipe_policy_host_path}"
         ;;
     ephemeral)
         call_docker exec "${name}" rm -f "${ipe_policy_container_path}"
