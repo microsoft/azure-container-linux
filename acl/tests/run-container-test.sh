@@ -5,6 +5,8 @@
 # a successful exit from this script is sufficient to validate container functionality.
 
 iptables -I INPUT -p tcp --dport 80 -j ACCEPT
-ctr image pull docker.io/library/nginx:latest > /dev/null
-ctr run --detach --net-host docker.io/library/nginx:latest nginx
+# Network-isolated CI blocks Docker Hub; use the multi-arch Azure Linux image in MCR.
+image="mcr.microsoft.com/azurelinux/base/nginx:1"
+ctr image pull "${image}" > /dev/null
+ctr run --detach --net-host "${image}" nginx
 sleep 2
