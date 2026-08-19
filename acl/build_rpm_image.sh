@@ -12,6 +12,10 @@
 #                                        skip VHD upload and image creation; use this image directly
 #                                        (for start-vm --vm-type=azure)
 #   --az-storage-account=NAME            Azure storage account name to override default (for start-vm --vm-type=azure)
+#   --az-storage-container=NAME          Azure storage container name for VHDs (for start-vm --vm-type=azure)
+#   --az-storage-rg=NAME                 Resource group containing the storage account (for start-vm --vm-type=azure)
+#   --az-gallery-rg=NAME                 Resource group containing the Azure Compute Gallery (for start-vm --vm-type=azure)
+#   --az-acg=NAME                        Azure Compute Gallery name to override default (for start-vm --vm-type=azure)
 #   --az-sub-id=ID                       Azure subscription ID to override default (for start-vm --vm-type=azure)
 #   --az-region=REGION                   Azure region to override default (for start-vm --vm-type=azure)
 #   --az-vm-size=SIZE                    Azure VM size (default: Standard_D2s_v5)
@@ -613,6 +617,38 @@ parse_args() {
                 ;;
             --az-storage-account)
                 AZ_STORAGE_ACC="$2"
+                shift 2
+                ;;
+            --az-storage-rg=*)
+                AZ_STORAGE_RG="${1#*=}"
+                shift
+                ;;
+            --az-storage-rg)
+                AZ_STORAGE_RG="$2"
+                shift 2
+                ;;
+            --az-storage-container=*)
+                AZ_STORAGE_CONTAINER="${1#*=}"
+                shift
+                ;;
+            --az-storage-container)
+                AZ_STORAGE_CONTAINER="$2"
+                shift 2
+                ;;
+            --az-gallery-rg=*)
+                AZ_GALLERY_RG="${1#*=}"
+                shift
+                ;;
+            --az-gallery-rg)
+                AZ_GALLERY_RG="$2"
+                shift 2
+                ;;
+            --az-acg=*)
+                AZ_ACG="${1#*=}"
+                shift
+                ;;
+            --az-acg)
+                AZ_ACG="$2"
                 shift 2
                 ;;
             --acg-gallery-name=*)
@@ -1937,6 +1973,9 @@ main() {
         [[ -n "${AZ_SUB_ID:-}" ]] && validate_args+=("--az-sub-id=${AZ_SUB_ID}")
         [[ -n "${AZ_REGION:-}" ]] && validate_args+=("--az-region=${AZ_REGION}")
         [[ -n "${AZ_STORAGE_ACC:-}" ]] && validate_args+=("--az-storage-account=${AZ_STORAGE_ACC}")
+        [[ -n "${AZ_STORAGE_RG:-}" ]] && validate_args+=("--az-storage-rg=${AZ_STORAGE_RG}")
+        [[ -n "${AZ_STORAGE_CONTAINER:-}" ]] && validate_args+=("--az-storage-container=${AZ_STORAGE_CONTAINER}")
+        [[ -n "${AZ_GALLERY_RG:-}" ]] && validate_args+=("--az-gallery-rg=${AZ_GALLERY_RG}")
         [[ -n "${AZ_ACG:-}" ]] && validate_args+=("--acg-gallery-name=${AZ_ACG}")
         [[ -n "${AZ_VM_SIZE:-}" ]] && validate_args+=("--az-vm-size=${AZ_VM_SIZE}")
         [[ -n "${AZ_BACKUP_REGIONS:-}" ]] && validate_args+=("--az-backup-regions=${AZ_BACKUP_REGIONS}")
