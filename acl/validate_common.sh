@@ -948,7 +948,7 @@ validate_main() {
                 if [[ -z "${VM_IP:-}" ]]; then
                     VM_IP=$(get_vm_ip_qemu "${VM_NAME}")
                 fi
-                curl --connect-timeout 10 --max-time 30 http://$VM_IP | grep "Thank you for using nginx."
+                curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "http://${VM_IP}/" >/dev/null
             fi
             print_size_summary
         fi

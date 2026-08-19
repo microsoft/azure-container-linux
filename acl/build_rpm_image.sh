@@ -1946,8 +1946,12 @@ main() {
         # Install edk2-aarch64 RPM only for arm64-usr when testing QEMU images.
         if [[ "$START_VM" == "true" ]] && [[ "$BOARD" == "arm64-usr" ]] \
                 && is_azure_linux_3 && [[ $VM_TYPE == "qemu" ]]; then
-            info "Installing qemu-user-static-aarch64.."
-            install_qemu_static_rpms
+            if ! command -v qemu-aarch64-static &>/dev/null; then
+                info "Installing qemu-user-static-aarch64.."
+                install_qemu_static_rpms
+            else
+                info "qemu-user-static-aarch64 is already installed"
+            fi
             info "Installing edk2-aarch64 rpm from ${STAGING_DIR} to provide AVM firmware binaries.."
             local edk2_aarch64_rpm=$(find "${STAGING_DIR}" -maxdepth 1 -name 'edk2-aarch64-*.rpm' 2>/dev/null)
             if [[ -f "$edk2_aarch64_rpm" ]]; then
