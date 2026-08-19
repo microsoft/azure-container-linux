@@ -55,7 +55,7 @@ function yell() {
 function get_git_version() {
     local tag="$(git tag --points-at HEAD)"
     if [ -z "$tag" ] ; then
-        git describe --tags
+        git describe --tags 2>/dev/null || get_version_from_versionfile
     else
         echo "$tag"
     fi
