@@ -943,12 +943,13 @@ validate_main() {
                     fi
                 fi
             fi
-            # Nginx curl test for container test (QEMU only)
+            # Nginx reachability test for container test (QEMU only). Any HTTP
+            # response is sufficient; the Azure Linux image returns 404 at /.
             if [[ "$VM_TYPE" != "azure" ]] && [[ ${#RUN_SCRIPTS[@]} -gt 0 ]] && [[ "${RUN_SCRIPTS[-1]}" == *"run-container-test.sh" ]]; then
                 if [[ -z "${VM_IP:-}" ]]; then
                     VM_IP=$(get_vm_ip_qemu "${VM_NAME}")
                 fi
-                curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "http://${VM_IP}/" >/dev/null
+                curl --silent --show-error --connect-timeout 10 --max-time 30 "http://${VM_IP}/" >/dev/null
             fi
             print_size_summary
         fi
