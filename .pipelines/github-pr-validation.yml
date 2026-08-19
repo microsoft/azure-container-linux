@@ -24,6 +24,18 @@ parameters:
   - name: aclPipelinesRef
     type: string
     default: refs/heads/main
+  - name: buildMantle
+    type: boolean
+    default: false
+  - name: runKolaAzure
+    type: boolean
+    default: false
+  - name: kolaTests
+    type: string
+    default: default
+  - name: maxRuns
+    type: number
+    default: 5
 
 resources:
   repositories:
@@ -51,3 +63,7 @@ extends:
   parameters:
     aclRef: $(Build.SourceBranch)
     mantleRef: 'aclmain'
+    buildMantle: ${{ parameters.buildMantle }}
+    runKolaAzure: ${{ parameters.runKolaAzure }}
+    kolaTests: ${{ parameters.kolaTests }}
+    maxRuns: ${{ parameters.maxRuns }}
