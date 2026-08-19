@@ -19,6 +19,8 @@ tty=()
 remove=""
 cleanup=""
 mounts=()
+ipe_policy_host_path=""
+ipe_policy_container_path="/tmp/acl-ipe-policy.p7b"
 
 usage() {
     echo "  Usage:"
@@ -78,6 +80,29 @@ while [[ $# -gt 0 ]] ; do
     *) break;;
     esac
 done
+
+ACL_IPE_POLICY_MODE="${ACL_IPE_POLICY_MODE:-ephemeral}"
+ACL_IPE_POLICY_PATH="${ACL_IPE_POLICY_PATH:-}"
+case "${ACL_IPE_POLICY_MODE}" in
+    ephemeral)
+        if [[ -n "${ACL_IPE_POLICY_PATH}" ]]; then
+            echo "ACL_IPE_POLICY_PATH is only valid with ACL_IPE_POLICY_MODE=external" >&2
+            exit 1
+        fi
+        ;;
+    external)
+        if [[ -z "${ACL_IPE_POLICY_PATH}" || ! -s "${ACL_IPE_POLICY_PATH}" ]]; then
+            echo "External IPE policy artifact is missing or empty: ${ACL_IPE_POLICY_PATH:-<unset>}" >&2
+            exit 1
+        fi
+        ipe_policy_host_path="$(readlink -f "${ACL_IPE_POLICY_PATH}")"
+        ACL_IPE_POLICY_PATH="${ipe_policy_container_path}"
+        ;;
+    *)
+        echo "Invalid ACL_IPE_POLICY_MODE: ${ACL_IPE_POLICY_MODE}" >&2
+        exit 1
+        ;;
+esac
 
 if [[ -n ${custom_image} ]] ; then
     container_image_name=${custom_image}
@@ -181,7 +206,27 @@ if [[ ${stat} != "Up" ]] ; then
     call_docker start "${name}"
 fi
 
+# Bind mounts are fixed when a container is created, but run_sdk_container
+# intentionally reuses existing containers. Stream the requested policy into
+# the running container on every invocation so external mode cannot read a
+# missing or stale artifact. docker cp cannot reliably target the /tmp tmpfs.
+case "${ACL_IPE_POLICY_MODE}" in
+    external)
+        call_docker exec -i "${name}" sh -c \
+            'cat > "$1" && chmod 0644 "$1" && test -s "$1"' \
+            sh "${ipe_policy_container_path}" < "${ipe_policy_host_path}"
+        ;;
+    ephemeral)
+        call_docker exec "${name}" rm -f "${ipe_policy_container_path}"
+        ;;
+esac
+
 # Workaround: The SDK expects to be able to write to /etc/hosts
 call_docker exec "${name}" sh -c 'cp /etc/hosts /etc/hosts2; umount /etc/hosts ; mv /etc/hosts2 /etc/hosts'
 
-call_docker exec "${tty[@]}" -i -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"
+call_docker exec "${tty[@]}" -i \
+    -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" \
+    -e ACL_IPE_CAPABLE="${ACL_IPE_CAPABLE:-false}" \
+    -e ACL_IPE_POLICY_MODE="${ACL_IPE_POLICY_MODE}" \
+    -e ACL_IPE_POLICY_PATH="${ACL_IPE_POLICY_PATH}" \
+    "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"

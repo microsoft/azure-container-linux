@@ -35,6 +35,8 @@
 #   --download-rpms                      [no-op] Kept for pipeline compatibility
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
 #   --help                               Show this help message
+#   --ipe-policy-mode=MODE               IPE policy source: ephemeral|external (default: ephemeral)
+#   --ipe-policy-path=PATH               Attached DER PKCS#7 policy artifact (required for external mode)
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
@@ -171,6 +173,16 @@ export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
+# Build-time IPE capability. Runtime activation is selected only through the
+# Azure IMDS acl-node-security-profile tag. Image builders must explicitly opt
+# supported Secure Boot UKI images into carrying the signed IPE assets.
+IPE_CAPABILITY_OVERRIDE_SET=false
+if [[ -v ACL_IPE_CAPABLE ]]; then
+    IPE_CAPABILITY_OVERRIDE_SET=true
+fi
+ACL_IPE_CAPABLE="${ACL_IPE_CAPABLE:-false}"
+ACL_IPE_POLICY_MODE="${ACL_IPE_POLICY_MODE:-ephemeral}"
+ACL_IPE_POLICY_PATH="${ACL_IPE_POLICY_PATH:-}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
@@ -231,6 +243,106 @@ show_help() {
     exit 0
 }
 
+validate_ipe_boot_path() {
+    local vm_type="${1:-}"
+
+    [[ "${ACL_IPE_CAPABLE}" == "false" ]] && return 0
+    if [[ "${BOOTLOADER_MODE}" != "uki" ]]; then
+        error "IPE requires BOOTLOADER_MODE=uki"
+        return 1
+    fi
+    if [[ "${SECURE_BOOT_ENABLED:-true}" != "true" ]]; then
+        error "IPE requires Secure Boot"
+        return 1
+    fi
+    if [[ "${vm_type}" == "qemu" ]]; then
+        error "IPE is supported only by the Azure Secure Boot UKI path"
+        return 1
+    fi
+}
+
+validate_ipe_policy_input() {
+    case "${ACL_IPE_POLICY_MODE}" in
+        ephemeral)
+            if [[ -n "${ACL_IPE_POLICY_PATH}" ]]; then
+                error "ACL_IPE_POLICY_PATH is only valid with ACL_IPE_POLICY_MODE=external"
+                return 1
+            fi
+            ;;
+        external)
+            if [[ -z "${ACL_IPE_POLICY_PATH}" ]]; then
+                error "External IPE policy mode requires --ipe-policy-path"
+                return 1
+            fi
+            if [[ ! -f "${ACL_IPE_POLICY_PATH}" || ! -s "${ACL_IPE_POLICY_PATH}" ]]; then
+                error "External IPE policy artifact does not exist or is empty: ${ACL_IPE_POLICY_PATH}"
+                return 1
+            fi
+            ACL_IPE_POLICY_PATH="$(readlink -f "${ACL_IPE_POLICY_PATH}")"
+            ;;
+        *)
+            error "Invalid IPE policy mode: ${ACL_IPE_POLICY_MODE} (expected ephemeral or external)"
+            return 1
+            ;;
+    esac
+    export ACL_IPE_POLICY_MODE ACL_IPE_POLICY_PATH
+}
+
+load_artifact_ipe_capable() {
+    local artifact_dir="$1"
+    local capability_file="${artifact_dir}/acl-ipe-capable"
+    local artifact_capable
+
+    if [[ ! -r "${capability_file}" ]]; then
+        if [[ -d "${artifact_dir}/acl-ipe-ephemeral" ]]; then
+            error "IPE signing assets found without ${capability_file}"
+            return 1
+        fi
+        if [[ "${IPE_CAPABILITY_OVERRIDE_SET}" == "true" &&
+            "${ACL_IPE_CAPABLE}" == "true" ]]; then
+            error "Source image has no IPE capability metadata; rebuild it with IPE assets"
+            return 1
+        fi
+        ACL_IPE_CAPABLE=false
+        export ACL_IPE_CAPABLE
+        return 0
+    fi
+
+    read -r artifact_capable < "${capability_file}"
+    case "${artifact_capable}" in
+        true|false) ;;
+        *)
+            error "Invalid IPE capability in ${capability_file}: ${artifact_capable}"
+            return 1
+            ;;
+    esac
+    if [[ "${IPE_CAPABILITY_OVERRIDE_SET}" == "true" &&
+        "${ACL_IPE_CAPABLE}" != "${artifact_capable}" ]]; then
+        error "Requested IPE capability '${ACL_IPE_CAPABLE}' does not match source image capability '${artifact_capable}'"
+        return 1
+    fi
+
+    ACL_IPE_CAPABLE="${artifact_capable}"
+    export ACL_IPE_CAPABLE
+}
+
+operation_uses_vm_image() {
+    [[ "$BUILD_VM_IMAGE" == "true" ]] ||
+        [[ "$BUILD_TEST_IMAGE" == "true" ]] ||
+        [[ "$START_VM" == "true" ]] ||
+        [[ "$RUN_KOLA_TESTS" == "true" ]]
+}
+
+operation_uses_gallery_image() {
+    [[ -n "$ACG_IMAGE_VERSION_ID" ]] || [[ "$REUSE_IMAGE" == "true" ]]
+}
+
+operation_uses_local_image_artifact() {
+    [[ "$BUILD_IMAGE" != "true" ]] &&
+        ! operation_uses_gallery_image &&
+        operation_uses_vm_image
+}
+
 # Parse command line arguments
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -249,6 +361,22 @@ parse_args() {
                 ;;
             --group)
                 GROUP="$2"
+                shift 2
+                ;;
+            --ipe-policy-mode=*)
+                ACL_IPE_POLICY_MODE="${1#*=}"
+                shift
+                ;;
+            --ipe-policy-mode)
+                ACL_IPE_POLICY_MODE="$2"
+                shift 2
+                ;;
+            --ipe-policy-path=*)
+                ACL_IPE_POLICY_PATH="${1#*=}"
+                shift
+                ;;
+            --ipe-policy-path)
+                ACL_IPE_POLICY_PATH="$2"
                 shift 2
                 ;;
             --img-name=*)
@@ -613,6 +741,28 @@ parse_args() {
         fi
     fi
 
+    if operation_uses_local_image_artifact; then
+        load_artifact_ipe_capable \
+            "${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest" ||
+            exit 1
+    fi
+    if operation_uses_gallery_image &&
+        [[ "${START_VM}" == "true" || "${RUN_KOLA_TESTS}" == "true" ]] &&
+        [[ "${IPE_CAPABILITY_OVERRIDE_SET}" == "false" ]]; then
+        warn "ACL_IPE_CAPABLE is not set for gallery image validation; defaulting to false"
+    fi
+
+    case "${ACL_IPE_CAPABLE}" in
+        true|false)
+            export ACL_IPE_CAPABLE
+            ;;
+        *)
+            error "Invalid ACL_IPE_CAPABLE value: ${ACL_IPE_CAPABLE}"
+            error "Valid options: true, false"
+            exit 1
+            ;;
+    esac
+
     # Normalize group name
     case "$GROUP" in
         prod|production)
@@ -636,10 +786,19 @@ parse_args() {
                 ;;
         esac
     fi
+    local ipe_vm_type=""
+    if operation_uses_vm_image; then
+        ipe_vm_type="${VM_TYPE}"
+    fi
+    validate_ipe_boot_path "${ipe_vm_type}" || exit 1
 
     # Add platform-specific host-side tests when --run-tests is used.
     if [[ "${RUN_TESTS:-false}" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
         RUN_HOST_SCRIPTS+=("./acl/tests/run-selinux-toggle-test.sh")
+        if [[ "${ACL_IPE_CAPABLE}" == "true" ]] &&
+            [[ "${SECURE_BOOT_ENABLED:-true}" == "true" ]]; then
+            RUN_HOST_SCRIPTS+=("./acl/tests/run-ipe-mode-toggle-test.sh")
+        fi
     fi
 
     if [[ "$REUSE_IMAGE" == "true" ]]; then
@@ -870,6 +1029,7 @@ build_image() {
     info "  Output:          ${OUTPUT_ROOT}"
     info "  Staging Dir:     ${STAGING_DIR}"
     info "  Force Rebuild:   ${FORCE_REBUILD}"
+    info "  IPE Policy Mode: ${ACL_IPE_POLICY_MODE}"
     echo
 
     # Count RPMs
@@ -1054,6 +1214,9 @@ build_vm_image() {
     # pulling a stale version.txt into local dev builds.
     local version_args=()
     local from_dir="${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest"
+    load_artifact_ipe_capable "${from_dir}" || exit 1
+    validate_ipe_boot_path "${vm_type}" || exit 1
+
     if [[ "${NO_TTY:-false}" == "true" ]] && [[ -f "${from_dir}/version.txt" ]]; then
         info "Installing artifact version.txt into manifest location (CI mode)"
         cp "${from_dir}/version.txt" \
@@ -1258,9 +1421,12 @@ run_with_retry() {
 # Main entry point
 main() {
     parse_args "$@"
+    validate_ipe_policy_input || exit 1
 
     section "Azure Container Linux Image Builder"
     info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"
+    info "IPE capable image: ${ACL_IPE_CAPABLE}"
+    info "IPE policy mode: ${ACL_IPE_POLICY_MODE}"
 
     check_prerequisites
     print_summary

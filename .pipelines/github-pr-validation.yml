@@ -20,12 +20,17 @@ pr:
       - aclmain
       - release/*
 
+parameters:
+  - name: aclPipelinesRef
+    type: string
+    default: refs/heads/main
+
 resources:
   repositories:
     - repository: acl_pipelines
       type: git
       name: ACL/acl-pipelines
-      ref: refs/heads/main
+      ref: ${{ parameters.aclPipelinesRef }}
     - repository: azure_container_linux
       type: github
       endpoint: github.com_acl
