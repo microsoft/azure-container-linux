@@ -1,0 +1,14 @@
+# Test-only MCR mirror for the ACL dm-verity end-to-end validation.
+#
+# Preserve the original mcr.microsoft.com image references while resolving
+# manifests, blobs, and OCI referrers from the signed test repository.
+# override_path keeps the repository prefix as the registry API root:
+#   mcr.microsoft.com/oss/v2/kubernetes/pause:3.6
+# becomes:
+#   notaryaksegistry.azurecr.io/v2/aks-managed-repository/oss/v2/kubernetes/pause
+#
+# The server is intentionally the mirror rather than MCR so missing images fail
+# closed instead of silently falling back to an unsigned upstream image.
+server = "https://notaryaksegistry.azurecr.io/v2/aks-managed-repository"
+capabilities = ["pull", "resolve", "referrers"]
+override_path = true

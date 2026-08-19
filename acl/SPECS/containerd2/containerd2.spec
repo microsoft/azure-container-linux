@@ -31,7 +31,7 @@ Version: 2.2.4
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 6018.verity%{?dist}
+Release: 9001.mirrortest%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -57,6 +57,8 @@ Source5: containerd-acl-profile.conf
 # Guarantees /etc/containerd/config.toml exists before containerd starts, so
 # the composition root's literal import always resolves.
 Source6: containerd-acl-tmpfiles.conf
+# Test-only MCR mirror used by the dm-verity AKS validation branch.
+Source7: mcr-mirror-hosts.toml
 
 # ============================================================================
 # Patches
@@ -202,6 +204,10 @@ install -D -p -m 0644 %{SOURCE5} %{buildroot}%{_prefix}/lib/systemd/system/conta
 # agent, so the composition root's literal import always resolves.
 install -D -p -m 0644 %{SOURCE6} %{buildroot}%{_prefix}/lib/tmpfiles.d/10-containerd-acl.conf
 
+# The ACL image bake preserves /usr but drops package-owned /etc content.
+# 90-acl-profile.conf copies this file into /etc before containerd starts.
+install -D -p -m 0644 %{SOURCE7} %{buildroot}%{_datadir}/containerd2/certs.d/mcr.microsoft.com/hosts.toml
+
 %post
 %systemd_post containerd.service
 
@@ -232,10 +238,21 @@ fi
 %{_datadir}/containerd2/acl-config.toml
 %{_prefix}/lib/systemd/system/containerd.service.d/90-acl-profile.conf
 %{_prefix}/lib/tmpfiles.d/10-containerd-acl.conf
+%{_datadir}/containerd2/certs.d/mcr.microsoft.com/hosts.toml
 %dir %{_datadir}/containerd2
+%dir %{_datadir}/containerd2/certs.d
+%dir %{_datadir}/containerd2/certs.d/mcr.microsoft.com
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Wed Aug 19 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9001.mirrortest
+- Test only: route mcr.microsoft.com pulls, resolves, and OCI referrer
+  discovery through notaryaksegistry.azurecr.io/aks-managed-repository.
+- Restore the packaged hosts.toml before every containerd start so the mirror
+  is active on ACL before first-boot image acquisition.
+- Use a separate test-only release band so this RPM cannot collide with the
+  PR-ready 6xxx dm-verity stream.
+
 * Thu Aug 06 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6018.verity
 - Patch12: hold the dm-verity lock across the mount, not just the create. The
   lock covered lookup-and-create only; the mount(2) that follows it and the

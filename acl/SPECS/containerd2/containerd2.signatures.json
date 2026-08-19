@@ -3,9 +3,10 @@
     "containerd-2.2.4.tar.gz": "f73a4580a869426120bc99bcd812ac723701a8c934549f70c8a6067e30e1458d",
     "containerd-acl-config.toml": "f3edcbbb346691039b2253473da9726a1166c761fe615f193778a07f8ae0b546",
     "containerd-acl-erofs.toml": "47be91fde749d6a47b4edf010e7b03a565b8d0a8d6512c59e3ea27206963c870",
-    "containerd-acl-profile.conf": "7de590c97f8be2fb1d606f8a272a7f7d6560a6f3a92c748d19d1a34e8e61c3dc",
+    "containerd-acl-profile.conf": "85cb9bbb797a18161f423525b81b78b13ce4db0a712f14a9629cc6acde1527ce",
     "containerd-acl-tmpfiles.conf": "f9386581986308508a05505b7c5fd32b6029d7abfeabc1d4111ecb10f8dc7bd9",
     "containerd.toml": "96067ccd8789a24bb0b1c99fcd2e344b75a36032ed55563edf15ff9257249616",
-    "containerd.service": "a07bfcf412669b06673190b0779f48e652c9adcf1758289e849a00802804eec8"
+    "containerd.service": "a07bfcf412669b06673190b0779f48e652c9adcf1758289e849a00802804eec8",
+    "mcr-mirror-hosts.toml": "6b71c928361587380732de1bf7551b20a7acd4f738ca9c13d938f32dba861a03"
   }
 }
