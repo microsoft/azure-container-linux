@@ -94,6 +94,10 @@ create_prod_image() {
     extract_prod_gcc "${root_fs_dir}"
     emerge_to_image "${root_fs_dir}" "${base_pkg}"
   elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    # Install by package name so DNF cannot use an unrelated soname provider.
+    rpm_install_package "${root_fs_dir}" libgomp || \
+        die "RPM mode: Failed to install libgomp into image rootfs"
+
     rpm_install_package_using_portage_name "${root_fs_dir}" "${base_pkg}"
 
     if [[ "${BOOTLOADER_MODE:-}" == "uki" ]]; then
