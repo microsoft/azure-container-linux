@@ -61,7 +61,7 @@ run_container() {
     local mode="$1" policy="$2" log="$3" status="${4:-up}"
     (
         cd "${TEST_DIR}"
-        ACL_IPE_POLICY_MODE="${mode}" \
+        ACL_IPE_ASSET_MODE="${mode}" \
         ACL_IPE_POLICY_PATH="${policy}" \
         FAKE_DOCKER_LOG="${log}" \
         FAKE_DOCKER_POLICY_CAPTURE="${log}.policy" \
@@ -104,6 +104,20 @@ test_ephemeral_mode_removes_stale_policy() {
         reused-container rm -f /tmp/acl-ipe-policy.p7b
 }
 
+test_disabled_mode_removes_stale_policy() {
+    local log="${TEST_DIR}/disabled.log"
+    run_container disabled "" "${log}"
+    assert_docker_call "${log}" exec \
+        reused-container rm -f /tmp/acl-ipe-policy.p7b
+}
+
+test_external_mode_without_new_policy_removes_stale_policy() {
+    local log="${TEST_DIR}/external-reuse.log"
+    run_container external "" "${log}"
+    assert_docker_call "${log}" exec \
+        reused-container rm -f /tmp/acl-ipe-policy.p7b
+}
+
 test_untagged_checkout_version_fallback() {
     local repo="${TEST_DIR}/untagged"
     mkdir -p "${repo}/sdk_container/.repo/manifests"
@@ -124,6 +138,8 @@ test_untagged_checkout_version_fallback() {
 test_external_policy_refresh
 test_external_policy_fresh_container
 test_ephemeral_mode_removes_stale_policy
+test_disabled_mode_removes_stale_policy
+test_external_mode_without_new_policy_removes_stale_policy
 test_untagged_checkout_version_fallback
 
 echo "run_sdk_container IPE policy reuse tests passed"

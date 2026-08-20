@@ -874,11 +874,11 @@ sslverify=1
 EOF
 }
 
-rpm_record_ipe_capability() {
-    local ipe_capable="$1"
+rpm_record_ipe_asset_mode() {
+    local ipe_asset_mode="$1"
     [[ -n "${BUILD_DIR:-}" ]] || return 0
-    printf '%s\n' "${ipe_capable}" > "${BUILD_DIR}/acl-ipe-capable" ||
-        die "RPM mode: failed to record IPE capability"
+    printf '%s\n' "${ipe_asset_mode}" > "${BUILD_DIR}/ipe-asset-mode" ||
+        die "RPM mode: failed to record IPE asset mode"
 }
 
 rpm_validate_ipe_policy_source() {
@@ -922,7 +922,7 @@ rpm_prepare_ipe_policy_artifact() {
                 die "RPM mode: failed to stage external IPE policy"
             ;;
         *)
-            die "RPM mode: invalid ACL_IPE_POLICY_MODE: ${policy_mode}"
+            die "RPM mode: invalid ACL_IPE_ASSET_MODE: ${policy_mode}"
             ;;
     esac
 }
@@ -940,15 +940,15 @@ rpm_verify_ipe_policy_artifact() {
 
 rpm_install_ipe_policy() {
     local root_fs_dir="$1"
-    local ipe_capable="${ACL_IPE_CAPABLE:-false}"
+    local ipe_asset_mode="${ACL_IPE_ASSET_MODE:-disabled}"
 
-    case "${ipe_capable}" in
-        false)
-            rpm_record_ipe_capability false
+    case "${ipe_asset_mode}" in
+        disabled)
+            rpm_record_ipe_asset_mode disabled
             return 0
             ;;
-        true) ;;
-        *) die "Invalid ACL_IPE_CAPABLE: ${ipe_capable}" ;;
+        ephemeral|external) ;;
+        *) die "Invalid ACL_IPE_ASSET_MODE: ${ipe_asset_mode}" ;;
     esac
     [[ "${BOOTLOADER_MODE:-uki}" == "uki" ]] ||
         die "RPM mode: IPE requires the UKI bootloader"
@@ -956,7 +956,7 @@ rpm_install_ipe_policy() {
         die "RPM mode: BUILD_DIR is not set; cannot create IPE signing assets"
 
     local policy_src="${BUILD_LIBRARY_DIR}/rpm/additional_files/ipe/acl-ipe-boot-policy.pol"
-    local policy_mode="${ACL_IPE_POLICY_MODE:-ephemeral}"
+    local policy_mode="${ipe_asset_mode}"
     local external_policy="${ACL_IPE_POLICY_PATH:-}"
     local cert_dir
     local work_dir policy_sig verified_policy
@@ -979,7 +979,7 @@ rpm_install_ipe_policy() {
         "${root_fs_dir}/usr/lib/ipe/acl.pol.p7b"
     sudo chroot "${root_fs_dir}" restorecon -RF /usr/lib/ipe
     rm -rf "${work_dir}"
-    rpm_record_ipe_capability true
+    rpm_record_ipe_asset_mode "${ipe_asset_mode}"
 
     info "RPM mode: Installed ${policy_mode} signed IPE policy on verified /usr"
 }
@@ -1166,7 +1166,7 @@ export -f rpm_download_packages
 export -f rpm_use_official_repos
 export -f rpm_cleanup_build_dir
 export -f rpm_umount_pseudofs
-export -f rpm_record_ipe_capability
+export -f rpm_record_ipe_asset_mode
 export -f rpm_validate_ipe_policy_source
 export -f rpm_prepare_ipe_policy_artifact
 export -f rpm_verify_ipe_policy_artifact
