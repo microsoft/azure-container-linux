@@ -8,6 +8,8 @@ setup_ssh_opts() {
         -o UserKnownHostsFile=/dev/null
         -o BatchMode=yes
         -o ConnectTimeout=10
+        -o ServerAliveInterval=5
+        -o ServerAliveCountMax=2
         -i "$VM_SSH_KEY"
     )
 }
@@ -65,7 +67,8 @@ reboot_and_wait() {
     local old new
     old=$(boot_id) || { error "Cannot read boot_id - VM unreachable?"; return 1; }
     info "Rebooting VM ${VM_NAME} via SSH (old boot_id=${old})..."
-    timeout 15s ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" "sudo reboot" || true
+    timeout --signal=TERM --kill-after=5s 15s \
+        ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" "sudo reboot" || true
     local deadline=$(( $(date +%s) + VM_SSH_TIMEOUT ))
     while (( $(date +%s) < deadline )); do
         new=$(boot_id) && [[ "$new" != "$old" ]] && {
