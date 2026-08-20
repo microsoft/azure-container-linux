@@ -64,12 +64,13 @@ set_security_profile_tag() {
 }
 
 reboot_and_wait() {
-    local old new
+    local old new reboot_timeout
+    reboot_timeout="${VM_BOOT_TIMEOUT:-$VM_SSH_TIMEOUT}"
     old=$(boot_id) || { error "Cannot read boot_id - VM unreachable?"; return 1; }
     info "Rebooting VM ${VM_NAME} via SSH (old boot_id=${old})..."
     timeout --signal=TERM --kill-after=5s 15s \
         ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" "sudo reboot" || true
-    local deadline=$(( $(date +%s) + VM_SSH_TIMEOUT ))
+    local deadline=$(( $(date +%s) + reboot_timeout ))
     while (( $(date +%s) < deadline )); do
         new=$(boot_id) && [[ "$new" != "$old" ]] && {
             info "VM rebooted (new boot_id=${new})"
@@ -77,7 +78,7 @@ reboot_and_wait() {
         }
         sleep 2
     done
-    warn "VM did not come back after reboot within ${VM_SSH_TIMEOUT}s - capturing VM diagnostics"
+    warn "VM did not come back after reboot within ${reboot_timeout}s - capturing VM diagnostics"
 
     local diag_dir="${DIAGNOSTICS_DIR:-/tmp}"
     mkdir -p "$diag_dir"

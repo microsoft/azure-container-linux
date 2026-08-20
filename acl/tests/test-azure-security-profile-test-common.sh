@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMMON_HELPER="${SCRIPT_DIR}/acl/tests/azure-security-profile-test-common.sh"
+VALIDATE_COMMON="${SCRIPT_DIR}/acl/validate/validate_common.sh"
 
 source "${COMMON_HELPER}"
 
@@ -26,5 +27,8 @@ contains_ssh_option "ServerAliveInterval=5"
 contains_ssh_option "ServerAliveCountMax=2"
 
 grep -Fq 'timeout --signal=TERM --kill-after=5s 15s \' "${COMMON_HELPER}"
+grep -Fq 'reboot_timeout="${VM_BOOT_TIMEOUT:-$VM_SSH_TIMEOUT}"' "${COMMON_HELPER}"
+grep -Fq '"--ssh-timeout=${VM_SSH_TIMEOUT}"' "${VALIDATE_COMMON}"
+grep -Fq '"--boot-timeout=${VM_BOOT_TIMEOUT}"' "${VALIDATE_COMMON}"
 
 echo "azure security profile helper timeout contract passed"
