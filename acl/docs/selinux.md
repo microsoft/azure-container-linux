@@ -31,11 +31,11 @@ The compiled ACL container policy contains five workload process domains:
 
 | Domain | Engine scope | MCS constrained | Intended use |
 | --- | --- | --- | --- |
-| `container_t` | System and user engines | Yes | Default confined container |
-| `container_logreader_t` | System and user engines | Yes | Confined host-log collector |
-| `container_kvm_t` | System engines | Yes | Containerized KVM workload |
-| `spc_t` | System engines | No | Privileged system container |
-| `spc_user_t` | User engines | No | Privileged rootless or user container |
+| `container_t` | System and user engines | ✅ Yes | Default confined container |
+| `container_logreader_t` | System and user engines | ✅ Yes | Confined host-log collector |
+| `container_kvm_t` | System engines | ✅ Yes | Containerized KVM workload |
+| `spc_t` | System engines | ❌ No | Privileged system container |
+| `spc_user_t` | User engines | ❌ No | Privileged rootless or user container |
 
 The engine scope describes how the ACL policy classifies the domain. Runtime
 support, admission policy, Linux capabilities, device assignment, and
@@ -147,17 +147,19 @@ purpose-built confined domain.
 ## Capability comparison
 
 This table summarizes SELinux policy intent, not every individual permission.
+The glyphs supplement, rather than replace, the text: ✅ Yes, ❌ No, and
+⚠️ broad or conditional access.
 
 | Capability | `container_t` | `container_logreader_t` | `container_kvm_t` | `spc_t` / `spc_user_t` |
 | --- | --- | --- | --- | --- |
-| Common container execution and storage | Yes | Yes | Yes | Yes |
-| Runtime-assigned MCS isolation | Yes | Yes | Yes | No |
-| Read types carrying `logfile` | No | Yes | No | Broad policy; do not rely on confinement |
-| Read and map persistent systemd journals | No | Yes | No | Broad policy; do not rely on confinement |
-| Read auditd-managed `auditd_log_t` files | No | No | No | Broad policy; depends on loaded modules |
-| KVM-specific policy | No | No | Yes | Broad system access for `spc_t` |
-| Privileged-container policy class | No | No | No | Yes |
-| SELinux-unconfined on stock ACL | No | No | No | Yes |
+| Common container execution and storage | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| Runtime-assigned MCS isolation | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No |
+| Read types carrying `logfile` | ❌ No | ✅ Yes | ❌ No | ⚠️ Unconfined on stock ACL |
+| Read and map persistent systemd journals | ❌ No | ✅ Yes | ❌ No | ⚠️ Unconfined on stock ACL |
+| Read auditd-managed `auditd_log_t` files | ❌ No | ✅ Yes | ❌ No | ⚠️ Unconfined on stock ACL |
+| KVM-specific policy | ❌ No | ❌ No | ✅ Yes | ⚠️ Broad system access for `spc_t` |
+| Privileged-container policy class | ❌ No | ❌ No | ❌ No | ✅ Yes |
+| SELinux-unconfined on stock ACL | ❌ No | ❌ No | ❌ No | ✅ Yes |
 
 ## Selecting a domain
 
