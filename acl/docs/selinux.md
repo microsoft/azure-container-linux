@@ -23,23 +23,29 @@ domain. Do not use `spc_t` solely to collect logs.
 ## Confined log collectors
 
 `container_logreader_t` extends the normal confined container policy with
-read, directory traversal, symlink, and watch access to types carrying the
-`logfile` attribute. Access is based on the SELinux label, not the path.
-Inspect host labels with:
+read, directory traversal, and symlink access to types carrying the `logfile`
+attribute. Inotify watch access applies only to `container_log_t`, not to other
+host log types. Access is based on the SELinux label, not the path. Inspect
+host labels with:
 
 ```bash
 ls -ldZ /var/log
-find /var/log -maxdepth 2 -type f -printf '%p\n' -exec ls -lZ {} \;
+find /var/log -maxdepth 2 -type f -exec ls -lZ -- {} +
 ```
 
 The domain intentionally does not grant:
 
 - Write, append, create, delete, rename, or relabel access to host logs.
 - Access to files that do not carry an SELinux log type.
-- Access to `auditd_log_t`, including `/var/log/audit`. Audit records contain
-  host-wide authentication, syscall, and AVC data and require a separately
-  reviewed policy.
+- Access to `auditd_log_t`, including auditd-managed files under
+  `/var/log/audit`. These files contain host-wide authentication, syscall, and
+  AVC data and require a separately reviewed policy.
 - The broad host privileges provided by `spc_t`.
+
+ACL stores the systemd journal persistently under `/var/log/journal`. The
+journal uses a regular log type and can contain kernel audit and AVC records,
+so it remains readable when mounted into the collector. For a hard audit-data
+boundary, restrict the mounted paths instead of relying on the domain alone.
 
 The host log path must still be mounted into the container. Make the mount
 read-only as defense in depth, and do not relabel the host log directory.
@@ -101,15 +107,18 @@ containers.
 Confirm the selected process domain and mounted labels from the container:
 
 ```bash
-id -Z
-ls -lZ /host/var/log
-head /host/var/log/messages
+cat /proc/self/attr/current
+ls -ldZ /host/var/log/journal /host/var/log/audit
+journalctl --file='/host/var/log/journal/*/system.journal' -n 5
 ```
 
-`id -Z` should report `container_logreader_t`. A write attempt to a host log
-and a read attempt under `/host/var/log/audit` should fail. On the host, check
-unexpected SELinux denials with:
+The process context should report `container_logreader_t`, and the journal
+read should succeed when the collector image includes `journalctl`. A write
+attempt to a host log should fail. Stock ACL creates `/var/log/audit` but does
+not run auditd, so the directory is normally empty; listing it should still be
+denied. Hosts that add auditd should also deny reads of its files. On the host,
+check unexpected SELinux denials with:
 
 ```bash
-ausearch -m AVC -ts recent
+journalctl -g 'avc:  denied' --since -10min
 ```
