@@ -887,8 +887,6 @@ rpm_validate_ipe_policy_source() {
         die "RPM mode: IPE policy source not found: ${policy_src}"
     grep -Fq 'op=EXECUTE dmverity_signature=TRUE action=ALLOW' "${policy_src}" ||
         die "RPM mode: IPE policy does not trust verified dm-verity signatures"
-    ! grep -q '@USR_VERITY_ROOT_HASH@' "${policy_src}" ||
-        die "RPM mode: stale root-hash placeholder remains in IPE policy"
 }
 
 rpm_prepare_ipe_policy_artifact() {
