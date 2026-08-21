@@ -26,12 +26,12 @@ Version: 2.2.4
 # Release: 1, 2, ...). The 6xxx range succeeds the prior 5xxx steamboat
 # RPM stream and the 4xxx 2.2.0-patch-based / 3xxx fork-tarball builds.
 # The ".verity" suffix marks the dm-verity erofs snapshotter patch set
-# (Patch8-9 of PATCHES.md). No .commit_hash tag since the upstream is an
+# (Patch8-14 of PATCHES.md). No .commit_hash tag since the upstream is an
 # immutable release tag.
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 6018.verity%{?dist}
+Release: 6019.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -98,9 +98,17 @@ Patch9:  0005-dm-verity-acl-integration.patch
 Patch10: 0006-dm-verity-precomputed-erofs-artifacts.patch
 # Independent of the dm-verity series; touches only upstream code.
 Patch11: 0007-erofs-selinux-shared-layer-context.patch
+# Bind referrer discovery to the selected applier so local pulls cannot silently
+# discard dm-verity artifacts. Also recognises built-in dm-verity kernels and
+# makes the shared EROFS SELinux context configurable.
+Patch12: 0008-erofs-bind-dmverity-to-selected-applier.patch
 # Concurrency fix for the dm-verity mount path. Kept separate from Patch8 so it
 # can be dropped or folded independently; belongs in 0004 once that settles.
-Patch12: 0008-erofs-dmverity-mount-lifecycle-lock.patch
+Patch13: 0009-erofs-dmverity-mount-lifecycle-lock.patch
+# Build compatibility for Patch12's mount-handler constructor change. The RPM
+# runs the existing containerd test suite in %check, so the stale zero-argument
+# test call must use the constructor's empty-value default.
+Patch14: 0010-erofs-test-pass-default-shared-layer-context.patch
 
 %{?systemd_requires}
 
@@ -236,6 +244,14 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Fri Aug 21 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6019.verity
+- Patch12: bind dm-verity enforcement to the selected applier so CRI local
+  pulls cannot silently discard discovered verification artifacts.
+- Patch13: retain the shared mapper mount-lifecycle lock after the new
+  selected-applier guard.
+- Patch14: update the existing dm-verity snapshot test for Patch12's
+  shared-layer-context constructor argument.
+
 * Thu Aug 06 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6018.verity
 - Patch12: hold the dm-verity lock across the mount, not just the create. The
   lock covered lookup-and-create only; the mount(2) that follows it and the

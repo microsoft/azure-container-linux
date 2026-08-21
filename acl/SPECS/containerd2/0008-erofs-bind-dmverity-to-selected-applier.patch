@@ -1,0 +1,403 @@
+From: Dallas Delaney <dadelan@microsoft.com>
+Subject: [PATCH] erofs: bind dm-verity enforcement to the selected applier
+
+Single commit on the ACL containerd branch:
+
+  erofs: bind dm-verity enforcement to the selected applier
+
+
+  Discovery of dm-verity referrers was derived from any *loaded* diff plugin
+  advertising CapabilityDmverityReferrers, but layers are applied by the differ
+  that is actually *selected*. The transfer service takes its differ from
+  unpack_config, while the CRI local pull path takes it from the diff service,
+  whose default order is walking-only. When CRI falls back to local pull the two
+  disagree: artifacts are fetched and discarded, layers are applied with no
+  dm-verity device, and configuration still reads as though verification is on.
+  The downgrade is reported only as a warning.
+
+  The fallback is not hypothetical. CheckLocalImagePullConfigs flips CRI to local
+  pull for several ordinary settings -- disable_snapshot_annotations, registry
+  mirrors and configs, max_concurrent_downloads -- so an unrelated node
+  configuration change can silently disable verification.
+
+  Report the selected applier chain from the diff service and fail plugin
+  initialisation when discovery is enabled but nothing in that chain can consume
+  the artifacts, rather than degrading silently. Warn when a capable differ is
+  present but not first, since an earlier differ may still apply the layer.
+
+  Also:
+
+    - IsSupported() only read /proc/modules, so a CONFIG_DM_VERITY=y kernel
+      reported unsupported and disabled the feature entirely. Check
+      /sys/module/dm_verity as well, which is present for built-in targets.
+      Reword the corresponding mount error, which named a missing module as the
+      only possible cause.
+
+    - The shared layer SELinux label was hardcoded to a distro-specific type
+      while its own comment cited a different type as precedent. Make it
+      configurable via shared_layer_context, keep the validated value as the
+      default, and correct the comment to say which type is used and why.
+
+
+diff --git a/internal/dmverity/dmverity_linux.go b/internal/dmverity/dmverity_linux.go
+index a3be00c4b..abc16f6ad 100644
+--- a/internal/dmverity/dmverity_linux.go
++++ b/internal/dmverity/dmverity_linux.go
+@@ -31,16 +31,37 @@ import (
+ 	"github.com/google/uuid"
+ )
+ 
++// IsSupported reports whether the kernel can back a dm-verity device.
++//
++// A false return with a nil error means the answer is determinate: dm-verity
++// is genuinely unavailable, and callers may skip cleanly. A non-nil error
++// means the answer is indeterminate — the check itself could not be
++// completed — and callers should treat that as a hard failure rather than
++// assume absence.
+ func IsSupported() (bool, error) {
+-	moduleData, err := os.ReadFile("/proc/modules")
+-	if err != nil {
++	// dm-verity may be a loadable module or built into the kernel. Checking
++	// only /proc/modules reports unsupported on a CONFIG_DM_VERITY=y kernel and
++	// silently disables verification, so consult the built-in target list too.
++	if moduleData, err := os.ReadFile("/proc/modules"); err == nil {
++		if bytes.Contains(moduleData, []byte("dm_verity")) {
++			return true, nil
++		}
++	} else if !os.IsNotExist(err) {
+ 		return false, fmt.Errorf("failed to read /proc/modules: %w", err)
+ 	}
+-	if !bytes.Contains(moduleData, []byte("dm_verity")) {
+-		return false, fmt.Errorf("dm_verity module not loaded")
++
++	// /sys/module/dm_verity is present for a built-in target as well as a
++	// loaded module, so it covers CONFIG_DM_VERITY=y kernels that never
++	// appear in /proc/modules.
++	if _, err := os.Stat("/sys/module/dm_verity"); err == nil {
++		return true, nil
++	} else if !os.IsNotExist(err) {
++		return false, fmt.Errorf("failed to stat /sys/module/dm_verity: %w", err)
+ 	}
+ 
+-	return true, nil
++	// Both probes succeeded and neither found dm-verity, so this is a
++	// determinate "not available" rather than a failed check.
++	return false, nil
+ }
+ 
+ func convertToVerityParams(opts *DmverityOptions) (verity.Params, error) {
+diff --git a/internal/dmverity/dmverity_other.go b/internal/dmverity/dmverity_other.go
+index d5c840b6f..f65c6a11f 100644
+--- a/internal/dmverity/dmverity_other.go
++++ b/internal/dmverity/dmverity_other.go
+@@ -25,8 +25,11 @@ import (
+ 
+ var errUnsupported = fmt.Errorf("dmverity is only supported on Linux systems")
+ 
++// IsSupported reports whether the kernel can back a dm-verity device. On
++// non-Linux platforms the answer is determinate, so this returns a nil error
++// and lets callers skip cleanly rather than treating it as a failed check.
+ func IsSupported() (bool, error) {
+-	return false, errUnsupported
++	return false, nil
+ }
+ 
+ func Format(_ string, _ string, _ *DmverityOptions) (string, error) {
+diff --git a/plugins/cri/images/plugin.go b/plugins/cri/images/plugin.go
+index 2dd3b3e60..18c113f5e 100644
+--- a/plugins/cri/images/plugin.go
++++ b/plugins/cri/images/plugin.go
+@@ -22,6 +22,7 @@ import (
+ 	"path/filepath"
+ 	"runtime"
+ 	"slices"
++	"strings"
+ 
+ 	containerd "github.com/containerd/containerd/v2/client"
+ 	"github.com/containerd/containerd/v2/core/metadata"
+@@ -31,6 +32,7 @@ import (
+ 	"github.com/containerd/containerd/v2/internal/cri/constants"
+ 	"github.com/containerd/containerd/v2/internal/cri/server/images"
+ 	"github.com/containerd/containerd/v2/plugins"
++	"github.com/containerd/containerd/v2/plugins/services"
+ 	"github.com/containerd/containerd/v2/plugins/services/warning"
+ 	"github.com/containerd/containerd/v2/version"
+ 	"github.com/containerd/log"
+@@ -64,9 +66,9 @@ func init() {
+ 			mdb := m.(*metadata.DB)
+ 
+ 			// Referrer discovery is driven by the differ that will consume the
+-			// artifacts rather than by separate configuration. The local image
+-			// pull path selects a differ dynamically, so any loaded differ that
+-			// consumes dm-verity artifacts enables discovery.
++			// artifacts rather than by separate configuration. This pass only
++			// establishes that a capable differ is loaded; it is narrowed below
++			// once the pull path, and therefore the applier, is known.
+ 			for _, p := range ic.Plugins().GetAll() {
+ 				if p.Registration.Type == plugins.DiffPlugin &&
+ 					slices.Contains(p.Meta.Capabilities, plugins.CapabilityDmverityReferrers) {
+@@ -103,6 +105,42 @@ func init() {
+ 				criconfig.CheckLocalImagePullConfigs(ic.Context, &config)
+ 			}
+ 
++			// A capable differ being loaded does not mean it is the one that
++			// applies layers. The transfer service takes its differ from
++			// unpack_config, but the local pull path takes it from the diff
++			// service, whose default order is walking-only. Falling back to
++			// local pull therefore silently drops dm-verity verification while
++			// discovery stays on, so bind enforcement to the selected applier.
++			if config.EnableDmverityReferrers && config.UseLocalImagePull {
++				ds, err := ic.GetByID(plugins.ServicePlugin, services.DiffService)
++				if err != nil {
++					return nil, fmt.Errorf("dm-verity referrer discovery is enabled but the diff service is unavailable: %w", err)
++				}
++				reporter, ok := ds.(interface {
++					DmverityAppliers() (ordered []string, capable []string)
++				})
++				if !ok {
++					return nil, fmt.Errorf("dm-verity referrer discovery is enabled but the diff service cannot report applier capabilities")
++				}
++				ordered, capable := reporter.DmverityAppliers()
++				if len(capable) == 0 {
++					return nil, fmt.Errorf(
++						"dm-verity referrer discovery is enabled but CRI fell back to local image pull, "+
++							"whose applier chain [%s] cannot consume dm-verity artifacts: layers would be applied "+
++							"without a dm-verity device. Either keep CRI on the transfer service (remove the "+
++							"configuration that forced local pull, e.g. disable_snapshot_annotations, registry.mirrors, "+
++							"registry.configs, max_concurrent_downloads) or add a dm-verity capable differ to "+
++							"[plugins.\"io.containerd.service.v1.diff-service\"] default",
++						strings.Join(ordered, ", "))
++				}
++				if ordered[0] != capable[0] {
++					log.G(ic.Context).Warnf(
++						"dm-verity capable differ %q is not first in the diff service order [%s]; "+
++							"layers may be applied by an earlier differ without dm-verity verification",
++						capable[0], strings.Join(ordered, ", "))
++				}
++			}
++
+ 			ts, err := ic.GetSingle(plugins.TransferPlugin)
+ 			if err != nil {
+ 				return nil, err
+diff --git a/plugins/diff/erofs/plugin/plugin.go b/plugins/diff/erofs/plugin/plugin.go
+index 26ce396d1..9a40bda49 100644
+--- a/plugins/diff/erofs/plugin/plugin.go
++++ b/plugins/diff/erofs/plugin/plugin.go
+@@ -100,7 +100,7 @@ func init() {
+ 					return nil, fmt.Errorf("dm-verity support check failed: %w", err)
+ 				}
+ 				if !supported {
+-					return nil, fmt.Errorf("dm-verity is not supported on this system (dm_verity module not loaded): %w", plugin.ErrSkipPlugin)
++					return nil, fmt.Errorf("dm-verity is not supported on this system (no dm_verity module loaded and no built-in verity target): %w", plugin.ErrSkipPlugin)
+ 				}
+ 				opts = append(opts, erofs.WithDmverity())
+ 
+diff --git a/plugins/mount/erofs/plugin_linux.go b/plugins/mount/erofs/plugin_linux.go
+index 63dd67ca4..1939d1361 100644
+--- a/plugins/mount/erofs/plugin_linux.go
++++ b/plugins/mount/erofs/plugin_linux.go
+@@ -43,11 +43,19 @@ import (
+ 
+ var forceloop bool
+ 
+-type erofsMountHandler struct{}
++type erofsMountHandler struct {
++	// sharedLayerContext is the SELinux label every EROFS layer mount asks
++	// for. Configurable because the value is policy-specific and upstream
++	// containerd cannot assume a distro's type names.
++	sharedLayerContext string
++}
+ 
+ // NewErofsMountHandler creates a new EROFS mount handler that supports dm-verity
+-func NewErofsMountHandler() mount.Handler {
+-	return &erofsMountHandler{}
++func NewErofsMountHandler(sharedLayerContext string) mount.Handler {
++	if sharedLayerContext == "" {
++		sharedLayerContext = defaultSharedLayerContext
++	}
++	return &erofsMountHandler{sharedLayerContext: sharedLayerContext}
+ }
+ 
+ // dmverityOpenMu serializes the "does this device already exist?" check and the
+@@ -96,9 +104,15 @@ const selinuxContextOpt = "context="
+ // Isolation is unaffected. This label applies to the read-only shared layer
+ // only; the per-container overlay stacked above it still carries the full MCS
+ // pair, and that overlay, not the layer, is what the container sees. It is also
+-// what overlayfs already does -- its lowerdirs sit on disk as
+-// container_ro_file_t:s0 with no categories.
+-const sharedLayerContext = "system_u:object_r:container_file_t:s0"
++// what overlayfs already does -- its lowerdirs sit on disk with a single shared
++// type and no categories.
++//
++// The type below is container_file_t rather than the read-only
++// container_ro_file_t: EROFS layers are also consumed through paths that expect
++// the standard container file type, and this is the value the deployment is
++// validated against. Override shared_layer_context to use a stricter type where
++// the local policy grants container domains read access to it.
++const defaultSharedLayerContext = "system_u:object_r:container_file_t:s0"
+ 
+ // sharedLayerMountOptions returns opts with the mount-manager bookkeeping
+ // options removed and the per-consumer SELinux label replaced by the single
+@@ -109,7 +123,7 @@ const sharedLayerContext = "system_u:object_r:container_file_t:s0"
+ // to supply one at all; it is then re-added unconditionally so that labelled and
+ // unlabelled callers converge on the same request. It is only re-added when
+ // SELinux is enabled, since mount(2) rejects the option outright otherwise.
+-func sharedLayerMountOptions(opts []string, selinuxEnabled bool) []string {
++func sharedLayerMountOptions(opts []string, selinuxEnabled bool, sharedLayerContext string) []string {
+ 	filtered := make([]string, 0, len(opts)+1)
+ 	for _, v := range opts {
+ 		// Skip loop option (handled by loop device setup) and dmverity mode option (already processed)
+@@ -227,8 +241,11 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ 		log.G(ctx).WithField("source", m.Source).Debug("detected dm-verity metadata, setting up dm-verity device")
+ 
+ 		supported, err := dmverity.IsSupported()
+-		if err != nil || !supported {
+-			return mount.ActiveMount{}, fmt.Errorf("layer requires dm-verity but system doesn't support it (dm_verity module not loaded): %w", err)
++		if err != nil {
++			return mount.ActiveMount{}, fmt.Errorf("layer %q requires dm-verity but support could not be determined: %w", m.Source, err)
++		}
++		if !supported {
++			return mount.ActiveMount{}, fmt.Errorf("layer %q requires dm-verity but the system does not provide it", m.Source)
+ 		}
+ 
+ 		// Extract snapshot ID from source path
+@@ -246,7 +263,7 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ 	}
+ 	// else: no metadata file, proceed with regular EROFS mount
+ 
+-	m.Options = sharedLayerMountOptions(m.Options, selinux.GetEnabled())
++	m.Options = sharedLayerMountOptions(m.Options, selinux.GetEnabled(), h.sharedLayerContext)
+ 
+ 	if err := os.MkdirAll(mp, 0700); err != nil {
+ 		if dmverityDevice != "" {
+@@ -355,7 +372,11 @@ func (h *erofsMountHandler) Unmount(ctx context.Context, path string) error {
+ 	return err
+ }
+ 
+-type Config struct{}
++type Config struct {
++	// SharedLayerContext overrides the SELinux label applied to shared EROFS
++	// layer mounts. Empty uses defaultSharedLayerContext.
++	SharedLayerContext string `toml:"shared_layer_context"`
++}
+ 
+ func init() {
+ 	registry.Register(&plugin.Registration{
+@@ -367,7 +388,8 @@ func init() {
+ 			p.OS = runtime.GOOS
+ 			ic.Meta.Platforms = append(ic.Meta.Platforms, p)
+ 
+-			return NewErofsMountHandler(), nil
++			cfg := ic.Config.(*Config)
++			return NewErofsMountHandler(cfg.SharedLayerContext), nil
+ 		},
+ 	})
+ }
+diff --git a/plugins/mount/erofs/plugin_linux_test.go b/plugins/mount/erofs/plugin_linux_test.go
+index 0da9e3637..c0cc94685 100644
+--- a/plugins/mount/erofs/plugin_linux_test.go
++++ b/plugins/mount/erofs/plugin_linux_test.go
+@@ -22,7 +22,7 @@ import (
+ )
+ 
+ func TestSharedLayerMountOptions(t *testing.T) {
+-	const shared = `context="` + sharedLayerContext + `"`
++	const shared = `context="` + defaultSharedLayerContext + `"`
+ 
+ 	for _, tc := range []struct {
+ 		name           string
+@@ -85,7 +85,7 @@ func TestSharedLayerMountOptions(t *testing.T) {
+ 		},
+ 	} {
+ 		t.Run(tc.name, func(t *testing.T) {
+-			got := sharedLayerMountOptions(tc.opts, tc.selinuxEnabled)
++			got := sharedLayerMountOptions(tc.opts, tc.selinuxEnabled, defaultSharedLayerContext)
+ 			if !slices.Equal(got, tc.expected) {
+ 				t.Errorf("sharedLayerMountOptions(%q, %v) = %q, want %q",
+ 					tc.opts, tc.selinuxEnabled, got, tc.expected)
+@@ -100,10 +100,10 @@ func TestSharedLayerMountOptions(t *testing.T) {
+ // different security settings" and only one pod per image can start.
+ func TestSharedLayerMountOptionsConverge(t *testing.T) {
+ 	taskPath := sharedLayerMountOptions(
+-		[]string{"ro", "loop", `context="system_u:object_r:container_file_t:s0:c646,c927"`}, true)
+-	containerPath := sharedLayerMountOptions([]string{"ro", "loop"}, true)
++		[]string{"ro", "loop", `context="system_u:object_r:container_file_t:s0:c646,c927"`}, true, defaultSharedLayerContext)
++	containerPath := sharedLayerMountOptions([]string{"ro", "loop"}, true, defaultSharedLayerContext)
+ 	otherPod := sharedLayerMountOptions(
+-		[]string{"ro", "loop", `context="system_u:object_r:container_file_t:s0:c154,c335"`}, true)
++		[]string{"ro", "loop", `context="system_u:object_r:container_file_t:s0:c154,c335"`}, true, defaultSharedLayerContext)
+ 
+ 	if !slices.Equal(taskPath, containerPath) {
+ 		t.Errorf("task path %q and container path %q disagree", taskPath, containerPath)
+diff --git a/plugins/services/diff/local.go b/plugins/services/diff/local.go
+index 1b2c9f2dc..5d729413e 100644
+--- a/plugins/services/diff/local.go
++++ b/plugins/services/diff/local.go
+@@ -19,6 +19,7 @@ package diff
+ import (
+ 	"context"
+ 	"fmt"
++	"slices"
+ 
+ 	diffapi "github.com/containerd/containerd/api/services/diff/v1"
+ 	"github.com/containerd/errdefs"
+@@ -71,6 +72,7 @@ func init() {
+ 			syncFs := ic.Config.(*config).SyncFs
+ 			orderedNames := ic.Config.(*config).Order
+ 			ordered := make([]differ, len(orderedNames))
++			var dmverityCapable []string
+ 			for i, n := range orderedNames {
+ 				d, ok := differs[n]
+ 				if !ok {
+@@ -81,11 +83,18 @@ func init() {
+ 				if !ok {
+ 					return nil, fmt.Errorf("differ does not implement Comparer and Applier interface: %s", n)
+ 				}
++
++				if p := ic.Plugins().Get(plugins.DiffPlugin, n); p != nil &&
++					slices.Contains(p.Meta.Capabilities, plugins.CapabilityDmverityReferrers) {
++					dmverityCapable = append(dmverityCapable, n)
++				}
+ 			}
+ 
+ 			return &local{
+-				differs: ordered,
+-				syncfs:  syncFs,
++				differs:         ordered,
++				orderedNames:    orderedNames,
++				dmverityCapable: dmverityCapable,
++				syncfs:          syncFs,
+ 			}, nil
+ 		},
+ 	})
+@@ -93,11 +102,29 @@ func init() {
+ 
+ type local struct {
+ 	differs []differ
+-	syncfs  bool
++	// orderedNames mirrors differs and is retained so callers can report
++	// which appliers this service will actually select.
++	orderedNames []string
++	// dmverityCapable lists the ordered differs that advertise
++	// plugins.CapabilityDmverityReferrers.
++	dmverityCapable []string
++	syncfs          bool
+ }
+ 
+ var _ diffapi.DiffClient = &local{}
+ 
++// DmverityAppliers reports the ordered applier chain this service will select
++// from, and the subset of it able to consume dm-verity referrer artifacts.
++//
++// Discovery of dm-verity artifacts is derived from loaded diff plugins, but
++// layers are applied by the differ this service selects. When the two disagree,
++// artifacts are fetched and then dropped, producing layers with no dm-verity
++// device while configuration still reads as though verification is enabled.
++// Callers use this to bind enforcement to the selected applier instead.
++func (l *local) DmverityAppliers() (ordered []string, capable []string) {
++	return l.orderedNames, l.dmverityCapable
++}
++
+ func (l *local) Apply(ctx context.Context, er *diffapi.ApplyRequest, _ ...grpc.CallOption) (*diffapi.ApplyResponse, error) {
+ 	var (
+ 		ocidesc ocispec.Descriptor
