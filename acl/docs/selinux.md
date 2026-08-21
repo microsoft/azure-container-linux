@@ -1,37 +1,75 @@
-# SELinux Container Domains
+# SELinux Container Domain Reference
 
 Azure Container Linux (ACL) runs SELinux in enforcing mode. Container
-workloads use SELinux domains to limit their access to the host and to other
-containers. The container runtime selects a domain and allocates an MCS
-category set for each workload.
+workloads run in SELinux process domains that limit their access to the host
+and to other containers.
 
-## Workload domains
+This guide documents the container workload domains shipped by ACL and helps
+operators choose the narrowest domain that meets a workload's requirements.
+It does not list every host service domain in the complete SELinux policy.
 
-| Domain | Intended use | Host access |
-| --- | --- | --- |
-| `container_t` | Default container workload | No general access to host logs or host files |
-| `container_logreader_t` | Opt-in log collector | Read-only access to objects labeled with an SELinux log type |
-| `container_kvm_t` | Containerized KVM workload | KVM-specific device and process access |
-| `spc_t` | Privileged container | Broad host access; may be unconfined when the unconfined policy module is enabled |
+## Choosing a workload domain
 
-`container_engine_t` is reserved for the container engine itself and is not a
-workload domain.
+Use `container_t` by default. Select another domain only when the workload has
+a requirement described in this guide.
 
-Use `container_t` unless the workload requires a documented specialized
-domain. Do not use `spc_t` solely to collect logs.
+| Requirement | Domain |
+| --- | --- |
+| General container workload | `container_t` |
+| Read host logs without broad host privileges | `container_logreader_t` |
+| Run a containerized KVM workload | `container_kvm_t` |
+| Broadly privileged system container | `spc_t` |
+| Broadly privileged rootless or user container | `spc_user_t` |
 
-## Confined log collectors
+Do not select `spc_t` merely to make SELinux AVC denials disappear. Determine
+which host resource the workload needs and use a specialized domain or request
+a narrowly scoped policy extension.
+
+## Supported workload domains
+
+The compiled ACL container policy contains five workload process domains:
+
+| Domain | Engine scope | MCS constrained | Intended use |
+| --- | --- | --- | --- |
+| `container_t` | System and user engines | Yes | Default confined container |
+| `container_logreader_t` | System and user engines | Yes | Confined host-log collector |
+| `container_kvm_t` | System engines | Yes | Containerized KVM workload |
+| `spc_t` | System engines | No | Privileged system container |
+| `spc_user_t` | User engines | No | Privileged rootless or user container |
+
+The engine scope describes how the ACL policy classifies the domain. Runtime
+support, admission policy, Linux capabilities, device assignment, and
+discretionary file permissions still apply.
+
+### `container_t`
+
+`container_t` is the default and should be used for most workloads. It has the
+common permissions needed to execute and manage files labeled for its
+container, use container networking, and access routine namespaced kernel
+interfaces.
+
+`container_t`:
+
+- Is constrained by the runtime-assigned MCS categories.
+- Does not receive general access to host files merely because they are bind
+  mounted.
+- Does not receive the specialized host-log, KVM, or privileged-container
+  permissions described below.
+
+`svirt_lxc_net_t` is a compatibility alias for `container_t`; use the canonical
+`container_t` name in new configurations.
+
+### `container_logreader_t`
 
 `container_logreader_t` extends the normal confined container policy with
 read, directory traversal, and symlink access to types carrying the `logfile`
-attribute. Inotify watch access applies only to `container_log_t`, not to other
-host log types. Access is based on the SELinux label, not the path. Inspect
-host labels with:
+attribute. It is intended for node-level log agents that would otherwise be
+run as broadly privileged containers.
 
-```bash
-ls -ldZ /var/log
-find /var/log -maxdepth 2 -type f -exec ls -lZ -- {} +
-```
+It additionally receives read-only mmap access to persistent files labeled
+`systemd_journal_t`, which is required by tools such as `journalctl --file`.
+Inotify watch access applies only to `container_log_t`, not to every host log
+type.
 
 The domain intentionally does not grant:
 
@@ -53,7 +91,69 @@ when a collector should not receive audit data.
 The host log path must still be mounted into the container. Make the mount
 read-only as defense in depth, and do not relabel the host log directory.
 
-### Kubernetes example
+### `container_kvm_t`
+
+`container_kvm_t` is the confined domain for containerized virtualization
+workloads such as KubeVirt. It adds KVM-related access beyond `container_t`,
+including policy needed for virtual-machine devices, selected system state,
+and virtualization runtime interactions.
+
+The domain remains MCS constrained. Selecting it does not itself pass devices
+into the container or grant every Linux capability required by a virtual
+machine; the runtime configuration must provide those separately.
+
+Do not use `container_kvm_t` for non-virtualization workloads.
+
+### `spc_t`
+
+`spc_t` is the super-privileged domain for system containers. Container
+runtimes commonly select it for privileged workloads.
+
+Compared with the confined domains, `spc_t`:
+
+- Is not an `mcs_constrained_type`.
+- Receives broad capabilities and host-resource permissions.
+- Can load kernel modules, administer container storage and runtime state, and
+  perform other host-management operations allowed by policy.
+- Becomes an unconfined SELinux domain when the optional unconfined policy
+  module is enabled.
+
+Runtime controls, Linux capabilities, namespaces, and discretionary access
+control can still deny an operation. Nevertheless, `spc_t` should be treated
+as broad host access, not as a convenient general-purpose domain.
+
+### `spc_user_t`
+
+`spc_user_t` is the privileged counterpart used by user or rootless container
+engines. It belongs to the privileged-container policy class but not the
+system-container class.
+
+Like `spc_t`, it is not MCS constrained and can become unconfined when the
+optional unconfined policy module is enabled. Rootless user-namespace and
+kernel restrictions still apply, but this domain is not a substitute for a
+purpose-built confined domain.
+
+## Capability comparison
+
+This table summarizes SELinux policy intent, not every individual permission.
+
+| Capability | `container_t` | `container_logreader_t` | `container_kvm_t` | `spc_t` / `spc_user_t` |
+| --- | --- | --- | --- | --- |
+| Common container execution and storage | Yes | Yes | Yes | Yes |
+| Runtime-assigned MCS isolation | Yes | Yes | Yes | No |
+| Read types carrying `logfile` | No | Yes | No | Broad policy; do not rely on confinement |
+| Read and map persistent systemd journals | No | Yes | No | Broad policy; do not rely on confinement |
+| Read auditd-managed `auditd_log_t` files | No | No | No | Broad policy; depends on loaded modules |
+| KVM-specific policy | No | No | Yes | Broad system access for `spc_t` |
+| Privileged-container policy class | No | No | No | Yes |
+| May become SELinux-unconfined | No | No | No | Yes |
+
+## Selecting a domain
+
+### Kubernetes
+
+Set only the required process type and allow the runtime to allocate the MCS
+level:
 
 ```yaml
 apiVersion: v1
@@ -78,11 +178,15 @@ spec:
         type: Directory
 ```
 
-Cluster admission policy must allow the `container_logreader_t` type. Do not
-set the pod to `privileged: true`. Add a separate read-only
-`/var/log/audit` mount only when the collector must read auditd-managed files.
+Cluster admission policy must allow the selected type. Do not set
+`privileged: true` unless the workload genuinely requires the privileged
+domain and associated runtime access. For `container_logreader_t`, add a
+separate read-only `/var/log/audit` mount only when the collector must read
+auditd-managed files.
 
-### Podman example
+### Podman or Docker-compatible engines
+
+Engines that support SELinux type overrides use `--security-opt`:
 
 ```bash
 podman run --rm \
@@ -91,40 +195,106 @@ podman run --rm \
   <collector-image>
 ```
 
-Do not add `:z` or `:Z` to the volume. Those options relabel host content and
-can interfere with host logging services. Add a separate
+Do not add `:z` or `:Z` to host system paths such as `/var/log`. Those options
+relabel host content and can interfere with host services. Add a separate
 `/var/log/audit:/host/var/log/audit:ro` mount only when auditd files are
 required.
 
 ## MCS isolation
 
-`container_logreader_t` remains an `mcs_constrained_type` and retains normal
-container MCS isolation. ACL builds the targeted policy in MCS mode, where
-standard host log file contexts resolve to level `s0`. A container at its
-runtime-assigned level, such as `s0:c123,c456`, dominates `s0` and can use the
-domain's read permissions without receiving an all-category level.
+`container_t`, `container_logreader_t`, and `container_kvm_t` remain
+`mcs_constrained_type` members. The container runtime assigns categories such
+as `s0:c123,c456` so similarly typed containers cannot access each other's
+objects.
+
+ACL builds the targeted policy in MCS mode. Standard host log file contexts
+resolve to level `s0`, which is dominated by a normally categorized container
+process. The log-reader domain can therefore use its type-enforcement read
+permissions without receiving an all-category level.
 
 Do not set `seLinuxOptions.level` to `s0:c0.c1023` and do not remove the
 runtime-assigned categories. Either action weakens isolation from other
 containers.
 
+## Names that are not workload domains
+
+Not every SELinux name containing `container` or ending in `_t` is a process
+domain that should be selected for a workload.
+
+### Engine and helper process domains
+
+These domains are assigned to container infrastructure and should not be set
+in a pod or container security context:
+
+| Domain | Purpose |
+| --- | --- |
+| `container_engine_t` | Generic container engine |
+| `dockerd_t`, `dockerd_user_t` | Docker daemon |
+| `dockerc_t`, `dockerc_user_t` | Docker client |
+| `crio_t` | CRI-O daemon |
+| `crio_conmon_t` | CRI-O container monitor |
+
+### File and object types
+
+Types such as `container_file_t`, `container_ro_file_t`, `container_log_t`,
+`container_runtime_t`, `container_var_lib_t`, and `container_device_t` label
+files or objects. They are not process domains.
+
+Names such as `container_domain`, `container_system_domain`,
+`container_user_domain`, and `privileged_container_domain` are policy
+attributes grouping multiple types. They are also not selectable process
+domains.
+
+## Requesting narrower policy
+
+If none of the available domains is narrow enough for a workload:
+
+1. Start from `container_t`, not `spc_t`.
+2. Identify the exact host paths, SELinux object types, devices, capabilities,
+   and operations the workload requires.
+3. Mount only required paths and use read-only mounts where possible.
+4. Capture the relevant AVC denials from an enforcing test system.
+5. Request a dedicated domain or narrowly scoped policy interface.
+6. Test both the required access and explicit denials for unrelated host
+   resources.
+
+A specialized domain should describe a stable workload role, as
+`container_logreader_t` and `container_kvm_t` do, rather than accumulate
+permissions for one deployment.
+
 ## Validation
 
-Confirm the selected process domain and mounted labels from the container:
+Confirm the selected process context from inside the container:
 
 ```bash
 cat /proc/self/attr/current
+```
+
+For `container_logreader_t`, inspect mounted labels and read the persistent
+journal:
+
+```bash
 ls -ldZ /host/var/log/journal
 journalctl --file='/host/var/log/journal/*/system.journal' -n 5
 ```
 
-The process context should report `container_logreader_t`, and the journal
-read should succeed when the collector image includes `journalctl`. A write
-attempt to a host log should fail. Stock ACL creates `/var/log/audit` but does
-not run auditd, so the directory is normally empty. Hosts that add auditd
-should treat access to its files as sensitive and mount them only when needed.
-On the host, check unexpected SELinux denials with:
+The context should report `container_logreader_t`, and the journal read should
+succeed when the collector image includes `journalctl`. A write attempt to a
+host log should fail.
+
+Stock ACL creates `/var/log/audit` but does not run auditd, so the directory is
+normally empty. Hosts that add auditd should treat access to its files as
+sensitive and mount them only when needed.
+
+On the host, check recent SELinux denials with:
 
 ```bash
 journalctl -g 'avc:  denied' --since -10min
+```
+
+Inspect host labels when troubleshooting:
+
+```bash
+ls -ldZ /var/log
+find /var/log -maxdepth 2 -type f -exec ls -lZ -- {} +
 ```
