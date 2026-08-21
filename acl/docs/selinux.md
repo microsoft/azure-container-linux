@@ -36,16 +36,19 @@ find /var/log -maxdepth 2 -type f -exec ls -lZ -- {} +
 The domain intentionally does not grant:
 
 - Write, append, create, delete, rename, or relabel access to host logs.
-- Access to files that do not carry an SELinux log type.
-- Access to `auditd_log_t`, including auditd-managed files under
-  `/var/log/audit`. These files contain host-wide authentication, syscall, and
-  AVC data and require a separately reviewed policy.
+- Blanket access to arbitrary host files beyond the common `container_domain`
+  policy it shares with `container_t`.
 - The broad host privileges provided by `spc_t`.
 
+Like Fedora, RHEL, and other distributions using `container-selinux`, ACL
+allows this domain to read auditd-managed files labeled `auditd_log_t`.
+Audit logs contain host-wide authentication, syscall, and AVC data; mount
+`/var/log/audit` only when the collector requires that information.
+
 ACL stores the systemd journal persistently under `/var/log/journal`. The
-journal uses a regular log type and can contain kernel audit and AVC records,
-so it remains readable when mounted into the collector. For a hard audit-data
-boundary, restrict the mounted paths instead of relying on the domain alone.
+journal uses `systemd_journal_t` and can contain kernel audit and AVC records,
+so it remains readable when mounted into the collector. Restrict mounted paths
+when a collector should not receive audit data.
 
 The host log path must still be mounted into the container. Make the mount
 read-only as defense in depth, and do not relabel the host log directory.
@@ -65,30 +68,33 @@ spec:
         seLinuxOptions:
           type: container_logreader_t
       volumeMounts:
-        - name: host-logs
-          mountPath: /host/var/log
+        - name: host-journal
+          mountPath: /host/var/log/journal
           readOnly: true
   volumes:
-    - name: host-logs
+    - name: host-journal
       hostPath:
-        path: /var/log
+        path: /var/log/journal
         type: Directory
 ```
 
 Cluster admission policy must allow the `container_logreader_t` type. Do not
-set the pod to `privileged: true`.
+set the pod to `privileged: true`. Add a separate read-only
+`/var/log/audit` mount only when the collector must read auditd-managed files.
 
 ### Podman example
 
 ```bash
 podman run --rm \
   --security-opt label=type:container_logreader_t \
-  --volume /var/log:/host/var/log:ro \
+  --volume /var/log/journal:/host/var/log/journal:ro \
   <collector-image>
 ```
 
 Do not add `:z` or `:Z` to the volume. Those options relabel host content and
-can interfere with host logging services.
+can interfere with host logging services. Add a separate
+`/var/log/audit:/host/var/log/audit:ro` mount only when auditd files are
+required.
 
 ## MCS isolation
 
@@ -108,16 +114,16 @@ Confirm the selected process domain and mounted labels from the container:
 
 ```bash
 cat /proc/self/attr/current
-ls -ldZ /host/var/log/journal /host/var/log/audit
+ls -ldZ /host/var/log/journal
 journalctl --file='/host/var/log/journal/*/system.journal' -n 5
 ```
 
 The process context should report `container_logreader_t`, and the journal
 read should succeed when the collector image includes `journalctl`. A write
 attempt to a host log should fail. Stock ACL creates `/var/log/audit` but does
-not run auditd, so the directory is normally empty; listing it should still be
-denied. Hosts that add auditd should also deny reads of its files. On the host,
-check unexpected SELinux denials with:
+not run auditd, so the directory is normally empty. Hosts that add auditd
+should treat access to its files as sensitive and mount them only when needed.
+On the host, check unexpected SELinux denials with:
 
 ```bash
 journalctl -g 'avc:  denied' --since -10min

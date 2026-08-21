@@ -1,6 +1,6 @@
-From 924642906fcfec987e41135f57e30f6f59de8b33 Mon Sep 17 00:00:00 2001
+From 1b6a1a2c7836d3601b7af8ac453f9b89163eda3a Mon Sep 17 00:00:00 2001
 From: Sean Dougherty <sdougherty@microsoft.com>
-Date: Fri, 21 Aug 2026 04:56:46 +0000
+Date: Fri, 21 Aug 2026 22:12:09 +0000
 Subject: [PATCH] container: Allow log reader to map journals
 
 Journal readers such as journalctl memory-map systemd journal files. Grant the
@@ -13,10 +13,10 @@ Signed-off-by: Sean Dougherty <sdougherty@microsoft.com>
  1 file changed, 4 insertions(+)
 
 diff --git a/policy/modules/services/container.te b/policy/modules/services/container.te
-index de96433..41de15c 100644
+index 2fe1b51..4559fb5 100644
 --- a/policy/modules/services/container.te
 +++ b/policy/modules/services/container.te
-@@ -613,6 +613,10 @@ logging_list_logs(container_logreader_t)
+@@ -614,6 +614,10 @@ logging_list_logs(container_logreader_t)
  allow container_logreader_t logfile:lnk_file read_lnk_file_perms;
  allow container_logreader_t container_log_t:file watch;
  
@@ -29,3 +29,4 @@ index de96433..41de15c 100644
  # Common container engine local policy
 -- 
 2.45.4
+
