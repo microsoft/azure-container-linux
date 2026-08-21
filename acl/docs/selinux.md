@@ -78,6 +78,10 @@ The domain intentionally does not grant:
   policy it shares with `container_t`.
 - The broad host privileges provided by `spc_t`.
 
+Common container policy permits limited reads of some non-log host types, such
+as executable and configuration content. Mount only the paths the collector
+requires; do not treat the process domain as a mount boundary.
+
 Like Fedora, RHEL, and other distributions using `container-selinux`, ACL
 allows this domain to read auditd-managed files labeled `auditd_log_t`.
 Audit logs contain host-wide authentication, syscall, and AVC data; mount
@@ -94,13 +98,17 @@ read-only as defense in depth, and do not relabel the host log directory.
 ### `container_kvm_t`
 
 `container_kvm_t` is the confined domain for containerized virtualization
-workloads such as KubeVirt. It adds KVM-related access beyond `container_t`,
-including policy needed for virtual-machine devices, selected system state,
-and virtualization runtime interactions.
+workloads such as KubeVirt. It shares the common `container_domain` policy with
+`container_t` but is a sibling domain, not a superset. Its domain-specific
+rules add `net_admin` and `sys_resource`, tun socket relabeling, selected
+sysfs, cgroup, and sysctl reads, and inherited FD, FIFO, and tun interactions
+with `spc_t`.
 
-The domain remains MCS constrained. Selecting it does not itself pass devices
-into the container or grant every Linux capability required by a virtual
-machine; the runtime configuration must provide those separately.
+The domain remains MCS constrained. It does not directly grant access to
+objects labeled `kvm_device_t`, `vhost_device_t`, or `vfio_device_t`. Actual
+device access requires an inherited descriptor, an appropriate device label,
+or separately reviewed policy in addition to runtime device and capability
+configuration.
 
 Do not use `container_kvm_t` for non-virtualization workloads.
 
@@ -115,12 +123,14 @@ Compared with the confined domains, `spc_t`:
 - Receives broad capabilities and host-resource permissions.
 - Can load kernel modules, administer container storage and runtime state, and
   perform other host-management operations allowed by policy.
-- Becomes an unconfined SELinux domain when the optional unconfined policy
-  module is enabled.
+- Is SELinux-unconfined on stock ACL because the unconfined policy module is
+  loaded.
 
 Runtime controls, Linux capabilities, namespaces, and discretionary access
 control can still deny an operation. Nevertheless, `spc_t` should be treated
-as broad host access, not as a convenient general-purpose domain.
+as broad host access, not as a convenient general-purpose domain. A system
+that explicitly disables the unconfined module removes the unconfined
+attribute set but still leaves `spc_t` with broad privileged-container policy.
 
 ### `spc_user_t`
 
@@ -128,9 +138,10 @@ as broad host access, not as a convenient general-purpose domain.
 engines. It belongs to the privileged-container policy class but not the
 system-container class.
 
-Like `spc_t`, it is not MCS constrained and can become unconfined when the
-optional unconfined policy module is enabled. Rootless user-namespace and
-kernel restrictions still apply, but this domain is not a substitute for a
+Like `spc_t`, it is not MCS constrained and is SELinux-unconfined on stock ACL.
+Disabling the unconfined module removes those unconfined attributes, but the
+domain remains a broad privileged-container type. Rootless user-namespace and
+kernel restrictions still apply; this domain is not a substitute for a
 purpose-built confined domain.
 
 ## Capability comparison
@@ -146,14 +157,14 @@ This table summarizes SELinux policy intent, not every individual permission.
 | Read auditd-managed `auditd_log_t` files | No | No | No | Broad policy; depends on loaded modules |
 | KVM-specific policy | No | No | Yes | Broad system access for `spc_t` |
 | Privileged-container policy class | No | No | No | Yes |
-| May become SELinux-unconfined | No | No | No | Yes |
+| SELinux-unconfined on stock ACL | No | No | No | Yes |
 
 ## Selecting a domain
 
 ### Kubernetes
 
-Set only the required process type and allow the runtime to allocate the MCS
-level:
+For a single-container pod, set only the required process type and allow the
+runtime to allocate the MCS level:
 
 ```yaml
 apiVersion: v1
@@ -183,6 +194,14 @@ Cluster admission policy must allow the selected type. Do not set
 domain and associated runtime access. For `container_logreader_t`, add a
 separate read-only `/var/log/audit` mount only when the collector must read
 auditd-managed files.
+
+When SELinux options omit an explicit level, containerd allocates a new MCS
+level for that container instead of inheriting the sandbox label. In a
+multi-container pod, independent type-only overrides can therefore prevent
+containers from sharing MCS-constrained IPC, sockets, processes, or relabeled
+volumes. Use a supported admission or runtime mechanism that assigns one
+unique per-pod level to the sandbox and every participating container. Do not
+reuse one static level across pods.
 
 ### Podman or Docker-compatible engines
 
@@ -233,6 +252,13 @@ in a pod or container security context:
 | `dockerc_t`, `dockerc_user_t` | Docker client |
 | `crio_t` | CRI-O daemon |
 | `crio_conmon_t` | CRI-O container monitor |
+| `podman_t`, `podman_user_t` | Podman system and user engines |
+| `podman_conmon_t`, `podman_user_conmon_t` | Podman container monitors |
+
+The shipped container runtime contexts file also contains an
+`init_process` entry naming `container_init_t`. The current compiled ACL
+policy does not define that type, so it is not an available workload domain
+and must not be selected.
 
 ### File and object types
 
