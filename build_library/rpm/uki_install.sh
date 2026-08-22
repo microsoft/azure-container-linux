@@ -38,6 +38,14 @@ case "${IPE_CAPABLE}" in
         ;;
 esac
 
+IPE_VERITY_SIGNATURE="${ACL_IPE_VERITY_SIGNATURE:-true}"
+case "${IPE_VERITY_SIGNATURE}" in
+    true|false) ;;
+    *)
+        die_notrace "ACL_IPE_VERITY_SIGNATURE must be true or false (got: ${IPE_VERITY_SIGNATURE})"
+        ;;
+esac
+
 # Determine EFI architecture suffix
 case "${FLAGS_target}" in
     x86_64-efi)
@@ -221,7 +229,7 @@ OSREL
         die "UKI/RPM: IPE assets require a /usr dm-verity root hash"
     fi
 
-    if [[ "${IPE_CAPABLE}" == "true" ]]; then
+    if [[ "${IPE_CAPABLE}" == "true" && "${IPE_VERITY_SIGNATURE}" == "true" ]]; then
         local build_dir cert_dir
         build_dir="$(readlink -f "$(dirname "${FLAGS_disk_image}")")"
         cert_dir="${build_dir}/acl-ipe-ephemeral"

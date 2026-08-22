@@ -48,11 +48,12 @@ sign_policy() {
 
 test_ipe_disabled_by_default() {
     prepare_case default
-    unset ACL_IPE_ASSET_MODE ACL_IPE_POLICY_PATH
+    unset ACL_IPE_ASSET_MODE ACL_IPE_POLICY_PATH ACL_IPE_VERITY_SIGNATURE
 
     rpm_install_ipe_policy "${CASE_ROOT}"
 
     [[ "$(<"${BUILD_DIR}/ipe-asset-mode")" == "disabled" ]]
+    [[ "$(<"${BUILD_DIR}/ipe-verity-signature")" == "true" ]]
     [[ ! -e "${CASE_ROOT}/usr/lib/ipe/acl.pol.p7b" ]]
 }
 
@@ -97,6 +98,21 @@ test_ephemeral_policy_is_generated() {
         -noverify -out "${TEST_DIR}/verified.pol" >/dev/null 2>&1
     cmp -s "${policy}" "${TEST_DIR}/verified.pol"
     [[ "$(<"${BUILD_DIR}/ipe-asset-mode")" == "ephemeral" ]]
+}
+
+test_ephemeral_policy_is_generated_without_verity_signature() {
+    prepare_case ephemeral-unsigned
+    export ACL_IPE_ASSET_MODE=ephemeral
+    export ACL_IPE_POLICY_PATH=
+    export ACL_IPE_VERITY_SIGNATURE=false
+
+    rpm_install_ipe_policy "${CASE_ROOT}"
+
+    [[ -s "${BUILD_DIR}/acl-ipe-ephemeral/ca.key" ]]
+    [[ -s "${CASE_ROOT}/usr/lib/ipe/acl.pol.p7b" ]]
+    [[ "$(<"${BUILD_DIR}/ipe-asset-mode")" == "ephemeral" ]]
+    [[ "$(<"${BUILD_DIR}/ipe-verity-signature")" == "false" ]]
+    unset ACL_IPE_VERITY_SIGNATURE
 }
 
 test_verity_roothash_matches_kernel_input() {
@@ -200,6 +216,7 @@ create_test_signer
 test_external_policy_is_installed
 test_mismatched_external_policy_is_rejected
 test_ephemeral_policy_is_generated
+test_ephemeral_policy_is_generated_without_verity_signature
 test_verity_roothash_matches_kernel_input
 test_gallery_validation_defaults_to_disabled_asset_mode --run-script
 test_gallery_validation_defaults_to_disabled_asset_mode --run-host-script

@@ -37,6 +37,7 @@
 #   --help                               Show this help message
 #   --ipe-asset-mode=MODE                IPE assets: disabled|ephemeral|external (default: disabled)
 #   --ipe-policy-path=PATH               Attached DER PKCS#7 policy artifact (required when building external mode)
+#   --ipe-verity-signature=BOOL           Sign /usr dm-verity root hash: true|false (default: true)
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
@@ -181,6 +182,11 @@ if [[ -v ACL_IPE_ASSET_MODE ]]; then
 fi
 ACL_IPE_ASSET_MODE="${ACL_IPE_ASSET_MODE:-disabled}"
 ACL_IPE_POLICY_PATH="${ACL_IPE_POLICY_PATH:-}"
+IPE_VERITY_SIGNATURE_OVERRIDE_SET=false
+if [[ -v ACL_IPE_VERITY_SIGNATURE ]]; then
+    IPE_VERITY_SIGNATURE_OVERRIDE_SET=true
+fi
+ACL_IPE_VERITY_SIGNATURE="${ACL_IPE_VERITY_SIGNATURE:-true}"
 # Include the EROFS/dm-verity containerd profile (the containerd2-erofs
 # subpackage) in the embedded containerd sysext. On by default; set
 # ACL_EROFS_ENABLE=0 to use the base containerd configuration.
@@ -269,6 +275,14 @@ validate_ipe_boot_path() {
 }
 
 configure_ipe_asset_mode() {
+    case "${ACL_IPE_VERITY_SIGNATURE}" in
+        true|false) ;;
+        *)
+            error "Invalid IPE verity signature setting: ${ACL_IPE_VERITY_SIGNATURE} (expected true or false)"
+            return 1
+            ;;
+    esac
+
     case "${ACL_IPE_ASSET_MODE}" in
         disabled)
             ACL_IPE_CAPABLE=false
@@ -304,13 +318,20 @@ configure_ipe_asset_mode() {
             return 1
             ;;
     esac
+    if [[ "${ACL_IPE_VERITY_SIGNATURE}" == "false" &&
+        "${ACL_IPE_ASSET_MODE}" != "ephemeral" ]]; then
+        error "ACL_IPE_VERITY_SIGNATURE=false is supported only with ACL_IPE_ASSET_MODE=ephemeral"
+        return 1
+    fi
     export ACL_IPE_ASSET_MODE ACL_IPE_CAPABLE ACL_IPE_POLICY_PATH
+    export ACL_IPE_VERITY_SIGNATURE
 }
 
 load_artifact_ipe_asset_mode() {
     local artifact_dir="$1"
     local mode_file="${artifact_dir}/ipe-asset-mode"
-    local artifact_mode
+    local signature_file="${artifact_dir}/ipe-verity-signature"
+    local artifact_mode artifact_signature
 
     if [[ ! -r "${mode_file}" ]]; then
         if [[ -d "${artifact_dir}/acl-ipe-ephemeral" ]]; then
@@ -335,6 +356,24 @@ load_artifact_ipe_asset_mode() {
             return 1
             ;;
     esac
+
+    artifact_signature=true
+    if [[ -r "${signature_file}" ]]; then
+        read -r artifact_signature < "${signature_file}"
+    fi
+    case "${artifact_signature}" in
+        true|false) ;;
+        *)
+            error "Invalid IPE verity signature setting in ${signature_file}: ${artifact_signature}"
+            return 1
+            ;;
+    esac
+    if [[ "${IPE_VERITY_SIGNATURE_OVERRIDE_SET}" == "true" &&
+        "${ACL_IPE_VERITY_SIGNATURE}" != "${artifact_signature}" ]]; then
+        error "Requested IPE verity signature setting '${ACL_IPE_VERITY_SIGNATURE}' does not match source image setting '${artifact_signature}'"
+        return 1
+    fi
+
     if [[ "${IPE_ASSET_MODE_OVERRIDE_SET}" == "true" &&
         "${ACL_IPE_ASSET_MODE}" != "${artifact_mode}" ]]; then
         error "Requested IPE asset mode '${ACL_IPE_ASSET_MODE}' does not match source image mode '${artifact_mode}'"
@@ -342,6 +381,7 @@ load_artifact_ipe_asset_mode() {
     fi
 
     ACL_IPE_ASSET_MODE="${artifact_mode}"
+    ACL_IPE_VERITY_SIGNATURE="${artifact_signature}"
     configure_ipe_asset_mode
 }
 
@@ -398,6 +438,16 @@ parse_args() {
                 ;;
             --ipe-policy-path)
                 ACL_IPE_POLICY_PATH="$2"
+                shift 2
+                ;;
+            --ipe-verity-signature=*)
+                ACL_IPE_VERITY_SIGNATURE="${1#*=}"
+                IPE_VERITY_SIGNATURE_OVERRIDE_SET=true
+                shift
+                ;;
+            --ipe-verity-signature)
+                ACL_IPE_VERITY_SIGNATURE="$2"
+                IPE_VERITY_SIGNATURE_OVERRIDE_SET=true
                 shift 2
                 ;;
             --img-name=*)
@@ -1042,6 +1092,7 @@ build_image() {
     info "  Staging Dir:     ${STAGING_DIR}"
     info "  Force Rebuild:   ${FORCE_REBUILD}"
     info "  IPE Asset Mode: ${ACL_IPE_ASSET_MODE}"
+    info "  IPE Verity Signature: ${ACL_IPE_VERITY_SIGNATURE}"
     echo
 
     # Count RPMs
@@ -1437,6 +1488,7 @@ main() {
     section "Azure Container Linux Image Builder"
     info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"
     info "IPE asset mode: ${ACL_IPE_ASSET_MODE}"
+    info "IPE verity signature: ${ACL_IPE_VERITY_SIGNATURE}"
 
     check_prerequisites
     print_summary

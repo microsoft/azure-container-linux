@@ -881,6 +881,13 @@ rpm_record_ipe_asset_mode() {
         die "RPM mode: failed to record IPE asset mode"
 }
 
+rpm_record_ipe_verity_signature() {
+    local enabled="$1"
+    [[ -n "${BUILD_DIR:-}" ]] || return 0
+    printf '%s\n' "${enabled}" > "${BUILD_DIR}/ipe-verity-signature" ||
+        die "RPM mode: failed to record IPE verity signature setting"
+}
+
 rpm_validate_ipe_policy_source() {
     local policy_src="$1"
     [[ -f "${policy_src}" ]] ||
@@ -939,6 +946,13 @@ rpm_verify_ipe_policy_artifact() {
 rpm_install_ipe_policy() {
     local root_fs_dir="$1"
     local ipe_asset_mode="${ACL_IPE_ASSET_MODE:-disabled}"
+    local ipe_verity_signature="${ACL_IPE_VERITY_SIGNATURE:-true}"
+
+    case "${ipe_verity_signature}" in
+        true|false) ;;
+        *) die "Invalid ACL_IPE_VERITY_SIGNATURE: ${ipe_verity_signature}" ;;
+    esac
+    rpm_record_ipe_verity_signature "${ipe_verity_signature}"
 
     case "${ipe_asset_mode}" in
         disabled)
@@ -1165,6 +1179,7 @@ export -f rpm_use_official_repos
 export -f rpm_cleanup_build_dir
 export -f rpm_umount_pseudofs
 export -f rpm_record_ipe_asset_mode
+export -f rpm_record_ipe_verity_signature
 export -f rpm_validate_ipe_policy_source
 export -f rpm_prepare_ipe_policy_artifact
 export -f rpm_verify_ipe_policy_artifact

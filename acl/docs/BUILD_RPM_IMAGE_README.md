@@ -181,6 +181,20 @@ IPE-capable VM images currently support only the Azure Secure Boot UKI path.
 QEMU image conversion must use `--ipe-asset-mode=disabled`, which is also the
 default.
 
+For an IPE-off performance baseline only, the `/usr` dm-verity root-hash
+signature can be omitted while retaining the IPE assets:
+
+```bash
+./acl/build_rpm_image.sh --rebuild \
+  --ipe-asset-mode=ephemeral \
+  --ipe-verity-signature=false
+```
+
+This preserves dm-verity integrity but does not authenticate the root hash.
+Do not enable IPE with this image: the policy authorizes normal `/usr`
+execution through `dmverity_signature=TRUE`, so permissive-mode results would
+be dominated by policy-denial auditing.
+
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
 
 ### Phase 4: Build VM Image (Optional)
