@@ -29,7 +29,7 @@ a narrowly scoped policy extension.
 
 The compiled ACL container policy contains five workload process domains:
 
-| Domain | Engine scope | MCS constrained | Intended use |
+| Domain | Policy engine scope | MCS constrained | Intended use |
 | --- | --- | --- | --- |
 | `container_t` | System and user engines | ✅ Yes | Default confined container |
 | `container_logreader_t` | System and user engines | ✅ Yes | Confined host-log collector |
@@ -37,9 +37,12 @@ The compiled ACL container policy contains five workload process domains:
 | `spc_t` | System engines | ❌ No | Privileged system container |
 | `spc_user_t` | User engines | ❌ No | Privileged rootless or user container |
 
-The engine scope describes how the ACL policy classifies the domain. Runtime
-support, admission policy, Linux capabilities, device assignment, and
-discretionary file permissions still apply.
+In policy scope, a system engine is a rootful container engine running as a
+system service, while a user engine is a rootless engine running in a user's
+session. This classification does not mean ACL ships or supports every engine
+represented in the policy. Runtime support, admission policy, Linux
+capabilities, device assignment, and discretionary file permissions still
+apply.
 
 ### `container_t`
 
@@ -147,8 +150,6 @@ purpose-built confined domain.
 ## Capability comparison
 
 This table summarizes SELinux policy intent, not every individual permission.
-The glyphs supplement, rather than replace, the text: ✅ Yes, ❌ No, and
-⚠️ broad or conditional access.
 
 | Capability | `container_t` | `container_logreader_t` | `container_kvm_t` | `spc_t` / `spc_user_t` |
 | --- | --- | --- | --- | --- |
@@ -205,7 +206,8 @@ Cluster admission policy must allow the selected type. Do not set
 `privileged: true` unless the workload genuinely requires the privileged
 domain and associated runtime access. For `container_logreader_t`, add a
 separate read-only `/var/log/audit` mount only when the collector must read
-auditd-managed files.
+auditd-managed files. Stock ACL does not run auditd, so this mount is needed
+only on customized hosts that add it.
 
 When SELinux options omit an explicit level, containerd allocates a new MCS
 level for that container instead of inheriting the sandbox label. In a
@@ -214,22 +216,6 @@ containers from sharing MCS-constrained IPC, sockets, processes, or relabeled
 volumes. Use a supported admission or runtime mechanism that assigns one
 unique per-pod level to the sandbox and every participating container. Do not
 reuse one static level across pods.
-
-### Podman or Docker-compatible engines
-
-Engines that support SELinux type overrides use `--security-opt`:
-
-```bash
-podman run --rm \
-  --security-opt label=type:container_logreader_t \
-  --volume /var/log/journal:/host/var/log/journal:ro \
-  <collector-image>
-```
-
-Do not add `:z` or `:Z` to host system paths such as `/var/log`. Those options
-relabel host content and can interfere with host services. Add a separate
-`/var/log/audit:/host/var/log/audit:ro` mount only when auditd files are
-required.
 
 ## MCS isolation
 
@@ -266,6 +252,10 @@ in a pod or container security context:
 | `crio_conmon_t` | CRI-O container monitor |
 | `podman_t`, `podman_user_t` | Podman system and user engines |
 | `podman_conmon_t`, `podman_user_conmon_t` | Podman container monitors |
+
+Some infrastructure domains are included for policy compatibility even when
+ACL does not ship or support the corresponding runtime. Their presence in the
+compiled policy is not a product support statement.
 
 The shipped container runtime contexts file also contains an
 `init_process` entry naming `container_init_t`. The current compiled ACL
