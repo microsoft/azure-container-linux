@@ -1,6 +1,6 @@
 # containerd2 patch series
 
-Reference for the 14-patch series in the active spec. Engineering rationale,
+Reference for the 15-patch series in the active spec. Engineering rationale,
 history, and triage notes live here so the `.spec` stays terse.
 
 ## Layout
@@ -8,13 +8,14 @@ history, and triage notes live here so the `.spec` stays terse.
 | # in spec | Origin | Purpose |
 |-----------|--------|---------|
 | Patch0-7  | AzureLinux 3.0-dev baseline | 8 carry-patches verbatim from microsoft/azurelinux@origin/3.0-dev:SPECS/containerd2 at commit 5a4864f9 (containerd2-2.2.4-2). |
-| Patch8    | dm-verity baseline | Upstream `add-signature-support` (aadagarwal). Split off by author so it can be dropped once it merges into azurelinux, leaving Patch9-14 unchanged. |
+| Patch8    | dm-verity baseline | Upstream `add-signature-support` (aadagarwal). Split off by author so it can be dropped once it merges into azurelinux, leaving Patch9-15 unchanged. |
 | Patch9    | ACL integration | Derives referrer discovery and snapshotter-side formatting from the erofs differ's capability, and adds the ACL entry points. Leaves Patch8's defaults untouched. |
 | Patch10   | precomputed artifacts | Consumes signed precomputed EROFS/Merkle bundles and selects the newest. |
 | Patch11   | EROFS SELinux sharing | Makes every consumer of an EROFS layer request one synthesised `context=`, so a layer can be mounted by more than one container. Independent of dm-verity; touches only upstream code. |
 | Patch12   | selected-applier binding | Binds dm-verity referrer discovery to the applier selected for the active pull path and fails closed when that applier cannot consume the artifacts. Also recognises built-in dm-verity and makes the shared layer SELinux context configurable. |
 | Patch13   | dm-verity mount lock  | Widens the dm-verity mutex from "guard the create" to "guard the mount lifecycle", closing a window in which a mapper could be removed between another container's verify and its `mount(2)`. |
 | Patch14   | test compatibility | Updates the existing dm-verity snapshot test for Patch12's mount-handler constructor argument so the RPM `%check` phase compiles. No runtime behavior changes. |
+| Patch15   | deferred signed unpack | Retains the selected signed EROFS referrer graph for fetch-only images and reconstructs it during first-use unpack, with capability-driven overlayfs isolation and fail-closed applier enforcement. |
 
 ## Source of truth
 
@@ -36,7 +37,8 @@ v2.2.4  193637f7ee8ae5f5aa5248f49e7baa3e6164966e   ( == %define commit_hash )
           ├─ 2b81b1336  erofs: share layer mounts across containers under SELinux
           ├─ 6e9236725  erofs: bind dm-verity enforcement to the selected applier
           ├─ 88f2a85a6  erofs: hold the dm-verity lock across the mount
-          └─ a1d272319  test(erofs): pass default shared layer context
+          ├─ a1d272319  test(erofs): pass default shared layer context
+          └─ e670c411f  feat: retain dm-verity artifacts for deferred unpack
 ```
 
 The SHAs above are informational; the **trailers** are what the export commands
@@ -61,6 +63,7 @@ maintainable.
 | *(ungrouped exact commit)* | `6e9236725` | Patch12 |
 | `acl-dmverity-mount-lock` | `88f2a85a6` | Patch13 |
 | `acl-dmverity-test-fix` | `a1d272319` | Patch14 |
+| *(ungrouped exact commit)* | `e670c411f` | Patch15 |
 
 containerd does **not** inspect IPE policy. Layer signatures are passed to the
 kernel whenever they are present and the feature is enabled; the kernel alone
@@ -96,7 +99,7 @@ Split **by author** along the clean commit boundary
 
 The split is deliberately along the author boundary (not by feature) so that
 when `add-signature-support` lands in azurelinux upstream, **Patch8 is simply
-dropped and Patch9-14 apply unchanged** on top of the upstream base. Feature
+dropped and Patch9-15 apply unchanged** on top of the upstream base. Feature
 grouping is applied *within* the ACL patches, where it does not fight this.
 
 Patch8 covers: dm-verity layer formatting, OCI referrer signing, per-layer
@@ -330,6 +333,34 @@ the empty value to select the production default. This is only a one-line test
 compatibility change, but the RPM runs `make test` during `%check`, so omitting
 it makes the package build fail before an image can be produced.
 
+## Patch15 — retain signed artifacts for deferred unpack
+
+AgentBaker preserves its existing cache policy: images below the compressed
+size threshold are unpacked while the VHD is built, while larger images remain
+fetch-only until first use. Immediate unpack can consume dm-verity artifacts
+transiently, but a fetch-only image previously lost the selected referrer graph
+and later unpack had no registry resolver with which to rediscover it.
+
+Patch15 retains only the selected signed referrer manifest and its config,
+signature, EROFS, and Merkle-tree children. Standard
+`containerd.io/gc.ref.content.*` labels root the complete graph from the image
+manifest, and the subject marker is published last only after every descriptor
+has been fetched and verified at its declared size. Immediate-unpack paths keep
+the non-retaining wrapper so materialized snapshots do not permanently
+duplicate the precomputed artifacts.
+
+Deferred CRI and generic `Image.Unpack` paths reconstruct layer annotations
+locally from the retained graph. Generic unpack resolves a multi-platform image
+once and reuses that exact manifest descriptor for reconstruction, avoiding a
+second platform traversal that could select a different manifest.
+
+Activation is capability-driven on both sides: the EROFS differ must advertise
+artifact consumption and the active snapshotter must explicitly set
+`dmverity_mode = "auto"` or `"on"`. ACL sets `"auto"` so unsigned layers remain
+valid and IPE remains the enforcement authority. The generic diff service also
+requires the capable EROFS differ to be first for an annotated EROFS mount;
+ordinary overlay mounts continue to fall through to walking unchanged.
+
 ## Regeneration procedure
 
 Patches are **exported from commits**, not diffed between hand-built trees:
@@ -344,6 +375,7 @@ SEL=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-erofs-selin
 APPLIER=$(git rev-parse 6e9236725198aabe6479e73a4fa0fb93d062d437)
 LOCK=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-mount-lock')
 TESTFIX=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-test-fix')
+DEFERRED=$(git rev-parse e670c411fd9b39d5edcd5c7341fb92844567a349)
 
 git diff $BASE   $AADHAR  # -> Patch8   (prepend the From:/Subject: header)
 git diff $AADHAR $INT     # -> Patch9
@@ -352,11 +384,13 @@ git diff $PRE    $SEL     # -> Patch11
 git diff $SEL    $APPLIER # -> Patch12
 git diff $APPLIER $LOCK   # -> Patch13
 git diff $LOCK   $TESTFIX # -> Patch14
+git format-patch -1 --stdout --no-signature $DEFERRED # -> Patch15
 ```
 
 Grouped boundaries are the **last** commit carrying their group trailer, so the
-groups must stay contiguous and in patch order on the branch. Patch12 is pinned
-to its exact ungrouped source commit so regeneration cannot skip it again.
+groups must stay contiguous and in patch order on the branch. Patch12 and
+Patch15 are pinned to their exact ungrouped source commits so regeneration
+cannot skip them.
 
 Each exported file keeps a `From:`/`Subject:` header plus a body listing the
 commits it squashes, so a reviewer can always get back to the individual
@@ -368,7 +402,7 @@ commits. `patch -p1` ignores the header, exactly as it does for a
 Run all five after regenerating. The first is the one that matters most: it is
 what proves the patch files and the branch have not diverged.
 
-1. **Tree equality.** Apply Patch0-14 to the pristine `Source0` tarball with
+1. **Tree equality.** Apply Patch0-15 to the pristine `Source0` tarball with
    `patch -p1 --fuzz=0` (what `%autosetup -p1` does) and `diff -r` the result
    against a worktree at `dadelan/acl-erofs`. Must be **identical**.
 2. **Cross-compile.** `GOOS=linux`, `GOOS=windows`, and `GOOS=darwin`
@@ -377,7 +411,7 @@ what proves the patch files and the branch have not diverged.
    non-Linux builds — this has regressed before.
 3. **gofmt.** `gofmt -l` must be silent. containerd CI enforces it.
 4. **Feature tests.**
-   `go test ./internal/dmverity/... ./plugins/diff/erofs/... ./plugins/mount/erofs/... ./plugins/snapshots/erofs/... ./pkg/snapshotters/... ./core/transfer/local/...`
+   `go test ./core/images/... ./core/transfer/local/... ./internal/cri/opts/... ./internal/cri/server/images/... ./internal/dmverity/... ./internal/erofsutils/... ./pkg/snapshotters/... ./plugins/cri/images/... ./plugins/diff/erofs/... ./plugins/mount/erofs/... ./plugins/services/diff/... ./plugins/snapshots/erofs/...`
 5. **Plugin graph.** `go build -o /tmp/ctrd ./cmd/containerd && /tmp/ctrd config dump`
    must exit 0. `registry.Graph` has no cycle detection, so a bad `Requires` edge
    is a startup stack overflow that compiles, passes `gofmt`, passes every unit

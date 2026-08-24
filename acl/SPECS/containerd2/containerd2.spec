@@ -26,12 +26,12 @@ Version: 2.2.4
 # Release: 1, 2, ...). The 6xxx range succeeds the prior 5xxx steamboat
 # RPM stream and the 4xxx 2.2.0-patch-based / 3xxx fork-tarball builds.
 # The ".verity" suffix marks the dm-verity erofs snapshotter patch set
-# (Patch8-14 of PATCHES.md). No .commit_hash tag since the upstream is an
+# (Patch8-15 of PATCHES.md). No .commit_hash tag since the upstream is an
 # immutable release tag.
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 6019.verity%{?dist}
+Release: 6020.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -81,6 +81,10 @@ Source6: containerd-acl-tmpfiles.conf
 # Patch10:  UUID-bound precomputed EROFS and dm-verity artifact consumption
 #           with newest-bundle selection. containerd does not inspect IPE
 #           policy; the kernel alone interprets it.
+# Patch15:  Retain the selected signed EROFS referrer graph for fetch-only
+#           image caches and reconstruct it during deferred first-use unpack.
+#           Capability and applier checks leave overlayfs unchanged and fail
+#           closed before signed EROFS layers can reach a walking differ.
 #           See PATCHES.md for the author/commit provenance.
 # ============================================================================
 
@@ -109,6 +113,9 @@ Patch13: 0009-erofs-dmverity-mount-lifecycle-lock.patch
 # runs the existing containerd test suite in %check, so the stale zero-argument
 # test call must use the constructor's empty-value default.
 Patch14: 0010-erofs-test-pass-default-shared-layer-context.patch
+# Preserve signed referrers for AgentBaker's fetch-only cache path and
+# reconstruct them when the image is unpacked on first use.
+Patch15: 0011-erofs-retain-referrers-for-deferred-unpack.patch
 
 %{?systemd_requires}
 
@@ -244,6 +251,17 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Mon Aug 24 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6020.verity
+- Patch15: retain the selected dm-verity referrer manifest and all signature,
+  EROFS, and Merkle-tree content for fetch-only transfers and OCI imports, then
+  reconstruct the signed layer annotations during deferred first-use unpack.
+- Keep immediate-unpack artifacts transient and root retained content through
+  standard content-store GC labels only while the cached image remains.
+- Explicitly opt the ACL EROFS snapshotter into permissive dm-verity auto mode
+  and order the EROFS differ before walking. Overlayfs remains unchanged, while
+  signed EROFS layers fail closed if a capable applier is unavailable or loses
+  first position.
+
 * Fri Aug 21 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6019.verity
 - Patch12: bind dm-verity enforcement to the selected applier so CRI local
   pulls cannot silently discard discovered verification artifacts.

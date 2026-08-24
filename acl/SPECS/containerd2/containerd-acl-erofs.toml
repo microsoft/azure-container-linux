@@ -2,6 +2,13 @@
 # file by default; ACL provisioning explicitly imports it.
 version = 2
 
+# Explicitly opt this profile into dm-verity referrer handling. The snapshotter
+# still uses permissive "auto" mount policy: verify layers with a .dmverity
+# sidecar and mount ordinary EROFS layers plainly. An unset mode has the same
+# mount behavior but deliberately does not advertise the referrer capability.
+[plugins."io.containerd.snapshotter.v1.erofs"]
+  dmverity_mode = "auto"
+
 # snapshotter is set in both the legacy and the v3 location; neither alone is
 # sufficient. Imports are merged before the v2->v3 migration runs and this file
 # is imported last, so the legacy key here beats any global legacy snapshotter
@@ -19,6 +26,12 @@ version = 2
 [plugins."io.containerd.cri.v1.images"]
   snapshotter = "erofs"
 
+[plugins."io.containerd.service.v1.diff-service"]
+  # Deferred first-use unpack runs through the generic diff service. The EROFS
+  # differ must see signed EROFS layers first; it returns ErrNotImplemented for
+  # other snapshotters so walking remains the ordinary fallback.
+  default = ["erofs", "walking"]
+
 [plugins."io.containerd.transfer.v1.local"]
   # Defining unpack_config REPLACES containerd's built-in default of
   # {platform, overlayfs, walking differ}. The snapshotter here is not a
@@ -32,16 +45,9 @@ version = 2
     differ = "erofs"
 
 [plugins."io.containerd.differ.v1.erofs"]
-  # The single dm-verity switch. It also drives referrer discovery on both pull
-  # paths: the differ advertises a dmverity-referrers capability that the
-  # transfer service and the CRI image service each read.
-  #
-  # dmverity_mode on the snapshotter is deliberately not set. It is a mount
-  # policy only -- how strict to be when a layer has no .dmverity sidecar -- and
-  # its "auto" default is what ACL wants: verify every layer that carries a
-  # sidecar, mount plainly those that do not. Setting "on" would make containerd
-  # a second enforcement point weaker than IPE, and would refuse to start on a
-  # host where the dm_verity module is not listed in /proc/modules.
+  # The differ advertises that it can consume dm-verity artifacts. Referrer
+  # discovery is enabled only when this capability is paired with the explicit
+  # snapshotter capability above, keeping overlayfs and stock EROFS inert.
   enable_dmverity = true
   enable_tar_index = true
   # Must remain byte-compatible with the signing tool's mkfs.erofs invocation.
