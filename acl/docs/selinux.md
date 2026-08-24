@@ -191,6 +191,16 @@ spec:
         type: Directory
 ```
 
+Kubernetes type selection requires the container runtime's CRI SELinux support
+to be enabled. ACL's embedded containerd configuration sets
+`enable_selinux = true`; this setting is not implied for other AKS node OS
+images. Verify the effective setting on a node with:
+
+```bash
+crictl --runtime-endpoint unix:///run/containerd/containerd.sock info \
+  | jq -r '.config.enableSelinux'
+```
+
 Cluster admission policy must allow the selected type. Do not set
 `privileged: true` unless the workload genuinely requires the privileged
 domain and associated runtime access. For `container_logreader_t`, add a
