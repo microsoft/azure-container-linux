@@ -28,7 +28,7 @@ Version: 2.2.4
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 9002.mirrortest%{?dist}
+Release: 9003.mirrortest%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -89,7 +89,9 @@ Source10: mcr-mirror-hosts.toml
 # Patch15:  Retain the selected signed EROFS referrer graph for fetch-only and
 #           non-capable unpack paths, including overlayfs, then reconstruct it
 #           during deferred first-use EROFS unpack. Capability and applier
-#           checks fail closed before signed EROFS layers reach a walking differ.
+#           checks fail closed before signed EROFS layers reach a walking differ,
+#           and the transfer plugin advertises when retained-referrer discovery
+#           is actually enabled for its merged unpack configuration.
 #           See PATCHES.md for the author/commit provenance.
 # ============================================================================
 
@@ -273,6 +275,11 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Tue Aug 25 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9003.mirrortest
+- Advertise dm-verity referrer retention on the local transfer plugin only when
+  its merged unpack configuration binds capable EROFS differ and snapshotter
+  plugins, giving AgentBaker one authoritative live capability to inspect.
+
 * Tue Aug 25 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9002.mirrortest
 - Carry the complete 6021.verity deferred-referrer and IPE runtime-selection
   patch stack into the isolated mirror package.
