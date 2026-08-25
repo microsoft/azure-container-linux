@@ -15,7 +15,7 @@ history, and triage notes live here so the `.spec` stays terse.
 | Patch12   | selected-applier binding | Binds dm-verity referrer discovery to the applier selected for the active pull path and fails closed when that applier cannot consume the artifacts. Also recognises built-in dm-verity and makes the shared layer SELinux context configurable. |
 | Patch13   | dm-verity mount lock  | Widens the dm-verity mutex from "guard the create" to "guard the mount lifecycle", closing a window in which a mapper could be removed between another container's verify and its `mount(2)`. |
 | Patch14   | test compatibility | Updates the existing dm-verity snapshot test for Patch12's mount-handler constructor argument so the RPM `%check` phase compiles. No runtime behavior changes. |
-| Patch15   | deferred signed unpack | Retains the selected signed EROFS referrer graph for fetch-only images and reconstructs it during first-use unpack, with capability-driven overlayfs isolation and fail-closed applier enforcement. |
+| Patch15   | deferred signed unpack | Retains the selected signed EROFS referrer graph for fetch-only and non-capable unpack paths, including overlayfs, and reconstructs it during first-use EROFS unpack with fail-closed applier enforcement. |
 
 ## Source of truth
 
@@ -38,7 +38,9 @@ v2.2.4  193637f7ee8ae5f5aa5248f49e7baa3e6164966e   ( == %define commit_hash )
           ├─ 6e9236725  erofs: bind dm-verity enforcement to the selected applier
           ├─ 88f2a85a6  erofs: hold the dm-verity lock across the mount
           ├─ a1d272319  test(erofs): pass default shared layer context
-          └─ e670c411f  feat: retain dm-verity artifacts for deferred unpack
+          ├─ e670c411f  feat: retain dm-verity artifacts for deferred unpack
+          ├─ 636e3078a  transfer: retain dm-verity refs across overlay unpack
+          └─ b90e6ec66  test(transfer): cover overlay referrer retention
 ```
 
 The SHAs above are informational; the **trailers** are what the export commands
@@ -50,10 +52,10 @@ exported the wrong Patch8-10. If you rewrite the branch, **move the tag**, then
 re-run the export and confirm the committed patch files come back unchanged.
 
 Grouped ACL commits carry an `Acl-Patch-Group:` trailer naming the patch file
-they belong to. Patch12 is the one ungrouped commit and is pinned by exact SHA
-in the regeneration procedure. Four commits collapse into two patch files: the
-commits exist for review and bisect, the patch files exist so the spec stays
-maintainable.
+they belong to. Patch12 is pinned by exact SHA. Patch15 begins with the original
+ungrouped deferred-unpack commit and ends at the last
+`acl-dmverity-deferred-unpack` commit, so its source range includes all three
+reviewable commits while the spec keeps one cohesive patch.
 
 | Group trailer | Commits | Patch file |
 |---|---|---|
@@ -63,7 +65,7 @@ maintainable.
 | *(ungrouped exact commit)* | `6e9236725` | Patch12 |
 | `acl-dmverity-mount-lock` | `88f2a85a6` | Patch13 |
 | `acl-dmverity-test-fix` | `a1d272319` | Patch14 |
-| *(ungrouped exact commit)* | `e670c411f` | Patch15 |
+| `acl-dmverity-deferred-unpack` (plus predecessor) | `e670c411f`, `636e3078a`, `b90e6ec66` | Patch15 |
 
 containerd does **not** inspect IPE policy. Layer signatures are passed to the
 kernel whenever they are present and the feature is enabled; the kernel alone
@@ -336,18 +338,21 @@ it makes the package build fail before an image can be produced.
 ## Patch15 — retain signed artifacts for deferred unpack
 
 AgentBaker preserves its existing cache policy: images below the compressed
-size threshold are unpacked while the VHD is built, while larger images remain
-fetch-only until first use. Immediate unpack can consume dm-verity artifacts
-transiently, but a fetch-only image previously lost the selected referrer graph
-and later unpack had no registry resolver with which to rediscover it.
+size threshold are unpacked into the active bake-time snapshotter, while larger
+images remain fetch-only until first use. An immediate capable EROFS unpack can
+consume dm-verity artifacts transiently. Fetch-only and non-capable unpack
+paths, including overlayfs, must instead preserve those artifacts because a
+later EROFS unpack has no registry resolver with which to rediscover them.
 
 Patch15 retains only the selected signed referrer manifest and its config,
 signature, EROFS, and Merkle-tree children. Standard
 `containerd.io/gc.ref.content.*` labels root the complete graph from the image
 manifest, and the subject marker is published last only after every descriptor
-has been fetched and verified at its declared size. Immediate-unpack paths keep
-the non-retaining wrapper so materialized snapshots do not permanently
-duplicate the precomputed artifacts.
+has been fetched and verified at its declared size. Only an immediate unpack
+through a capable EROFS snapshotter keeps the non-retaining wrapper, because
+that path materializes the artifacts before the transfer completes. Overlayfs
+unpack retains the graph so the same VHD can switch to EROFS at runtime without
+another registry traversal.
 
 Deferred CRI and generic `Image.Unpack` paths reconstruct layer annotations
 locally from the retained graph. Generic unpack resolves a multi-platform image
@@ -375,7 +380,7 @@ SEL=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-erofs-selin
 APPLIER=$(git rev-parse 6e9236725198aabe6479e73a4fa0fb93d062d437)
 LOCK=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-mount-lock')
 TESTFIX=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-test-fix')
-DEFERRED=$(git rev-parse e670c411fd9b39d5edcd5c7341fb92844567a349)
+DEFERRED=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-deferred-unpack')
 
 git diff $BASE   $AADHAR  # -> Patch8   (prepend the From:/Subject: header)
 git diff $AADHAR $INT     # -> Patch9
@@ -384,13 +389,13 @@ git diff $PRE    $SEL     # -> Patch11
 git diff $SEL    $APPLIER # -> Patch12
 git diff $APPLIER $LOCK   # -> Patch13
 git diff $LOCK   $TESTFIX # -> Patch14
-git format-patch -1 --stdout --no-signature $DEFERRED # -> Patch15
+git diff $TESTFIX $DEFERRED # -> Patch15 (prepend the documented squash header)
 ```
 
 Grouped boundaries are the **last** commit carrying their group trailer, so the
 groups must stay contiguous and in patch order on the branch. Patch12 and
-Patch15 are pinned to their exact ungrouped source commits so regeneration
-cannot skip them.
+Patch15's original `e670c411f` commit remain fixed points in the series;
+Patch15's grouped boundary must descend from that original commit.
 
 Each exported file keeps a `From:`/`Subject:` header plus a body listing the
 commits it squashes, so a reviewer can always get back to the individual

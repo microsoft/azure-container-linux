@@ -1,38 +1,19 @@
-From e670c411fd9b39d5edcd5c7341fb92844567a349 Mon Sep 17 00:00:00 2001
 From: Dallas Delaney <dadelan@microsoft.com>
-Date: Mon, 24 Aug 2026 18:02:22 +0000
-Subject: [PATCH] feat: retain dm-verity artifacts for deferred unpack
+Subject: [PATCH] erofs: retain dm-verity artifacts for deferred unpack
 
-fetch-only transfers/imports retain the selected signature/referrer graph, deferred unpack reconstructs layer annotations using the exact selected manifest, and capability/applier gating keeps overlayfs unchanged and fails closed for signed EROFS layers.
+Squash of three commits on the ACL containerd branch:
 
+  e670c411f  feat: retain dm-verity artifacts for deferred unpack
+  636e3078a  transfer: retain dm-verity refs across overlay unpack
+  b90e6ec66  test(transfer): cover overlay referrer retention
+
+Fetch-only and non-capable overlayfs unpack paths retain and GC-root the selected graph for deferred EROFS reconstruction. Immediate capable EROFS unpack remains transient to avoid unnecessary retained duplication.
+
+Generic and CRI first-use unpack reconstruct annotations locally, and tests pin disabled, fetch-only, overlayfs-retained, and immediate modes.
+
+Acl-Patch-Group: acl-dmverity-deferred-unpack
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 Copilot-Session: 3fad9689-50c6-480a-9f07-f805603944d1
----
- client/image.go                               |  47 +++-
- core/images/image.go                          |  15 +-
- core/transfer/local/import.go                 |  11 +-
- core/transfer/local/pull.go                   |  11 +-
- internal/cri/config/config.go                 |   4 +-
- internal/cri/opts/container.go                |  10 +-
- internal/cri/server/images/image_pull.go      |   6 +-
- internal/cri/server/images/service.go         |   6 +
- internal/erofsutils/mount.go                  |   4 +
- internal/erofsutils/mount_test.go             |  29 +++
- pkg/snapshotters/contentstore_fetcher.go      |  87 +++++++-
- pkg/snapshotters/contentstore_fetcher_test.go |  85 +++++++
- pkg/snapshotters/signatures.go                | 156 +++++++++++--
- pkg/snapshotters/signatures_test.go           | 209 +++++++++++++++++-
- plugins/cri/images/plugin.go                  |  87 +++++---
- plugins/services/diff/local.go                |  33 +++
- plugins/services/diff/local_test.go           |  94 ++++++++
- plugins/snapshots/erofs/plugin/plugin.go      |   7 +
- plugins/snapshots/erofs/plugin/plugin_test.go |  38 ++++
- plugins/transfer/plugin.go                    |  13 +-
- plugins/types.go                              |   7 +-
- 21 files changed, 871 insertions(+), 88 deletions(-)
- create mode 100644 internal/erofsutils/mount_test.go
- create mode 100644 plugins/services/diff/local_test.go
- create mode 100644 plugins/snapshots/erofs/plugin/plugin_test.go
 
 diff --git a/client/image.go b/client/image.go
 index f93f29bd5..3101ae4e9 100644
@@ -179,8 +160,67 @@ index 9fcce9b4e..0332b6283 100644
  }
  
  // Config resolves the image configuration descriptor using a content provided
+diff --git a/core/transfer/local/dmverity.go b/core/transfer/local/dmverity.go
+new file mode 100644
+index 000000000..f7c23886b
+--- /dev/null
++++ b/core/transfer/local/dmverity.go
+@@ -0,0 +1,53 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package local
++
++import (
++	"github.com/containerd/containerd/v2/core/content"
++	"github.com/containerd/containerd/v2/core/images"
++	"github.com/containerd/containerd/v2/core/remotes"
++	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
++)
++
++type dmverityReferrerMode uint8
++
++const (
++	dmverityReferrersDisabled dmverityReferrerMode = iota
++	dmverityReferrersForImmediateUnpack
++	dmverityReferrersRetained
++)
++
++func selectDmverityReferrerMode(enabled, unpackCapable bool) dmverityReferrerMode {
++	if !enabled {
++		return dmverityReferrersDisabled
++	}
++	if unpackCapable {
++		return dmverityReferrersForImmediateUnpack
++	}
++	return dmverityReferrersRetained
++}
++
++func appendDmverityReferrerHandler(handler images.Handler, fetcher remotes.Fetcher, store content.Store, mode dmverityReferrerMode) images.Handler {
++	switch mode {
++	case dmverityReferrersForImmediateUnpack:
++		return snpkg.AppendSignatureHandlerWrapper(fetcher)(handler)
++	case dmverityReferrersRetained:
++		return snpkg.AppendRetainedSignatureHandlerWrapper(fetcher, store)(handler)
++	default:
++		return handler
++	}
++}
 diff --git a/core/transfer/local/import.go b/core/transfer/local/import.go
-index 9b23e5eec..00bfcb382 100644
+index 9b23e5eec..640ee7d02 100644
 --- a/core/transfer/local/import.go
 +++ b/core/transfer/local/import.go
 @@ -20,6 +20,7 @@ import (
@@ -213,27 +253,38 @@ index 9b23e5eec..00bfcb382 100644
  					uopts = append(uopts, unpack.WithUnpackPlatform(mu))
  				}
  			}
-@@ -106,7 +112,7 @@ func (ts *localTransferService) importStream(ctx context.Context, i transfer.Ima
- 				uopts = append(uopts, unpack.WithDuplicationSuppressor(ts.config.DuplicationSuppressor))
+@@ -107,7 +113,13 @@ func (ts *localTransferService) importStream(ctx context.Context, i transfer.Ima
  			}
  
--			if ts.config.EnableDmverityReferrers {
-+			if ts.config.EnableDmverityReferrers && enableDmverityReferrers {
- 				handler = snpkg.AppendSignatureHandlerWrapper(snpkg.NewContentStoreFetcher(ts.content))(handler)
+ 			if ts.config.EnableDmverityReferrers {
+-				handler = snpkg.AppendSignatureHandlerWrapper(snpkg.NewContentStoreFetcher(ts.content))(handler)
++				fetcher := snpkg.NewContentStoreFetcher(ts.content)
++				handler = appendDmverityReferrerHandler(
++					handler,
++					fetcher,
++					ts.content,
++					selectDmverityReferrerMode(true, enableDmverityReferrers),
++				)
  			}
  
-@@ -117,6 +123,9 @@ func (ts *localTransferService) importStream(ctx context.Context, i transfer.Ima
+ 			unpacker, err = unpack.NewUnpacker(ctx, ts.content, uopts...)
+@@ -117,6 +129,14 @@ func (ts *localTransferService) importStream(ctx context.Context, i transfer.Ima
  			handler = unpacker.Unpack(handler)
  		}
  	}
 +	if ts.config.EnableDmverityReferrers && unpacker == nil {
-+		handler = snpkg.AppendRetainedSignatureHandlerWrapper(snpkg.NewContentStoreFetcher(ts.content), ts.content)(handler)
++		handler = appendDmverityReferrerHandler(
++			handler,
++			snpkg.NewContentStoreFetcher(ts.content),
++			ts.content,
++			dmverityReferrersRetained,
++		)
 +	}
  
  	if err := images.WalkNotEmpty(ctx, handler, index); err != nil {
  		if unpacker != nil {
 diff --git a/core/transfer/local/pull.go b/core/transfer/local/pull.go
-index c0a5bc12b..2f582dbea 100644
+index c0a5bc12b..565499626 100644
 --- a/core/transfer/local/pull.go
 +++ b/core/transfer/local/pull.go
 @@ -19,6 +19,7 @@ package local
@@ -270,25 +321,77 @@ index c0a5bc12b..2f582dbea 100644
  					if progressTracker != nil {
  						mu.ApplyOpts = append(mu.ApplyOpts, diff.WithProgress(progressTracker.ExtractProgress))
  					}
-@@ -224,7 +230,7 @@ func (ts *localTransferService) pull(ctx context.Context, ir transfer.ImageFetch
+@@ -224,9 +230,12 @@ func (ts *localTransferService) pull(ctx context.Context, ir transfer.ImageFetch
  			if enableRemoteSnapshotAnnotations {
  				handler = snpkg.AppendInfoHandlerWrapper(name)(handler)
  			}
 -			if ts.config.EnableDmverityReferrers {
-+			if ts.config.EnableDmverityReferrers && enableDmverityReferrers {
- 				handler = snpkg.AppendSignatureHandlerWrapper(fetcher)(handler)
- 			}
+-				handler = snpkg.AppendSignatureHandlerWrapper(fetcher)(handler)
+-			}
++			handler = appendDmverityReferrerHandler(
++				handler,
++				fetcher,
++				ts.content,
++				selectDmverityReferrerMode(ts.config.EnableDmverityReferrers, enableDmverityReferrers),
++			)
  
-@@ -235,6 +241,9 @@ func (ts *localTransferService) pull(ctx context.Context, ir transfer.ImageFetch
+ 			unpacker, err = unpack.NewUnpacker(ctx, ts.content, uopts...)
+ 			if err != nil {
+@@ -235,6 +244,9 @@ func (ts *localTransferService) pull(ctx context.Context, ir transfer.ImageFetch
  			handler = unpacker.Unpack(handler)
  		}
  	}
 +	if ts.config.EnableDmverityReferrers && unpacker == nil {
-+		handler = snpkg.AppendRetainedSignatureHandlerWrapper(fetcher, ts.content)(handler)
++		handler = appendDmverityReferrerHandler(handler, fetcher, ts.content, dmverityReferrersRetained)
 +	}
  
  	if err := images.Dispatch(ctx, handler, nil, desc); err != nil {
  		if unpacker != nil {
+diff --git a/core/transfer/local/pull_test.go b/core/transfer/local/pull_test.go
+index 221fa9657..0a53e921b 100644
+--- a/core/transfer/local/pull_test.go
++++ b/core/transfer/local/pull_test.go
+@@ -151,3 +151,40 @@ func TestGetSupportedPlatform(t *testing.T) {
+ 	}
+ 
+ }
++
++func TestSelectDmverityReferrerMode(t *testing.T) {
++	for _, testCase := range []struct {
++		name          string
++		enabled       bool
++		unpackCapable bool
++		expected      dmverityReferrerMode
++	}{
++		{
++			name:     "disabled transfer leaves handlers unchanged",
++			expected: dmverityReferrersDisabled,
++		},
++		{
++			name:          "capable EROFS unpack uses transient annotations",
++			enabled:       true,
++			unpackCapable: true,
++			expected:      dmverityReferrersForImmediateUnpack,
++		},
++		{
++			name:     "fetch-only transfer retains referrers",
++			enabled:  true,
++			expected: dmverityReferrersRetained,
++		},
++		{
++			name:     "overlayfs unpack retains referrers",
++			enabled:  true,
++			expected: dmverityReferrersRetained,
++		},
++	} {
++		t.Run(testCase.name, func(t *testing.T) {
++			actual := selectDmverityReferrerMode(testCase.enabled, testCase.unpackCapable)
++			if actual != testCase.expected {
++				t.Fatalf("expected mode %d, got %d", testCase.expected, actual)
++			}
++		})
++	}
++}
 diff --git a/internal/cri/config/config.go b/internal/cri/config/config.go
 index 1bceb8020..f60bc1502 100644
 --- a/internal/cri/config/config.go

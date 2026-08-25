@@ -176,6 +176,7 @@ build_standalone_sysext_images() {
             "IMAGE_VERSION=${IMAGE_VERSION:-}"
             "IMAGE_VERSION_ID=${IMAGE_VERSION_ID:-}"
             "IMAGE_BUILD_ID=${IMAGE_BUILD_ID:-}"
+            "ACL_FEATURES=${ACL_FEATURES:-}"
         )
     fi
 

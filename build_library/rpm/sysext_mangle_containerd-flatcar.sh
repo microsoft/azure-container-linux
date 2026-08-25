@@ -18,6 +18,7 @@ rootfs="${1}"
 azl_config="${rootfs}/etc/containerd/config.toml"
 acl_config="${rootfs}/usr/share/containerd/config.toml"
 acl_cgroupfs_config="${rootfs}/usr/share/containerd/config-cgroupfs.toml"
+force_erofs_marker="${rootfs}/usr/share/containerd2/force-erofs"
 unit="${rootfs}/usr/lib/systemd/system/containerd.service"
 dropin_dir="${rootfs}/usr/lib/systemd/system/containerd.service.d"
 wants_dir="${rootfs}/usr/lib/systemd/system/multi-user.target.wants"
@@ -54,6 +55,16 @@ echo ">>> NOTICE: $0: generating cgroupfs containerd config"
 sed -E 's/^([[:space:]]*)SystemdCgroup[[:space:]]*=.*/\1SystemdCgroup = false/' \
   "${acl_config}" > "${acl_cgroupfs_config}"
 chmod 0644 "${acl_cgroupfs_config}"
+
+case ",${ACL_FEATURES:-}," in
+  *,erofs-static,*)
+    echo ">>> NOTICE: $0: selecting the static EROFS containerd profile"
+    install -Dpm 0644 /dev/null "${force_erofs_marker}"
+    ;;
+  *)
+    rm -f "${force_erofs_marker}"
+    ;;
+esac
 
 # The RPM enables the unit from %post, which does not run when the payload is
 # unpacked into a sysext, so create the enablement symlink here.

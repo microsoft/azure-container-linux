@@ -31,7 +31,7 @@ Version: 2.2.4
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 6020.verity%{?dist}
+Release: 6021.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -45,9 +45,9 @@ Source0: https://github.com/%{github_owner}/%{github_repo}/archive/%{branch_name
 Source1: containerd.service
 # Stock Azure Linux configuration remains active by default.
 Source2: containerd.toml
-# Dormant ACL profile; ACL provisioning imports it explicitly.
+# EROFS/dm-verity capability shared by both ACL runtime profiles.
 Source3: containerd-acl-erofs.toml
-# ACL composition root: fixes import/merge order so the ACL delta wins.
+# Overlayfs-capability composition root.
 Source4: containerd-acl-config.toml
 # systemd drop-in selecting the composition root; "90-" must sort after
 # AgentBaker's "50-default-config.conf". Also pulls in modprobe@erofs and
@@ -57,6 +57,12 @@ Source5: containerd-acl-profile.conf
 # Guarantees /etc/containerd/config.toml exists before containerd starts, so
 # the composition root's literal import always resolves.
 Source6: containerd-acl-tmpfiles.conf
+# Runtime-only delta that switches CRI and the generic diff service to EROFS.
+Source7: containerd-acl-erofs-runtime.toml
+# Composition root selected after IPE activation or for static EROFS images.
+Source8: containerd-acl-erofs-config.toml
+# Atomically selects the overlayfs-capability or EROFS runtime root at startup.
+Source9: containerd-acl-select-profile
 
 # ============================================================================
 # Patches
@@ -81,10 +87,10 @@ Source6: containerd-acl-tmpfiles.conf
 # Patch10:  UUID-bound precomputed EROFS and dm-verity artifact consumption
 #           with newest-bundle selection. containerd does not inspect IPE
 #           policy; the kernel alone interprets it.
-# Patch15:  Retain the selected signed EROFS referrer graph for fetch-only
-#           image caches and reconstruct it during deferred first-use unpack.
-#           Capability and applier checks leave overlayfs unchanged and fail
-#           closed before signed EROFS layers can reach a walking differ.
+# Patch15:  Retain the selected signed EROFS referrer graph for fetch-only and
+#           non-capable unpack paths, including overlayfs, then reconstruct it
+#           during deferred first-use EROFS unpack. Capability and applier
+#           checks fail closed before signed EROFS layers reach a walking differ.
 #           See PATCHES.md for the author/commit provenance.
 # ============================================================================
 
@@ -113,8 +119,8 @@ Patch13: 0009-erofs-dmverity-mount-lifecycle-lock.patch
 # runs the existing containerd test suite in %check, so the stale zero-argument
 # test call must use the constructor's empty-value default.
 Patch14: 0010-erofs-test-pass-default-shared-layer-context.patch
-# Preserve signed referrers for AgentBaker's fetch-only cache path and
-# reconstruct them when the image is unpacked on first use.
+# Preserve signed referrers for AgentBaker's fetch-only and overlayfs cache
+# paths, then reconstruct them when the image is unpacked into EROFS.
 Patch15: 0011-erofs-retain-referrers-for-deferred-unpack.patch
 
 %{?systemd_requires}
@@ -166,13 +172,14 @@ Requires: %{name} = %{version}-%{release}
 Requires: erofs-utils
 
 %description erofs
-Activates the EROFS snapshotter and dm-verity image verification in containerd
-for Azure Container Linux (ACL) images.
+Provides EROFS and dm-verity image verification capability for containerd on
+Azure Container Linux (ACL) images.
 
 The main containerd2 package stays behavior-neutral: it ships the stock Azure
 Linux configuration and the dm-verity code paths remain default-off. Installing
-this subpackage is what turns them on, by selecting an ACL composition root
-through a late systemd drop-in.
+this subpackage loads the capability while preserving overlayfs by default. A
+late systemd selector activates the EROFS CRI profile only after the ACL IPE
+policy is active, or when the image carries an explicit static EROFS marker.
 
 All files are installed under /usr. ACL is an immutable OS whose image bake
 discards RPM-contributed paths under /etc, and only /usr survives into the
@@ -206,16 +213,21 @@ install -D -p -m 0644 %{SOURCE2} %{buildroot}%{_sysconfdir}/containerd/config.to
 # Everything below is ACL-only and must live under /usr: the immutable-OS bake
 # discards RPM-contributed /etc paths, and sysexts only ship /usr.
 
-# ACL EROFS/dm-verity settings. Dormant unless the composition root imports it.
+# EROFS/dm-verity capability shared by overlayfs and EROFS runtime roots.
 install -D -p -m 0644 %{SOURCE3} %{buildroot}%{_datadir}/containerd2/acl-erofs.toml
 
-# Composition root and the drop-in that selects it.
+# Overlayfs-capability composition root and startup selector.
 install -D -p -m 0644 %{SOURCE4} %{buildroot}%{_datadir}/containerd2/acl-config.toml
 install -D -p -m 0644 %{SOURCE5} %{buildroot}%{_prefix}/lib/systemd/system/containerd.service.d/90-acl-profile.conf
 
 # Seeds /etc/containerd/config.toml on platforms that have no provisioning
 # agent, so the composition root's literal import always resolves.
 install -D -p -m 0644 %{SOURCE6} %{buildroot}%{_prefix}/lib/tmpfiles.d/10-containerd-acl.conf
+
+# EROFS runtime delta and composition root.
+install -D -p -m 0644 %{SOURCE7} %{buildroot}%{_datadir}/containerd2/acl-erofs-runtime.toml
+install -D -p -m 0644 %{SOURCE8} %{buildroot}%{_datadir}/containerd2/acl-erofs-config.toml
+install -D -p -m 0755 %{SOURCE9} %{buildroot}%{_libexecdir}/containerd2/acl-select-profile
 
 %post
 %systemd_post containerd.service
@@ -245,12 +257,24 @@ fi
 %files erofs
 %{_datadir}/containerd2/acl-erofs.toml
 %{_datadir}/containerd2/acl-config.toml
+%{_datadir}/containerd2/acl-erofs-runtime.toml
+%{_datadir}/containerd2/acl-erofs-config.toml
+%{_libexecdir}/containerd2/acl-select-profile
 %{_prefix}/lib/systemd/system/containerd.service.d/90-acl-profile.conf
 %{_prefix}/lib/tmpfiles.d/10-containerd-acl.conf
 %dir %{_datadir}/containerd2
+%dir %{_libexecdir}/containerd2
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Mon Aug 24 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6021.verity
+- Keep overlayfs active while IPE is off, but load EROFS/dm-verity and both
+  transfer unpack combinations so VHD baking can retain signed referrers.
+- Patch15: retain the selected graph when a transfer unpacks into overlayfs;
+  only immediate capable EROFS unpack consumes it transiently.
+- Select the EROFS CRI and diff-service profile at containerd startup only
+  after the ACL IPE policy is active, or for an explicitly static EROFS image.
+
 * Mon Aug 24 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6020.verity
 - Patch15: retain the selected dm-verity referrer manifest and all signature,
   EROFS, and Merkle-tree content for fetch-only transfers and OCI imports, then
