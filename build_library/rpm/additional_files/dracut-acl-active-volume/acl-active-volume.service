@@ -1,0 +1,23 @@
+[Unit]
+Description=Publish ACL active A/B volume marker (initrd)
+DefaultDependencies=no
+ConditionPathExists=/proc/cmdline
+
+# Ordered as early as the initrd allows.  The only inputs are /proc/cmdline
+# and /run, both of which PID 1 has available before it runs any unit, so
+# this deliberately declares no dependency on udev, on any .device unit, or
+# on /sysroot.  Ordering before dracut-cmdline.service puts it ahead of the
+# entire dracut startup chain.
+After=systemd-journald.socket
+Before=dracut-cmdline.service
+Before=initrd-setup-root.service
+Before=initrd.target
+
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/acl-active-volume
+StandardOutput=journal+console

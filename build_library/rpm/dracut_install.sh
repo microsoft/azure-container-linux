@@ -249,6 +249,24 @@ _dracut_patch_bootengine_modules() {
 _dracut_install_initramfs_assets() {
     local root_fs_dir="$1"
 
+    # Install acl-active-volume dracut module.
+    # Derives the active A/B slot from the kernel command line and publishes
+    # it to /run/acl/active-volume{,.env}.  It reads only /proc/cmdline, so it
+    # runs before udev and before any partition is probed; /run is carried
+    # across switch-root, so real-root services can read the result too.
+    # On images without an A/B-slotted payload this is purely informational.
+    info "RPM mode: Creating acl-active-volume dracut module for A/B slot detection"
+    local active_volume_module="${root_fs_dir}/usr/lib/dracut/modules.d/01acl-active-volume"
+    sudo mkdir -p "${active_volume_module}"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-active-volume/module-setup.sh" \
+        "${active_volume_module}/module-setup.sh"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-active-volume/acl-active-volume.sh" \
+        "${active_volume_module}/acl-active-volume.sh"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-active-volume/acl-active-volume.service" \
+        "${active_volume_module}/acl-active-volume.service"
+    sudo chmod +x "${active_volume_module}/module-setup.sh"
+    sudo chmod +x "${active_volume_module}/acl-active-volume.sh"
+
     # Create sysroot-oem.mount unit matching Flatcar's diskless-generator behavior.
     # This unit is created but NOT added to initrd-root-fs.target.requires, so it
     # won't be automatically started. Instead, ignition-files.service has:

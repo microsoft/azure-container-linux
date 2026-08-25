@@ -29,3 +29,4 @@ Additional tests live in `acl/tests/`:
 - Disk I/O error detection (`run-dmesg-io-error-test.sh`)
 - Container runtime smoke tests (`run-container-test.sh`)
 - SELinux AVC check (`run-selinux-avc-test.sh`)
+- Active A/B volume marker (`run-active-volume-test.sh`)

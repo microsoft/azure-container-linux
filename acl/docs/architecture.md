@@ -59,6 +59,23 @@ The `/usr` partition (USR-A) is a read-only btrfs filesystem with zstd compressi
 
 The A/B partition scheme (USR-A / USR-B) enables safe updates: the inactive slot is written, verified, and then atomically switched on reboot.
 
+### Active Slot Marker
+
+The initramfs publishes which A/B slot the system booted from, so that later boot stages, update tooling, and support diagnostics do not each have to re-derive it.
+
+`acl-active-volume.service` runs before `dracut-cmdline.service` — effectively the first ACL-owned unit in the initrd. It reads the active USR partition's PARTUUID from `systemd.verity_usr_data=` on the kernel command line (falling back to `mount.usr=` on non-verity images) and maps it to slot `A` or `B` using the fixed PARTUUIDs from `build_library/disk_layout_uki.json`. Because `/proc/cmdline` is its only input, it needs no udev, no probed block devices, and no mounted `/sysroot`.
+
+It writes two files, both under `/run`, which `switch-root` bind-mounts into the real root:
+
+| Path | Contents |
+| ---- | -------- |
+| `/run/acl/active-volume` | Exactly `A` or `B`. Always present. |
+| `/run/acl/active-volume.env` | `EnvironmentFile`-compatible: `ACL_ACTIVE_VOLUME`, `ACL_ACTIVE_USR_LABEL`, `ACL_ACTIVE_USR_PARTUUID`, `ACL_ACTIVE_VOLUME_SOURCE`, `ACL_ACTIVE_VOLUME_STATUS`, `ACL_ACTIVE_VOLUME_DEFAULTED`. |
+
+If the slot cannot be derived, the marker falls back to `A`. ACL images prioritize USR-A and bake its PARTUUID into the UKI command line, so `A` is correct for any image that has not been through an A/B switch. The fallback sets `ACL_ACTIVE_VOLUME_DEFAULTED=1` and records why in `ACL_ACTIVE_VOLUME_STATUS`, so a consumer that needs certainty can distinguish a derived answer from a defaulted one.
+
+The service never fails a boot: every path exits 0.
+
 ### `/etc` Overlay from `/usr`
 
 `/etc` is mounted as an **overlayfs** with:
