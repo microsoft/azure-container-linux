@@ -58,9 +58,15 @@ function get_git_version() {
     # multi-line one leaks into the versionfile and into derived docker
     # container names, which docker then rejects. Pick the highest version tag
     # deterministically.
-    local tag="$(git tag --points-at HEAD | sort -V | tail -n 1)"
+    # 'git for-each-ref' does the selection itself, so no pipeline is needed and
+    # a git failure is not masked by the exit status of a trailing 'tail'.
+    local tag
+    tag="$(git for-each-ref --count=1 --sort='-v:refname' \
+               --format='%(refname:short)' --points-at=HEAD 'refs/tags/*')"
     if [ -z "$tag" ] ; then
-        git describe --tags | head -n 1
+        # 'git describe' always prints a single line; leave it unpiped so its
+        # exit status still propagates to the caller.
+        git describe --tags
     else
         echo "$tag"
     fi
