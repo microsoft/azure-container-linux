@@ -155,6 +155,46 @@ Build the Flatcar production image using RPM package sources.
 ./acl/build_rpm_image.sh --rebuild
 ```
 
+Development and test images can include IPE assets with an ephemeral attached
+PKCS#7 policy signature:
+
+```bash
+./acl/build_rpm_image.sh --rebuild --ipe-asset-mode=ephemeral
+```
+
+Production builds can consume an externally signed attached DER PKCS#7
+artifact. The artifact is mounted read-only into the SDK container, verified,
+and accepted only when its extracted content exactly matches
+`build_library/rpm/additional_files/ipe/acl-ipe-boot-policy.pol`:
+
+```bash
+./acl/build_rpm_image.sh --rebuild \
+  --ipe-asset-mode=external \
+  --ipe-policy-path=/secure/input/acl.pol.p7b
+```
+
+External mode never falls back to ephemeral policy signing and does not need
+the policy signing private key. The build still creates a separate ephemeral
+key for development Secure Boot and the dm-verity root-hash companion.
+
+IPE-capable VM images currently support only the Azure Secure Boot UKI path.
+QEMU image conversion must use `--ipe-asset-mode=disabled`, which is also the
+default.
+
+For an IPE-off performance baseline only, the `/usr` dm-verity root-hash
+signature can be omitted while retaining the IPE assets:
+
+```bash
+./acl/build_rpm_image.sh --rebuild \
+  --ipe-asset-mode=ephemeral \
+  --ipe-verity-signature=false
+```
+
+This preserves dm-verity integrity but does not authenticate the root hash.
+Do not enable IPE with this image: the policy authorizes normal `/usr`
+execution through `dmverity_signature=TRUE`, so permissive-mode results would
+be dominated by policy-denial auditing.
+
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
 
 ### Phase 4: Build VM Image (Optional)

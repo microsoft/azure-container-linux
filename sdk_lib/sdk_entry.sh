@@ -108,17 +108,53 @@ fi
 sed -i -e '/export INJECT_DOCKER_SYSEXT=/d' /home/sdk/.bashrc 2>/dev/null || true
 echo "export INJECT_DOCKER_SYSEXT='${INJECT_DOCKER_SYSEXT:-false}'" >> /home/sdk/.bashrc
 
-# Forward the optional perf-tooling image feature into commands run as the sdk user.
-sed -i -e '/export ACL_PERF_TOOLS=/d' /home/sdk/.bashrc 2>/dev/null || true
-if [[ -n "${ACL_PERF_TOOLS:-}" ]]; then
-    echo "export ACL_PERF_TOOLS='${ACL_PERF_TOOLS}'" >> /home/sdk/.bashrc
-fi
-
-# Forward the optional IPE image feature into commands run as the sdk user.
-sed -i -e '/export ACL_IPE_ENABLE=/d' /home/sdk/.bashrc 2>/dev/null || true
-if [[ -n "${ACL_IPE_ENABLE:-}" ]]; then
-    echo "export ACL_IPE_ENABLE='${ACL_IPE_ENABLE}'" >> /home/sdk/.bashrc
-fi
+ACL_IPE_ASSET_MODE="${ACL_IPE_ASSET_MODE:-disabled}"
+ACL_IPE_POLICY_PATH="${ACL_IPE_POLICY_PATH:-}"
+ACL_IPE_VERITY_SIGNATURE="${ACL_IPE_VERITY_SIGNATURE:-true}"
+case "${ACL_IPE_VERITY_SIGNATURE}" in
+    true|false) ;;
+    *)
+        echo "ERROR: ACL_IPE_VERITY_SIGNATURE must be true or false (got: ${ACL_IPE_VERITY_SIGNATURE})" >&2
+        exit 1
+        ;;
+esac
+case "${ACL_IPE_ASSET_MODE}" in
+    disabled)
+        ACL_IPE_CAPABLE=false
+        [[ -z "${ACL_IPE_POLICY_PATH}" ]] || {
+            echo "ERROR: ACL_IPE_POLICY_PATH is only valid in external mode" >&2
+            exit 1
+        }
+        ;;
+    ephemeral)
+        ACL_IPE_CAPABLE=true
+        [[ -z "${ACL_IPE_POLICY_PATH}" ]] || {
+            echo "ERROR: ACL_IPE_POLICY_PATH is only valid in external mode" >&2
+            exit 1
+        }
+        ;;
+    external)
+        ACL_IPE_CAPABLE=true
+        [[ -z "${ACL_IPE_POLICY_PATH}" || -s "${ACL_IPE_POLICY_PATH}" ]] || {
+            echo "ERROR: external IPE policy artifact is empty or missing: ${ACL_IPE_POLICY_PATH}" >&2
+            exit 1
+        }
+        ;;
+    *)
+        echo "ERROR: ACL_IPE_ASSET_MODE must be disabled, ephemeral, or external (got: ${ACL_IPE_ASSET_MODE})" >&2
+        exit 1
+        ;;
+esac
+sed -i \
+    -e '/export ACL_IPE_ASSET_MODE=/d' \
+    -e '/export ACL_IPE_CAPABLE=/d' \
+    -e '/export ACL_IPE_POLICY_PATH=/d' \
+    -e '/export ACL_IPE_VERITY_SIGNATURE=/d' \
+    /home/sdk/.bashrc 2>/dev/null || true
+echo "export ACL_IPE_ASSET_MODE='${ACL_IPE_ASSET_MODE}'" >> /home/sdk/.bashrc
+echo "export ACL_IPE_CAPABLE='${ACL_IPE_CAPABLE}'" >> /home/sdk/.bashrc
+echo "export ACL_IPE_POLICY_PATH='${ACL_IPE_POLICY_PATH}'" >> /home/sdk/.bashrc
+echo "export ACL_IPE_VERITY_SIGNATURE='${ACL_IPE_VERITY_SIGNATURE}'" >> /home/sdk/.bashrc
 
 # Forward sysext package feature gates (see acl/sysexts.yaml) into commands run
 # as the sdk user. Always rewritten, including when empty, so that a build with

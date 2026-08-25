@@ -1,27 +1,21 @@
 [Unit]
-Description=Load and activate ACL IPE policy
+Description=Select and activate ACL IPE policy from Azure IMDS
 Documentation=https://docs.kernel.org/admin-guide/LSM/ipe.html
 DefaultDependencies=no
-After=initrd-setup-root.service
-Before=initrd-parse-etc.service initrd-switch-root.target initrd-switch-root.service sysroot-boot.service
-ConditionKernelCommandLine=ipe.enforce
+RequiresMountsFor=/sysroot/usr/
+# Run before switch_root while SELinux is not yet loaded. This avoids the
+# mac_admin/EPERM denial on the securityfs policy write once SELinux is
+# enforcing in the real system. Mirrors 99acl-selinux-toggle's ordering.
+After=initrd-setup-root.service acl-selinux-toggle.service
+Before=initrd-parse-etc.service
+ConditionVirtualization=microsoft
+ConditionKernelCommandLine=flatcar.oem.id=azure
 
 [Service]
-# Deliberately NOT RemainAfterExit=yes. This unit exists only inside the
-# initramfs, so anything still active at switch-root gets serialized into the
-# real root's systemd, where the fragment no longer exists. systemd then
-# reports it LOAD=not-found ACTIVE=failed, which fails kola's "no failed
-# units" basic check on every machine (build 1179447: 330/330 failed with
-# "acl-ipe-load.service not-found failed", empty status and empty journal --
-# the signature of carried-over state rather than a real failure).
-#
-# Letting the oneshot go inactive on success means there is nothing left to
-# serialize. A genuine ExecStart failure still latches the unit into the
-# failed state and still surfaces post-switch-root, which is what we want:
-# this hides the artifact, not real breakage. The policy stays loaded either
-# way -- it lives in the kernel, not in this unit's state.
 Type=oneshot
+RemainAfterExit=yes
 ExecStart=/usr/bin/acl-ipe-load
+StandardOutput=journal+console
 
 [Install]
 WantedBy=initrd.target

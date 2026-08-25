@@ -1,0 +1,20 @@
+From: Dallas Delaney <dadelan@microsoft.com>
+Subject: [PATCH] test(erofs): pass default shared layer context
+
+Acl-Patch-Group: acl-dmverity-test-fix
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+Copilot-Session: a2b8a479-0739-4899-ad83-f24a515db011
+
+diff --git a/plugins/snapshots/erofs/erofs_linux_test.go b/plugins/snapshots/erofs/erofs_linux_test.go
+index d9bd86fed..206a23fe9 100644
+--- a/plugins/snapshots/erofs/erofs_linux_test.go
++++ b/plugins/snapshots/erofs/erofs_linux_test.go
+@@ -472,7 +472,7 @@ func testDmverityEndToEndWithMode(t *testing.T, useTarIndex bool) {
+ 
+ 	mountTargetDir := filepath.Join(tempDir, "mount-manager")
+ 	mgr, err := mountmanager.NewManager(db, mountTargetDir,
+-		mountmanager.WithMountHandler("erofs", erofsmount.NewErofsMountHandler()))
++		mountmanager.WithMountHandler("erofs", erofsmount.NewErofsMountHandler("")))
+ 	require.NoError(t, err)
+ 
+ 	contentStore, err := local.NewStore(filepath.Join(tempDir, "content"))

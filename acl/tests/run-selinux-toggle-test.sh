@@ -5,6 +5,7 @@
 set -euo pipefail
 
 source "${SCRIPT_DIR}/acl/validate/validate_common.sh"
+source "${SCRIPT_DIR}/acl/tests/azure-security-profile-test-common.sh"
 
 # ── Helpers ────────────────────────────────────────────────────────
 
@@ -13,63 +14,15 @@ get_selinux_mode() {
     ssh_cmd "sudo getenforce" 2>/dev/null | tr '[:upper:]' '[:lower:]'
 }
 
-# Read the acl-node-security-profile tag value as IMDS sees it from the VM.
-# Returns non-zero if the IMDS request fails or the response cannot be parsed.
-imds_tag() {
-    local raw
-    raw=$(ssh_cmd "curl -sf -H Metadata:true --noproxy '*' \
-        'http://169.254.169.254/metadata/instance/compute/tagsList?api-version=2021-02-01'" \
-        2>/dev/null) || return 1
-    jq -r '.[] | select(.name=="acl-node-security-profile") | .value' <<<"$raw"
-}
-
-# Set (or remove) the tag on the VM, then wait for in-guest IMDS to converge.
-#
-# Uses the generic ARM tag endpoint (`az tag update`) rather than
-# `az vm update --set tags.…`. The latter round-trips the whole VM resource
-# through the Compute RP, so it can fail on unrelated VM properties.
-set_selinux_tag() {
-    local value="$1"
-    local vm_id
-    vm_id=$(az vm show --resource-group "$VM_RG" --name "$VM_NAME" --query id -o tsv)
-    if [[ -z "$value" ]]; then
-        info "Removing acl-node-security-profile tag..."
-        az tag update \
-            --resource-id "$vm_id" \
-            --operation delete \
-            --tags "acl-node-security-profile=" \
-            --output none
-    else
-        info "Setting acl-node-security-profile=${value}..."
-        az tag update \
-            --resource-id "$vm_id" \
-            --operation merge \
-            --tags "acl-node-security-profile=${value}" \
-            --output none
-    fi
-    info "Waiting for in-guest IMDS to report tag='${value:-<absent>}'..."
-    local deadline=$(( $(date +%s) + 60 )) seen
-    while (( $(date +%s) < deadline )); do
-        seen=$(imds_tag) && [[ "$seen" == "$value" ]] && return 0
-        sleep 2
-    done
-    error "IMDS did not converge to '${value:-<absent>}' within 60s"
-    return 1
-}
-
-
 # Assert that SELinux is in the expected mode.
 assert_selinux_mode() {
-    local expected="$1"
-    local actual
+    local expected="$1" actual
     actual=$(get_selinux_mode)
-    if [[ "$actual" == "$expected" ]]; then
-        info "✅ SELinux mode is '${actual}' (expected '${expected}')"
-        return 0
-    else
+    if [[ "$actual" != "$expected" ]]; then
         error "❌ SELinux mode is '${actual}' but expected '${expected}'"
         return 1
     fi
+    info "✅ SELinux mode is '${actual}' (expected '${expected}')"
 }
 
 # ── Main ───────────────────────────────────────────────────────────
@@ -109,27 +62,18 @@ main() {
 
     # Step 2: Toggle to permissive (with extra k/v to exercise comma-separated parsing).
     section "Step 2: Toggle SELinux to permissive via IMDS tag"
-    set_selinux_tag "selinux=permissive,foo=bar"
-    reboot_and_wait
-    if ! assert_selinux_mode "permissive"; then
-        exit_code=1
-    fi
+    set_security_profile_and_reboot "selinux=permissive,foo=bar"
+    assert_selinux_mode "permissive" || exit_code=1
 
     # Step 3: Toggle back to enforcing.
     section "Step 3: Toggle SELinux back to enforcing via IMDS tag"
-    set_selinux_tag "selinux=enforcing"
-    reboot_and_wait
-    if ! assert_selinux_mode "enforcing"; then
-        exit_code=1
-    fi
+    set_security_profile_and_reboot "selinux=enforcing"
+    assert_selinux_mode "enforcing" || exit_code=1
 
     # Step 4: Clean up — remove the tag, reboot, verify mode stays enforcing.
     section "Step 4: Cleanup — remove tag and reboot"
-    set_selinux_tag ""
-    reboot_and_wait
-    if ! assert_selinux_mode "enforcing"; then
-        exit_code=1
-    fi
+    set_security_profile_and_reboot ""
+    assert_selinux_mode "enforcing" || exit_code=1
 
     # Summary
     section "SELinux Toggle Test Summary"

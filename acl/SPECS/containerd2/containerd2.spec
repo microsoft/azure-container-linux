@@ -21,17 +21,14 @@ Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 # Tracks the AzureLinux 3.0-dev containerd2 baseline at Version 2.2.4.
 Version: 2.2.4
-# Release "6000.verity" distinguishes this dadelan fork build from any
-# future official AzureLinux containerd2-2.2.4-N release (which start at
-# Release: 1, 2, ...). The 6xxx range succeeds the prior 5xxx steamboat
-# RPM stream and the 4xxx 2.2.0-patch-based / 3xxx fork-tarball builds.
-# The ".verity" suffix marks the dm-verity erofs snapshotter patch set
-# (Patch8-9 of PATCHES.md). No .commit_hash tag since the upstream is an
-# immutable release tag.
+# This test branch carries the complete 6021.verity patch stack but uses the
+# isolated 9000.mirrortest release band so its forced MCR mirror cannot collide
+# with the PR-ready 6xxx package stream. No .commit_hash tag is needed because
+# the upstream release tag is immutable.
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 9001.mirrortest%{?dist}
+Release: 9002.mirrortest%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -45,9 +42,9 @@ Source0: https://github.com/%{github_owner}/%{github_repo}/archive/%{branch_name
 Source1: containerd.service
 # Stock Azure Linux configuration remains active by default.
 Source2: containerd.toml
-# Dormant ACL profile; ACL provisioning imports it explicitly.
+# EROFS/dm-verity capability shared by both ACL runtime profiles.
 Source3: containerd-acl-erofs.toml
-# ACL composition root: fixes import/merge order so the ACL delta wins.
+# Overlayfs-capability composition root.
 Source4: containerd-acl-config.toml
 # systemd drop-in selecting the composition root; "90-" must sort after
 # AgentBaker's "50-default-config.conf". Also pulls in modprobe@erofs and
@@ -57,8 +54,14 @@ Source5: containerd-acl-profile.conf
 # Guarantees /etc/containerd/config.toml exists before containerd starts, so
 # the composition root's literal import always resolves.
 Source6: containerd-acl-tmpfiles.conf
+# Runtime-only delta that switches CRI and the generic diff service to EROFS.
+Source7: containerd-acl-erofs-runtime.toml
+# Composition root selected after IPE activation or for static EROFS images.
+Source8: containerd-acl-erofs-config.toml
+# Atomically selects the overlayfs-capability or EROFS runtime root at startup.
+Source9: containerd-acl-select-profile
 # Test-only MCR mirror used by the dm-verity AKS validation branch.
-Source7: mcr-mirror-hosts.toml
+Source10: mcr-mirror-hosts.toml
 
 # ============================================================================
 # Patches
@@ -83,6 +86,10 @@ Source7: mcr-mirror-hosts.toml
 # Patch10:  UUID-bound precomputed EROFS and dm-verity artifact consumption
 #           with newest-bundle selection. containerd does not inspect IPE
 #           policy; the kernel alone interprets it.
+# Patch15:  Retain the selected signed EROFS referrer graph for fetch-only and
+#           non-capable unpack paths, including overlayfs, then reconstruct it
+#           during deferred first-use EROFS unpack. Capability and applier
+#           checks fail closed before signed EROFS layers reach a walking differ.
 #           See PATCHES.md for the author/commit provenance.
 # ============================================================================
 
@@ -100,9 +107,20 @@ Patch9:  0005-dm-verity-acl-integration.patch
 Patch10: 0006-dm-verity-precomputed-erofs-artifacts.patch
 # Independent of the dm-verity series; touches only upstream code.
 Patch11: 0007-erofs-selinux-shared-layer-context.patch
+# Bind referrer discovery to the selected applier so local pulls cannot silently
+# discard dm-verity artifacts. Also recognises built-in dm-verity kernels and
+# makes the shared EROFS SELinux context configurable.
+Patch12: 0008-erofs-bind-dmverity-to-selected-applier.patch
 # Concurrency fix for the dm-verity mount path. Kept separate from Patch8 so it
 # can be dropped or folded independently; belongs in 0004 once that settles.
-Patch12: 0008-erofs-dmverity-mount-lifecycle-lock.patch
+Patch13: 0009-erofs-dmverity-mount-lifecycle-lock.patch
+# Build compatibility for Patch12's mount-handler constructor change. The RPM
+# runs the existing containerd test suite in %check, so the stale zero-argument
+# test call must use the constructor's empty-value default.
+Patch14: 0010-erofs-test-pass-default-shared-layer-context.patch
+# Preserve signed referrers for AgentBaker's fetch-only and overlayfs cache
+# paths, then reconstruct them when the image is unpacked into EROFS.
+Patch15: 0011-erofs-retain-referrers-for-deferred-unpack.patch
 
 %{?systemd_requires}
 
@@ -153,13 +171,14 @@ Requires: %{name} = %{version}-%{release}
 Requires: erofs-utils
 
 %description erofs
-Activates the EROFS snapshotter and dm-verity image verification in containerd
-for Azure Container Linux (ACL) images.
+Provides EROFS and dm-verity image verification capability for containerd on
+Azure Container Linux (ACL) images.
 
 The main containerd2 package stays behavior-neutral: it ships the stock Azure
 Linux configuration and the dm-verity code paths remain default-off. Installing
-this subpackage is what turns them on, by selecting an ACL composition root
-through a late systemd drop-in.
+this subpackage loads the capability while preserving overlayfs by default. A
+late systemd selector activates the EROFS CRI profile only after the ACL IPE
+policy is active, or when the image carries an explicit static EROFS marker.
 
 All files are installed under /usr. ACL is an immutable OS whose image bake
 discards RPM-contributed paths under /etc, and only /usr survives into the
@@ -193,10 +212,10 @@ install -D -p -m 0644 %{SOURCE2} %{buildroot}%{_sysconfdir}/containerd/config.to
 # Everything below is ACL-only and must live under /usr: the immutable-OS bake
 # discards RPM-contributed /etc paths, and sysexts only ship /usr.
 
-# ACL EROFS/dm-verity settings. Dormant unless the composition root imports it.
+# EROFS/dm-verity capability shared by overlayfs and EROFS runtime roots.
 install -D -p -m 0644 %{SOURCE3} %{buildroot}%{_datadir}/containerd2/acl-erofs.toml
 
-# Composition root and the drop-in that selects it.
+# Overlayfs-capability composition root and startup selector.
 install -D -p -m 0644 %{SOURCE4} %{buildroot}%{_datadir}/containerd2/acl-config.toml
 install -D -p -m 0644 %{SOURCE5} %{buildroot}%{_prefix}/lib/systemd/system/containerd.service.d/90-acl-profile.conf
 
@@ -204,9 +223,14 @@ install -D -p -m 0644 %{SOURCE5} %{buildroot}%{_prefix}/lib/systemd/system/conta
 # agent, so the composition root's literal import always resolves.
 install -D -p -m 0644 %{SOURCE6} %{buildroot}%{_prefix}/lib/tmpfiles.d/10-containerd-acl.conf
 
+# EROFS runtime delta and composition root.
+install -D -p -m 0644 %{SOURCE7} %{buildroot}%{_datadir}/containerd2/acl-erofs-runtime.toml
+install -D -p -m 0644 %{SOURCE8} %{buildroot}%{_datadir}/containerd2/acl-erofs-config.toml
+install -D -p -m 0755 %{SOURCE9} %{buildroot}%{_libexecdir}/containerd2/acl-select-profile
+
 # The ACL image bake preserves /usr but drops package-owned /etc content.
 # 90-acl-profile.conf copies this file into /etc before containerd starts.
-install -D -p -m 0644 %{SOURCE7} %{buildroot}%{_datadir}/containerd2/certs.d/mcr.microsoft.com/hosts.toml
+install -D -p -m 0644 %{SOURCE10} %{buildroot}%{_datadir}/containerd2/certs.d/mcr.microsoft.com/hosts.toml
 
 %post
 %systemd_post containerd.service
@@ -236,15 +260,54 @@ fi
 %files erofs
 %{_datadir}/containerd2/acl-erofs.toml
 %{_datadir}/containerd2/acl-config.toml
+%{_datadir}/containerd2/acl-erofs-runtime.toml
+%{_datadir}/containerd2/acl-erofs-config.toml
+%{_libexecdir}/containerd2/acl-select-profile
+%{_datadir}/containerd2/certs.d/mcr.microsoft.com/hosts.toml
 %{_prefix}/lib/systemd/system/containerd.service.d/90-acl-profile.conf
 %{_prefix}/lib/tmpfiles.d/10-containerd-acl.conf
-%{_datadir}/containerd2/certs.d/mcr.microsoft.com/hosts.toml
 %dir %{_datadir}/containerd2
 %dir %{_datadir}/containerd2/certs.d
 %dir %{_datadir}/containerd2/certs.d/mcr.microsoft.com
+%dir %{_libexecdir}/containerd2
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Tue Aug 25 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9002.mirrortest
+- Carry the complete 6021.verity deferred-referrer and IPE runtime-selection
+  patch stack into the isolated mirror package.
+- Route MCR pulls, resolves, and OCI referrer discovery through the signed
+  notaryaksegistry test repository before AgentBaker image caching begins.
+- Use one explicit CRI registry configuration root so transfer-service pulls
+  cannot misread the default path list and silently bypass the mirror.
+
+* Mon Aug 24 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6021.verity
+- Keep overlayfs active while IPE is off, but load EROFS/dm-verity and both
+  transfer unpack combinations so VHD baking can retain signed referrers.
+- Patch15: retain the selected graph when a transfer unpacks into overlayfs;
+  only immediate capable EROFS unpack consumes it transiently.
+- Select the EROFS CRI and diff-service profile at containerd startup only
+  after the ACL IPE policy is active, or for an explicitly static EROFS image.
+
+* Mon Aug 24 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6020.verity
+- Patch15: retain the selected dm-verity referrer manifest and all signature,
+  EROFS, and Merkle-tree content for fetch-only transfers and OCI imports, then
+  reconstruct the signed layer annotations during deferred first-use unpack.
+- Keep immediate-unpack artifacts transient and root retained content through
+  standard content-store GC labels only while the cached image remains.
+- Explicitly opt the ACL EROFS snapshotter into permissive dm-verity auto mode
+  and order the EROFS differ before walking. Overlayfs remains unchanged, while
+  signed EROFS layers fail closed if a capable applier is unavailable or loses
+  first position.
+
+* Fri Aug 21 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6019.verity
+- Patch12: bind dm-verity enforcement to the selected applier so CRI local
+  pulls cannot silently discard discovered verification artifacts.
+- Patch13: retain the shared mapper mount-lifecycle lock after the new
+  selected-applier guard.
+- Patch14: update the existing dm-verity snapshot test for Patch12's
+  shared-layer-context constructor argument.
+
 * Wed Aug 19 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9001.mirrortest
 - Test only: route mcr.microsoft.com pulls, resolves, and OCI referrer
   discovery through notaryaksegistry.azurecr.io/aks-managed-repository.

@@ -1,57 +1,91 @@
 #!/bin/bash
+# Load and activate the signed ACL IPE policy before switch_root, while SELinux
+# still permits writes to securityfs. IPE is off by default; the Azure IMDS
+# profile can enable permissive mode, but not enforcing mode.
+#
+# Loader failures are fail-open: log the error and continue booting without IPE.
 
-set -euo pipefail
+set -uo pipefail
 
-POLICY_NAME="acl_ipe_boot_policy"
-IPE_DIR="/sys/kernel/security/ipe"
-ESP_LABEL="EFI-SYSTEM"
-ESP_MNT="/run/acl-ipe-esp"
-POLICY_REL="acl-ipe/acl.pol.p7b"
-esp_mounted=0
+POLICY_NAME="${ACL_IPE_POLICY_NAME:-acl_ipe_boot_policy}"
+IPE_DIR="${ACL_IPE_DIR:-/sys/kernel/security/ipe}"
+POLICY_FILE="${ACL_IPE_POLICY_FILE:-/sysroot/usr/lib/ipe/acl.pol.p7b}"
+CMDLINE_FILE="${ACL_IPE_CMDLINE_FILE:-/proc/cmdline}"
+SECURITY_PROFILE_HELPER="${ACL_IPE_SECURITY_PROFILE_HELPER:-/usr/lib/acl/acl-node-security-profile.sh}"
 
-fail() {
-    echo "acl-ipe-load: $*" >&2
-    exit 1
-}
+log() { echo "acl-ipe-load: $*" >&2; }
 
-cleanup() {
-    if [[ "${esp_mounted}" -eq 1 ]]; then
-        umount "${ESP_MNT}" 2>/dev/null || true
+source "${SECURITY_PROFILE_HELPER}"
+
+cmdline="$(cat "${CMDLINE_FILE}")"
+mode="off"
+mode_source="default"
+if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
+    if security_profile="$(acl_security_profile)"; then
+        requested_mode="$(acl_security_profile_value "${security_profile}" "ipe")"
+        case "${requested_mode}" in
+            off|permissive)
+                mode="${requested_mode}"
+                mode_source="acl-node-security-profile"
+                ;;
+            "")
+                ;;
+            *)
+                log "Ignoring unrecognized acl-node-security-profile ipe mode '${requested_mode}'."
+                ;;
+        esac
+    else
+        log "IMDS unavailable; leaving IPE off."
     fi
-}
-trap cleanup EXIT
+fi
+log "Using IPE mode '${mode}' from ${mode_source}."
 
+if [[ "${mode}" == "off" ]]; then
+    log "IPE mode is off; policy activation skipped."
+    exit 0
+fi
+
+# securityfs exposes the IPE nodes; mount it if it is not already.
 if [[ ! -e "${IPE_DIR}/new_policy" ]]; then
-    mkdir -p /sys/kernel/security
-    mount -t securityfs securityfs /sys/kernel/security ||
-        fail "unable to mount securityfs"
+    mount -t securityfs none /sys/kernel/security 2>/dev/null || true
 fi
-[[ -e "${IPE_DIR}/new_policy" ]] ||
-    fail "IPE securityfs interface is unavailable"
-
-if [[ ! -d "${IPE_DIR}/policies/${POLICY_NAME}" ]]; then
-    esp_device=$(findfs "LABEL=${ESP_LABEL}" 2>/dev/null) ||
-        fail "unable to find the EFI system partition"
-
-    mkdir -p "${ESP_MNT}"
-    mount -t vfat -o ro "${esp_device}" "${ESP_MNT}" ||
-        fail "unable to mount the EFI system partition"
-    esp_mounted=1
-
-    policy_file="${ESP_MNT}/${POLICY_REL}"
-    [[ -s "${policy_file}" ]] ||
-        fail "signed IPE policy is missing"
-
-    cat "${policy_file}" > "${IPE_DIR}/new_policy" ||
-        fail "kernel rejected the signed IPE policy"
+if [[ ! -e "${IPE_DIR}/new_policy" ]]; then
+    log "IPE securityfs interface missing; IPE not enabled in kernel. Skipping."
+    exit 0
 fi
 
-active_node="${IPE_DIR}/policies/${POLICY_NAME}/active"
-[[ -w "${active_node}" ]] ||
-    fail "IPE policy activation node is unavailable"
+if [[ -d "${IPE_DIR}/policies/${POLICY_NAME}" ]]; then
+    log "Policy ${POLICY_NAME} already present; ensuring it is active."
+else
+    if [[ ! -f "${POLICY_FILE}" ]]; then
+        log "No signed policy at ${POLICY_FILE}; nothing to load."
+        exit 0
+    fi
 
-echo 1 > "${active_node}" ||
-    fail "unable to activate IPE policy"
+    if cat "${POLICY_FILE}" > "${IPE_DIR}/new_policy" 2>/dev/null; then
+        log "Loaded policy ${POLICY_NAME} from verified /usr."
+    else
+        log "Failed to load ${POLICY_FILE} (untrusted signature, malformed, or write denied)."
+        exit 0
+    fi
+fi
 
-[[ "$(cat "${active_node}")" == "1" ]] ||
-    fail "IPE policy did not become active"
+if [[ ! -w "${IPE_DIR}/enforce" ]] ||
+    ! echo 0 > "${IPE_DIR}/enforce" 2>/dev/null; then
+    log "WARNING: failed to set IPE mode to ${mode}."
+    exit 0
+fi
+log "Set IPE enforcement to 0 (${mode}) at runtime."
+
+active_file="${IPE_DIR}/policies/${POLICY_NAME}/active"
+if [[ ! -w "${active_file}" ]] || ! echo 1 > "${active_file}" 2>/dev/null; then
+    log "WARNING: failed to activate ${POLICY_NAME}."
+    exit 0
+fi
+log "Activated policy ${POLICY_NAME}."
+
+policy_active="$(cat "${active_file}" 2>/dev/null || true)"
+if [[ "${policy_active}" != "1" ]]; then
+    log "WARNING: policy ${POLICY_NAME} is not active."
+    exit 0
+fi

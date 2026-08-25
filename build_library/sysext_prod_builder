@@ -82,6 +82,7 @@ create_prod_sysext() {
       "IMAGE_VERSION=${IMAGE_VERSION:-}" \
       "IMAGE_VERSION_ID=${IMAGE_VERSION_ID:-}" \
       "IMAGE_BUILD_ID=${IMAGE_BUILD_ID:-}" \
+      "ACL_FEATURES=${ACL_FEATURES:-}" \
       "${SCRIPTS_DIR}/build_sysext" \
             --board="${BOARD}" \
             --image_builddir="${workdir}/sysext-build" \

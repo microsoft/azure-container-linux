@@ -1,0 +1,1758 @@
+From: Dallas Delaney <dadelan@microsoft.com>
+Subject: [PATCH] erofs: retain dm-verity artifacts for deferred unpack
+
+Squash of three commits on the ACL containerd branch:
+
+  e670c411f  feat: retain dm-verity artifacts for deferred unpack
+  636e3078a  transfer: retain dm-verity refs across overlay unpack
+  b90e6ec66  test(transfer): cover overlay referrer retention
+
+Fetch-only and non-capable overlayfs unpack paths retain and GC-root the selected graph for deferred EROFS reconstruction. Immediate capable EROFS unpack remains transient to avoid unnecessary retained duplication.
+
+Generic and CRI first-use unpack reconstruct annotations locally, and tests pin disabled, fetch-only, overlayfs-retained, and immediate modes.
+
+Acl-Patch-Group: acl-dmverity-deferred-unpack
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+Copilot-Session: 3fad9689-50c6-480a-9f07-f805603944d1
+
+diff --git a/client/image.go b/client/image.go
+index f93f29bd5..3101ae4e9 100644
+--- a/client/image.go
++++ b/client/image.go
+@@ -21,6 +21,7 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
++	"slices"
+ 	"sync"
+ 
+ 	"github.com/containerd/containerd/v2/core/content"
+@@ -32,6 +33,7 @@ import (
+ 	"github.com/containerd/containerd/v2/pkg/labels"
+ 	"github.com/containerd/containerd/v2/pkg/rootfs"
+ 	"github.com/containerd/containerd/v2/pkg/snapshotters"
++	"github.com/containerd/containerd/v2/plugins"
+ 	"github.com/containerd/errdefs"
+ 	"github.com/containerd/platforms"
+ 	"github.com/opencontainers/go-digest"
+@@ -313,11 +315,44 @@ func (i *image) Unpack(ctx context.Context, snapshotterName string, opts ...Unpa
+ 		}
+ 	}
+ 
+-	manifest, err := i.getManifest(ctx, i.platform)
++	snapshotterName, err = i.client.resolveSnapshotterName(ctx, snapshotterName)
++	if err != nil {
++		return err
++	}
++	sn, err := i.client.getSnapshotter(ctx, snapshotterName)
++	if err != nil {
++		return err
++	}
++	capabilities, err := i.client.GetSnapshotterCapabilities(ctx, snapshotterName)
+ 	if err != nil {
+ 		return err
+ 	}
+ 
++	manifestDesc, manifest, err := images.ManifestWithDescriptor(ctx, i.ContentStore(), i.i.Target, i.platform)
++	if err != nil {
++		return err
++	}
++	if slices.Contains(capabilities, plugins.CapabilityDmverityReferrers) {
++		annotations, err := snapshotters.CachedSignatureAnnotations(ctx, i.ContentStore(), manifestDesc)
++		if err != nil {
++			return err
++		}
++		for idx := range manifest.Layers {
++			cached, ok := annotations[manifest.Layers[idx].Digest]
++			if !ok {
++				continue
++			}
++			merged := make(map[string]string, len(manifest.Layers[idx].Annotations)+len(cached))
++			for key, value := range manifest.Layers[idx].Annotations {
++				merged[key] = value
++			}
++			for key, value := range cached {
++				merged[key] = value
++			}
++			manifest.Layers[idx].Annotations = merged
++		}
++	}
++
+ 	layers, err := i.getLayers(ctx, manifest)
+ 	if err != nil {
+ 		return err
+@@ -330,14 +365,6 @@ func (i *image) Unpack(ctx context.Context, snapshotterName string, opts ...Unpa
+ 		chain    []digest.Digest
+ 		unpacked bool
+ 	)
+-	snapshotterName, err = i.client.resolveSnapshotterName(ctx, snapshotterName)
+-	if err != nil {
+-		return err
+-	}
+-	sn, err := i.client.getSnapshotter(ctx, snapshotterName)
+-	if err != nil {
+-		return err
+-	}
+ 	if config.CheckPlatformSupported {
+ 		if err := i.checkSnapshotterSupport(ctx, snapshotterName, manifest); err != nil {
+ 			return err
+@@ -348,7 +375,7 @@ func (i *image) Unpack(ctx context.Context, snapshotterName string, opts ...Unpa
+ 		snOpts := append(config.SnapshotOpts, snapshots.WithLabels(map[string]string{
+ 			snapshotters.TargetLayerDigestLabel:    layer.Blob.Digest.String(),
+ 			snapshotters.TargetManifestDigestLabel: i.Target().Digest.String(),
+-			snapshotters.TargetRefLabel: 		  	i.Name(),
++			snapshotters.TargetRefLabel:            i.Name(),
+ 		}))
+ 		unpacked, err = rootfs.ApplyLayerWithOpts(ctx, layer, chain, sn, a, snOpts, config.ApplyOpts)
+ 		if err != nil {
+diff --git a/core/images/image.go b/core/images/image.go
+index 9fcce9b4e..0332b6283 100644
+--- a/core/images/image.go
++++ b/core/images/image.go
+@@ -133,6 +133,7 @@ func (image *Image) Size(ctx context.Context, provider content.Provider, platfor
+ }
+ 
+ type platformManifest struct {
++	d ocispec.Descriptor
+ 	p *ocispec.Platform
+ 	m *ocispec.Manifest
+ }
+@@ -151,6 +152,13 @@ type platformManifest struct {
+ // to return a manifest descriptor or decide that we want to bring the API in
+ // this direction because this abstraction is not needed.
+ func Manifest(ctx context.Context, provider content.Provider, image ocispec.Descriptor, platform platforms.MatchComparer) (ocispec.Manifest, error) {
++	_, manifest, err := ManifestWithDescriptor(ctx, provider, image, platform)
++	return manifest, err
++}
++
++// ManifestWithDescriptor resolves a manifest and its descriptor from the image
++// for the given platform.
++func ManifestWithDescriptor(ctx context.Context, provider content.Provider, image ocispec.Descriptor, platform platforms.MatchComparer) (ocispec.Descriptor, ocispec.Manifest, error) {
+ 	var (
+ 		limit    = 1
+ 		m        []platformManifest
+@@ -191,6 +199,7 @@ func Manifest(ctx context.Context, provider content.Provider, image ocispec.Desc
+ 			}
+ 
+ 			m = append(m, platformManifest{
++				d: desc,
+ 				p: desc.Platform,
+ 				m: &manifest,
+ 			})
+@@ -241,7 +250,7 @@ func Manifest(ctx context.Context, provider content.Provider, image ocispec.Desc
+ 		}
+ 		return nil, fmt.Errorf("unexpected media type %v for %v: %w", desc.MediaType, desc.Digest, errdefs.ErrNotFound)
+ 	}), image); err != nil {
+-		return ocispec.Manifest{}, err
++		return ocispec.Descriptor{}, ocispec.Manifest{}, err
+ 	}
+ 
+ 	if len(m) == 0 {
+@@ -249,9 +258,9 @@ func Manifest(ctx context.Context, provider content.Provider, image ocispec.Desc
+ 		if wasIndex {
+ 			err = fmt.Errorf("no match for platform in manifest %v: %w", image.Digest, errdefs.ErrNotFound)
+ 		}
+-		return ocispec.Manifest{}, err
++		return ocispec.Descriptor{}, ocispec.Manifest{}, err
+ 	}
+-	return *m[0].m, nil
++	return m[0].d, *m[0].m, nil
+ }
+ 
+ // Config resolves the image configuration descriptor using a content provided
+diff --git a/core/transfer/local/dmverity.go b/core/transfer/local/dmverity.go
+new file mode 100644
+index 000000000..f7c23886b
+--- /dev/null
++++ b/core/transfer/local/dmverity.go
+@@ -0,0 +1,53 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package local
++
++import (
++	"github.com/containerd/containerd/v2/core/content"
++	"github.com/containerd/containerd/v2/core/images"
++	"github.com/containerd/containerd/v2/core/remotes"
++	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
++)
++
++type dmverityReferrerMode uint8
++
++const (
++	dmverityReferrersDisabled dmverityReferrerMode = iota
++	dmverityReferrersForImmediateUnpack
++	dmverityReferrersRetained
++)
++
++func selectDmverityReferrerMode(enabled, unpackCapable bool) dmverityReferrerMode {
++	if !enabled {
++		return dmverityReferrersDisabled
++	}
++	if unpackCapable {
++		return dmverityReferrersForImmediateUnpack
++	}
++	return dmverityReferrersRetained
++}
++
++func appendDmverityReferrerHandler(handler images.Handler, fetcher remotes.Fetcher, store content.Store, mode dmverityReferrerMode) images.Handler {
++	switch mode {
++	case dmverityReferrersForImmediateUnpack:
++		return snpkg.AppendSignatureHandlerWrapper(fetcher)(handler)
++	case dmverityReferrersRetained:
++		return snpkg.AppendRetainedSignatureHandlerWrapper(fetcher, store)(handler)
++	default:
++		return handler
++	}
++}
+diff --git a/core/transfer/local/import.go b/core/transfer/local/import.go
+index 9b23e5eec..640ee7d02 100644
+--- a/core/transfer/local/import.go
++++ b/core/transfer/local/import.go
+@@ -20,6 +20,7 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"fmt"
++	"slices"
+ 
+ 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+ 
+@@ -31,6 +32,7 @@ import (
+ 	"github.com/containerd/containerd/v2/core/transfer"
+ 	"github.com/containerd/containerd/v2/core/unpack"
+ 	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
++	"github.com/containerd/containerd/v2/plugins"
+ )
+ 
+ func (ts *localTransferService) importStream(ctx context.Context, i transfer.ImageImporter, is transfer.ImageStorer, tops *transfer.Config) error {
+@@ -95,9 +97,13 @@ func (ts *localTransferService) importStream(ctx context.Context, i transfer.Ima
+ 		unpacks := iu.UnpackPlatforms()
+ 		if len(unpacks) > 0 {
+ 			uopts := []unpack.UnpackerOpt{}
++			enableDmverityReferrers := false
+ 			for _, u := range unpacks {
+ 				matched, mu := getSupportedPlatform(ctx, u, ts.config.UnpackPlatforms)
+ 				if matched {
++					if slices.Contains(mu.SnapshotterCapabilities, plugins.CapabilityDmverityReferrers) {
++						enableDmverityReferrers = true
++					}
+ 					uopts = append(uopts, unpack.WithUnpackPlatform(mu))
+ 				}
+ 			}
+@@ -107,7 +113,13 @@ func (ts *localTransferService) importStream(ctx context.Context, i transfer.Ima
+ 			}
+ 
+ 			if ts.config.EnableDmverityReferrers {
+-				handler = snpkg.AppendSignatureHandlerWrapper(snpkg.NewContentStoreFetcher(ts.content))(handler)
++				fetcher := snpkg.NewContentStoreFetcher(ts.content)
++				handler = appendDmverityReferrerHandler(
++					handler,
++					fetcher,
++					ts.content,
++					selectDmverityReferrerMode(true, enableDmverityReferrers),
++				)
+ 			}
+ 
+ 			unpacker, err = unpack.NewUnpacker(ctx, ts.content, uopts...)
+@@ -117,6 +129,14 @@ func (ts *localTransferService) importStream(ctx context.Context, i transfer.Ima
+ 			handler = unpacker.Unpack(handler)
+ 		}
+ 	}
++	if ts.config.EnableDmverityReferrers && unpacker == nil {
++		handler = appendDmverityReferrerHandler(
++			handler,
++			snpkg.NewContentStoreFetcher(ts.content),
++			ts.content,
++			dmverityReferrersRetained,
++		)
++	}
+ 
+ 	if err := images.WalkNotEmpty(ctx, handler, index); err != nil {
+ 		if unpacker != nil {
+diff --git a/core/transfer/local/pull.go b/core/transfer/local/pull.go
+index c0a5bc12b..565499626 100644
+--- a/core/transfer/local/pull.go
++++ b/core/transfer/local/pull.go
+@@ -19,6 +19,7 @@ package local
+ import (
+ 	"context"
+ 	"fmt"
++	"slices"
+ 
+ 	"github.com/containerd/errdefs"
+ 	"github.com/containerd/log"
+@@ -34,6 +35,7 @@ import (
+ 	"github.com/containerd/containerd/v2/core/unpack"
+ 	"github.com/containerd/containerd/v2/defaults"
+ 	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
++	"github.com/containerd/containerd/v2/plugins"
+ )
+ 
+ func (ts *localTransferService) pull(ctx context.Context, ir transfer.ImageFetcher, is transfer.ImageStorer, tops *transfer.Config) error {
+@@ -194,6 +196,7 @@ func (ts *localTransferService) pull(ctx context.Context, ir transfer.ImageFetch
+ 		if len(unpacks) > 0 {
+ 			uopts := []unpack.UnpackerOpt{}
+ 			enableRemoteSnapshotAnnotations := false
++			enableDmverityReferrers := false
+ 			// Only unpack if requested unpackconfig matches default/supported unpackconfigs
+ 			for _, u := range unpacks {
+ 				matched, mu := getSupportedPlatform(ctx, u, ts.config.UnpackPlatforms)
+@@ -201,6 +204,9 @@ func (ts *localTransferService) pull(ctx context.Context, ir transfer.ImageFetch
+ 					if v, ok := mu.SnapshotterExports["enable_remote_snapshot_annotations"]; ok && v == "true" {
+ 						enableRemoteSnapshotAnnotations = true
+ 					}
++					if slices.Contains(mu.SnapshotterCapabilities, plugins.CapabilityDmverityReferrers) {
++						enableDmverityReferrers = true
++					}
+ 					if progressTracker != nil {
+ 						mu.ApplyOpts = append(mu.ApplyOpts, diff.WithProgress(progressTracker.ExtractProgress))
+ 					}
+@@ -224,9 +230,12 @@ func (ts *localTransferService) pull(ctx context.Context, ir transfer.ImageFetch
+ 			if enableRemoteSnapshotAnnotations {
+ 				handler = snpkg.AppendInfoHandlerWrapper(name)(handler)
+ 			}
+-			if ts.config.EnableDmverityReferrers {
+-				handler = snpkg.AppendSignatureHandlerWrapper(fetcher)(handler)
+-			}
++			handler = appendDmverityReferrerHandler(
++				handler,
++				fetcher,
++				ts.content,
++				selectDmverityReferrerMode(ts.config.EnableDmverityReferrers, enableDmverityReferrers),
++			)
+ 
+ 			unpacker, err = unpack.NewUnpacker(ctx, ts.content, uopts...)
+ 			if err != nil {
+@@ -235,6 +244,9 @@ func (ts *localTransferService) pull(ctx context.Context, ir transfer.ImageFetch
+ 			handler = unpacker.Unpack(handler)
+ 		}
+ 	}
++	if ts.config.EnableDmverityReferrers && unpacker == nil {
++		handler = appendDmverityReferrerHandler(handler, fetcher, ts.content, dmverityReferrersRetained)
++	}
+ 
+ 	if err := images.Dispatch(ctx, handler, nil, desc); err != nil {
+ 		if unpacker != nil {
+diff --git a/core/transfer/local/pull_test.go b/core/transfer/local/pull_test.go
+index 221fa9657..0a53e921b 100644
+--- a/core/transfer/local/pull_test.go
++++ b/core/transfer/local/pull_test.go
+@@ -151,3 +151,40 @@ func TestGetSupportedPlatform(t *testing.T) {
+ 	}
+ 
+ }
++
++func TestSelectDmverityReferrerMode(t *testing.T) {
++	for _, testCase := range []struct {
++		name          string
++		enabled       bool
++		unpackCapable bool
++		expected      dmverityReferrerMode
++	}{
++		{
++			name:     "disabled transfer leaves handlers unchanged",
++			expected: dmverityReferrersDisabled,
++		},
++		{
++			name:          "capable EROFS unpack uses transient annotations",
++			enabled:       true,
++			unpackCapable: true,
++			expected:      dmverityReferrersForImmediateUnpack,
++		},
++		{
++			name:     "fetch-only transfer retains referrers",
++			enabled:  true,
++			expected: dmverityReferrersRetained,
++		},
++		{
++			name:     "overlayfs unpack retains referrers",
++			enabled:  true,
++			expected: dmverityReferrersRetained,
++		},
++	} {
++		t.Run(testCase.name, func(t *testing.T) {
++			actual := selectDmverityReferrerMode(testCase.enabled, testCase.unpackCapable)
++			if actual != testCase.expected {
++				t.Fatalf("expected mode %d, got %d", testCase.expected, actual)
++			}
++		})
++	}
++}
+diff --git a/internal/cri/config/config.go b/internal/cri/config/config.go
+index 1bceb8020..f60bc1502 100644
+--- a/internal/cri/config/config.go
++++ b/internal/cri/config/config.go
+@@ -286,8 +286,8 @@ type ImageConfig struct {
+ 	Snapshotter string `toml:"snapshotter" json:"snapshotter"`
+ 
+ 	// EnableDmverityReferrers enables discovery of dm-verity signature and
+-	// precomputed EROFS referrers when local image pull is used. It is derived
+-	// from the capabilities advertised by the loaded diff plugins rather than
++	// precomputed EROFS referrers. It is derived from the capabilities
++	// advertised by the loaded diff and active snapshotter plugins rather than
+ 	// being set directly.
+ 	EnableDmverityReferrers bool `toml:"-" json:"enableDmverityReferrers"`
+ 
+diff --git a/internal/cri/opts/container.go b/internal/cri/opts/container.go
+index 563d2a983..e99d32de5 100644
+--- a/internal/cri/opts/container.go
++++ b/internal/cri/opts/container.go
+@@ -21,6 +21,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"os"
++	"slices"
+ 	"strings"
+ 
+ 	"github.com/containerd/continuity/fs"
+@@ -37,6 +38,7 @@ import (
+ 	"github.com/containerd/containerd/v2/core/snapshots"
+ 	"github.com/containerd/containerd/v2/core/unpack"
+ 	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
++	containerdplugins "github.com/containerd/containerd/v2/plugins"
+ )
+ 
+ // WithNewSnapshot wraps `containerd.WithNewSnapshot` so that if creating the
+@@ -65,7 +67,10 @@ func unpackImage(ctx context.Context, client *containerd.Client, i containerd.Im
+ 	}
+ 	defer done(ctx)
+ 
+-	matcher := platforms.Default()
++	matcher := i.Platform()
++	if matcher == nil {
++		matcher = platforms.Default()
++	}
+ 
+ 	capabilities, err := client.GetSnapshotterCapabilities(ctx, snapshotter)
+ 	if err != nil {
+@@ -93,6 +98,9 @@ func unpackImage(ctx context.Context, client *containerd.Client, i containerd.Im
+ 	childrenHandler = images.LimitManifests(childrenHandler, matcher, 1)
+ 
+ 	var h images.Handler = childrenHandler
++	if slices.Contains(capabilities, containerdplugins.CapabilityDmverityReferrers) {
++		h = snpkg.AppendCachedSignatureHandlerWrapper(i.ContentStore())(h)
++	}
+ 	if appendSnapshotLabels {
+ 		h = snpkg.AppendInfoHandlerWrapper(i.Name())(h)
+ 	}
+diff --git a/internal/cri/server/images/image_pull.go b/internal/cri/server/images/image_pull.go
+index bf3dc64a4..05cc46098 100644
+--- a/internal/cri/server/images/image_pull.go
++++ b/internal/cri/server/images/image_pull.go
+@@ -25,6 +25,7 @@ import (
+ 	"net/http"
+ 	"net/url"
+ 	"path/filepath"
++	"slices"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -54,6 +55,7 @@ import (
+ 	"github.com/containerd/containerd/v2/internal/cri/util"
+ 	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
+ 	"github.com/containerd/containerd/v2/pkg/tracing"
++	"github.com/containerd/containerd/v2/plugins"
+ )
+ 
+ // For image management:
+@@ -276,7 +278,9 @@ func (c *CRIImageService) pullImageWithLocalPull(
+ 		handlerWrappers = append(handlerWrappers, snpkg.AppendInfoHandlerWrapper(ref))
+ 	}
+ 	if c.config.EnableDmverityReferrers {
+-		handlerWrappers = append(handlerWrappers, snpkg.AppendSignatureHandlerWrapperFromResolver(resolver, ref))
++		if slices.Contains(c.snapshotterCapabilities[snapshotter], plugins.CapabilityDmverityReferrers) {
++			handlerWrappers = append(handlerWrappers, snpkg.AppendSignatureHandlerWrapperFromResolver(resolver, ref))
++		}
+ 	}
+ 	if len(handlerWrappers) > 0 {
+ 		pullOpts = append(pullOpts, containerd.WithImageHandlerWrapper(
+diff --git a/internal/cri/server/images/service.go b/internal/cri/server/images/service.go
+index 125ca18f3..5e2b0d9a3 100644
+--- a/internal/cri/server/images/service.go
++++ b/internal/cri/server/images/service.go
+@@ -65,6 +65,9 @@ type CRIImageService struct {
+ 	imageFSPaths map[string]string
+ 	// runtimePlatforms are the platforms configured for a runtime.
+ 	runtimePlatforms map[string]ImagePlatform
++	// snapshotterCapabilities are the capabilities advertised by each configured
++	// snapshotter plugin.
++	snapshotterCapabilities map[string][]string
+ 	// imageStore stores all resources associated with images.
+ 	imageStore *imagestore.Store
+ 	// snapshotStore stores information of all snapshots.
+@@ -95,6 +98,8 @@ type CRIImageServiceOptions struct {
+ 
+ 	Snapshotters map[string]snapshots.Snapshotter
+ 
++	SnapshotterCapabilities map[string][]string
++
+ 	Client imageClient
+ 
+ 	Transferrer transfer.Transferrer
+@@ -122,6 +127,7 @@ func NewService(config criconfig.ImageConfig, options *CRIImageServiceOptions) (
+ 		imageStore:                  imagestore.NewStore(options.Images, options.Content, platforms.Default()),
+ 		imageFSPaths:                options.ImageFSPaths,
+ 		runtimePlatforms:            options.RuntimePlatforms,
++		snapshotterCapabilities:     options.SnapshotterCapabilities,
+ 		snapshotStore:               snapshotstore.NewStore(),
+ 		transferrer:                 options.Transferrer,
+ 		unpackDuplicationSuppressor: kmutex.New(),
+diff --git a/internal/erofsutils/mount.go b/internal/erofsutils/mount.go
+index 35c469904..213199a32 100644
+--- a/internal/erofsutils/mount.go
++++ b/internal/erofsutils/mount.go
+@@ -124,6 +124,10 @@ func ConvertErofs(ctx context.Context, layerPath string, srcDir string, mkfsExtr
+ // The candidate will be checked with ".erofslayer" to make sure this active
+ // snapshot is really generated by the EROFS snapshotter instead of others.
+ func MountsToLayer(mounts []mount.Mount) (string, error) {
++	if len(mounts) == 0 {
++		return "", fmt.Errorf("erofs differ requires at least one mount: %w", errdefs.ErrNotImplemented)
++	}
++
+ 	var layer string
+ 
+ 	// If mount[0].Type is prefixed with "mkfs/", it should be always the snapshot layer
+diff --git a/internal/erofsutils/mount_test.go b/internal/erofsutils/mount_test.go
+new file mode 100644
+index 000000000..93ed294ab
+--- /dev/null
++++ b/internal/erofsutils/mount_test.go
+@@ -0,0 +1,29 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package erofsutils
++
++import (
++	"testing"
++
++	"github.com/containerd/errdefs"
++	"github.com/stretchr/testify/require"
++)
++
++func TestMountsToLayerRejectsEmptyMounts(t *testing.T) {
++	_, err := MountsToLayer(nil)
++	require.ErrorIs(t, err, errdefs.ErrNotImplemented)
++}
+diff --git a/pkg/snapshotters/contentstore_fetcher.go b/pkg/snapshotters/contentstore_fetcher.go
+index 9e0279ab2..9d2ba4f25 100644
+--- a/pkg/snapshotters/contentstore_fetcher.go
++++ b/pkg/snapshotters/contentstore_fetcher.go
+@@ -25,6 +25,7 @@ import (
+ 	"github.com/containerd/containerd/v2/core/content"
+ 	"github.com/containerd/containerd/v2/core/images"
+ 	"github.com/containerd/containerd/v2/core/remotes"
++	"github.com/containerd/errdefs"
+ 	"github.com/containerd/log"
+ 	"github.com/opencontainers/go-digest"
+ 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+@@ -42,19 +43,12 @@ const maxManifestSize = 4 * 1024 * 1024 // 4 MiB
+ // against a registry-backed fetcher (e.g. AppendSignatureHandlerWrapper)
+ // can be used during local OCI-layout imports.
+ //
+-// FetchReferrers walks the content store, parses each candidate blob as an
+-// OCI manifest, and returns the descriptors whose `subject.digest` matches
+-// the request. When FetchReferrersConfig.ArtifactTypes is non-empty the
+-// results are filtered to manifests whose artifactType is in the set.
+-//
+-// This is intentionally an O(n) scan over the content store: it is meant to
+-// run once per imported image during a transfer.Import, when n is small
+-// (the freshly-imported OCI layout's manifests + layers + config blobs).
+-// If a use case appears that needs sub-linear lookup, switch to a labeled
+-// index (e.g. write a "containerd.io/manifest.subject" label at ingest
+-// time and look up by label filter); the interface stays the same.
++// FetchReferrers walks the content store, parses candidate OCI manifests, and
++// matches their `subject.digest`. A cached-only fetcher instead resolves the
++// selected dm-verity referrer directly from DmverityReferrerLabel.
+ type ContentStoreFetcher struct {
+-	store content.Store
++	store      content.Store
++	cachedOnly bool
+ }
+ 
+ // NewContentStoreFetcher constructs a ContentStoreFetcher backed by store.
+@@ -62,6 +56,13 @@ func NewContentStoreFetcher(store content.Store) *ContentStoreFetcher {
+ 	return &ContentStoreFetcher{store: store}
+ }
+ 
++func newCachedContentStoreFetcher(store content.Store) *ContentStoreFetcher {
++	return &ContentStoreFetcher{
++		store:      store,
++		cachedOnly: true,
++	}
++}
++
+ // Fetch implements remotes.Fetcher by reading the blob identified by desc
+ // out of the content store.
+ func (f *ContentStoreFetcher) Fetch(ctx context.Context, desc ocispec.Descriptor) (io.ReadCloser, error) {
+@@ -90,6 +91,15 @@ func (f *ContentStoreFetcher) FetchReferrers(ctx context.Context, dgst digest.Di
+ 	for _, t := range cfg.ArtifactTypes {
+ 		allowed[t] = struct{}{}
+ 	}
++	if f.cachedOnly && len(allowed) == 1 {
++		if _, ok := allowed[SignatureArtifactType]; ok {
++			if referrers, found, err := f.labeledDmverityReferrer(ctx, dgst); err != nil {
++				return nil, err
++			} else if found {
++				return referrers, nil
++			}
++		}
++	}
+ 
+ 	var result []ocispec.Descriptor
+ 	walkErr := f.store.Walk(ctx, func(info content.Info) error {
+@@ -149,6 +159,59 @@ func (f *ContentStoreFetcher) FetchReferrers(ctx context.Context, dgst digest.Di
+ 	return result, nil
+ }
+ 
++func (f *ContentStoreFetcher) labeledDmverityReferrer(ctx context.Context, subject digest.Digest) ([]ocispec.Descriptor, bool, error) {
++	subjectInfo, err := f.store.Info(ctx, subject)
++	if err != nil {
++		if errdefs.IsNotFound(err) {
++			return nil, false, nil
++		}
++		return nil, false, fmt.Errorf("inspect subject manifest %s: %w", subject, err)
++	}
++	value := subjectInfo.Labels[DmverityReferrerLabel]
++	if value == "" {
++		return nil, false, nil
++	}
++
++	referrerDigest, err := digest.Parse(value)
++	if err != nil {
++		return nil, true, fmt.Errorf("invalid dm-verity referrer label on %s: %w", subject, err)
++	}
++	info, err := f.store.Info(ctx, referrerDigest)
++	if err != nil {
++		return nil, true, fmt.Errorf("inspect labeled dm-verity referrer %s: %w", referrerDigest, err)
++	}
++	if info.Size <= 0 || info.Size > maxManifestSize {
++		return nil, true, fmt.Errorf("labeled dm-verity referrer %s size %d out of range", referrerDigest, info.Size)
++	}
++
++	desc := ocispec.Descriptor{
++		Digest: referrerDigest,
++		Size:   info.Size,
++	}
++	data, err := content.ReadBlob(ctx, f.store, desc)
++	if err != nil {
++		return nil, true, fmt.Errorf("read labeled dm-verity referrer %s: %w", referrerDigest, err)
++	}
++	var probe struct {
++		MediaType    string              `json:"mediaType"`
++		ArtifactType string              `json:"artifactType"`
++		Subject      *ocispec.Descriptor `json:"subject"`
++	}
++	if err := json.Unmarshal(data, &probe); err != nil {
++		return nil, true, fmt.Errorf("parse labeled dm-verity referrer %s: %w", referrerDigest, err)
++	}
++	if !images.IsManifestType(probe.MediaType) || probe.ArtifactType != SignatureArtifactType {
++		return nil, true, fmt.Errorf("labeled content %s is not a dm-verity referrer manifest", referrerDigest)
++	}
++	if probe.Subject == nil || probe.Subject.Digest != subject {
++		return nil, true, fmt.Errorf("labeled dm-verity referrer %s does not target subject %s", referrerDigest, subject)
++	}
++
++	desc.MediaType = probe.MediaType
++	desc.ArtifactType = probe.ArtifactType
++	return []ocispec.Descriptor{desc}, true, nil
++}
++
+ type readerAtCloser struct {
+ 	io.Reader
+ 	closer io.Closer
+diff --git a/pkg/snapshotters/contentstore_fetcher_test.go b/pkg/snapshotters/contentstore_fetcher_test.go
+index 101e946d4..6880db133 100644
+--- a/pkg/snapshotters/contentstore_fetcher_test.go
++++ b/pkg/snapshotters/contentstore_fetcher_test.go
+@@ -22,6 +22,7 @@ import (
+ 	"encoding/json"
+ 	"io"
+ 	"sort"
++	"sync"
+ 	"testing"
+ 
+ 	"github.com/containerd/containerd/v2/core/content"
+@@ -33,6 +34,46 @@ import (
+ 	"github.com/stretchr/testify/require"
+ )
+ 
++type memoryLabelStore struct {
++	mu     sync.Mutex
++	labels map[digest.Digest]map[string]string
++}
++
++func newMemoryLabelStore() *memoryLabelStore {
++	return &memoryLabelStore{labels: map[digest.Digest]map[string]string{}}
++}
++
++func (s *memoryLabelStore) Get(dgst digest.Digest) (map[string]string, error) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	return s.labels[dgst], nil
++}
++
++func (s *memoryLabelStore) Set(dgst digest.Digest, labels map[string]string) error {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	s.labels[dgst] = labels
++	return nil
++}
++
++func (s *memoryLabelStore) Update(dgst digest.Digest, update map[string]string) (map[string]string, error) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	labels := s.labels[dgst]
++	if labels == nil {
++		labels = map[string]string{}
++	}
++	for key, value := range update {
++		if value == "" {
++			delete(labels, key)
++		} else {
++			labels[key] = value
++		}
++	}
++	s.labels[dgst] = labels
++	return labels, nil
++}
++
+ // writeBlob writes data into cs and returns its descriptor.
+ func writeBlob(t *testing.T, ctx context.Context, cs content.Store, mediaType string, data []byte) ocispec.Descriptor {
+ 	t.Helper()
+@@ -142,6 +183,50 @@ func TestContentStoreFetcherFetchReferrers(t *testing.T) {
+ 	}
+ }
+ 
++func TestContentStoreFetcherSeparatesCachedLookupFromImportDiscovery(t *testing.T) {
++	ctx := context.Background()
++	cs, err := local.NewLabeledStore(t.TempDir(), newMemoryLabelStore())
++	require.NoError(t, err)
++
++	config := writeBlob(t, ctx, cs, ocispec.MediaTypeImageConfig, []byte("{}"))
++	subject := writeManifest(t, ctx, cs, ocispec.Manifest{
++		MediaType: ocispec.MediaTypeImageManifest,
++		Config:    config,
++	})
++	selected := writeManifest(t, ctx, cs, ocispec.Manifest{
++		MediaType:    ocispec.MediaTypeImageManifest,
++		ArtifactType: SignatureArtifactType,
++		Subject:      &subject,
++		Config:       config,
++		Annotations:  map[string]string{ociAnnotationCreated: "2026-07-20T01:00:00Z"},
++	})
++	newer := writeManifest(t, ctx, cs, ocispec.Manifest{
++		MediaType:    ocispec.MediaTypeImageManifest,
++		ArtifactType: SignatureArtifactType,
++		Subject:      &subject,
++		Config:       config,
++		Annotations:  map[string]string{ociAnnotationCreated: "2026-07-20T02:00:00Z"},
++	})
++	_, err = cs.Update(ctx, content.Info{
++		Digest: subject.Digest,
++		Labels: map[string]string{DmverityReferrerLabel: selected.Digest.String()},
++	}, "labels."+DmverityReferrerLabel)
++	require.NoError(t, err)
++
++	cached, err := newCachedContentStoreFetcher(cs).FetchReferrers(ctx, subject.Digest,
++		remotes.WithReferrerArtifactTypes(SignatureArtifactType))
++	require.NoError(t, err)
++	require.Len(t, cached, 1)
++	assert.Equal(t, selected.Digest, cached[0].Digest)
++
++	discovered, err := NewContentStoreFetcher(cs).FetchReferrers(ctx, subject.Digest,
++		remotes.WithReferrerArtifactTypes(SignatureArtifactType))
++	require.NoError(t, err)
++	require.Len(t, discovered, 2)
++	assert.ElementsMatch(t, []digest.Digest{selected.Digest, newer.Digest},
++		[]digest.Digest{discovered[0].Digest, discovered[1].Digest})
++}
++
+ // TestContentStoreFetcherFetchReferrersEmpty verifies a store with no
+ // matching referrers returns no results and no error.
+ func TestContentStoreFetcherFetchReferrersEmpty(t *testing.T) {
+diff --git a/pkg/snapshotters/signatures.go b/pkg/snapshotters/signatures.go
+index af8cba50b..443108b93 100644
+--- a/pkg/snapshotters/signatures.go
++++ b/pkg/snapshotters/signatures.go
+@@ -26,6 +26,7 @@ import (
+ 	"sync"
+ 	"time"
+ 
++	"github.com/containerd/containerd/v2/core/content"
+ 	"github.com/containerd/containerd/v2/core/images"
+ 	"github.com/containerd/containerd/v2/core/remotes"
+ 	"github.com/containerd/errdefs"
+@@ -54,6 +55,11 @@ const (
+ 	// TargetLayerMerkleTreeDescriptorLabel contains the JSON descriptor for a precomputed Merkle-tree blob.
+ 	TargetLayerMerkleTreeDescriptorLabel = "containerd.io/dmverity/merkle-tree-descriptor"
+ 
++	// DmverityReferrerLabel roots the selected dm-verity referrer from its
++	// subject manifest and marks that manifest for deferred local discovery.
++	// The content GC recognizes the containerd.io/gc.ref.content prefix.
++	DmverityReferrerLabel = "containerd.io/gc.ref.content.dmverity"
++
+ 	sigLayerDigestAnnotation    = "io.cncf.notary.dmverity.layer-digest"
+ 	sigLayerRootHashAnnotation  = "io.cncf.notary.dmverity.layer-roothash"
+ 	sigLayerSignatureAnnotation = "io.cncf.notary.dmverity.layer-signature"
+@@ -101,38 +107,38 @@ func ParseTargetDescriptor(value string) (ocispec.Descriptor, error) {
+ 	return desc, nil
+ }
+ 
+-func fetchSignatures(ctx context.Context, fetcher remotes.Fetcher, manifestDigest digest.Digest) (map[string]*LayerSignatureInfo, []ocispec.Descriptor, error) {
++func fetchSignatures(ctx context.Context, fetcher remotes.Fetcher, manifestDigest digest.Digest) (map[string]*LayerSignatureInfo, []ocispec.Descriptor, *referrerWithManifest, error) {
+ 	signatures := make(map[string]*LayerSignatureInfo)
+ 	refFetcher, ok := fetcher.(remotes.ReferrersFetcher)
+ 	if !ok {
+ 		log.G(ctx).Debug("Fetcher does not support referrers API, skipping signature fetch")
+-		return signatures, nil, nil
++		return signatures, nil, nil, nil
+ 	}
+ 
+ 	referrers, err := refFetcher.FetchReferrers(ctx, manifestDigest,
+ 		remotes.WithReferrerArtifactTypes(SignatureArtifactType))
+ 	if err != nil {
+ 		if errdefs.IsNotFound(err) {
+-			return signatures, nil, nil
++			return signatures, nil, nil, nil
+ 		}
+-		return nil, nil, fmt.Errorf("fetch dm-verity referrers for %s: %w", manifestDigest, err)
++		return nil, nil, nil, fmt.Errorf("fetch dm-verity referrers for %s: %w", manifestDigest, err)
+ 	}
+ 	if len(referrers) == 0 {
+-		return signatures, nil, nil
++		return signatures, nil, nil, nil
+ 	}
+ 
+ 	parsed := make([]referrerWithManifest, 0, len(referrers))
+ 	for _, refDesc := range referrers {
+ 		manifestData, err := fetchDescriptor(ctx, fetcher, refDesc)
+ 		if err != nil {
+-			return nil, nil, fmt.Errorf("fetch dm-verity manifest %s: %w", refDesc.Digest, err)
++			return nil, nil, nil, fmt.Errorf("fetch dm-verity manifest %s: %w", refDesc.Digest, err)
+ 		}
+ 		var manifest ocispec.Manifest
+ 		if err := json.Unmarshal(manifestData, &manifest); err != nil {
+-			return nil, nil, fmt.Errorf("parse dm-verity manifest %s: %w", refDesc.Digest, err)
++			return nil, nil, nil, fmt.Errorf("parse dm-verity manifest %s: %w", refDesc.Digest, err)
+ 		}
+ 		if manifest.Subject == nil || manifest.Subject.Digest != manifestDigest {
+-			return nil, nil, fmt.Errorf("dm-verity manifest %s subject does not match image manifest %s", refDesc.Digest, manifestDigest)
++			return nil, nil, nil, fmt.Errorf("dm-verity manifest %s subject does not match image manifest %s", refDesc.Digest, manifestDigest)
+ 		}
+ 		var createdAt time.Time
+ 		if created := manifest.Annotations[ociAnnotationCreated]; created != "" {
+@@ -158,18 +164,18 @@ func fetchSignatures(ctx context.Context, fetcher remotes.Fetcher, manifestDiges
+ 		candidate := newestReferrer(precomputed)
+ 		infos, artifactDescs, err := parsePrecomputedBundle(ctx, fetcher, candidate.manifest)
+ 		if err != nil {
+-			return nil, nil, fmt.Errorf("parse precomputed dm-verity bundle %s: %w", candidate.desc.Digest, err)
++			return nil, nil, nil, fmt.Errorf("parse precomputed dm-verity bundle %s: %w", candidate.desc.Digest, err)
+ 		}
+ 		log.G(ctx).WithFields(log.Fields{
+ 			"bundle":   candidate.desc.Digest,
+ 			"manifest": manifestDigest,
+ 			"layers":   len(infos),
+ 		}).Info("Using precomputed EROFS dm-verity bundle")
+-		return infos, artifactDescs, nil
++		return infos, artifactDescs, &candidate, nil
+ 	}
+ 
+ 	if len(legacy) == 0 {
+-		return signatures, nil, nil
++		return signatures, nil, nil, nil
+ 	}
+ 	newest := newestReferrer(legacy)
+ 	for _, layer := range newest.manifest.Layers {
+@@ -183,7 +189,7 @@ func fetchSignatures(ctx context.Context, fetcher remotes.Fetcher, manifestDiges
+ 			signatures[layerDigest] = &LayerSignatureInfo{RootHash: rootHash, Signature: sig}
+ 		}
+ 	}
+-	return signatures, nil, nil
++	return signatures, nil, &newest, nil
+ }
+ 
+ func newestReferrer(candidates []referrerWithManifest) referrerWithManifest {
+@@ -316,7 +322,15 @@ func fetchDescriptor(ctx context.Context, fetcher remotes.Fetcher, desc ocispec.
+ // precomputed EROFS artifacts when processing an image manifest.
+ func AppendSignatureHandlerWrapper(fetcher remotes.Fetcher) func(f images.Handler) images.Handler {
+ 	return func(f images.Handler) images.Handler {
+-		return signatureHandler(f, fetcher)
++		return signatureHandler(f, fetcher, nil, false)
++	}
++}
++
++// AppendRetainedSignatureHandlerWrapper additionally persists and GC-roots the
++// selected referrer graph for a later deferred unpack.
++func AppendRetainedSignatureHandlerWrapper(fetcher remotes.Fetcher, store content.Store) func(f images.Handler) images.Handler {
++	return func(f images.Handler) images.Handler {
++		return signatureHandler(f, fetcher, store, false)
+ 	}
+ }
+ 
+@@ -335,12 +349,40 @@ func AppendSignatureHandlerWrapperFromResolver(resolver remotes.Resolver, ref st
+ 			if fetcherErr != nil {
+ 				return nil, fmt.Errorf("create fetcher for dm-verity artifact lookup: %w", fetcherErr)
+ 			}
+-			return signatureHandler(f, fetcher).Handle(ctx, desc)
++			return signatureHandler(f, fetcher, nil, false).Handle(ctx, desc)
+ 		})
+ 	}
+ }
+ 
+-func signatureHandler(f images.Handler, fetcher remotes.Fetcher) images.Handler {
++// AppendCachedSignatureHandlerWrapper restores dm-verity layer annotations
++// from a referrer graph retained by an earlier fetch-only pull. Manifests
++// without DmverityReferrerLabel are left untouched.
++func AppendCachedSignatureHandlerWrapper(store content.Store) func(f images.Handler) images.Handler {
++	return func(f images.Handler) images.Handler {
++		return signatureHandler(f, newCachedContentStoreFetcher(store), store, true)
++	}
++}
++
++// CachedSignatureAnnotations resolves the retained dm-verity bundle for an
++// already-selected image manifest and returns the annotations needed to apply
++// each signed layer. It performs no remote access and leaves unmarked images
++// unchanged.
++func CachedSignatureAnnotations(ctx context.Context, store content.Store, manifest ocispec.Descriptor) (map[digest.Digest]map[string]string, error) {
++	children := AppendCachedSignatureHandlerWrapper(store)(images.ChildrenHandler(store))
++	resolved, err := children.Handle(ctx, manifest)
++	if err != nil {
++		return nil, fmt.Errorf("resolve cached dm-verity annotations: %w", err)
++	}
++	annotations := map[digest.Digest]map[string]string{}
++	for _, child := range resolved {
++		if child.Annotations[TargetLayerSignatureLabel] != "" {
++			annotations[child.Digest] = child.Annotations
++		}
++	}
++	return annotations, nil
++}
++
++func signatureHandler(f images.Handler, fetcher remotes.Fetcher, store content.Store, cachedOnly bool) images.Handler {
+ 	return images.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
+ 		children, err := f.Handle(ctx, desc)
+ 		if err != nil {
+@@ -350,16 +392,36 @@ func signatureHandler(f images.Handler, fetcher remotes.Fetcher) images.Handler
+ 			return children, nil
+ 		}
+ 
+-		signatures, artifacts, err := fetchSignatures(ctx, fetcher, desc.Digest)
++		if cachedOnly {
++			info, err := store.Info(ctx, desc.Digest)
++			if err != nil {
++				return nil, fmt.Errorf("inspect cached image manifest %s: %w", desc.Digest, err)
++			}
++			if info.Labels[DmverityReferrerLabel] == "" {
++				return children, nil
++			}
++		}
++
++		signatures, artifacts, referrer, err := fetchSignatures(ctx, fetcher, desc.Digest)
+ 		if err != nil {
+ 			return nil, err
+ 		}
+ 		if len(signatures) == 0 {
+ 			return children, nil
+ 		}
+-		for _, artifact := range artifacts {
+-			if _, err := f.Handle(ctx, artifact); err != nil {
+-				return nil, fmt.Errorf("fetch precomputed artifact %s: %w", artifact.Digest, err)
++
++		if !cachedOnly && store != nil {
++			if referrer == nil {
++				return nil, fmt.Errorf("dm-verity signatures for %s have no source referrer", desc.Digest)
++			}
++			if err := persistSignatureReferrer(ctx, f, store, desc, *referrer); err != nil {
++				return nil, err
++			}
++		} else if store == nil {
++			for _, artifact := range artifacts {
++				if _, err := f.Handle(ctx, artifact); err != nil {
++					return nil, fmt.Errorf("fetch precomputed artifact %s: %w", artifact.Digest, err)
++				}
+ 			}
+ 		}
+ 
+@@ -405,3 +467,59 @@ func signatureHandler(f images.Handler, fetcher remotes.Fetcher) images.Handler
+ 		return children, nil
+ 	})
+ }
++
++func persistSignatureReferrer(ctx context.Context, handler images.Handler, store content.Store, subject ocispec.Descriptor, referrer referrerWithManifest) error {
++	if _, err := handler.Handle(ctx, referrer.desc); err != nil {
++		return fmt.Errorf("fetch dm-verity referrer manifest %s: %w", referrer.desc.Digest, err)
++	}
++	if err := verifyRetainedContent(ctx, store, referrer.desc); err != nil {
++		return err
++	}
++	children := append([]ocispec.Descriptor(nil), referrer.manifest.Layers...)
++	if referrer.manifest.Config.Digest != "" {
++		children = append([]ocispec.Descriptor{referrer.manifest.Config}, children...)
++	}
++	for _, child := range children {
++		if _, err := handler.Handle(ctx, child); err != nil {
++			return fmt.Errorf("fetch dm-verity referrer content %s: %w", child.Digest, err)
++		}
++		if err := verifyRetainedContent(ctx, store, child); err != nil {
++			return err
++		}
++	}
++	labelChildren := images.SetChildrenLabels(store, images.HandlerFunc(
++		func(context.Context, ocispec.Descriptor) ([]ocispec.Descriptor, error) {
++			return children, nil
++		},
++	))
++	if _, err := labelChildren.Handle(ctx, referrer.desc); err != nil {
++		return fmt.Errorf("retain dm-verity referrer children for %s: %w", referrer.desc.Digest, err)
++	}
++
++	_, err := store.Update(ctx, content.Info{
++		Digest: subject.Digest,
++		Labels: map[string]string{
++			DmverityReferrerLabel: referrer.desc.Digest.String(),
++		},
++	}, "labels."+DmverityReferrerLabel)
++	if err != nil {
++		return fmt.Errorf("retain dm-verity referrer %s for image manifest %s: %w", referrer.desc.Digest, subject.Digest, err)
++	}
++	return nil
++}
++
++func verifyRetainedContent(ctx context.Context, store content.Store, desc ocispec.Descriptor) error {
++	info, err := store.Info(ctx, desc.Digest)
++	if err != nil {
++		return fmt.Errorf("verify retained dm-verity content %s: %w", desc.Digest, err)
++	}
++	if info.Size != desc.Size {
++		return fmt.Errorf(
++			"verify retained dm-verity content %s: descriptor size %d does not match stored size %d",
++			desc.Digest,
++			desc.Size,
++			info.Size,
++		)
++	}
++	return nil
++}
+diff --git a/pkg/snapshotters/signatures_test.go b/pkg/snapshotters/signatures_test.go
+index b8832312d..e0dbb9bb5 100644
+--- a/pkg/snapshotters/signatures_test.go
++++ b/pkg/snapshotters/signatures_test.go
+@@ -23,11 +23,15 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"io"
++	"strings"
+ 	"testing"
+ 	"time"
+ 
++	"github.com/containerd/containerd/v2/core/content"
+ 	"github.com/containerd/containerd/v2/core/images"
+ 	"github.com/containerd/containerd/v2/core/remotes"
++	"github.com/containerd/containerd/v2/plugins/content/local"
++	"github.com/containerd/platforms"
+ 	"github.com/opencontainers/go-digest"
+ 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+ 	"github.com/stretchr/testify/assert"
+@@ -115,7 +119,7 @@ func TestSignatureHandlerPrecomputedBundle(t *testing.T) {
+ 			return nil, nil
+ 		}
+ 	})
+-	children, err := signatureHandler(base, fetcher).Handle(context.Background(), sourceManifest)
++	children, err := signatureHandler(base, fetcher, nil, false).Handle(context.Background(), sourceManifest)
+ 	require.NoError(t, err)
+ 	require.Len(t, children, 3)
+ 	layer := children[1]
+@@ -132,6 +136,197 @@ func TestSignatureHandlerPrecomputedBundle(t *testing.T) {
+ 	assert.ElementsMatch(t, []digest.Digest{erofsDesc.Digest, treeDesc.Digest}, fetched)
+ }
+ 
++func TestSignatureHandlerPersistsBundleForDeferredUnpack(t *testing.T) {
++	ctx := context.Background()
++	configBytes := []byte(`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
++	config := descriptorFor(configBytes, ocispec.MediaTypeImageConfig)
++	layerBytes := []byte("source layer")
++	sourceLayer := descriptorFor(layerBytes, ocispec.MediaTypeImageLayerGzip)
++	sourceManifestBytes, err := json.Marshal(ocispec.Manifest{
++		MediaType: ocispec.MediaTypeImageManifest,
++		Config:    config,
++		Layers:    []ocispec.Descriptor{sourceLayer},
++	})
++	require.NoError(t, err)
++	sourceManifest := descriptorFor(sourceManifestBytes, ocispec.MediaTypeImageManifest)
++	bundle := newPrecomputedBundle(t, sourceManifest, sourceLayer, "selected", "abcd", time.Now().UTC())
++
++	fetcher := &artifactFetcher{
++		blobs: mergeBlobMaps(bundle.blobs, map[digest.Digest][]byte{
++			sourceManifest.Digest: sourceManifestBytes,
++			config.Digest:         configBytes,
++			sourceLayer.Digest:    layerBytes,
++		}),
++		refs: map[digest.Digest][]ocispec.Descriptor{
++			sourceManifest.Digest: {bundle.descriptor},
++		},
++	}
++	cs, err := local.NewLabeledStore(t.TempDir(), newMemoryLabelStore())
++	require.NoError(t, err)
++	base := images.Handlers(
++		remotes.FetchHandler(cs, fetcher),
++		images.SetChildrenLabels(cs, images.ChildrenHandler(cs)),
++	)
++
++	children, err := signatureHandler(base, fetcher, cs, false).Handle(ctx, sourceManifest)
++	require.NoError(t, err)
++	require.Len(t, children, 2)
++	assert.Equal(t, "abcd", children[1].Annotations[TargetLayerRootHashLabel])
++
++	subjectInfo, err := cs.Info(ctx, sourceManifest.Digest)
++	require.NoError(t, err)
++	assert.Equal(t, bundle.descriptor.Digest.String(), subjectInfo.Labels[DmverityReferrerLabel])
++
++	referrerInfo, err := cs.Info(ctx, bundle.descriptor.Digest)
++	require.NoError(t, err)
++	var retained []string
++	for key, value := range referrerInfo.Labels {
++		if strings.HasPrefix(key, "containerd.io/gc.ref.content") {
++			retained = append(retained, value)
++		}
++	}
++	assert.Len(t, retained, 4)
++	for dgst := range bundle.blobs {
++		_, err := cs.Info(ctx, dgst)
++		require.NoError(t, err, "bundle content %s was not persisted", dgst)
++	}
++
++	deferred := AppendCachedSignatureHandlerWrapper(cs)(images.ChildrenHandler(cs))
++	deferredChildren, err := deferred.Handle(ctx, sourceManifest)
++	require.NoError(t, err)
++	require.Len(t, deferredChildren, 2)
++	assert.Equal(t, "abcd", deferredChildren[1].Annotations[TargetLayerRootHashLabel])
++	assert.NotEmpty(t, deferredChildren[1].Annotations[TargetLayerEROFSDescriptorLabel])
++
++	annotations, err := CachedSignatureAnnotations(ctx, cs, sourceManifest)
++	require.NoError(t, err)
++	require.Contains(t, annotations, sourceLayer.Digest)
++	assert.Equal(t, "abcd", annotations[sourceLayer.Digest][TargetLayerRootHashLabel])
++
++	require.NoError(t, content.WriteBlob(ctx, cs, "source config", bytes.NewReader(configBytes), config))
++	require.NoError(t, content.WriteBlob(ctx, cs, "source layer", bytes.NewReader(layerBytes), sourceLayer))
++	otherConfigBytes := []byte(`{"architecture":"arm64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
++	otherConfig := descriptorFor(otherConfigBytes, ocispec.MediaTypeImageConfig)
++	otherLayerBytes := []byte("other source layer")
++	otherLayer := descriptorFor(otherLayerBytes, ocispec.MediaTypeImageLayerGzip)
++	otherManifestBytes, err := json.Marshal(ocispec.Manifest{
++		MediaType: ocispec.MediaTypeImageManifest,
++		Config:    otherConfig,
++		Layers:    []ocispec.Descriptor{otherLayer},
++	})
++	require.NoError(t, err)
++	otherManifest := descriptorFor(otherManifestBytes, ocispec.MediaTypeImageManifest)
++	require.NoError(t, content.WriteBlob(ctx, cs, "other config", bytes.NewReader(otherConfigBytes), otherConfig))
++	require.NoError(t, content.WriteBlob(ctx, cs, "other layer", bytes.NewReader(otherLayerBytes), otherLayer))
++	require.NoError(t, content.WriteBlob(ctx, cs, "other manifest", bytes.NewReader(otherManifestBytes), otherManifest))
++
++	sourceForIndex := sourceManifest
++	sourceForIndex.Platform = &ocispec.Platform{OS: "linux", Architecture: "amd64"}
++	indexBytes, err := json.Marshal(ocispec.Index{
++		MediaType: ocispec.MediaTypeImageIndex,
++		// A platform-less entry precedes the selected manifest. Deferred
++		// reconstruction must use the exact descriptor chosen for unpack.
++		Manifests: []ocispec.Descriptor{otherManifest, sourceForIndex},
++	})
++	require.NoError(t, err)
++	index := descriptorFor(indexBytes, ocispec.MediaTypeImageIndex)
++	require.NoError(t, content.WriteBlob(ctx, cs, "index", bytes.NewReader(indexBytes), index))
++	selected, _, err := images.ManifestWithDescriptor(ctx, cs, index, platforms.Only(ocispec.Platform{
++		OS:           "linux",
++		Architecture: "amd64",
++	}))
++	require.NoError(t, err)
++	assert.Equal(t, sourceManifest.Digest, selected.Digest)
++	indexAnnotations, err := CachedSignatureAnnotations(ctx, cs, selected)
++	require.NoError(t, err)
++	assert.Equal(t, "abcd", indexAnnotations[sourceLayer.Digest][TargetLayerRootHashLabel])
++
++	_, err = cs.Update(ctx, content.Info{
++		Digest: sourceManifest.Digest,
++		Labels: map[string]string{DmverityReferrerLabel: ""},
++	}, "labels."+DmverityReferrerLabel)
++	require.NoError(t, err)
++	unmarkedChildren, err := deferred.Handle(ctx, sourceManifest)
++	require.NoError(t, err)
++	require.Len(t, unmarkedChildren, 2)
++	assert.Empty(t, unmarkedChildren[1].Annotations[TargetLayerSignatureLabel])
++}
++
++func TestPersistSignatureReferrerAllowsOmittedConfig(t *testing.T) {
++	ctx := context.Background()
++	subjectBytes := []byte("subject manifest")
++	subject := descriptorFor(subjectBytes, ocispec.MediaTypeImageManifest)
++	layerBytes := []byte("artifact layer")
++	layer := descriptorFor(layerBytes, LayerSignatureMediaType)
++	manifest := ocispec.Manifest{
++		MediaType:    ocispec.MediaTypeImageManifest,
++		ArtifactType: SignatureArtifactType,
++		Subject:      &subject,
++		Layers:       []ocispec.Descriptor{layer},
++	}
++	manifestBytes, err := json.Marshal(manifest)
++	require.NoError(t, err)
++	referrer := descriptorFor(manifestBytes, ocispec.MediaTypeImageManifest)
++	referrer.ArtifactType = SignatureArtifactType
++
++	fetcher := &artifactFetcher{blobs: map[digest.Digest][]byte{
++		referrer.Digest: manifestBytes,
++		layer.Digest:    layerBytes,
++	}}
++	cs, err := local.NewLabeledStore(t.TempDir(), newMemoryLabelStore())
++	require.NoError(t, err)
++	require.NoError(t, content.WriteBlob(ctx, cs, "subject", bytes.NewReader(subjectBytes), subject))
++
++	err = persistSignatureReferrer(
++		ctx,
++		remotes.FetchHandler(cs, fetcher),
++		cs,
++		subject,
++		referrerWithManifest{desc: referrer, manifest: manifest},
++	)
++	require.NoError(t, err)
++	info, err := cs.Info(ctx, subject.Digest)
++	require.NoError(t, err)
++	assert.Equal(t, referrer.Digest.String(), info.Labels[DmverityReferrerLabel])
++}
++
++func TestPersistSignatureReferrerRejectsMissingArtifactContent(t *testing.T) {
++	ctx := context.Background()
++	subjectBytes := []byte("subject manifest")
++	subject := descriptorFor(subjectBytes, ocispec.MediaTypeImageManifest)
++	layer := descriptorFor([]byte("missing artifact layer"), EROFSArtifactMediaType)
++	manifest := ocispec.Manifest{
++		MediaType:    ocispec.MediaTypeImageManifest,
++		ArtifactType: SignatureArtifactType,
++		Subject:      &subject,
++		Layers:       []ocispec.Descriptor{layer},
++	}
++	manifestBytes, err := json.Marshal(manifest)
++	require.NoError(t, err)
++	referrer := descriptorFor(manifestBytes, ocispec.MediaTypeImageManifest)
++	referrer.ArtifactType = SignatureArtifactType
++
++	cs, err := local.NewLabeledStore(t.TempDir(), newMemoryLabelStore())
++	require.NoError(t, err)
++	require.NoError(t, content.WriteBlob(ctx, cs, "subject", bytes.NewReader(subjectBytes), subject))
++	require.NoError(t, content.WriteBlob(ctx, cs, "referrer", bytes.NewReader(manifestBytes), referrer))
++
++	err = persistSignatureReferrer(
++		ctx,
++		images.HandlerFunc(func(context.Context, ocispec.Descriptor) ([]ocispec.Descriptor, error) {
++			return nil, nil
++		}),
++		cs,
++		subject,
++		referrerWithManifest{desc: referrer, manifest: manifest},
++	)
++	require.Error(t, err)
++	assert.Contains(t, err.Error(), "verify retained dm-verity content")
++	info, err := cs.Info(ctx, subject.Digest)
++	require.NoError(t, err)
++	assert.Empty(t, info.Labels[DmverityReferrerLabel])
++}
++
+ func TestSignatureHandlerRejectsInvalidPrecomputedBundle(t *testing.T) {
+ 	sourceManifest := descriptorFor([]byte("source manifest"), ocispec.MediaTypeImageManifest)
+ 	bundle := ocispec.Manifest{
+@@ -158,7 +353,7 @@ func TestSignatureHandlerRejectsInvalidPrecomputedBundle(t *testing.T) {
+ 	base := images.HandlerFunc(func(context.Context, ocispec.Descriptor) ([]ocispec.Descriptor, error) {
+ 		return nil, nil
+ 	})
+-	_, err = signatureHandler(base, fetcher).Handle(context.Background(), sourceManifest)
++	_, err = signatureHandler(base, fetcher, nil, false).Handle(context.Background(), sourceManifest)
+ 	require.Error(t, err)
+ 	assert.Contains(t, err.Error(), "incomplete precomputed artifacts")
+ }
+@@ -176,11 +371,13 @@ func TestFetchSignaturesSelectsNewestPrecomputedBundle(t *testing.T) {
+ 		},
+ 	}
+ 
+-	signatures, artifacts, err := fetchSignatures(context.Background(), fetcher, sourceManifest.Digest)
++	signatures, artifacts, selected, err := fetchSignatures(context.Background(), fetcher, sourceManifest.Digest)
+ 	require.NoError(t, err)
+ 	require.Contains(t, signatures, sourceLayer.Digest.String())
+ 	assert.Equal(t, "ef01", signatures[sourceLayer.Digest.String()].RootHash)
+ 	assert.ElementsMatch(t, []ocispec.Descriptor{newer.erofs, newer.tree}, artifacts)
++	require.NotNil(t, selected)
++	assert.Equal(t, newer.descriptor.Digest, selected.desc.Digest)
+ }
+ 
+ func TestFetchSignaturesFailsClosedOnInvalidNewestPrecomputedBundle(t *testing.T) {
+@@ -213,7 +410,7 @@ func TestFetchSignaturesFailsClosedOnInvalidNewestPrecomputedBundle(t *testing.T
+ 		},
+ 	}
+ 
+-	_, _, err = fetchSignatures(context.Background(), fetcher, sourceManifest.Digest)
++	_, _, _, err = fetchSignatures(context.Background(), fetcher, sourceManifest.Digest)
+ 	require.Error(t, err)
+ 	assert.Contains(t, err.Error(), invalidDescriptor.Digest.String())
+ 	assert.Contains(t, err.Error(), "incomplete precomputed artifacts")
+@@ -249,11 +446,14 @@ func newPrecomputedBundle(
+ 	treeBytes := []byte("tree-" + name)
+ 	treeDesc := descriptorFor(treeBytes, MerkleTreeArtifactMediaType)
+ 	treeDesc.Annotations = precomputedAnnotations(sourceLayer.Digest.String())
++	configBytes := []byte("{}")
++	configDesc := descriptorFor(configBytes, ocispec.MediaTypeImageConfig)
+ 
+ 	manifest := ocispec.Manifest{
+ 		MediaType:    ocispec.MediaTypeImageManifest,
+ 		ArtifactType: SignatureArtifactType,
+ 		Subject:      &subject,
++		Config:       configDesc,
+ 		Layers:       []ocispec.Descriptor{signatureDesc, erofsDesc, treeDesc},
+ 		Annotations: map[string]string{
+ 			ociAnnotationCreated: createdAt.Format(time.RFC3339),
+@@ -270,6 +470,7 @@ func newPrecomputedBundle(
+ 		tree:       treeDesc,
+ 		blobs: map[digest.Digest][]byte{
+ 			manifestDesc.Digest:  manifestBytes,
++			configDesc.Digest:    configBytes,
+ 			signatureDesc.Digest: signatureBytes,
+ 			erofsDesc.Digest:     erofsBytes,
+ 			treeDesc.Digest:      treeBytes,
+diff --git a/plugins/cri/images/plugin.go b/plugins/cri/images/plugin.go
+index 18c113f5e..f0f356463 100644
+--- a/plugins/cri/images/plugin.go
++++ b/plugins/cri/images/plugin.go
+@@ -65,15 +65,14 @@ func init() {
+ 			}
+ 			mdb := m.(*metadata.DB)
+ 
+-			// Referrer discovery is driven by the differ that will consume the
+-			// artifacts rather than by separate configuration. This pass only
+-			// establishes that a capable differ is loaded; it is narrowed below
+-			// once the pull path, and therefore the applier, is known.
++			// Referrer discovery is derived from both sides of the signed EROFS
++			// path: a differ that consumes the artifacts and an active snapshotter
++			// that mounts the result.
++			dmverityDifferAvailable := false
+ 			for _, p := range ic.Plugins().GetAll() {
+ 				if p.Registration.Type == plugins.DiffPlugin &&
+ 					slices.Contains(p.Meta.Capabilities, plugins.CapabilityDmverityReferrers) {
+-					config.EnableDmverityReferrers = true
+-					log.G(ic.Context).Debugf("enabling dm-verity referrer discovery for differ %q", p.Registration.ID)
++					dmverityDifferAvailable = true
+ 					break
+ 				}
+ 			}
+@@ -105,13 +104,42 @@ func init() {
+ 				criconfig.CheckLocalImagePullConfigs(ic.Context, &config)
+ 			}
+ 
+-			// A capable differ being loaded does not mean it is the one that
+-			// applies layers. The transfer service takes its differ from
+-			// unpack_config, but the local pull path takes it from the diff
+-			// service, whose default order is walking-only. Falling back to
+-			// local pull therefore silently drops dm-verity verification while
+-			// discovery stays on, so bind enforcement to the selected applier.
+-			if config.EnableDmverityReferrers && config.UseLocalImagePull {
++			snapshotters := map[string]struct{}{config.Snapshotter: {}}
++			for _, platform := range config.RuntimePlatforms {
++				name := platform.Snapshotter
++				if name == "" {
++					name = config.Snapshotter
++				}
++				snapshotters[name] = struct{}{}
++			}
++			var dmveritySnapshotter string
++			for name := range snapshotters {
++				if p := ic.Plugins().Get(plugins.SnapshotPlugin, name); p != nil &&
++					slices.Contains(p.Meta.Capabilities, plugins.CapabilityDmverityReferrers) {
++					dmveritySnapshotter = name
++					break
++				}
++			}
++			if dmveritySnapshotter != "" && !dmverityDifferAvailable {
++				return nil, fmt.Errorf(
++					"snapshotter %q enables dm-verity referrers but no capable differ is available",
++					dmveritySnapshotter,
++				)
++			}
++			if dmveritySnapshotter != "" {
++				config.EnableDmverityReferrers = true
++				log.G(ic.Context).Debugf(
++					"enabling dm-verity referrer discovery for snapshotter %q",
++					dmveritySnapshotter,
++				)
++			}
++
++			// Local pulls and first-use unpack after a fetch-only transfer both
++			// apply layers through the diff service. Require its first applier
++			// to consume dm-verity artifacts; a merely loaded capable differ is
++			// insufficient because an earlier walking differ can consume the
++			// layer without verification.
++			if config.EnableDmverityReferrers {
+ 				ds, err := ic.GetByID(plugins.ServicePlugin, services.DiffService)
+ 				if err != nil {
+ 					return nil, fmt.Errorf("dm-verity referrer discovery is enabled but the diff service is unavailable: %w", err)
+@@ -125,18 +153,16 @@ func init() {
+ 				ordered, capable := reporter.DmverityAppliers()
+ 				if len(capable) == 0 {
+ 					return nil, fmt.Errorf(
+-						"dm-verity referrer discovery is enabled but CRI fell back to local image pull, "+
+-							"whose applier chain [%s] cannot consume dm-verity artifacts: layers would be applied "+
+-							"without a dm-verity device. Either keep CRI on the transfer service (remove the "+
+-							"configuration that forced local pull, e.g. disable_snapshot_annotations, registry.mirrors, "+
+-							"registry.configs, max_concurrent_downloads) or add a dm-verity capable differ to "+
++						"dm-verity referrer discovery is enabled but the diff service applier chain [%s] "+
++							"cannot consume dm-verity artifacts during local or deferred unpack; add a "+
++							"dm-verity capable differ to "+
+ 							"[plugins.\"io.containerd.service.v1.diff-service\"] default",
+ 						strings.Join(ordered, ", "))
+ 				}
+ 				if ordered[0] != capable[0] {
+-					log.G(ic.Context).Warnf(
+-						"dm-verity capable differ %q is not first in the diff service order [%s]; "+
+-							"layers may be applied by an earlier differ without dm-verity verification",
++					return nil, fmt.Errorf(
++						"dm-verity capable differ %q must be first in the diff service order [%s] "+
++							"so local and deferred unpack cannot bypass dm-verity verification",
+ 						capable[0], strings.Join(ordered, ", "))
+ 				}
+ 			}
+@@ -147,11 +173,12 @@ func init() {
+ 			}
+ 
+ 			options := &images.CRIImageServiceOptions{
+-				Content:          mdb.ContentStore(),
+-				RuntimePlatforms: map[string]images.ImagePlatform{},
+-				Snapshotters:     map[string]snapshots.Snapshotter{},
+-				ImageFSPaths:     map[string]string{},
+-				Transferrer:      ts.(transfer.Transferrer),
++				Content:                 mdb.ContentStore(),
++				RuntimePlatforms:        map[string]images.ImagePlatform{},
++				Snapshotters:            map[string]snapshots.Snapshotter{},
++				SnapshotterCapabilities: map[string][]string{},
++				ImageFSPaths:            map[string]string{},
++				Transferrer:             ts.(transfer.Transferrer),
+ 			}
+ 
+ 			ctrdCli, err := containerd.New(
+@@ -173,6 +200,9 @@ func init() {
+ 			} else {
+ 				return nil, fmt.Errorf("failed to find snapshotter %q", defaultSnapshotter)
+ 			}
++			if p := ic.Plugins().Get(plugins.SnapshotPlugin, defaultSnapshotter); p != nil {
++				options.SnapshotterCapabilities[defaultSnapshotter] = p.Meta.Capabilities
++			}
+ 
+ 			snapshotRoot := func(snapshotter string) (snapshotRoot string) {
+ 				if plugin := ic.Plugins().Get(plugins.SnapshotPlugin, snapshotter); plugin != nil {
+@@ -198,6 +228,11 @@ func init() {
+ 					options.ImageFSPaths[snapshotter] = snapshotRoot(snapshotter)
+ 					log.L.Infof("Get image filesystem path %q for snapshotter %q", options.ImageFSPaths[snapshotter], snapshotter)
+ 				}
++				if _, ok := options.SnapshotterCapabilities[snapshotter]; !ok {
++					if p := ic.Plugins().Get(plugins.SnapshotPlugin, snapshotter); p != nil {
++						options.SnapshotterCapabilities[snapshotter] = p.Meta.Capabilities
++					}
++				}
+ 
+ 				platform := platforms.DefaultSpec()
+ 				if rp.Platform != "" {
+diff --git a/plugins/services/diff/local.go b/plugins/services/diff/local.go
+index 5d729413e..97a4e31e4 100644
+--- a/plugins/services/diff/local.go
++++ b/plugins/services/diff/local.go
+@@ -20,6 +20,7 @@ import (
+ 	"context"
+ 	"fmt"
+ 	"slices"
++	"strings"
+ 
+ 	diffapi "github.com/containerd/containerd/api/services/diff/v1"
+ 	"github.com/containerd/errdefs"
+@@ -32,7 +33,9 @@ import (
+ 
+ 	"github.com/containerd/containerd/v2/core/diff"
+ 	"github.com/containerd/containerd/v2/core/mount"
++	"github.com/containerd/containerd/v2/internal/erofsutils"
+ 	"github.com/containerd/containerd/v2/pkg/oci"
++	"github.com/containerd/containerd/v2/pkg/snapshotters"
+ 	"github.com/containerd/containerd/v2/plugins"
+ 	"github.com/containerd/containerd/v2/plugins/services"
+ )
+@@ -146,6 +149,9 @@ func (l *local) Apply(ctx context.Context, er *diffapi.ApplyRequest, _ ...grpc.C
+ 	}
+ 	opts = append(opts, diff.WithSyncFs(er.SyncFs))
+ 
++	if err := l.validateDmverityApply(desc, mounts); err != nil {
++		return nil, errgrpc.ToGRPC(err)
++	}
+ 	for _, differ := range l.differs {
+ 		ocidesc, err = differ.Apply(ctx, desc, mounts, opts...)
+ 		if !errdefs.IsNotImplemented(err) {
+@@ -163,6 +169,33 @@ func (l *local) Apply(ctx context.Context, er *diffapi.ApplyRequest, _ ...grpc.C
+ 
+ }
+ 
++func (l *local) validateDmverityApply(desc ocispec.Descriptor, mounts []mount.Mount) error {
++	if desc.Annotations[snapshotters.TargetLayerSignatureLabel] == "" &&
++		desc.Annotations[snapshotters.TargetLayerRootHashLabel] == "" &&
++		desc.Annotations[snapshotters.TargetLayerEROFSDescriptorLabel] == "" &&
++		desc.Annotations[snapshotters.TargetLayerMerkleTreeDescriptorLabel] == "" {
++		return nil
++	}
++	if len(mounts) == 0 {
++		return nil
++	}
++	if _, err := erofsutils.MountsToLayer(mounts); err != nil {
++		if errdefs.IsNotImplemented(err) {
++			return nil
++		}
++		return err
++	}
++	if len(l.orderedNames) == 0 || len(l.dmverityCapable) == 0 ||
++		l.orderedNames[0] != l.dmverityCapable[0] {
++		return fmt.Errorf(
++			"dm-verity layer annotations require a capable first differ; ordered [%s], capable [%s]",
++			strings.Join(l.orderedNames, ", "),
++			strings.Join(l.dmverityCapable, ", "),
++		)
++	}
++	return nil
++}
++
+ func (l *local) Diff(ctx context.Context, dr *diffapi.DiffRequest, _ ...grpc.CallOption) (*diffapi.DiffResponse, error) {
+ 	var (
+ 		ocidesc ocispec.Descriptor
+diff --git a/plugins/services/diff/local_test.go b/plugins/services/diff/local_test.go
+new file mode 100644
+index 000000000..cf6e36977
+--- /dev/null
++++ b/plugins/services/diff/local_test.go
+@@ -0,0 +1,94 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package diff
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/containerd/containerd/v2/core/mount"
++	"github.com/containerd/containerd/v2/pkg/snapshotters"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++func TestValidateDmverityApply(t *testing.T) {
++	layer := t.TempDir()
++	require.NoError(t, os.WriteFile(filepath.Join(layer, ".erofslayer"), nil, 0o600))
++	erofsMounts := []mount.Mount{{Type: "bind", Source: filepath.Join(layer, "layer.erofs")}}
++	signed := ocispec.Descriptor{
++		Annotations: map[string]string{
++			snapshotters.TargetLayerSignatureLabel: "sha256:signature",
++		},
++	}
++
++	tests := []struct {
++		name      string
++		service   local
++		mounts    []mount.Mount
++		wantError bool
++	}{
++		{
++			name:      "no capable differ",
++			service:   local{orderedNames: []string{"walking"}},
++			mounts:    erofsMounts,
++			wantError: true,
++		},
++		{
++			name: "capable differ is not first",
++			service: local{
++				orderedNames:    []string{"walking", "erofs"},
++				dmverityCapable: []string{"erofs"},
++			},
++			mounts:    erofsMounts,
++			wantError: true,
++		},
++		{
++			name: "capable differ is first",
++			service: local{
++				orderedNames:    []string{"erofs", "walking"},
++				dmverityCapable: []string{"erofs"},
++			},
++			mounts: erofsMounts,
++		},
++		{
++			name:      "overlay mount is unaffected",
++			service:   local{orderedNames: []string{"walking"}},
++			mounts:    []mount.Mount{{Type: "overlay", Options: []string{"upperdir=" + t.TempDir()}}},
++			wantError: false,
++		},
++		{
++			name:      "empty mounts are unaffected",
++			service:   local{orderedNames: []string{"walking"}},
++			mounts:    nil,
++			wantError: false,
++		},
++	}
++
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			err := test.service.validateDmverityApply(signed, test.mounts)
++			if test.wantError {
++				assert.Error(t, err)
++				return
++			}
++			assert.NoError(t, err)
++		})
++	}
++}
+diff --git a/plugins/snapshots/erofs/plugin/plugin.go b/plugins/snapshots/erofs/plugin/plugin.go
+index 3a3d35b20..0a610d537 100644
+--- a/plugins/snapshots/erofs/plugin/plugin.go
++++ b/plugins/snapshots/erofs/plugin/plugin.go
+@@ -97,7 +97,14 @@ func init() {
+ 
+ 			ic.Meta.Exports[plugins.SnapshotterRootDir] = root
+ 			ic.Meta.Capabilities = append(ic.Meta.Capabilities, "rebase")
++			if dmverityReferrersEnabled(config.DmverityMode) {
++				ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
++			}
+ 			return erofs.NewSnapshotter(root, opts...)
+ 		},
+ 	})
+ }
++
++func dmverityReferrersEnabled(mode string) bool {
++	return mode == "auto" || mode == "on"
++}
+diff --git a/plugins/snapshots/erofs/plugin/plugin_test.go b/plugins/snapshots/erofs/plugin/plugin_test.go
+new file mode 100644
+index 000000000..1cf4f71fb
+--- /dev/null
++++ b/plugins/snapshots/erofs/plugin/plugin_test.go
+@@ -0,0 +1,38 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package plugin
++
++import "testing"
++
++func TestDmverityReferrersEnabled(t *testing.T) {
++	tests := []struct {
++		mode string
++		want bool
++	}{
++		{mode: "", want: false},
++		{mode: "off", want: false},
++		{mode: "auto", want: true},
++		{mode: "on", want: true},
++	}
++	for _, test := range tests {
++		t.Run(test.mode, func(t *testing.T) {
++			if got := dmverityReferrersEnabled(test.mode); got != test.want {
++				t.Fatalf("dmverityReferrersEnabled(%q) = %v, want %v", test.mode, got, test.want)
++			}
++		})
++	}
++}
+diff --git a/plugins/transfer/plugin.go b/plugins/transfer/plugin.go
+index 2d5e2b690..b2228fb03 100644
+--- a/plugins/transfer/plugin.go
++++ b/plugins/transfer/plugin.go
+@@ -165,12 +165,17 @@ func init() {
+ 					return nil, fmt.Errorf("no matching diff plugins: %w", errdefs.ErrNotFound)
+ 				}
+ 
+-				// Referrer discovery is driven by the differ that will consume
+-				// the artifacts rather than by separate configuration.
++				// Referrer discovery requires both the differ that consumes the
++				// artifacts and a snapshotter that mounts the signed result.
+ 				if dp := ic.Plugins().Get(plugins.DiffPlugin, applierID); dp != nil &&
+-					slices.Contains(dp.Meta.Capabilities, plugins.CapabilityDmverityReferrers) {
++					slices.Contains(dp.Meta.Capabilities, plugins.CapabilityDmverityReferrers) &&
++					slices.Contains(snCapabilities, plugins.CapabilityDmverityReferrers) {
+ 					lc.EnableDmverityReferrers = true
+-					log.G(ic.Context).Debugf("enabling dm-verity referrer discovery for differ %q", applierID)
++					log.G(ic.Context).Debugf(
++						"enabling dm-verity referrer discovery for differ %q and snapshotter %q",
++						applierID,
++						uc.Snapshotter,
++					)
+ 				}
+ 
+ 				// If CheckPlatformSupported is false, we will match all platforms
+diff --git a/plugins/types.go b/plugins/types.go
+index 2bce9765a..fb0c292e5 100644
+--- a/plugins/types.go
++++ b/plugins/types.go
+@@ -109,9 +109,8 @@ const (
+ )
+ 
+ const (
+-	// CapabilityDmverityReferrers is advertised by a diff plugin that consumes
+-	// dm-verity referrer artifacts. Pull implementations use it to decide
+-	// whether referrer discovery is needed, so operators do not have to state
+-	// the same intent in both the differ and the pull configuration.
++	// CapabilityDmverityReferrers is advertised by a differ that consumes
++	// dm-verity referrer artifacts and by a snapshotter that can mount their
++	// signed result. Pull and deferred-unpack paths require both sides.
+ 	CapabilityDmverityReferrers = "dmverity-referrers"
+ )

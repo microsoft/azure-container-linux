@@ -19,6 +19,8 @@ tty=()
 remove=""
 cleanup=""
 mounts=()
+ipe_policy_host_path=""
+ipe_policy_container_path="/tmp/acl-ipe-policy.p7b"
 
 usage() {
     echo "  Usage:"
@@ -78,6 +80,39 @@ while [[ $# -gt 0 ]] ; do
     *) break;;
     esac
 done
+
+ACL_IPE_ASSET_MODE="${ACL_IPE_ASSET_MODE:-disabled}"
+ACL_IPE_POLICY_PATH="${ACL_IPE_POLICY_PATH:-}"
+ACL_IPE_VERITY_SIGNATURE="${ACL_IPE_VERITY_SIGNATURE:-true}"
+case "${ACL_IPE_VERITY_SIGNATURE}" in
+    true|false) ;;
+    *)
+        echo "Invalid ACL_IPE_VERITY_SIGNATURE: ${ACL_IPE_VERITY_SIGNATURE}" >&2
+        exit 1
+        ;;
+esac
+case "${ACL_IPE_ASSET_MODE}" in
+    disabled|ephemeral)
+        if [[ -n "${ACL_IPE_POLICY_PATH}" ]]; then
+            echo "ACL_IPE_POLICY_PATH is only valid with ACL_IPE_ASSET_MODE=external" >&2
+            exit 1
+        fi
+        ;;
+    external)
+        if [[ -n "${ACL_IPE_POLICY_PATH}" && ! -s "${ACL_IPE_POLICY_PATH}" ]]; then
+            echo "External IPE policy artifact is empty or missing: ${ACL_IPE_POLICY_PATH}" >&2
+            exit 1
+        fi
+        if [[ -n "${ACL_IPE_POLICY_PATH}" ]]; then
+            ipe_policy_host_path="$(readlink -f "${ACL_IPE_POLICY_PATH}")"
+            ACL_IPE_POLICY_PATH="${ipe_policy_container_path}"
+        fi
+        ;;
+    *)
+        echo "Invalid ACL_IPE_ASSET_MODE: ${ACL_IPE_ASSET_MODE}" >&2
+        exit 1
+        ;;
+esac
 
 if [[ -n ${custom_image} ]] ; then
     container_image_name=${custom_image}
@@ -160,6 +195,7 @@ if [[ -z ${stat} ]] ; then
         -e IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
         -e IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
         -e EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
+        -e ACL_IPE_VERITY_SIGNATURE="${ACL_IPE_VERITY_SIGNATURE}"
         --name="${name}"
         --hostname="${hostname}"
         --entrypoint /bin/bash
@@ -181,12 +217,32 @@ if [[ ${stat} != "Up" ]] ; then
     call_docker start "${name}"
 fi
 
+# Bind mounts are fixed when a container is created, but run_sdk_container
+# intentionally reuses existing containers. Stream the requested policy into
+# the running container on every invocation so external mode cannot read a
+# missing or stale artifact. docker cp cannot reliably target the /tmp tmpfs.
+case "${ACL_IPE_ASSET_MODE}" in
+    external)
+        if [[ -n "${ipe_policy_host_path:-}" ]]; then
+            call_docker exec -i "${name}" sh -c \
+                'cat > "$1" && chmod 0644 "$1" && test -s "$1"' \
+                sh "${ipe_policy_container_path}" < "${ipe_policy_host_path}"
+        else
+            call_docker exec "${name}" rm -f "${ipe_policy_container_path}"
+        fi
+        ;;
+    disabled|ephemeral)
+        call_docker exec "${name}" rm -f "${ipe_policy_container_path}"
+        ;;
+esac
+
 # Workaround: The SDK expects to be able to write to /etc/hosts
 call_docker exec "${name}" sh -c 'cp /etc/hosts /etc/hosts2; umount /etc/hosts ; mv /etc/hosts2 /etc/hosts'
 
 call_docker exec "${tty[@]}" -i \
     -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" \
-    -e ACL_PERF_TOOLS="${ACL_PERF_TOOLS:-}" \
-    -e ACL_IPE_ENABLE="${ACL_IPE_ENABLE:-}" \
+    -e ACL_IPE_ASSET_MODE="${ACL_IPE_ASSET_MODE}" \
+    -e ACL_IPE_POLICY_PATH="${ACL_IPE_POLICY_PATH}" \
+    -e ACL_IPE_VERITY_SIGNATURE="${ACL_IPE_VERITY_SIGNATURE}" \
     -e ACL_FEATURES="${ACL_FEATURES:-}" \
     "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"

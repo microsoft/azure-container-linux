@@ -177,121 +177,6 @@ is_azure_linux_3() {
 
 # ── SSH / connect helpers ──────────────────────────────────────────
 
-# Every /24 this agent has egressed from, and the RG holding the NSG to edit.
-#
-# These live here rather than in validate_azure.sh because host-side test
-# scripts (run-boot-benchmark.sh and friends) run in their own process and
-# source only this module. Keeping the rule here is what lets them re-assert
-# it; a copy in the azure module would simply be undefined for them, and the
-# re-assert would silently do nothing on the one path that needs it most.
-ACL_SSH_ALLOW_CIDRS=()
-ACL_SSH_NSG_RG=""
-
-# Resolve this agent's current public egress address.
-_current_egress_ip() {
-    local svc egress_ip=""
-    for svc in "https://ifconfig.me/ip" "https://api.ipify.org" "https://icanhazip.com"; do
-        egress_ip=$(curl -fsS --max-time 10 "$svc" 2>/dev/null | tr -d '[:space:]')
-        if [[ "$egress_ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
-            printf '%s' "$egress_ip"
-            return 0
-        fi
-    done
-    return 1
-}
-
-_ssh_allow_cidr_known() {
-    local candidate="$1" known
-    for known in ${ACL_SSH_ALLOW_CIDRS[@]+"${ACL_SSH_ALLOW_CIDRS[@]}"}; do
-        if [[ "$known" == "$candidate" ]]; then
-            return 0
-        fi
-    done
-    return 1
-}
-
-# Idempotent, and safe to call repeatedly mid-suite.
-#
-# Creating the rule once at provisioning time is not enough. The egress NAT
-# pool rotates across /24 boundaries, not just within one -- a run that
-# provisioned from 20.112.84.82 can be reconnecting from a different /24 an
-# hour later, at which point the original allow no longer matches and
-# NRMS-Rule-106 takes over again. That is exactly how build 1179334's boot
-# benchmark lost SSH despite the rule having been created successfully.
-#
-# So accumulate: every CIDR we have ever egressed from stays in the rule. The
-# set is tiny in practice and each entry was genuinely ours.
-reassert_ssh_nsg_allow() {
-    [[ "${VM_TYPE:-}" == "azure" ]] || return 0
-
-    # ACL_SSH_NSG_RG is set at provisioning time, but host-side scripts run in a
-    # fresh process and only have what .vm-state.env gave them.
-    local vm_rg_name="${1:-${ACL_SSH_NSG_RG:-${VM_RG:-}}}"
-    [[ -z "$vm_rg_name" ]] && return 0
-
-    local nsg_name="${VM_NAME}NSG"
-    if ! az network nsg show -g "$vm_rg_name" -n "$nsg_name" &>/dev/null; then
-        warn "NSG ${nsg_name} not found — skipping the NRMS SSH allow rule"
-        return 0
-    fi
-
-    local egress_ip
-    if ! egress_ip=$(_current_egress_ip); then
-        warn "Could not determine this agent's egress IP; skipping the NRMS SSH allow rule."
-        warn "If SSH dies partway through a long suite, NRMS-Rule-106 is the first thing to check."
-        return 0
-    fi
-
-    local egress_cidr="${egress_ip%.*}.0/24"
-
-    # A host-side script starts with an empty set, but the rule itself may
-    # already carry CIDRs written by the provisioning process. Seed from the
-    # live rule first: without this, an update would *replace* the earlier
-    # prefixes rather than widen them, quietly un-allowing a range we still
-    # rotate back into.
-    local action=create existing_prefixes="" prefix
-    if existing_prefixes=$(az network nsg rule show -g "$vm_rg_name" \
-            --nsg-name "$nsg_name" -n "acl-allow-ssh-agent" \
-            --query "sourceAddressPrefixes" -o tsv 2>/dev/null); then
-        action=update
-        for prefix in $(printf '%s' "$existing_prefixes" | tr '\t,' '\n\n'); do
-            if [[ -n "$prefix" ]] && ! _ssh_allow_cidr_known "$prefix"; then
-                ACL_SSH_ALLOW_CIDRS+=("$prefix")
-            fi
-        done
-    fi
-
-    if _ssh_allow_cidr_known "$egress_cidr"; then
-        return 0
-    fi
-    ACL_SSH_ALLOW_CIDRS+=("$egress_cidr")
-
-    if (( ${#ACL_SSH_ALLOW_CIDRS[@]} > 1 )); then
-        info "Egress moved to ${egress_ip}; widening SSH allow to ${#ACL_SSH_ALLOW_CIDRS[@]} CIDRs (${ACL_SSH_ALLOW_CIDRS[*]})..."
-    else
-        info "Adding SSH allow for ${egress_cidr} (egress ${egress_ip}) above NRMS deny rules (priority 100)..."
-    fi
-
-    # Best-effort: a run whose NSG cannot be edited should still get as far as it
-    # can and fail on its own terms, rather than here.
-    if az network nsg rule "$action" \
-            --resource-group "$vm_rg_name" \
-            --nsg-name "$nsg_name" \
-            --name "acl-allow-ssh-agent" \
-            --priority 100 \
-            --direction Inbound \
-            --access Allow \
-            --protocol Tcp \
-            --source-address-prefixes ${ACL_SSH_ALLOW_CIDRS[@]+"${ACL_SSH_ALLOW_CIDRS[@]}"} \
-            --destination-port-ranges 22 \
-            --description "Outranks NRMS-Rule-106 (deny tcp/22 from Internet) so long-running suites keep SSH." \
-            --output none 2>/dev/null; then
-        info "✓ SSH allow rule ${action}d for ${ACL_SSH_ALLOW_CIDRS[*]}"
-    else
-        warn "Could not ${action} the SSH allow rule — continuing without it"
-    fi
-}
-
 wait_for_ssh() {
     local ip="$1"
     local timeout="$2"
@@ -300,25 +185,10 @@ wait_for_ssh() {
     info "Waiting for SSH to become available on $ip (timeout: ${timeout}s)..."
     local start_time=$(date +%s)
     local end_time=$((start_time + timeout))
-    local last_reassert=0
     while [[ $(date +%s) -lt $end_time ]]; do
         if ssh $ssh_opts "${VM_SSH_USER}@${ip}" "echo 'SSH ready'" &>/dev/null; then
             info "SSH connection established!"
             return 0
-        fi
-        # A VM that is merely still booting comes back within the first several
-        # seconds. Past that, the likelier cause is the NSG: NRMS re-hardened it,
-        # or this agent's SNAT egress rotated out of the /24 we allowed at
-        # provisioning time. Re-assert the allow rule with the current address
-        # rather than burning the whole timeout against a closed port.
-        #
-        # No-ops on qemu, and cheap on azure: it only calls into az when the
-        # egress /24 is one we have not already allowed.
-        local waited=$(( $(date +%s) - start_time ))
-        local since_reassert=$(( $(date +%s) - last_reassert ))
-        if (( waited >= 45 && since_reassert >= 60 )); then
-            last_reassert=$(date +%s)
-            reassert_ssh_nsg_allow || true
         fi
         sleep 5
     done
@@ -334,201 +204,6 @@ connect_vm_ssh() {
     ssh $ssh_opts "${VM_SSH_USER}@${ip}"
 }
 
-# ── Host-side VM interaction ───────────────────────────────────────
-#
-# Host-side tests run on the agent and drive an already-provisioned VM over
-# ssh, rather than being copied into the VM and executed there. Rebooting and
-# waiting for the node to come back is the common shape of that work, so it
-# lives here: a test that wants to reboot a VM should not have to own the
-# retry, the liveness proof, or the failure diagnostics.
-
-SSH_OPTS=()
-
-setup_ssh_opts() {
-    SSH_OPTS=(
-        -o StrictHostKeyChecking=no
-        -o UserKnownHostsFile=/dev/null
-        -o BatchMode=yes
-        -o ConnectTimeout=10
-        -i "$VM_SSH_KEY"
-    )
-}
-
-ssh_cmd() {
-    [[ ${#SSH_OPTS[@]} -eq 0 ]] && setup_ssh_opts
-    ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" "$@"
-}
-
-# The kernel boot ID. Changes on every real boot, which is what makes it a
-# usable liveness proof.
-boot_id() { ssh_cmd 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null; }
-
-# Reboot and wait for the boot_id to change.
-#
-# Waiting on SSH alone is not enough: the outgoing sshd can still answer while
-# the machine is shutting down, so a caller that only checked reachability
-# could attribute the previous boot to the new one.
-#
-# Sets REBOOT_WALL_MS to the host-observed duration. Callers that only care
-# that the node came back can ignore it; the boot benchmark needs it because
-# host-side wall clock is the only thing that brackets the segments the guest
-# cannot see -- shutdown, platform firmware, systemd-boot and the UKI stub all
-# run while no guest monotonic clock exists.
-REBOOT_WALL_MS=""
-reboot_and_wait() {
-    local old new t0 t1
-    old=$(boot_id) || { error "Cannot read boot_id — VM unreachable?"; return 1; }
-    info "Rebooting ${VM_NAME} (old boot_id=${old})..."
-    t0=$(date +%s.%N)
-    ssh_cmd "sudo systemctl reboot" || true
-    local deadline=$(( $(date +%s) + VM_SSH_TIMEOUT ))
-    while (( $(date +%s) < deadline )); do
-        new=$(boot_id) && [[ -n "$new" && "$new" != "$old" ]] && {
-            t1=$(date +%s.%N)
-            REBOOT_WALL_MS=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f",(b-a)*1000}')
-            info "Back up (new boot_id=${new}, wall clock ${REBOOT_WALL_MS} ms)"
-            return 0
-        }
-        # The poll interval bounds how much the wall clock overstates the
-        # reboot, so keep it short: that number is only useful as a tight
-        # upper bound.
-        sleep 1
-    done
-    error "VM did not come back within ${VM_SSH_TIMEOUT}s"
-    # A reboot that never completes is the most informative failure a host-side
-    # test can hit: the serial console holds whatever the kernel printed on the
-    # way down or while failing to come up.
-    capture_vm_diagnostics "$VM_IP" "${1:-reboot-hang}"
-    return 1
-}
-
-# ── Diagnostics capture ────────────────────────────────────────────
-
-# Collect whatever record survives of a node that stopped responding.
-#
-# The resource group is deleted at the end of every run, so the Azure serial
-# console is the only place a kernel-level fault is still readable afterwards.
-# Capturing it has to happen here, at the point of failure, not during teardown.
-# Boot diagnostics is enabled at VM create time (validate_azure.sh), so the log
-# is already being recorded — nothing was ever reading it.
-capture_vm_diagnostics() {
-    local ip="$1"
-    local reason="${2:-failure}"
-
-    local diag_dir="${DIAGNOSTICS_DIR:-/tmp}"
-    mkdir -p "$diag_dir"
-    local prefix="${diag_dir}/$(date +%Y%m%d-%H%M%S)-${VM_NAME}-${reason//[^a-zA-Z0-9._-]/_}"
-
-    if [[ -n "${VM_RG:-}" ]] && command -v az >/dev/null 2>&1; then
-        # Check first whether the node is actually down. An unreachable VM that
-        # Azure still reports as running is usually a network-path problem, and
-        # the serial console will show a perfectly healthy boot -- which reads
-        # as "no evidence" unless the power state is stated alongside it.
-        local power_state
-        power_state=$(az vm get-instance-view --resource-group "$VM_RG" --name "$VM_NAME" \
-            --query "instanceView.statuses[?starts_with(code,'PowerState')].code | [0]" \
-            -o tsv 2>/dev/null | tr -d '\r')
-        info "Azure power state: ${power_state:-unknown}"
-
-        if [[ "$power_state" == "PowerState/running" ]]; then
-            warn "The VM is still running — this is a connectivity failure, not a dead node."
-            # The guest agent rides a different path than SSH, so it usually
-            # still answers when the NSG has closed port 22.
-            # NRMS-Rule-106 (deny tcp/22 from Internet) is injected into every
-            # NSG by an Azure Policy a few minutes after the resource group is
-            # created, and it outranks the default-allow-ssh that az vm create
-            # writes at priority 1000. It only ever bites suites long enough to
-            # still be running when the policy lands.
-            local nsg_name="${VM_NAME}NSG"
-            az network nsg rule list --resource-group "$VM_RG" --nsg-name "$nsg_name" \
-                --query "sort_by([].{priority:priority,name:name,access:access,direction:direction,protocol:protocol,source:sourceAddressPrefix,ports:destinationPortRanges},&priority)" \
-                -o json >"${prefix}-nsg-rules.json" 2>/dev/null || true
-            local ssh_deny
-            ssh_deny=$(az network nsg rule list --resource-group "$VM_RG" --nsg-name "$nsg_name" \
-                --query "[?access=='Deny' && direction=='Inbound' && contains(to_string(destinationPortRanges),'22')].name" \
-                -o tsv 2>/dev/null | tr -d '\r' | tr '\n' ' ')
-            if [[ -n "$ssh_deny" ]]; then
-                error "NSG ${nsg_name} denies inbound tcp/22 via: ${ssh_deny}"
-                error "SSH was blocked by policy, not by anything this test did."
-            fi
-            # az run-command caps its reply at ~4KB and keeps the tail, and IPE
-            # audit lines are long enough to blow that budget on their own. Put
-            # the noisy kernel log first and filtered, so the compact summary is
-            # what survives if anything gets cut.
-            info "Collecting guest state via the Azure guest agent..."
-            az vm run-command invoke --resource-group "$VM_RG" --name "$VM_NAME" \
-                --command-id RunShellScript \
-                --scripts 'dmesg | grep -iE "error|fail|panic|oom-kill|blocked for more than" | tail -15; echo "--- summary ---"; uptime; free -m; df -h /; echo "dm devices: $(dmsetup ls 2>/dev/null | wc -l), loop: $(losetup -a 2>/dev/null | wc -l)"; systemctl is-system-running; systemctl list-units --state=failed --no-pager --no-legend' \
-                --query 'value[0].message' -o tsv >"${prefix}-guest-state.log" 2>/dev/null || true
-            if [[ -s "${prefix}-guest-state.log" ]]; then
-                info "Guest state captured to ${prefix}-guest-state.log"
-            fi
-        fi
-
-        info "Capturing Azure instance view and serial console..."
-        az vm get-instance-view --resource-group "$VM_RG" --name "$VM_NAME" \
-            --query 'instanceView.{statuses:statuses,vmAgent:vmAgent.statuses}' \
-            -o json >"${prefix}-instance-view.json" 2>&1 || true
-        # The boot log comes back as a JSON string and needs unescaping. `jq`
-        # is not guaranteed on every agent, and silently losing the log to a
-        # missing dependency would defeat the point of collecting it, so fall
-        # back through python3 to the raw bytes.
-        local raw="${prefix}-serial.raw"
-        az vm boot-diagnostics get-boot-log \
-            --resource-group "$VM_RG" --name "$VM_NAME" >"$raw" 2>/dev/null || true
-        if command -v jq >/dev/null 2>&1 && jq -r . <"$raw" >"${prefix}-serial.log" 2>/dev/null; then
-            :
-        elif command -v python3 >/dev/null 2>&1 && python3 -c 'import json,sys
-d = sys.stdin.read()
-try:
-    sys.stdout.write(json.loads(d))
-except Exception:
-    sys.stdout.write(d)' <"$raw" >"${prefix}-serial.log" 2>/dev/null; then
-            :
-        else
-            cp "$raw" "${prefix}-serial.log" 2>/dev/null || true
-        fi
-        rm -f "$raw"
-
-        if [[ -s "${prefix}-serial.log" ]]; then
-            info "Serial log: ${prefix}-serial.log ($(wc -c <"${prefix}-serial.log") bytes)"
-            # Surface the fault directly in the pipeline log — the artifact
-            # is easy to miss and this is the whole reason we collected it.
-            if grep -qiE 'kernel panic|BUG:|Oops:|general protection fault|Call Trace:|out of memory|oom-kill' \
-                 "${prefix}-serial.log"; then
-                error "Serial console contains a kernel fault:"
-                grep -iE -B 5 -A 30 \
-                    'kernel panic|BUG:|Oops:|general protection fault|Call Trace:|out of memory|oom-kill' \
-                    "${prefix}-serial.log" | sed 's/^/  [serial] /' | head -80 || true
-            else
-                info "No kernel fault matched; last 100 serial lines:"
-                tail -100 "${prefix}-serial.log" | sed 's/^/  [serial] /' || true
-            fi
-        else
-            warn "Serial console log was empty or unavailable"
-        fi
-    fi
-
-    # A node that answers again rebooted rather than hung, which means the
-    # fault is in the *previous* boot's kernel log.
-    local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    ssh_opts+=" -o ConnectTimeout=15 -o BatchMode=yes -i $VM_SSH_KEY"
-    if ssh $ssh_opts "${VM_SSH_USER}@${ip}" true 2>/dev/null; then
-        warn "Node is reachable again — it rebooted rather than hung"
-        ssh $ssh_opts "${VM_SSH_USER}@${ip}" \
-            "sudo journalctl -k -b -1 --no-pager 2>/dev/null | tail -300" \
-            >"${prefix}-prevboot-kernel.log" 2>&1 || true
-        if [[ -s "${prefix}-prevboot-kernel.log" ]]; then
-            info "Previous-boot kernel log, last 60 lines:"
-            tail -60 "${prefix}-prevboot-kernel.log" | sed 's/^/  [prevboot] /' || true
-        fi
-    else
-        warn "Node is still unreachable — it hung or is powered off"
-    fi
-
-    info "Diagnostics written with prefix ${prefix}"
-}
-
 # ── Script execution (SSH) ─────────────────────────────────────────
 
 run_scripts_on_vm() {
@@ -537,28 +212,8 @@ run_scripts_on_vm() {
     local scripts=("$@")
     local failed=0
 
-    # Benchmarks run for minutes at a time with no output. Without keepalives
-    # an idle NAT/firewall timeout looks identical to a dead node, and ssh
-    # blocks indefinitely against a hung one. 15s x 8 fails after ~2m of silence.
     local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
-    ssh_opts+=" -o ServerAliveInterval=15 -o ServerAliveCountMax=8"
     ssh_opts+=" -i $VM_SSH_KEY"
-
-    # Test knobs set on the agent do not otherwise reach the guest: the script is
-    # copied over and run through sudo, which builds a fresh environment. Without
-    # this, every CRITEST_* override is silently ignored and the run quietly
-    # measures the defaults instead of what it was asked to measure.
-    #
-    # An explicit prefix whitelist rather than the whole environment, because on a
-    # pipeline agent that also holds service-connection secrets, and this ships
-    # them to a throwaway VM. printf %q quotes each value for the remote bash, so
-    # a value containing spaces (an image set is a space-separated list) survives.
-    local remote_env="" _v
-    for _v in $(compgen -v 2>/dev/null | grep -E '^(CRITEST_|ACL_PERF_)' | sort -u); do
-        [[ -n "${!_v+x}" ]] || continue
-        remote_env+="$(printf '%s=%q ' "$_v" "${!_v}")"
-    done
-    [[ -n "$remote_env" ]] && remote_env="env ${remote_env}"
 
     for script in "${scripts[@]}"; do
         if [[ -f "$script" ]]; then
@@ -571,18 +226,8 @@ run_scripts_on_vm() {
                 failed=1
                 continue
             fi
-            local rc=0
-            ssh $ssh_opts "${VM_SSH_USER}@${ip}" "chmod +x ${remote_script} && sudo ${remote_env}${remote_script}" || rc=$?
-            if [[ $rc -ne 0 ]]; then
-                error "Script failed: $script (exit ${rc})"
-                # 255 is ssh's own code for a connection that failed or was
-                # closed, as distinct from a non-zero exit of the script itself.
-                # A node that drops mid-run leaves no other trace once the
-                # resource group is deleted, so collect evidence right here.
-                if [[ $rc -eq 255 ]]; then
-                    error "SSH connection lost — node died or hung, not a test failure"
-                    capture_vm_diagnostics "$ip" "$(basename "$script")"
-                fi
+            if ! ssh $ssh_opts "${VM_SSH_USER}@${ip}" "chmod +x ${remote_script} && sudo ${remote_script}"; then
+                error "Script failed: $script"
                 SCRIPT_RESULTS_NAMES+=("$script")
                 SCRIPT_RESULTS_STATUS+=(1)
                 failed=1
@@ -1289,7 +934,12 @@ validate_main() {
             local host_failed=0
             for script in "${RUN_HOST_SCRIPTS[@]}"; do
                 info "Running host script: $script"
-                local host_args=("--vm-type=${VM_TYPE}" "--ssh-user=${VM_SSH_USER}")
+                local host_args=(
+                    "--vm-type=${VM_TYPE}"
+                    "--ssh-user=${VM_SSH_USER}"
+                    "--ssh-timeout=${VM_SSH_TIMEOUT}"
+                    "--boot-timeout=${VM_BOOT_TIMEOUT}"
+                )
                 [[ -n "${VM_SSH_KEY:-}" ]] && host_args+=("--ssh-key=${VM_SSH_KEY}")
                 if SCRIPT_DIR="${SCRIPT_DIR}" bash "$script" "${host_args[@]}"; then
                     info "Host script completed: $script"

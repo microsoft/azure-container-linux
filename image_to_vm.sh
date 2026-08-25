@@ -142,16 +142,16 @@ run_fs_hook
 # output directory so _write_qemu_uefi_secure_conf() can enroll it in the OVMF
 # Secure Boot db.
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]; then
-    sign_uki_args=(
-        "${VM_TMP_ROOT}/boot"
-        "$(_dst_dir)"
-    )
-    if [[ "${ACL_IPE_ENABLE:-}" == "1" ]]; then
-        sign_uki_args+=(
-            "${BUILD_LIBRARY_DIR}/rpm/additional_files/ipe/acl-ipe-boot-policy.pol"
-        )
+    ipe_policy="${VM_TMP_ROOT}/usr/lib/ipe/acl.pol.p7b"
+    ipe_cert_dir="${FLAGS_from}/acl-ipe-ephemeral"
+    signing_args=("${VM_TMP_ROOT}/boot" "$(_dst_dir)")
+    if [[ -s "${ipe_policy}" ]]; then
+        # Reuse the per-build certificate used to sign the detached /usr
+        # root-hash signature (and the policy in ephemeral mode). Detect this
+        # from the source image so later conversions cannot use a new key.
+        signing_args+=("${ipe_cert_dir}")
     fi
-    "${BUILD_LIBRARY_DIR}/rpm/sign_uki_ephemeral.sh" "${sign_uki_args[@]}"
+    "${BUILD_LIBRARY_DIR}/rpm/sign_uki_ephemeral.sh" "${signing_args[@]}"
 fi
 
 # Changes done, glue it together

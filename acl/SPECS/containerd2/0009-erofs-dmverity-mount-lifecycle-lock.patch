@@ -8,8 +8,8 @@ which a device could be removed after another container had already verified it
 but before that container had mounted it.
 
 The kernel refuses DM_DEV_REMOVE with EBUSY while a filesystem holds the mapper
-open, so a device with live mounts was never at risk. The exposure is the
-moment the open count reaches zero:
+open, so a device with live mounts was never at risk. The exposure is the moment
+the open count reaches zero:
 
   container A: mount.Unmount(path)      -- open count drops to 0
   container B: os.Stat(/dev/mapper/...) -- present
@@ -24,9 +24,9 @@ B's failure surfaces as
   dm-verity device "containerd-erofs-N" verification failed
 
 which reads as an integrity violation but is a device that was removed out from
-under a caller that was still setting it up. Reproduced on a burst of 10
-concurrent containers sharing one image (1 failure in 10); 20 sequential starts
-of the same image never hit it.
+under a caller still setting it up. Reproduced on a burst of 10 concurrent
+containers sharing one image (1 failure in 10); 20 sequential starts of the same
+image never hit it.
 
 Widening the guarded section to include the mount(2) closes the window. Once B
 holds the lock, A's removal either has not started -- B then finds the device
@@ -45,12 +45,14 @@ holds it until the mount is complete. Go mutexes are not reentrant, so
 reinstating the inner Lock would deadlock every dm-verity mount on the node. The
 added test pins that contract by calling the helper with the lock already held.
 
+Acl-Patch-Group: acl-dmverity-mount-lock
+
 diff --git a/plugins/mount/erofs/plugin_linux.go b/plugins/mount/erofs/plugin_linux.go
-index 63dd67ca4..04b6ba5cb 100644
+index 1939d1361..fef721d41 100644
 --- a/plugins/mount/erofs/plugin_linux.go
 +++ b/plugins/mount/erofs/plugin_linux.go
-@@ -50,8 +50,9 @@ func NewErofsMountHandler() mount.Handler {
- 	return &erofsMountHandler{}
+@@ -58,8 +58,9 @@ func NewErofsMountHandler(sharedLayerContext string) mount.Handler {
+ 	return &erofsMountHandler{sharedLayerContext: sharedLayerContext}
  }
  
 -// dmverityOpenMu serializes the "does this device already exist?" check and the
@@ -61,7 +63,7 @@ index 63dd67ca4..04b6ba5cb 100644
  //
  // Device-mapper names are derived from the snapshot ID, so two concurrent mounts
  // of the same layer -- routine when several pods start from one image -- can both
-@@ -59,10 +60,39 @@ func NewErofsMountHandler() mount.Handler {
+@@ -67,10 +68,39 @@ func NewErofsMountHandler(sharedLayerContext string) mount.Handler {
  // DM_DEV_CREATE fails because the name is taken, and its cleanup then removes the
  // winner's device out from under a live mount.
  //
@@ -105,7 +107,7 @@ index 63dd67ca4..04b6ba5cb 100644
  
  // selinuxContextOpt is the superblock-wide SELinux mount option. Unlike
  // defcontext=/rootcontext=, it labels the whole superblock, so every mount of a
-@@ -129,10 +159,11 @@ func sharedLayerMountOptions(opts []string, selinuxEnabled bool) []string {
+@@ -143,10 +173,11 @@ func sharedLayerMountOptions(opts []string, selinuxEnabled bool, sharedLayerCont
  
  // openOrReuseDmverityDevice returns the /dev/mapper path for a layer, creating
  // the device if it does not already exist and validating it if it does.
@@ -120,7 +122,7 @@ index 63dd67ca4..04b6ba5cb 100644
  	devicePath := dmverity.DevicePath(deviceName)
  	if _, err := os.Stat(devicePath); !os.IsNotExist(err) {
  		// Device-mapper names are host-global while snapshot IDs are only
-@@ -226,6 +257,12 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+@@ -240,6 +271,12 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
  	if metadata != nil {
  		log.G(ctx).WithField("source", m.Source).Debug("detected dm-verity metadata, setting up dm-verity device")
  
@@ -131,9 +133,9 @@ index 63dd67ca4..04b6ba5cb 100644
 +		defer dmverityLifecycleMu.Unlock()
 +
  		supported, err := dmverity.IsSupported()
- 		if err != nil || !supported {
- 			return mount.ActiveMount{}, fmt.Errorf("layer requires dm-verity but system doesn't support it (dm_verity module not loaded): %w", err)
-@@ -340,11 +377,25 @@ func (h *erofsMountHandler) Unmount(ctx context.Context, path string) error {
+ 		if err != nil {
+ 			return mount.ActiveMount{}, fmt.Errorf("layer %q requires dm-verity but support could not be determined: %w", m.Source, err)
+@@ -357,11 +394,25 @@ func (h *erofsMountHandler) Unmount(ctx context.Context, path string) error {
  	err = mount.Unmount(path, 0)
  
  	if deviceName != "" {
@@ -160,7 +162,7 @@ index 63dd67ca4..04b6ba5cb 100644
  			log.G(ctx).WithError(closeErr).WithField("device", deviceName).Debug("unable to close dm-verity device")
  		} else {
 diff --git a/plugins/mount/erofs/plugin_linux_test.go b/plugins/mount/erofs/plugin_linux_test.go
-index 0da9e3637..71dd20852 100644
+index c0cc94685..46d98a64f 100644
 --- a/plugins/mount/erofs/plugin_linux_test.go
 +++ b/plugins/mount/erofs/plugin_linux_test.go
 @@ -17,8 +17,14 @@
