@@ -4,11 +4,12 @@
     "containerd-acl-config.toml": "1fe27aa9bf963a8c7164d5ffd951568c9ec43df3ba2e5edb6306e83d92eeb635",
     "containerd-acl-erofs-config.toml": "d0b26c8f90a34ad4153cf713000900c31f95ae6923225b0c08dfdfe970af0559",
     "containerd-acl-erofs-runtime.toml": "5fc15467d148997350b97e27cb4a1b278e82a3482a5781cb1fb306f69a4db2b8",
-    "containerd-acl-erofs.toml": "9e4e149cb6aaa655628bb950a8bfe70dab3e9a4dc8ff1b80627662c529d346b3",
-    "containerd-acl-profile.conf": "9d33eb571553abd9bfb9fdeedf1e1ab3674b84b80d0a52c567c92c461a8ddef1",
+    "containerd-acl-erofs.toml": "56deb521a574359f0223a85c0264e2426c9d95ad9f0d455ffb9b44e9c575e147",
+    "containerd-acl-profile.conf": "8e923ff365f1a7ebd5d06dda366954fa2019c784b4635b509c2d6c3c1c67aa6a",
     "containerd-acl-select-profile": "5c880f1465b6e24bd561552d9d3cb72b8f729fae3388e510ef63974d75f59dd7",
     "containerd-acl-tmpfiles.conf": "f9386581986308508a05505b7c5fd32b6029d7abfeabc1d4111ecb10f8dc7bd9",
     "containerd.toml": "96067ccd8789a24bb0b1c99fcd2e344b75a36032ed55563edf15ff9257249616",
-    "containerd.service": "a07bfcf412669b06673190b0779f48e652c9adcf1758289e849a00802804eec8"
+    "containerd.service": "a07bfcf412669b06673190b0779f48e652c9adcf1758289e849a00802804eec8",
+    "mcr-mirror-hosts.toml": "f524d903c4c2e883719f21d98872bcefff15ba207427d311bdc71410f659f3f0"
   }
 }

@@ -6,6 +6,16 @@
 # snapshotter selection remains separate in acl-erofs-runtime.toml.
 version = 2
 
+# Keep the registry root to a single directory on this mirror-test branch.
+# Local CRI pulls split path lists, but transfer-service pulls pass config_path
+# through as one HostDir; the normal colon-separated default would therefore
+# miss the packaged mcr.microsoft.com/hosts.toml and silently use MCR.
+[plugins."io.containerd.grpc.v1.cri".registry]
+  config_path = "/etc/containerd/certs.d"
+
+[plugins."io.containerd.cri.v1.images".registry]
+  config_path = "/etc/containerd/certs.d"
+
 # Explicitly opt this profile into dm-verity referrer handling. The snapshotter
 # still uses permissive "auto" mount policy: verify layers with a .dmverity
 # sidecar and mount ordinary EROFS layers plainly. An unset mode has the same

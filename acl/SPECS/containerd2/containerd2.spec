@@ -21,17 +21,14 @@ Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 # Tracks the AzureLinux 3.0-dev containerd2 baseline at Version 2.2.4.
 Version: 2.2.4
-# Release "6000.verity" distinguishes this dadelan fork build from any
-# future official AzureLinux containerd2-2.2.4-N release (which start at
-# Release: 1, 2, ...). The 6xxx range succeeds the prior 5xxx steamboat
-# RPM stream and the 4xxx 2.2.0-patch-based / 3xxx fork-tarball builds.
-# The ".verity" suffix marks the dm-verity erofs snapshotter patch set
-# (Patch8-16 of PATCHES.md). No .commit_hash tag since the upstream is an
-# immutable release tag.
+# This test branch carries the complete 6022.verity tar-index patch stack but
+# uses the isolated 9000.mirrortest release band so its forced MCR mirror cannot
+# collide with the PR-ready 6xxx package stream. No .commit_hash tag is needed
+# because the upstream release tag is immutable.
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 6022.verity%{?dist}
+Release: 9004.mirrortest%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -63,6 +60,8 @@ Source7: containerd-acl-erofs-runtime.toml
 Source8: containerd-acl-erofs-config.toml
 # Atomically selects the overlayfs-capability or EROFS runtime root at startup.
 Source9: containerd-acl-select-profile
+# Test-only MCR mirror used by the dm-verity AKS validation branch.
+Source10: mcr-mirror-hosts.toml
 
 # ============================================================================
 # Patches
@@ -234,6 +233,10 @@ install -D -p -m 0644 %{SOURCE7} %{buildroot}%{_datadir}/containerd2/acl-erofs-r
 install -D -p -m 0644 %{SOURCE8} %{buildroot}%{_datadir}/containerd2/acl-erofs-config.toml
 install -D -p -m 0755 %{SOURCE9} %{buildroot}%{_libexecdir}/containerd2/acl-select-profile
 
+# The ACL image bake preserves /usr but drops package-owned /etc content.
+# 90-acl-profile.conf copies this file into /etc before containerd starts.
+install -D -p -m 0644 %{SOURCE10} %{buildroot}%{_datadir}/containerd2/certs.d/mcr.microsoft.com/hosts.toml
+
 %post
 %systemd_post containerd.service
 
@@ -265,13 +268,24 @@ fi
 %{_datadir}/containerd2/acl-erofs-runtime.toml
 %{_datadir}/containerd2/acl-erofs-config.toml
 %{_libexecdir}/containerd2/acl-select-profile
+%{_datadir}/containerd2/certs.d/mcr.microsoft.com/hosts.toml
 %{_prefix}/lib/systemd/system/containerd.service.d/90-acl-profile.conf
 %{_prefix}/lib/tmpfiles.d/10-containerd-acl.conf
 %dir %{_datadir}/containerd2
+%dir %{_datadir}/containerd2/certs.d
+%dir %{_datadir}/containerd2/certs.d/mcr.microsoft.com
 %dir %{_libexecdir}/containerd2
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Thu Aug 27 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9004.mirrortest
+- Carry the complete 6022.verity signed tar-index stack in the isolated mirror
+  package used by the AgentBaker performance prototype.
+- Route MCR pulls, resolves, and OCI referrer discovery through the isolated
+  aks-managed-repository-tar-index namespace with no unsigned-upstream fallback.
+- Restore the packaged hosts.toml before every containerd start and use one
+  explicit CRI registry root so transfer-service pulls cannot bypass it.
+
 * Wed Aug 26 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6022.verity
 - Patch16: replace full precomputed EROFS blobs with compact signed tar indexes
   and reconstruct each verified data device from the OCI tar stream.
