@@ -26,12 +26,12 @@ Version: 2.2.4
 # Release: 1, 2, ...). The 6xxx range succeeds the prior 5xxx steamboat
 # RPM stream and the 4xxx 2.2.0-patch-based / 3xxx fork-tarball builds.
 # The ".verity" suffix marks the dm-verity erofs snapshotter patch set
-# (Patch8-15 of PATCHES.md). No .commit_hash tag since the upstream is an
+# (Patch8-16 of PATCHES.md). No .commit_hash tag since the upstream is an
 # immutable release tag.
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 6021.verity%{?dist}
+Release: 6022.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -91,6 +91,9 @@ Source9: containerd-acl-select-profile
 #           non-capable unpack paths, including overlayfs, then reconstruct it
 #           during deferred first-use EROFS unpack. Capability and applier
 #           checks fail closed before signed EROFS layers reach a walking differ.
+# Patch16:  Replace full precomputed EROFS blobs with signed tar indexes and
+#           Merkle trees. Reconstruct the exact EROFS data device from the
+#           decompressed OCI tar stream and verify it before use.
 #           See PATCHES.md for the author/commit provenance.
 # ============================================================================
 
@@ -122,6 +125,8 @@ Patch14: 0010-erofs-test-pass-default-shared-layer-context.patch
 # Preserve signed referrers for AgentBaker's fetch-only and overlayfs cache
 # paths, then reconstruct them when the image is unpacked into EROFS.
 Patch15: 0011-erofs-retain-referrers-for-deferred-unpack.patch
+# Replacement-only signed EROFS tar-index wire format.
+Patch16: 0012-erofs-use-signed-tar-index-referrers.patch
 
 %{?systemd_requires}
 
@@ -267,6 +272,14 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Wed Aug 26 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6022.verity
+- Patch16: replace full precomputed EROFS blobs with compact signed tar indexes
+  and reconstruct each verified data device from the OCI tar stream.
+- Fail closed on malformed matching bundles and enforce the 512-byte dm-verity
+  block contract required by EROFS tar-index filesystems.
+- Complete Patch15's transfer-plugin capability advertisement so AgentBaker can
+  detect when fetch-only dm-verity referrer retention is active.
+
 * Mon Aug 24 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6021.verity
 - Keep overlayfs active while IPE is off, but load EROFS/dm-verity and both
   transfer unpack combinations so VHD baking can retain signed referrers.

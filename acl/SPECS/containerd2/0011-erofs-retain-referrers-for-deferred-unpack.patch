@@ -1,15 +1,19 @@
 From: Dallas Delaney <dadelan@microsoft.com>
 Subject: [PATCH] erofs: retain dm-verity artifacts for deferred unpack
 
-Squash of three commits on the ACL containerd branch:
+Squash of four commits on the ACL containerd branch:
 
   e670c411f  feat: retain dm-verity artifacts for deferred unpack
   636e3078a  transfer: retain dm-verity refs across overlay unpack
   b90e6ec66  test(transfer): cover overlay referrer retention
+  3f2b140ed  transfer: advertise dm-verity referrer retention
 
 Fetch-only and non-capable overlayfs unpack paths retain and GC-root the selected graph for deferred EROFS reconstruction. Immediate capable EROFS unpack remains transient to avoid unnecessary retained duplication.
 
 Generic and CRI first-use unpack reconstruct annotations locally, and tests pin disabled, fetch-only, overlayfs-retained, and immediate modes.
+
+The local transfer plugin advertises retention only when its merged unpack
+configuration selects both a capable differ and snapshotter.
 
 Acl-Patch-Group: acl-dmverity-deferred-unpack
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
@@ -1714,10 +1718,10 @@ index 000000000..1cf4f71fb
 +	}
 +}
 diff --git a/plugins/transfer/plugin.go b/plugins/transfer/plugin.go
-index 2d5e2b690..b2228fb03 100644
+index 2d5e2b690..366575f33 100644
 --- a/plugins/transfer/plugin.go
 +++ b/plugins/transfer/plugin.go
-@@ -165,12 +165,17 @@ func init() {
+@@ -165,12 +165,20 @@ func init() {
  					return nil, fmt.Errorf("no matching diff plugins: %w", errdefs.ErrNotFound)
  				}
  
@@ -1729,6 +1733,9 @@ index 2d5e2b690..b2228fb03 100644
 -					slices.Contains(dp.Meta.Capabilities, plugins.CapabilityDmverityReferrers) {
 +					slices.Contains(dp.Meta.Capabilities, plugins.CapabilityDmverityReferrers) &&
 +					slices.Contains(snCapabilities, plugins.CapabilityDmverityReferrers) {
++					if !lc.EnableDmverityReferrers {
++						ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
++					}
  					lc.EnableDmverityReferrers = true
 -					log.G(ic.Context).Debugf("enabling dm-verity referrer discovery for differ %q", applierID)
 +					log.G(ic.Context).Debugf(

@@ -1,6 +1,6 @@
 # containerd2 patch series
 
-Reference for the 15-patch series in the active spec. Engineering rationale,
+Reference for the 16-patch series in the active spec. Engineering rationale,
 history, and triage notes live here so the `.spec` stays terse.
 
 ## Layout
@@ -8,7 +8,7 @@ history, and triage notes live here so the `.spec` stays terse.
 | # in spec | Origin | Purpose |
 |-----------|--------|---------|
 | Patch0-7  | AzureLinux 3.0-dev baseline | 8 carry-patches verbatim from microsoft/azurelinux@origin/3.0-dev:SPECS/containerd2 at commit 5a4864f9 (containerd2-2.2.4-2). |
-| Patch8    | dm-verity baseline | Upstream `add-signature-support` (aadagarwal). Split off by author so it can be dropped once it merges into azurelinux, leaving Patch9-15 unchanged. |
+| Patch8    | dm-verity baseline | Upstream `add-signature-support` (aadagarwal). Split off by author so it can be dropped once it merges into azurelinux, leaving Patch9-16 unchanged. |
 | Patch9    | ACL integration | Derives referrer discovery and snapshotter-side formatting from the erofs differ's capability, and adds the ACL entry points. Leaves Patch8's defaults untouched. |
 | Patch10   | precomputed artifacts | Consumes signed precomputed EROFS/Merkle bundles and selects the newest. |
 | Patch11   | EROFS SELinux sharing | Makes every consumer of an EROFS layer request one synthesised `context=`, so a layer can be mounted by more than one container. Independent of dm-verity; touches only upstream code. |
@@ -16,6 +16,7 @@ history, and triage notes live here so the `.spec` stays terse.
 | Patch13   | dm-verity mount lock  | Widens the dm-verity mutex from "guard the create" to "guard the mount lifecycle", closing a window in which a mapper could be removed between another container's verify and its `mount(2)`. |
 | Patch14   | test compatibility | Updates the existing dm-verity snapshot test for Patch12's mount-handler constructor argument so the RPM `%check` phase compiles. No runtime behavior changes. |
 | Patch15   | deferred signed unpack | Retains the selected signed EROFS referrer graph for fetch-only and non-capable unpack paths, including overlayfs, and reconstructs it during first-use EROFS unpack with fail-closed applier enforcement. |
+| Patch16   | signed tar-index replacement | Replaces full precomputed EROFS blobs with compact signed tar indexes and Merkle trees, then reconstructs and verifies the EROFS data device from the OCI tar stream. |
 
 ## Source of truth
 
@@ -40,21 +41,29 @@ v2.2.4  193637f7ee8ae5f5aa5248f49e7baa3e6164966e   ( == %define commit_hash )
           ├─ a1d272319  test(erofs): pass default shared layer context
           ├─ e670c411f  feat: retain dm-verity artifacts for deferred unpack
           ├─ 636e3078a  transfer: retain dm-verity refs across overlay unpack
-          └─ b90e6ec66  test(transfer): cover overlay referrer retention
+          ├─ b90e6ec66  test(transfer): cover overlay referrer retention
+          └─ 3f2b140ed  transfer: advertise dm-verity referrer retention
+              └─ 20fcf6669  erofs: consume signed dm-verity tar indexes
 ```
 
-The SHAs above are informational; the **trailers** are what the export commands
-below actually resolve, so a rebase does not invalidate the procedure. The tag
-does matter, and it has gone stale once: until 2026-08-04 `acl/platform-v2.2.4`
-still pointed at `2a27bae8a` from before a branch regeneration, which was no
-longer an ancestor of the branch, so the documented procedure would have
-exported the wrong Patch8-10. If you rewrite the branch, **move the tag**, then
-re-run the export and confirm the committed patch files come back unchanged.
+Patch0-15 live on `dadelan/acl-erofs`. Patch16 is the exact child commit
+`20fcf6669` on the isolated `dadelan/erofs-tar-index-prototype` branch. The
+earlier SHAs are informational; their **trailers** are what the grouped export
+commands below resolve, so a rebase does not invalidate the procedure. Patch16
+is intentionally pinned by exact SHA while it remains an isolated replacement
+prototype.
+
+The platform tag does matter, and it has gone stale once: until 2026-08-04
+`acl/platform-v2.2.4` still pointed at `2a27bae8a` from before a branch
+regeneration, which was no longer an ancestor of the branch, so the documented
+procedure would have exported the wrong Patch8-10. If you rewrite the branch,
+**move the tag**, then re-run the export and confirm the committed patch files
+come back unchanged.
 
 Grouped ACL commits carry an `Acl-Patch-Group:` trailer naming the patch file
 they belong to. Patch12 is pinned by exact SHA. Patch15 begins with the original
 ungrouped deferred-unpack commit and ends at the last
-`acl-dmverity-deferred-unpack` commit, so its source range includes all three
+`acl-dmverity-deferred-unpack` commit, so its source range includes all four
 reviewable commits while the spec keeps one cohesive patch.
 
 | Group trailer | Commits | Patch file |
@@ -65,7 +74,8 @@ reviewable commits while the spec keeps one cohesive patch.
 | *(ungrouped exact commit)* | `6e9236725` | Patch12 |
 | `acl-dmverity-mount-lock` | `88f2a85a6` | Patch13 |
 | `acl-dmverity-test-fix` | `a1d272319` | Patch14 |
-| `acl-dmverity-deferred-unpack` (plus predecessor) | `e670c411f`, `636e3078a`, `b90e6ec66` | Patch15 |
+| `acl-dmverity-deferred-unpack` (plus predecessor) | `e670c411f`, `636e3078a`, `b90e6ec66`, `3f2b140ed` | Patch15 |
+| *(isolated exact commit)* | `20fcf6669` | Patch16 |
 
 containerd does **not** inspect IPE policy. Layer signatures are passed to the
 kernel whenever they are present and the feature is enabled; the kernel alone
@@ -101,7 +111,7 @@ Split **by author** along the clean commit boundary
 
 The split is deliberately along the author boundary (not by feature) so that
 when `add-signature-support` lands in azurelinux upstream, **Patch8 is simply
-dropped and Patch9-15 apply unchanged** on top of the upstream base. Feature
+dropped and Patch9-16 apply unchanged** on top of the upstream base. Feature
 grouping is applied *within* the ACL patches, where it does not fight this.
 
 Patch8 covers: dm-verity layer formatting, OCI referrer signing, per-layer
@@ -366,6 +376,30 @@ valid and IPE remains the enforcement authority. The generic diff service also
 requires the capable EROFS differ to be first for an annotated EROFS mount;
 ordinary overlay mounts continue to fall through to walking unchanged.
 
+## Patch16 — replace full EROFS blobs with signed tar indexes
+
+Patch16 replaces Patch10's full precomputed EROFS payload with a compact
+replacement-only artifact containing one EROFS tar index, Merkle tree, and
+PKCS#7 root-hash signature per source layer. The differ reconstructs the exact
+data device as:
+
+```
+[512-byte-aligned EROFS tar index][decompressed OCI tar][zero padding to 4096]
+```
+
+The OCI tar alone remains the diffID input. The EROFS UUID binds the index to
+the source-layer digest, and dm-verity covers the complete padded device with
+SHA-256, 512-byte data and hash blocks, and the fixed 32-byte zero salt. The
+512-byte block size is required because `mkfs.erofs --tar=i` emits a filesystem
+with 512-byte logical blocks; a 4096-byte dm-verity mapping verifies but cannot
+be mounted by EROFS.
+
+Discovery treats every referrer using the replacement artifact type as
+authoritative. Before selecting the newest bundle, containerd validates every
+matching manifest, signature/root hash, artifact descriptor, and exact source
+layer coverage. Any malformed matching bundle fails the pull rather than
+downgrading to the older full-EROFS format.
+
 ## Regeneration procedure
 
 Patches are **exported from commits**, not diffed between hand-built trees:
@@ -381,6 +415,7 @@ APPLIER=$(git rev-parse 6e9236725198aabe6479e73a4fa0fb93d062d437)
 LOCK=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-mount-lock')
 TESTFIX=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-test-fix')
 DEFERRED=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-deferred-unpack')
+TARINDEX=$(git rev-parse 20fcf666959f20ff85029905febd23b59d9beb3f)
 
 git diff $BASE   $AADHAR  # -> Patch8   (prepend the From:/Subject: header)
 git diff $AADHAR $INT     # -> Patch9
@@ -390,12 +425,14 @@ git diff $SEL    $APPLIER # -> Patch12
 git diff $APPLIER $LOCK   # -> Patch13
 git diff $LOCK   $TESTFIX # -> Patch14
 git diff $TESTFIX $DEFERRED # -> Patch15 (prepend the documented squash header)
+git format-patch -1 --stdout --no-signature $TARINDEX # -> Patch16
 ```
 
 Grouped boundaries are the **last** commit carrying their group trailer, so the
 groups must stay contiguous and in patch order on the branch. Patch12 and
-Patch15's original `e670c411f` commit remain fixed points in the series;
-Patch15's grouped boundary must descend from that original commit.
+Patch15's original `e670c411f` commit and Patch16's `20fcf6669` commit remain
+fixed points in the series; Patch15's grouped boundary must descend from its
+original commit, and Patch16 must remain an immediate child of that boundary.
 
 Each exported file keeps a `From:`/`Subject:` header plus a body listing the
 commits it squashes, so a reviewer can always get back to the individual
@@ -407,9 +444,10 @@ commits. `patch -p1` ignores the header, exactly as it does for a
 Run all five after regenerating. The first is the one that matters most: it is
 what proves the patch files and the branch have not diverged.
 
-1. **Tree equality.** Apply Patch0-15 to the pristine `Source0` tarball with
-   `patch -p1 --fuzz=0` (what `%autosetup -p1` does) and `diff -r` the result
-   against a worktree at `dadelan/acl-erofs`. Must be **identical**.
+1. **Tree equality.** Apply Patch0-16 to the pristine `Source0` tarball with
+   `patch -p1 --fuzz=0 --no-backup-if-mismatch` (what `%autosetup -p1` does)
+   and `diff -r` the result against a worktree at exact commit `20fcf6669`
+   (`dadelan/erofs-tar-index-prototype`). Must be **identical**.
 2. **Cross-compile.** `GOOS=linux`, `GOOS=windows`, and `GOOS=darwin`
    `go build ./...` must all pass. `plugins/snapshots/erofs/erofs.go` carries
    no build constraint, so Linux-only symbols referenced from it break the
