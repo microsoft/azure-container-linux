@@ -66,18 +66,6 @@ sysexts:
     mode: embedded
     packages:
       - app-containers/containerd
-      # Provides EROFS/dm-verity capability. Subpackages are not pulled in
-      # implicitly by the catalog mapping above, so this must be listed
-      # explicitly or runtime IPE selection cannot use EROFS.
-      #
-      # The image build enables this feature when ACL_EROFS_ENABLE=1 or when
-      # IPE assets are present. ACL_EROFS_ENABLE=1 additionally emits the
-      # erofs-static feature, which keeps EROFS selected without an active IPE
-      # policy for the existing perf-matrix arm. With only the erofs feature,
-      # containerd bakes on overlayfs and selects EROFS at boot after IPE is
-      # active.
-      - name: containerd2-erofs
-        feature: erofs
 
  # --- scenario-specific sysexts -----------------------------------------
   - name: docker
