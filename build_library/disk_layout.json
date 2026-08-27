@@ -33,6 +33,7 @@
         "fs_compression":"zstd",
         "mount":"/usr",
         "verity_hash":"4",
+        "legacy_verity_offset":true,
         "features": ["prioritize", "verity"]
       },
       "4":{
@@ -47,7 +48,8 @@
         "type":"flatcar-rootfs",
         "blocks":"2097152",
         "fs_blocks":"262144",
-        "verity_hash":"6"
+        "verity_hash":"6",
+        "legacy_verity_offset":true
       },
       "6":{
         "label":"HASH-B",

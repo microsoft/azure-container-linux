@@ -218,13 +218,30 @@ create_prod_tar() {
   local container="${BUILD_DIR}/flatcar-container.tar.gz"
   local lodev="$(sudo losetup --find --show -r -P "${image}")"
   local lodevbase="$(basename "${lodev}")"
-  sudo mkdir -p "/mnt/${lodevbase}p9"
-  sudo mount "${lodev}p9" "/mnt/${lodevbase}p9"
-  sudo mount "${lodev}p3" "/mnt/${lodevbase}p9/usr"
-  sudo tar --xattrs -czpf "${container}" -C "/mnt/${lodevbase}p9" .
-  sudo umount "/mnt/${lodevbase}p9/usr"
-  sudo umount "/mnt/${lodevbase}p9"
-  sudo rmdir "/mnt/${lodevbase}p9"
+  local mountpoint="/mnt/${lodevbase}-root"
+
+  # Resolve ROOT and USR-A by GPT partition label rather than a hardcoded
+  # partition number, since disk_layout.json layouts can renumber
+  # partitions (e.g. ROOT moving from p9 to p11).
+  local partdev rootdev usrdev
+  for partdev in "${lodev}"p*; do
+    case "$(sudo blkid -o value -s PARTLABEL "${partdev}" 2>/dev/null)" in
+      ROOT) rootdev="${partdev}" ;;
+      USR-A) usrdev="${partdev}" ;;
+    esac
+  done
+  if [[ -z "${rootdev}" || -z "${usrdev}" ]]; then
+    sudo losetup --detach "${lodev}"
+    die_notrace "create_prod_tar: could not resolve ROOT/USR-A partitions on ${lodev}"
+  fi
+
+  sudo mkdir -p "${mountpoint}"
+  sudo mount "${rootdev}" "${mountpoint}"
+  sudo mount "${usrdev}" "${mountpoint}/usr"
+  sudo tar --xattrs -czpf "${container}" -C "${mountpoint}" .
+  sudo umount "${mountpoint}/usr"
+  sudo umount "${mountpoint}"
+  sudo rmdir "${mountpoint}"
   sudo losetup --detach "${lodev}"
 }
 
