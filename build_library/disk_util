@@ -84,7 +84,7 @@ def LoadPartitionConfig(options):
       '_comment', 'type', 'num', 'label', 'blocks', 'block_size', 'fs_blocks',
       'fs_block_size', 'fs_type', 'features', 'uuid', 'part_alignment', 'mount',
       'binds', 'fs_subvolume', 'fs_bytes_per_inode', 'fs_inode_size', 'fs_label',
-      'fs_compression', 'verity_hash'))
+      'fs_compression', 'verity_hash', 'legacy_verity_offset'))
   integer_layout_keys = set((
       'blocks', 'block_size', 'fs_blocks', 'fs_block_size', 'part_alignment',
       'fs_bytes_per_inode', 'fs_inode_size'))
@@ -824,6 +824,12 @@ def Verity(options):
   active USR slot (the one with 'prioritize') is formatted, so the
   inactive slot is skipped naturally.
 
+  A partition with both a verity_hash cross-reference and
+  legacy_verity_offset set to true gets the hash tree written to *both*
+  locations (dedicated partition + inline within the data partition), so
+  boot paths that only know the legacy inline offset keep working
+  unmodified alongside consumers that expect a dedicated hash partition.
+
   Args:
     options: Flags passed to the script
   """
@@ -875,21 +881,45 @@ def Verity(options):
 
     with contextlib.ExitStack() as loops:
       data_loop = loops.enter_context(PartitionLoop(options, part))
-      verity_cmd = ['veritysetup', 'format', '--hash=sha256',
-                    '--data-block-size', part['fs_block_size'],
-                    '--hash-block-size', part['fs_block_size'],
-                    '--data-blocks', part['fs_blocks']]
+      base_cmd = ['veritysetup', 'format', '--hash=sha256',
+                  '--data-block-size', part['fs_block_size'],
+                  '--hash-block-size', part['fs_block_size'],
+                  '--data-blocks', part['fs_blocks']]
       if hash_part:
         # Separate hash partition mode: write hash tree to a dedicated partition.
         hash_loop = loops.enter_context(PartitionLoop(options, hash_part))
       else:
         # Legacy inline mode: hash tree appended within the same partition.
         hash_loop = data_loop
-        verity_cmd += ['--hash-offset', part['fs_bytes']]
-      verity_cmd += [data_loop, hash_loop]
+        base_cmd = base_cmd + ['--hash-offset', part['fs_bytes']]
+
+      # Use an explicit salt (rather than veritysetup's random default) so
+      # that if we also need to write a second, legacy-inline copy of the
+      # hash tree below, both writes are byte-identical and produce the
+      # same root hash.
+      salt = os.urandom(32).hex()
+      verity_cmd = base_cmd + ['--salt', salt, data_loop, hash_loop]
 
       verityout = SudoOutput(verity_cmd).decode('utf8')
       print(verityout.strip())
+
+      if hash_part and part.get('legacy_verity_offset'):
+        # Also write an identical copy of the hash tree inline, appended
+        # after the filesystem within the data partition itself, for boot
+        # paths (e.g. Portage/bootengine) that don't yet know how to
+        # locate a separate hash partition.
+        legacy_cmd = base_cmd + ['--salt', salt, '--hash-offset',
+                                  part['fs_bytes'], data_loop, data_loop]
+        legacy_out = SudoOutput(legacy_cmd).decode('utf8')
+        m_legacy = re.search(r'Root hash:\s+([a-f0-9]{64})$', legacy_out,
+                              re.IGNORECASE | re.MULTILINE)
+        m_primary = re.search(r'Root hash:\s+([a-f0-9]{64})$', verityout,
+                               re.IGNORECASE | re.MULTILINE)
+        if not m_legacy or not m_primary or \
+            m_legacy.group(1) != m_primary.group(1):
+          raise Exception(
+              "Legacy inline verity hash does not match dedicated-partition "
+              "verity hash for partition %r" % part_num)
 
       # Read the filesystem UUID from the data partition for cmdline use.
       if options.fs_uuid:
