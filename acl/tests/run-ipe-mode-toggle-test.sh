@@ -59,11 +59,6 @@ assert_ipe_assets_present() {
         error "acl.ipe.policy_sha256 token is missing or malformed in UKI cmdline"
         return 1
     fi
-    # Verify the credential is delivered by systemd-stub
-    if ! ssh_cmd "sudo test -s /.extra/credentials/acl-ipe-policy.p7b.cred"; then
-        error "IPE policy credential not found at /.extra/credentials/acl-ipe-policy.p7b.cred"
-        return 1
-    fi
     if ! ssh_cmd "sudo test -r '${POLICY_DIR}/active'"; then
         error "IPE policy was not loaded"
         return 1

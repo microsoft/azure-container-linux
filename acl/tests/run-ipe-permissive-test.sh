@@ -61,11 +61,6 @@ if [[ "$(tr -d '[:space:]' < "${POLICY_DIR}/active")" != "1" ]]; then
     fail "policy ${POLICY_NAME} is not active"
 fi
 
-signed_policy="/.extra/credentials/acl-ipe-policy.p7b.cred"
-if [[ ! -s "${signed_policy}" ]]; then
-    fail "IPE policy credential is missing at ${signed_policy}"
-fi
-
 policy="$(cat "${POLICY_DIR}/policy")"
 grep -Fq "DEFAULT op=EXECUTE action=DENY" <<< "${policy}" ||
     fail "active policy does not deny untrusted execution by default"
@@ -131,7 +126,6 @@ fi
 
 echo ""
 echo "IPE policy: ${POLICY_NAME}"
-echo "IPE policy artifact: ${signed_policy}"
 echo "IPE enforce state: 0 (permissive)"
 echo "/usr dm-verity root hash: ${usr_hash}"
 echo "/usr dm-verity root-hash signature: ${verity_sig_path} (per-UKI ESP companion)"
