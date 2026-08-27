@@ -27,7 +27,8 @@ a narrowly scoped policy extension.
 
 ## Supported workload domains
 
-The compiled ACL container policy contains five workload process domains:
+The compiled ACL `selinux-policy-2.20250213-10` container policy contains five
+workload process domains:
 
 | Domain | Policy engine scope | MCS constrained | Intended use |
 | --- | --- | --- | --- |
@@ -158,7 +159,7 @@ This table summarizes SELinux policy intent, not every individual permission.
 | Read types carrying `logfile` | ❌ No | ✅ Yes | ❌ No | ⚠️ Unconfined on stock ACL |
 | Read and map persistent systemd journals | ❌ No | ✅ Yes | ❌ No | ⚠️ Unconfined on stock ACL |
 | Read auditd-managed `auditd_log_t` files | ❌ No | ✅ Yes | ❌ No | ⚠️ Unconfined on stock ACL |
-| KVM-specific policy | ❌ No | ❌ No | ✅ Yes | ⚠️ Broad system access for `spc_t` |
+| KVM-specific policy | ❌ No | ❌ No | ✅ Yes | ❌ No — broad privileged access instead |
 | Privileged-container policy class | ❌ No | ❌ No | ❌ No | ✅ Yes |
 | SELinux-unconfined on stock ACL | ❌ No | ❌ No | ❌ No | ✅ Yes |
 
@@ -175,6 +176,10 @@ kind: Pod
 metadata:
   name: host-log-reader
 spec:
+  securityContext:
+    # ACL assigns GID 190 to the systemd-journal group.
+    supplementalGroups:
+      - 190
   containers:
     - name: collector
       image: <collector-image>
@@ -194,8 +199,8 @@ spec:
 
 Kubernetes type selection requires the container runtime's CRI SELinux support
 to be enabled. ACL's embedded containerd configuration sets
-`enable_selinux = true`; this setting is not implied for other AKS node OS
-images. Verify the effective setting on a node with:
+`enable_selinux = true`. Do not assume the same default on other node OS
+images; verify the effective setting on any node with:
 
 ```bash
 crictl --runtime-endpoint unix:///run/containerd/containerd.sock info \
@@ -213,9 +218,19 @@ When SELinux options omit an explicit level, containerd allocates a new MCS
 level for that container instead of inheriting the sandbox label. In a
 multi-container pod, independent type-only overrides can therefore prevent
 containers from sharing MCS-constrained IPC, sockets, processes, or relabeled
-volumes. Use a supported admission or runtime mechanism that assigns one
-unique per-pod level to the sandbox and every participating container. Do not
-reuse one static level across pods.
+volumes.
+
+Kubernetes has no built-in field that both generates a unique per-pod level
+and overrides the type. ACL does not ship an allocator for this case, so use a
+single-container pod for `container_logreader_t` and run other workloads in
+separate pods.
+
+An advanced multi-container deployment requires a mutating admission webhook
+that assigns the same level to the sandbox and every participating container.
+Its allocator must be coordinated with containerd on every node, such as by
+using a disjoint reserved category range, so it cannot select a level already
+assigned to another container. Do not reuse one static level across pods;
+doing so collapses MCS isolation between them.
 
 ## MCS isolation
 
@@ -258,9 +273,9 @@ ACL does not ship or support the corresponding runtime. Their presence in the
 compiled policy is not a product support statement.
 
 The shipped container runtime contexts file also contains an
-`init_process` entry naming `container_init_t`. The current compiled ACL
-policy does not define that type, so it is not an available workload domain
-and must not be selected.
+`init_process` entry naming `container_init_t`. The compiled
+`selinux-policy-2.20250213-10` ACL policy does not define that type, so it is
+not an available workload domain and must not be selected.
 
 ### File and object types
 
@@ -307,8 +322,12 @@ journalctl --file='/host/var/log/journal/*/system.journal' -n 5
 ```
 
 The context should report `container_logreader_t`, and the journal read should
-succeed when the collector image includes `journalctl`. A write attempt to a
-host log should fail.
+succeed when the collector image includes `journalctl` and the process passes
+discretionary access control on the journal files. ACL journal files are
+`root:systemd-journal` mode `0640`; the example grants the container the
+corresponding host GID 190 through `supplementalGroups`. If a read fails with
+`EACCES` while the host shows no related AVC, the cause is DAC rather than
+SELinux. A write attempt to a host log should fail.
 
 Stock ACL creates `/var/log/audit` but does not run auditd, so the directory is
 normally empty. Hosts that add auditd should treat access to its files as
