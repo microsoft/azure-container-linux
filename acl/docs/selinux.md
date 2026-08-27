@@ -1,9 +1,11 @@
 # SELinux Container Domains
 
-Azure Container Linux (ACL) runs SELinux in enforcing mode. Container
-workloads use SELinux domains to limit their access to the host and to other
-containers. The container runtime selects a domain and allocates an MCS
-category set for each workload.
+Azure Container Linux (ACL) enables SELinux in enforcing mode by default.
+Operators can configure a node to use permissive mode for troubleshooting;
+use `getenforce` to verify its current mode. Container workloads use SELinux
+domains to limit their access to the host and to other containers. The
+container runtime selects a domain and allocates an MCS category set for each
+workload.
 
 ## Workload domains
 
