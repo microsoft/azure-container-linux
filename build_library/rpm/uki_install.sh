@@ -58,12 +58,10 @@ case "${FLAGS_target}" in
         ;;
 esac
 
-# The IPE policy is signed before dm-verity sealing and installed on /usr.
-# systemd-stub transports the matching root-hash signature from the UKI's
-# hash-addressed .extra.d companion into the initramfs at boot. The same
-# certificate signs the UKI and root hash for development images and is
-# enrolled in the test VM's UEFI db. In ephemeral policy mode it also signs
-# the policy; external mode never requires the policy signing key.
+# systemd-stub transports the IPE policy and root-hash signatures from the
+# UKI's .extra.d companion directory into the initramfs at boot. Build-time
+# images use one ephemeral certificate for the UKI and both credentials.
+# Definition 5425 replaces all three signatures for external-mode images.
 IPE_VERITY_SIG_SOURCE=""
 IPE_VERITY_SIG_PATH=""
 
@@ -233,6 +231,24 @@ OSREL
         fi
     fi
 
+    # Bind the policy credential to the signed UKI command line.
+    local ipe_policy_cred=""
+    local ipe_policy_hash_token=""
+    if [[ "${IPE_CAPABLE}" == "true" ]]; then
+        local staged_cred
+        staged_cred="$(readlink -f "$(dirname "${FLAGS_disk_image}")")/acl-ipe-policy/acl-ipe-policy.p7b.cred"
+        [[ -s "${staged_cred}" ]] ||
+            die "UKI/RPM: staged IPE policy candidate not found at ${staged_cred}"
+        local policy_sha256
+        policy_sha256="$(sha256sum "${staged_cred}" | cut -d' ' -f1)"
+        policy_sha256="${policy_sha256,,}"
+        [[ "${policy_sha256}" =~ ^[0-9a-f]{64}$ ]] ||
+            die "UKI/RPM: invalid SHA-256 of staged IPE policy"
+        ipe_policy_cred="${staged_cred}"
+        ipe_policy_hash_token="acl.ipe.policy_sha256=${policy_sha256}"
+        info "UKI/RPM: IPE policy SHA-256 = ${policy_sha256}"
+    fi
+
     local cmdline=""
     if [[ ${FLAGS_verity} -eq ${FLAGS_TRUE} ]]; then
         local verity_usr_options="hash-offset=${verity_hash_offset},panic-on-corruption"
@@ -250,9 +266,9 @@ OSREL
     # Common base args — platform-agnostic, same for all image types.
     cmdline+=" root=LABEL=ROOT rootflags=rw"
     cmdline+=" consoleblank=0"
-    # IPE activation is intentionally absent from the signed command line.
-    # The initramfs loader leaves the policy inactive unless Azure IMDS requests
-    # permissive mode for this boot.
+    if [[ -n "${ipe_policy_hash_token}" ]]; then
+        cmdline+=" ${ipe_policy_hash_token}"
+    fi
     # NOTE: crashkernel=256M is delivered via a UKI addon (kdump.addon.efi)
     # rather than baked into the main UKI cmdline.  This allows disabling
     # kdump by removing the addon from the ESP without rebuilding the UKI.
@@ -366,6 +382,14 @@ OSREL
         sudo rm -f "${signature_dir}"/verity-usr-*.p7s.cred
         sudo cp "${IPE_VERITY_SIG_SOURCE}" "${signature_dir}/"
         info "UKI/RPM: Installed /usr root-hash signature companion → EFI/Linux/${uki_name}.extra.d/$(basename "${IPE_VERITY_SIG_SOURCE}")"
+    fi
+
+    local cred_dir="${ESP_DIR}/EFI/Linux/${uki_name}.extra.d"
+    sudo rm -f "${cred_dir}"/acl-ipe-policy*.cred
+    if [[ -n "${ipe_policy_cred}" ]]; then
+        sudo mkdir -p "${cred_dir}"
+        sudo cp "${ipe_policy_cred}" "${cred_dir}/acl-ipe-policy.p7b.cred"
+        info "UKI/RPM: Installed IPE policy credential → EFI/Linux/${uki_name}.extra.d/acl-ipe-policy.p7b.cred"
     fi
 
     sudo mkdir -p "${ESP_DIR}/loader"

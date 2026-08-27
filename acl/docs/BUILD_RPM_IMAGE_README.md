@@ -162,20 +162,25 @@ PKCS#7 policy signature:
 ./acl/build_rpm_image.sh --rebuild --ipe-asset-mode=ephemeral
 ```
 
-Production builds can consume an externally signed attached DER PKCS#7
-artifact. The artifact is mounted read-only into the SDK container, verified,
-and accepted only when its extracted content exactly matches
-`build_library/rpm/additional_files/ipe/acl-ipe-boot-policy.pol`:
+Production IPE validation builds use `--ipe-asset-mode=external`; normal
+production pipeline defaults remain `disabled` until activation is approved.
+The build creates a build-local ephemeral candidate CMS so pre-publish VHDs
+remain bootable; the Pipelines collector exports the staged raw policy from
+`${BUILD_DIR}/acl-ipe-policy/` for external signing by definition 5425.
 
 ```bash
-./acl/build_rpm_image.sh --rebuild \
-  --ipe-asset-mode=external \
-  --ipe-policy-path=/secure/input/acl.pol.p7b
+./acl/build_rpm_image.sh --rebuild --ipe-asset-mode=external
 ```
 
-External mode never falls back to ephemeral policy signing and does not need
-the policy signing private key. The build still creates a separate ephemeral
-key for development Secure Boot and the dm-verity root-hash companion.
+The candidate CMS is staged at
+`${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred` and installed as a
+per-UKI `.extra.d` credential companion. The UKI cmdline includes an
+`acl.ipe.policy_sha256=<hash>` token that binds the credential to the signed
+kernel command line. At boot, the initramfs loader validates the credential
+SHA-256, loads the policy into the kernel IPE subsystem, and only activates it
+when Azure IMDS requests permissive mode. Loading is best effort on Azure;
+validation or loading failures are logged and leave IPE inactive without
+blocking boot.
 
 IPE-capable VM images currently support only the Azure Secure Boot UKI path.
 QEMU image conversion must use `--ipe-asset-mode=disabled`, which is also the

@@ -36,7 +36,6 @@
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
 #   --help                               Show this help message
 #   --ipe-asset-mode=MODE                IPE assets: disabled|ephemeral|external (default: disabled)
-#   --ipe-policy-path=PATH               Attached DER PKCS#7 policy artifact (required when building external mode)
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
@@ -180,7 +179,6 @@ if [[ -v ACL_IPE_ASSET_MODE ]]; then
     IPE_ASSET_MODE_OVERRIDE_SET=true
 fi
 ACL_IPE_ASSET_MODE="${ACL_IPE_ASSET_MODE:-disabled}"
-ACL_IPE_POLICY_PATH="${ACL_IPE_POLICY_PATH:-}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
@@ -263,39 +261,19 @@ configure_ipe_asset_mode() {
     case "${ACL_IPE_ASSET_MODE}" in
         disabled)
             ACL_IPE_CAPABLE=false
-            if [[ -n "${ACL_IPE_POLICY_PATH}" ]]; then
-                error "ACL_IPE_POLICY_PATH is only valid with ACL_IPE_ASSET_MODE=external"
-                return 1
-            fi
             ;;
         ephemeral)
             ACL_IPE_CAPABLE=true
-            if [[ -n "${ACL_IPE_POLICY_PATH}" ]]; then
-                error "ACL_IPE_POLICY_PATH is only valid with ACL_IPE_ASSET_MODE=external"
-                return 1
-            fi
             ;;
         external)
             ACL_IPE_CAPABLE=true
-            if [[ "${BUILD_IMAGE}" == "true" && -z "${ACL_IPE_POLICY_PATH}" ]]; then
-                error "External IPE asset mode requires --ipe-policy-path when building an image"
-                return 1
-            fi
-            if [[ -n "${ACL_IPE_POLICY_PATH}" &&
-                (! -f "${ACL_IPE_POLICY_PATH}" || ! -s "${ACL_IPE_POLICY_PATH}") ]]; then
-                error "External IPE policy artifact does not exist or is empty: ${ACL_IPE_POLICY_PATH}"
-                return 1
-            fi
-            if [[ -n "${ACL_IPE_POLICY_PATH}" ]]; then
-                ACL_IPE_POLICY_PATH="$(readlink -f "${ACL_IPE_POLICY_PATH}")"
-            fi
             ;;
         *)
             error "Invalid IPE asset mode: ${ACL_IPE_ASSET_MODE} (expected disabled, ephemeral, or external)"
             return 1
             ;;
     esac
-    export ACL_IPE_ASSET_MODE ACL_IPE_CAPABLE ACL_IPE_POLICY_PATH
+    export ACL_IPE_ASSET_MODE ACL_IPE_CAPABLE
 }
 
 load_artifact_ipe_asset_mode() {
@@ -381,14 +359,6 @@ parse_args() {
             --ipe-asset-mode)
                 ACL_IPE_ASSET_MODE="$2"
                 IPE_ASSET_MODE_OVERRIDE_SET=true
-                shift 2
-                ;;
-            --ipe-policy-path=*)
-                ACL_IPE_POLICY_PATH="${1#*=}"
-                shift
-                ;;
-            --ipe-policy-path)
-                ACL_IPE_POLICY_PATH="$2"
                 shift 2
                 ;;
             --img-name=*)

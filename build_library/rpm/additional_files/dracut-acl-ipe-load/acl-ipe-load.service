@@ -1,11 +1,8 @@
 [Unit]
-Description=Select and activate ACL IPE policy from Azure IMDS
+Description=Load and activate ACL IPE boot policy
 Documentation=https://docs.kernel.org/admin-guide/LSM/ipe.html
 DefaultDependencies=no
-RequiresMountsFor=/sysroot/usr/
-# Run before switch_root while SELinux is not yet loaded. This avoids the
-# mac_admin/EPERM denial on the securityfs policy write once SELinux is
-# enforcing in the real system. Mirrors 99acl-selinux-toggle's ordering.
+# Run during initrd while SELinux is not yet loaded.
 After=initrd-setup-root.service acl-selinux-toggle.service
 Before=initrd-parse-etc.service
 ConditionVirtualization=microsoft
@@ -16,6 +13,7 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/acl-ipe-load
 StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=initrd.target

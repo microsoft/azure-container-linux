@@ -35,18 +35,8 @@ call_docker() {
         "${FAKE_DOCKER_STATUS:-up}" == "up" ]]; then
         printf 'Up 1 second\n'
     fi
-    if [[ "${command}" == "exec" &&
-        "${1:-}" == "-i" &&
-        "${2:-}" == "reused-container" &&
-        "${3:-}" == "sh" &&
-        "${4:-}" == "-c" ]]; then
-        cat > "${FAKE_DOCKER_POLICY_CAPTURE}"
-    fi
 }
 EOF
-
-printf 'policy-a\n' > "${TEST_DIR}/policy-a.p7b"
-printf 'policy-b\n' > "${TEST_DIR}/policy-b.p7b"
 
 assert_docker_call() {
     local log="$1" expected="$2" arg
@@ -58,64 +48,31 @@ assert_docker_call() {
 }
 
 run_container() {
-    local mode="$1" policy="$2" log="$3" status="${4:-up}"
+    local mode="$1" log="$2" status="${3:-up}"
     (
         cd "${TEST_DIR}"
         ACL_IPE_ASSET_MODE="${mode}" \
-        ACL_IPE_POLICY_PATH="${policy}" \
         FAKE_DOCKER_LOG="${log}" \
-        FAKE_DOCKER_POLICY_CAPTURE="${log}.policy" \
         FAKE_DOCKER_STATUS="${status}" \
             ./run_sdk_container -C fake-sdk -n reused-container -- true
     )
 }
 
-test_external_policy_refresh() {
-    local log="${TEST_DIR}/external.log" policy
-
-    for policy in "${TEST_DIR}/policy-a.p7b" "${TEST_DIR}/policy-b.p7b"; do
-        run_container external "${policy}" "${log}"
-        cmp -s "${policy}" "${log}.policy"
+test_mode_forwarded() {
+    local log="${TEST_DIR}/mode.log"
+    for mode in disabled ephemeral external; do
+        : > "${log}"
+        run_container "${mode}" "${log}"
+        grep -Fq $'\t-e\tACL_IPE_ASSET_MODE='"${mode}"$'\t' "${log}" ||
+            { echo "IPE asset mode ${mode} was not forwarded" >&2; return 1; }
     done
-    [[ "$(grep -Fc $'exec\t-i\treused-container\tsh\t-c\tcat > "$1" && chmod 0644 "$1" && test -s "$1"\tsh\t/tmp/acl-ipe-policy.p7b' "${log}")" -eq 2 ]]
-    ! grep -Fq $'cp\t' "${log}"
-    ! grep -Fq $'create\t' "${log}"
 }
 
-test_external_policy_fresh_container() {
-    local log="${TEST_DIR}/fresh.log"
-    local create_line start_line stream_line
-
-    run_container external "${TEST_DIR}/policy-a.p7b" "${log}" missing
-    cmp -s "${TEST_DIR}/policy-a.p7b" "${log}.policy"
-
-    create_line="$(grep -nF $'create\t' "${log}" | cut -d: -f1)"
-    start_line="$(grep -nF $'start\treused-container' "${log}" | cut -d: -f1)"
-    stream_line="$(grep -nF $'exec\t-i\treused-container\tsh\t-c\tcat > "$1" && chmod 0644 "$1" && test -s "$1"\tsh\t/tmp/acl-ipe-policy.p7b' "${log}" | cut -d: -f1)"
-    [[ -n "${create_line}" && -n "${start_line}" && -n "${stream_line}" ]]
-    [[ "${create_line}" -lt "${start_line}" ]]
-    [[ "${start_line}" -lt "${stream_line}" ]]
-}
-
-test_ephemeral_mode_removes_stale_policy() {
-    local log="${TEST_DIR}/ephemeral.log"
-    run_container ephemeral "" "${log}"
-    assert_docker_call "${log}" exec \
-        reused-container rm -f /tmp/acl-ipe-policy.p7b
-}
-
-test_disabled_mode_removes_stale_policy() {
-    local log="${TEST_DIR}/disabled.log"
-    run_container disabled "" "${log}"
-    assert_docker_call "${log}" exec \
-        reused-container rm -f /tmp/acl-ipe-policy.p7b
-}
-
-test_external_mode_without_new_policy_removes_stale_policy() {
-    local log="${TEST_DIR}/external-reuse.log"
-    run_container external "" "${log}"
-    assert_docker_call "${log}" exec \
-        reused-container rm -f /tmp/acl-ipe-policy.p7b
+test_invalid_mode_rejected() {
+    local log="${TEST_DIR}/invalid.log"
+    if run_container "invalid" "${log}" 2>/dev/null; then
+        echo "invalid mode was accepted" >&2; return 1
+    fi
 }
 
 test_untagged_checkout_version_fallback() {
@@ -134,12 +91,8 @@ test_untagged_checkout_version_fallback() {
     )
 }
 
-# Different inputs prove that a reused container receives the current policy.
-test_external_policy_refresh
-test_external_policy_fresh_container
-test_ephemeral_mode_removes_stale_policy
-test_disabled_mode_removes_stale_policy
-test_external_mode_without_new_policy_removes_stale_policy
+test_mode_forwarded
+test_invalid_mode_rejected
 test_untagged_checkout_version_fallback
 
-echo "run_sdk_container IPE policy reuse tests passed"
+echo "run_sdk_container IPE asset mode tests passed"

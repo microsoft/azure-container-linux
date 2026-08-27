@@ -3,8 +3,9 @@
 # ex: ts=8 sw=4 sts=4 et filetype=sh
 
 install() {
-    # acl-ipe-load mounts securityfs if the initramfs has not mounted it yet.
-    inst_multiple -o mkdir mount mv
+    # acl-ipe-load needs sha256sum for credential verification and mount for
+    # securityfs.
+    inst_multiple -o mkdir mount mv cat sha256sum cut
 
     inst_simple "${moddir}/acl-node-security-profile.sh" \
                 "/usr/lib/acl/acl-node-security-profile.sh"

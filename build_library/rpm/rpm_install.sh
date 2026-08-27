@@ -891,38 +891,20 @@ rpm_validate_ipe_policy_source() {
 
 rpm_prepare_ipe_policy_artifact() {
     local policy_src="$1" policy_sig="$2" cert_dir="$3"
-    local policy_mode="$4" external_policy="$5"
     local key="${cert_dir}/ca.key"
     local cert="${cert_dir}/uki-signing-ca.pem"
 
-    case "${policy_mode}" in
-        ephemeral)
-            [[ -z "${external_policy}" ]] ||
-                die "RPM mode: ACL_IPE_POLICY_PATH is only valid in external mode"
-            "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" ||
-                die "RPM mode: IPE could not ensure ephemeral signing cert"
-            if ! openssl smime -sign -binary \
-                    -in "${policy_src}" \
-                    -signer "${cert}" \
-                    -inkey "${key}" \
-                    -noattr -nodetach -nosmimecap \
-                    -outform der \
-                    -out "${policy_sig}" 2>/dev/null || [[ ! -s "${policy_sig}" ]]; then
-                die "RPM mode: IPE failed to sign policy"
-            fi
-            ;;
-        external)
-            [[ -n "${external_policy}" ]] ||
-                die "RPM mode: external IPE policy mode requires ACL_IPE_POLICY_PATH"
-            [[ -s "${external_policy}" ]] ||
-                die "RPM mode: external IPE policy artifact is missing or empty: ${external_policy}"
-            cp "${external_policy}" "${policy_sig}" ||
-                die "RPM mode: failed to stage external IPE policy"
-            ;;
-        *)
-            die "RPM mode: invalid ACL_IPE_ASSET_MODE: ${policy_mode}"
-            ;;
-    esac
+    "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" ||
+        die "RPM mode: IPE could not ensure ephemeral signing cert"
+    if ! openssl smime -sign -binary \
+            -in "${policy_src}" \
+            -signer "${cert}" \
+            -inkey "${key}" \
+            -noattr -nodetach -nosmimecap \
+            -outform der \
+            -out "${policy_sig}" 2>/dev/null || [[ ! -s "${policy_sig}" ]]; then
+        die "RPM mode: IPE failed to sign policy"
+    fi
 }
 
 rpm_verify_ipe_policy_artifact() {
@@ -942,6 +924,9 @@ rpm_install_ipe_policy() {
 
     case "${ipe_asset_mode}" in
         disabled)
+            if [[ -n "${BUILD_DIR:-}" ]]; then
+                rm -rf -- "${BUILD_DIR}/acl-ipe-policy"
+            fi
             rpm_record_ipe_asset_mode disabled
             return 0
             ;;
@@ -954,32 +939,37 @@ rpm_install_ipe_policy() {
         die "RPM mode: BUILD_DIR is not set; cannot create IPE signing assets"
 
     local policy_src="${BUILD_LIBRARY_DIR}/rpm/additional_files/ipe/acl-ipe-boot-policy.pol"
-    local policy_mode="${ipe_asset_mode}"
-    local external_policy="${ACL_IPE_POLICY_PATH:-}"
-    local cert_dir
-    local work_dir policy_sig verified_policy
 
     rpm_validate_ipe_policy_source "${policy_src}"
 
+    local cert_dir
     cert_dir="$(readlink -f "${BUILD_DIR}")/acl-ipe-ephemeral"
+
+    # Stage directory for Pipelines collector and uki_install.sh.
+    local stage_dir="${BUILD_DIR}/acl-ipe-policy"
+    rm -rf -- "${stage_dir}"
+    mkdir -p "${stage_dir}"
+
+    local policy_sig="${stage_dir}/acl-ipe-policy.p7b.cred"
+    local staged_raw="${stage_dir}/acl-ipe-boot-policy.pol"
+    local work_dir verified_policy
     work_dir="$(mktemp -d)"
-    policy_sig="${work_dir}/acl.pol.p7b"
     verified_policy="${work_dir}/acl-ipe-boot-policy.verified.pol"
 
     rpm_prepare_ipe_policy_artifact \
-        "${policy_src}" "${policy_sig}" "${cert_dir}" \
-        "${policy_mode}" "${external_policy}"
+        "${policy_src}" "${policy_sig}" "${cert_dir}"
     rpm_verify_ipe_policy_artifact \
         "${policy_src}" "${policy_sig}" "${verified_policy}"
 
-    sudo install -D -m 0644 \
-        "${policy_sig}" \
-        "${root_fs_dir}/usr/lib/ipe/acl.pol.p7b"
-    sudo chroot "${root_fs_dir}" restorecon -RF /usr/lib/ipe
+    # Stage the raw policy for the Pipelines collector (external mode replaces
+    # the candidate CMS later; the raw policy is used for external signing).
+    cp "${policy_src}" "${staged_raw}" ||
+        die "RPM mode: failed to stage raw IPE policy"
+
     rm -rf "${work_dir}"
     rpm_record_ipe_asset_mode "${ipe_asset_mode}"
 
-    info "RPM mode: Installed ${policy_mode} signed IPE policy on verified /usr"
+    info "RPM mode: Staged ${ipe_asset_mode} IPE policy candidate at ${stage_dir}"
 }
 
 rpm_configure_selinux() {

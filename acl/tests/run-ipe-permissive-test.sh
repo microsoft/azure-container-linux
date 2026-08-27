@@ -61,9 +61,9 @@ if [[ "$(tr -d '[:space:]' < "${POLICY_DIR}/active")" != "1" ]]; then
     fail "policy ${POLICY_NAME} is not active"
 fi
 
-signed_policy="/usr/lib/ipe/acl.pol.p7b"
+signed_policy="/.extra/credentials/acl-ipe-policy.p7b.cred"
 if [[ ! -s "${signed_policy}" ]]; then
-    fail "signed IPE policy is missing from verified /usr at ${signed_policy}"
+    fail "IPE policy credential is missing at ${signed_policy}"
 fi
 
 policy="$(cat "${POLICY_DIR}/policy")"
@@ -74,7 +74,7 @@ grep -Fq "op=EXECUTE boot_verified=TRUE action=ALLOW" <<< "${policy}" ||
 grep -Fq "op=EXECUTE dmverity_signature=TRUE action=ALLOW" <<< "${policy}" ||
     fail "active policy does not trust verified dm-verity signatures"
 if grep -Fq "dmverity_roothash=" <<< "${policy}"; then
-    fail "active policy still pins one dm-verity root hash instead of trusting signed volumes"
+    fail "active policy must not contain dmverity_roothash rules"
 fi
 
 verity_device="$(readlink -f /dev/mapper/usr 2>/dev/null || true)"
@@ -113,9 +113,9 @@ if [[ -n "${loader_errors}" ]]; then
     echo "${loader_errors}" >&2
     fail "IPE or dm-verity boot errors were detected"
 fi
-grep -Fq "acl-ipe-load: Using IPE mode 'permissive' from acl-node-security-profile." \
+grep -Fq "acl-ipe-load: Using IPE mode 'permissive'." \
     <<< "${boot_logs}" ||
-    fail "initramfs did not select permissive mode from acl-node-security-profile"
+    fail "initramfs did not select permissive IPE mode"
 
 audit_event="$(
     grep -F "${probe}" <<< "${boot_logs}" |

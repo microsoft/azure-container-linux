@@ -42,19 +42,38 @@ assert_ipe_mode() {
 }
 
 assert_ipe_assets_present() {
-    local cmdline usr_hash expected_signature_path
+    local cmdline usr_hash expected_signature_path policy_hash policy_active
     cmdline=$(ssh_cmd "cat /proc/cmdline")
 
     if [[ " ${cmdline} " == *" ipe.enforce="* ]]; then
         error "IPE mode is still embedded in the kernel command line"
         return 1
     fi
-    if ! ssh_cmd "sudo test -s /usr/lib/ipe/acl.pol.p7b"; then
-        error "Signed IPE policy is missing from verified /usr"
+    # Verify the policy hash token is present on cmdline
+    policy_hash="$(
+        tr ' ' '\n' <<< "${cmdline}" |
+            sed -n 's/^acl\.ipe\.policy_sha256=//p' |
+            head -n 1
+    )"
+    if ! [[ "${policy_hash}" =~ ^[0-9a-f]{64}$ ]]; then
+        error "acl.ipe.policy_sha256 token is missing or malformed in UKI cmdline"
         return 1
     fi
-    if ssh_cmd "sudo test -d '${POLICY_DIR}'"; then
-        error "IPE policy was loaded even though no mode was requested"
+    # Verify the credential is delivered by systemd-stub
+    if ! ssh_cmd "sudo test -s /.extra/credentials/acl-ipe-policy.p7b.cred"; then
+        error "IPE policy credential not found at /.extra/credentials/acl-ipe-policy.p7b.cred"
+        return 1
+    fi
+    if ! ssh_cmd "sudo test -r '${POLICY_DIR}/active'"; then
+        error "IPE policy was not loaded"
+        return 1
+    fi
+    policy_active="$(
+        ssh_cmd "sudo cat '${POLICY_DIR}/active'" 2>/dev/null |
+            tr -d '[:space:]'
+    )"
+    if [[ "${policy_active}" != "0" ]]; then
+        error "IPE policy active state is '${policy_active}', expected loaded but inactive"
         return 1
     fi
     usr_hash="$(
@@ -72,7 +91,7 @@ assert_ipe_assets_present() {
         error "Hash-matched /usr root-hash signature companion is missing from the UKI"
         return 1
     fi
-    info "IPE assets are present and no default mode is embedded in the UKI"
+    info "IPE assets are present and the policy is loaded but inactive"
 }
 
 run_permissive_validation() {
