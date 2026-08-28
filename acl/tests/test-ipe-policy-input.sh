@@ -113,11 +113,38 @@ test_uki_binds_policy_before_writing_cmdline() {
     grep -Fq 'EFI/Linux/${uki_name}.extra.d/acl-ipe-policy.p7b.cred' "${uki_install}"
 }
 
+test_vm_conversions_share_secure_boot_cert() {
+    local cert_dir="${TEST_DIR}/vm-shared-cert"
+    local first_cert="${TEST_DIR}/vm-first-cert.pem"
+    local image_to_vm="${SCRIPT_DIR}/image_to_vm.sh"
+    local ensure_line sign_line cert_arg_line
+
+    "${SCRIPT_DIR}/build_library/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" >/dev/null 2>&1
+    cp "${cert_dir}/uki-signing-ca.pem" "${first_cert}"
+    "${SCRIPT_DIR}/build_library/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" >/dev/null 2>&1
+    cmp -s "${first_cert}" "${cert_dir}/uki-signing-ca.pem"
+
+    ensure_line="$(grep -nF \
+        '"${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${ephemeral_cert_dir}"' \
+        "${image_to_vm}" | cut -d: -f1)"
+    sign_line="$(grep -nF \
+        '"${BUILD_LIBRARY_DIR}/rpm/sign_uki_ephemeral.sh" \' \
+        "${image_to_vm}" | cut -d: -f1)"
+    cert_arg_line="$(grep -nFx \
+        '        "${ephemeral_cert_dir}"' \
+        "${image_to_vm}" | cut -d: -f1)"
+
+    [[ -n "${ensure_line}" && -n "${sign_line}" && -n "${cert_arg_line}" ]]
+    [[ "${ensure_line}" -lt "${sign_line}" ]]
+    [[ "${sign_line}" -lt "${cert_arg_line}" ]]
+}
+
 test_ipe_disabled_by_default
 test_ipe_disabled_stages_nothing
 test_ephemeral_stages_candidate
 test_external_stages_candidate
 test_verity_roothash_matches_kernel_input
 test_uki_binds_policy_before_writing_cmdline
+test_vm_conversions_share_secure_boot_cert
 
 echo "IPE policy input tests passed"
