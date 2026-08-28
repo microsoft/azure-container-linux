@@ -223,7 +223,12 @@ create_prod_tar() {
   # Resolve ROOT and USR-A by GPT partition label rather than a hardcoded
   # partition number, since disk_layout.json layouts can renumber
   # partitions (e.g. ROOT moving from p9 to p11).
-  local partdev rootdev usrdev
+  # rootdev/usrdev must be initialized: this function runs under
+  # switch_to_strict_mode (set -u), and referencing a `local`-declared-but-
+  # unset variable -- even just to test it with `-z` -- is itself an
+  # unbound-variable error, which would abort before the missing-partition
+  # check below ever gets to run.
+  local partdev rootdev="" usrdev=""
   for partdev in "${lodev}"p*; do
     case "$(sudo blkid -o value -s PARTLABEL "${partdev}" 2>/dev/null)" in
       ROOT) rootdev="${partdev}" ;;
