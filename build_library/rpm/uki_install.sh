@@ -175,10 +175,11 @@ OSREL
     # NOTE: The main UKI cmdline contains only slot-independent args.
     # Slot-specific args are delivered via UKI addons:
     #
-    #   verity.addon.efi   — Active slot's verity partition identity
-    #                        (PARTUUID for data + hash) and root hash.
-    #                        Trident swaps this to switch A/B slots.
-    #                        See _uki_build_verity_addons() below.
+    #   slot-a.addon.efi/  — Active slot's verity partition identity
+    #   slot-b.addon.efi     (PARTUUID for data + hash), root hash, and
+    #                        acl.slot=<a|b>. Trident swaps this (copying
+    #                        the template verbatim, no rename) to switch
+    #                        A/B slots. See _uki_build_verity_addons() below.
     #   oem.addon.efi      — Platform identification (oem_id, console).
     #                        Built per-platform during image_to_vm.sh.
     #                        See build_library/rpm/uki_addon.sh.
@@ -486,11 +487,14 @@ _uki_build_debug_addon() {
 #   systemd.verity_usr_hash=PARTUUID=<hash-partition>
 #   systemd.verity_usr_options=panic-on-corruption
 #   usrhash=<root-hash>
+#   acl.slot=<a|b>
 #
 # mount.usr=/dev/mapper/usr is slot-independent and stays in the main UKI
 # cmdline (not the addon).
 # At boot, systemd-stub appends the active addon's cmdline to the main UKI
-# cmdline.  Trident swaps which addon is in .extra.d/ to switch slots.
+# cmdline.  Trident swaps which addon is in .extra.d/ to switch slots — it
+# copies the slot's template verbatim (slot-a.addon.efi / slot-b.addon.efi,
+# no rename) from acl/uki-addons/ into <uki>.efi.extra.d/.
 _uki_build_verity_addons() {
     local esp_dir="$1"
     local uki_name="$2"
@@ -571,35 +575,38 @@ _uki_build_verity_addons() {
         cmdline+=" systemd.verity_usr_hash=PARTUUID=${hash_uuid}"
         cmdline+=" systemd.verity_usr_options=panic-on-corruption"
         cmdline+=" usrhash=${usr_hash}"
+        cmdline+=" acl.slot=${slot}"
 
         info "UKI/RPM: Slot ${slot_label} cmdline = ${cmdline}"
 
-        echo "${cmdline}" > "${verity_temp_dir}/verity-${slot}-cmdline.txt"
+        echo "${cmdline}" > "${verity_temp_dir}/slot-${slot}-cmdline.txt"
 
-        addon_file="${verity_temp_dir}/verity-${slot}.addon.efi"
+        addon_file="${verity_temp_dir}/slot-${slot}.addon.efi"
         if ! sudo ukify build \
-            --cmdline=@"${verity_temp_dir}/verity-${slot}-cmdline.txt" \
+            --cmdline=@"${verity_temp_dir}/slot-${slot}-cmdline.txt" \
             --stub="${efi_stub}" \
             --output="${addon_file}"; then
             sudo rm -rf "${verity_temp_dir}"
-            die "UKI/RPM: ukify build failed for verity-${slot}.addon.efi"
+            die "UKI/RPM: ukify build failed for slot-${slot}.addon.efi"
         fi
 
         if [[ ! -f "${addon_file}" ]]; then
             sudo rm -rf "${verity_temp_dir}"
-            die "UKI/RPM: ukify failed to produce verity-${slot}.addon.efi"
+            die "UKI/RPM: ukify failed to produce slot-${slot}.addon.efi"
         fi
 
         # Save template
-        sudo cp "${addon_file}" "${template_dir}/verity-${slot}.addon.efi"
-        info "UKI/RPM: Saved verity-${slot}.addon.efi → acl/uki-addons/"
+        sudo cp "${addon_file}" "${template_dir}/slot-${slot}.addon.efi"
+        info "UKI/RPM: Saved slot-${slot}.addon.efi → acl/uki-addons/"
     done
 
-    # Install slot A as the active verity addon
+    # Install slot A as the active verity addon — copied verbatim (no
+    # rename) so the staged filename matches its template, mirroring how
+    # Trident activates the target slot during an A/B update.
     local addon_dir="${esp_dir}/EFI/Linux/${uki_name}.extra.d"
     sudo mkdir -p "${addon_dir}"
-    sudo cp "${template_dir}/verity-a.addon.efi" "${addon_dir}/verity.addon.efi"
-    info "UKI/RPM: Activated slot A → EFI/Linux/${uki_name}.extra.d/verity.addon.efi"
+    sudo cp "${template_dir}/slot-a.addon.efi" "${addon_dir}/slot-a.addon.efi"
+    info "UKI/RPM: Activated slot A → EFI/Linux/${uki_name}.extra.d/slot-a.addon.efi"
 
     # NOTE: Both slot templates are built with the same root hash at image
     # build time.  Trident overwrites the active addon (and its root hash)
