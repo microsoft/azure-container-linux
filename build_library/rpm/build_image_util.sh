@@ -938,9 +938,34 @@ _configure_misc_rpm() {
         sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/audit-rules.service" "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service"
     fi
 
-    # Disable auditd.service if present (it is pulled in transitively by trident RPMs).
-    if [[ -f "${root_fs_dir}/usr/lib/systemd/system/auditd.service" ]]; then
-        info "RPM mode: Disabling auditd.service (left disabled by default, matching portage-mode ACL images)"
+    # Remove auditd (it is pulled in transitively by trident RPMs, and Azure Linux's
+    # 90-default.preset unconditionally enables auditd.service). Merely deleting the
+    # multi-user.target.wants symlink is not durable: any later `systemctl preset`/
+    # `preset-all` re-application (e.g. triggered by downstream image customization
+    # installing more packages) recreates it from that preset rule and the service
+    # starts on the next boot. Uninstalling the package removes the unit file itself,
+    # so there is nothing left for a future preset pass to enable.
+    # audit-libs is left in place: it provides libaudit.so.1, which other packages
+    # (e.g. systemd, sudo, polkit) link against directly.
+    #
+    # TEMPORARY: this whole block is a workaround for trident-selinux's transitive
+    # dependency on audit. Trident's fix (microsoft/trident#734) already removed
+    # that dependency, but it has not been published to PMC yet (PMC still serves
+    # trident 0.26.0, which predates the fix). Once a trident release containing
+    # the fix reaches PMC, delete this block.
+    local audit_pkgs
+    audit_pkgs=$(sudo rpm --dbpath="${root_fs_dir}/var/lib/rpm" -qa "audit" "python3-audit" 2>/dev/null | sort -u)
+    if [[ -n "${audit_pkgs}" ]]; then
+        info "RPM mode: Removing auditd packages: ${audit_pkgs//$'\n'/ }"
+        if ! sudo rpm --root="${root_fs_dir}" --dbpath="/var/lib/rpm" -e --nodeps --noscripts ${audit_pkgs}; then
+            error "RPM mode: Failed to remove auditd packages, aborting build"
+            exit 1
+        fi
+        # --noscripts skips %preun/%postun, so `systemctl disable` never runs, and
+        # the *.wants symlinks aren't part of the package payload (systemctl/preset
+        # creates them, not rpm), so removing the package doesn't remove them either.
+        # Without this, they're left as dangling symlinks (unit file gone from
+        # /usr/lib/systemd/system) which trips kola's dead-symlink content check.
         sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/auditd.service"
         sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/auditd.service"
     fi
