@@ -175,8 +175,8 @@ OSREL
     # NOTE: The main UKI cmdline contains only slot-independent args.
     # Slot-specific args are delivered via UKI addons:
     #
-    #   slot-a.addon.efi/  — Active slot's verity partition identity
-    #   slot-b.addon.efi     (PARTUUID for data + hash), root hash, and
+    #   slot-a.addon.efi,  — Active slot's verity partition identity
+    #   slot-b.addon.efi      (PARTUUID for data + hash), root hash, and
     #                        acl.slot=<a|b>. Trident swaps this (copying
     #                        the template verbatim, no rename) to switch
     #                        A/B slots. See _uki_build_verity_addons() below.
