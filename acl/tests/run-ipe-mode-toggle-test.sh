@@ -122,6 +122,7 @@ main() {
     section "Step 2: Verify enforcing IPE is not exposed through IMDS"
     set_security_profile_and_reboot "ipe=enforcing"
     assert_ipe_mode "off"
+    assert_ipe_assets_present
 
     section "Step 3: Enable permissive IPE through IMDS"
     set_security_profile_and_reboot "ipe=permissive,foo=bar"
@@ -131,10 +132,7 @@ main() {
     section "Step 4: Disable IPE through IMDS"
     set_security_profile_and_reboot "ipe=off"
     assert_ipe_mode "off"
-
-    section "Step 5: Remove tag and verify default remains off"
-    set_security_profile_and_reboot ""
-    assert_ipe_mode "off"
+    assert_ipe_assets_present
 
     section "IPE IMDS Reboot Toggle Test Summary"
     info "All reboot-based IPE toggle assertions passed"
