@@ -95,7 +95,7 @@
 #   ACL_SDK_IMAGE           Override SDK container image (e.g., <your-registry>/sdk:<release>)
 #                           Bypasses auto-detection from version.txt when set
 #   ACL_EROFS_ENABLE        Static EROFS test override: 1 forces EROFS at boot
-#                           (default: 0; IPE-capable images select it dynamically)
+#                           (default: 0; independent from IPE asset inclusion)
 #   NO_TTY                  Set to "true" to disable TTY allocation (for CI pipelines)
 #   RPM_REPO_URL            Azure Linux repository URL
 #   RPM_ARCH                Target architecture (default: x86_64)
@@ -189,10 +189,9 @@ if [[ -v ACL_IPE_VERITY_SIGNATURE ]]; then
     IPE_VERITY_SIGNATURE_OVERRIDE_SET=true
 fi
 ACL_IPE_VERITY_SIGNATURE="${ACL_IPE_VERITY_SIGNATURE:-true}"
-# Include the EROFS/dm-verity containerd capability in the embedded sysext.
-# ACL_EROFS_ENABLE=1 also preserves the legacy static-EROFS image behavior.
-# IPE-capable images include the same package even when this is 0 so the
-# boot-time IPE toggle can select EROFS later.
+# This stock-containerd control keeps passive IPE assets independent from the
+# patched EROFS runtime package. ACL_EROFS_ENABLE=1 remains the explicit opt-in
+# for the legacy static-EROFS image behavior.
 export ACL_EROFS_ENABLE="${ACL_EROFS_ENABLE:-0}"
 ACL_FEATURES="${ACL_FEATURES:-}"
 export ACL_FEATURES
@@ -209,8 +208,6 @@ configure_acl_features() {
     if [[ "${ACL_EROFS_ENABLE}" == "1" ]]; then
         append_acl_feature erofs
         append_acl_feature erofs-static
-    elif [[ "${ACL_IPE_ASSET_MODE}" != "disabled" ]]; then
-        append_acl_feature erofs
     fi
     export ACL_FEATURES
 }

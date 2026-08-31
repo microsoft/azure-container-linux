@@ -75,8 +75,8 @@ grep -Fq 'ACL_EROFS_ENABLE="${ACL_EROFS_ENABLE:-0}"' "${BUILD_SCRIPT}"
 grep -Fq '"ACL_FEATURES=${ACL_FEATURES:-}"' "${SYSEXT_PROD_BUILDER}"
 grep -Fq '"ACL_FEATURES=${ACL_FEATURES:-}"' "${STANDALONE_SYSEXT_UTIL}"
 test_features 0 disabled "" ""
-test_features 0 ephemeral "" erofs
-test_features 0 external base "base,erofs"
+test_features 0 ephemeral "" ""
+test_features 0 external base "base"
 test_features 1 disabled "" "erofs,erofs-static"
 test_features 1 ephemeral erofs "erofs,erofs-static"
 
