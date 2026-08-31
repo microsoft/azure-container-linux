@@ -1,0 +1,201 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="2120" viewBox="0 0 1440 2120" role="img" aria-labelledby="title desc">
+  <title id="title">General execution and OS-disk performance by MAP image build</title>
+  <desc id="desc">Four panels compare user-visible Kubernetes exec latency, host-local fork and exec latency, node OS-disk read IOPS, and node OS-disk write IOPS. Labels include each value's percent difference from the base image. Kubernetes exec and fio have one full-profile pipeline run per image. Host-local exec has two runs for each image with IPE disabled. That test failed for the IPE audit plus patched EROFS image, so the image is not plotted in the host-local panel. Lower is better for execution latency and higher is better for IOPS.</desc>
+  <style>
+    text { font-family: "Segoe UI", Arial, Helvetica, sans-serif; fill: #172033; }
+    .title { font-size: 32px; font-weight: 700; }
+    .subtitle { font-size: 16px; fill: #475569; }
+    .panel-title { font-size: 23px; font-weight: 700; }
+    .method { font-size: 15px; fill: #475569; }
+    .group { font-size: 17px; font-weight: 700; }
+    .legend { font-size: 15px; font-weight: 600; }
+    .small { font-size: 14px; fill: #4b5563; }
+    .value { font-size: 14px; font-weight: 700; }
+    .grid { stroke: #d8dee9; stroke-width: 1; }
+    .axis { stroke: #64748b; stroke-width: 1.5; }
+    .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.25; }
+    .base { fill: #6b7280; }
+    .assets { fill: #27845b; }
+    .patched { fill: #2563eb; }
+    .active { fill: #d97706; }
+    .result { fill: #eef6ff; stroke: #93c5fd; stroke-width: 1.25; }
+  </style>
+
+  <rect x="0" y="0" width="1440" height="2120" fill="#f8fafc"/>
+  <text x="60" y="58" class="title">General performance: execution paths and OS-disk I/O</text>
+  <text x="60" y="88" class="subtitle">Values include change vs base. Lower is better for exec; higher is better for I/O. Percentages are descriptive, not isolated feature costs.</text>
+
+  <rect x="70" y="112" width="18" height="18" rx="3" class="base"/>
+  <text x="98" y="126" class="legend">Base image, base overlayfs</text>
+  <text x="98" y="148" class="small">MAP 1188747</text>
+  <rect x="720" y="112" width="18" height="18" rx="3" class="assets"/>
+  <text x="748" y="126" class="legend">IPE off, passive assets</text>
+  <text x="748" y="148" class="small">MAP 1191353</text>
+  <rect x="70" y="166" width="18" height="18" rx="3" class="patched"/>
+  <text x="98" y="180" class="legend">IPE off, passive assets + patched overlayfs</text>
+  <text x="98" y="202" class="small">MAP 1190061</text>
+  <rect x="720" y="166" width="18" height="18" rx="3" class="active"/>
+  <text x="748" y="180" class="legend">IPE audit, patched EROFS*</text>
+  <text x="748" y="202" class="small">MAP 1191171</text>
+  <text x="70" y="228" class="small">* Permissive policy evaluation: ipe.enforce=0 and ipe.success_audit=0; ALLOW verdicts are not logged, but DENY paths remain audit-visible.</text>
+
+  <rect x="50" y="250" width="1340" height="350" rx="10" class="panel"/>
+  <text x="75" y="287" class="panel-title">A. User-visible Kubernetes exec latency</text>
+  <text x="75" y="316" class="method">Already-running pod; each operation starts a fresh kubectl exec /bin/true and includes client, API server, konnectivity, and runtime exec.</text>
+  <text x="75" y="340" class="method">One full-profile pipeline run and 20 complete Kubernetes operations per build. This is not isolated IPE-hook time. Lower is better.</text>
+
+  <line x1="390" y1="352" x2="390" y2="525" class="axis"/>
+  <line x1="547.4" y1="352" x2="547.4" y2="525" class="grid"/>
+  <line x1="704.8" y1="352" x2="704.8" y2="525" class="grid"/>
+  <line x1="862.2" y1="352" x2="862.2" y2="525" class="grid"/>
+  <line x1="1019.6" y1="352" x2="1019.6" y2="525" class="grid"/>
+  <line x1="1177.0" y1="352" x2="1177.0" y2="525" class="grid"/>
+  <line x1="1240" y1="352" x2="1240" y2="525" class="grid"/>
+
+  <text x="370" y="378" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="390" y="360" width="760.9" height="22" rx="3" class="base"/>
+  <text x="1161" y="377" class="value">241.7 ms (baseline)</text>
+  <text x="370" y="418" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="390" y="400" width="799.9" height="22" rx="3" class="assets"/>
+  <text x="1200" y="417" class="value">254.1 ms (+5.1%)</text>
+  <text x="370" y="458" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="390" y="440" width="777.2" height="22" rx="3" class="patched"/>
+  <text x="1177" y="457" class="value">246.9 ms (+2.1%)</text>
+  <text x="370" y="498" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="390" y="480" width="733.7" height="22" rx="3" class="active"/>
+  <text x="1134" y="497" class="value">233.1 ms (-3.6%)</text>
+
+  <text x="390" y="554" text-anchor="middle" class="small">0 ms</text>
+  <text x="547.4" y="554" text-anchor="middle" class="small">50</text>
+  <text x="704.8" y="554" text-anchor="middle" class="small">100</text>
+  <text x="862.2" y="554" text-anchor="middle" class="small">150</text>
+  <text x="1019.6" y="554" text-anchor="middle" class="small">200</text>
+  <text x="1177.0" y="554" text-anchor="middle" class="small">250</text>
+  <text x="1240" y="554" text-anchor="middle" class="small">270 ms</text>
+
+  <rect x="50" y="625" width="1340" height="385" rx="10" class="panel"/>
+  <text x="75" y="662" class="panel-title">B. Host-local fork/exec</text>
+  <text x="75" y="691" class="method">The harness opens a node debug shell, enters the host filesystem with chroot /host, and repeatedly runs /bin/true.</text>
+  <text x="75" y="715" class="method">Each shown image has IPE disabled: 2 runs x 100,000 executions = 200,000 executions per image.</text>
+
+  <line x1="390" y1="730" x2="390" y2="910" class="axis"/>
+  <line x1="602.5" y1="730" x2="602.5" y2="910" class="grid"/>
+  <line x1="815" y1="730" x2="815" y2="910" class="grid"/>
+  <line x1="1027.5" y1="730" x2="1027.5" y2="910" class="grid"/>
+  <line x1="1240" y1="730" x2="1240" y2="910" class="grid"/>
+
+  <text x="370" y="766" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="390" y="748" width="776.8" height="22" rx="3" class="base"/>
+  <text x="1177" y="765" class="value">731.1 us/exec (baseline)</text>
+  <text x="370" y="806" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="390" y="788" width="778.9" height="22" rx="3" class="assets"/>
+  <text x="1179" y="805" class="value">733.0 us/exec (+0.3%)</text>
+  <text x="370" y="846" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="390" y="828" width="783.0" height="22" rx="3" class="patched"/>
+  <text x="1183" y="845" class="value">737.0 us/exec (+0.8%)</text>
+
+  <text x="390" y="940" text-anchor="middle" class="small">0 us</text>
+  <text x="602.5" y="940" text-anchor="middle" class="small">200</text>
+  <text x="815" y="940" text-anchor="middle" class="small">400</text>
+  <text x="1027.5" y="940" text-anchor="middle" class="small">600</text>
+  <text x="1240" y="940" text-anchor="middle" class="small">800 us/exec</text>
+  <text x="75" y="968" class="small">Do not rank the three shown bars: their 5.9 us spread is below per-run detection floors (4.4-39.0 us) and run-to-run host drift.</text>
+  <text x="75" y="992" class="small">The host-exec test failed for the IPE audit + patched EROFS image, so that image is not plotted in this panel.</text>
+
+  <rect x="50" y="1035" width="1340" height="450" rx="10" class="panel"/>
+  <text x="75" y="1072" class="panel-title">C. Node OS-disk read IOPS</text>
+  <text x="75" y="1101" class="method">Test: fio measures how many 4 KiB reads the node OS disk completes per second for 2 minutes; it does not read EROFS container layers.</text>
+  <text x="75" y="1125" class="method">Example (fio.readthedocs.io): fio --name=bench --directory=/host-data --rw=read --bs=4K --size=8192M --direct=1 --runtime=120</text>
+
+  <line x1="390" y1="1140" x2="390" y2="1405" class="axis"/>
+  <line x1="592.4" y1="1140" x2="592.4" y2="1405" class="grid"/>
+  <line x1="794.8" y1="1140" x2="794.8" y2="1405" class="grid"/>
+  <line x1="997.1" y1="1140" x2="997.1" y2="1405" class="grid"/>
+  <line x1="1199.5" y1="1140" x2="1199.5" y2="1405" class="grid"/>
+  <line x1="1240" y1="1140" x2="1240" y2="1405" class="grid"/>
+
+  <text x="75" y="1162" class="group">Sequential read</text>
+  <text x="370" y="1190" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="390" y="1174" width="775.8" height="18" rx="3" class="base"/>
+  <text x="1176" y="1189" class="value">19,166.7 (baseline)</text>
+  <text x="370" y="1218" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="390" y="1202" width="784.8" height="18" rx="3" class="assets"/>
+  <text x="1185" y="1217" class="value">19,388.5 (+1.2%)</text>
+  <text x="370" y="1246" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="390" y="1230" width="782.7" height="18" rx="3" class="patched"/>
+  <text x="1183" y="1245" class="value">19,336.8 (+0.9%)</text>
+  <text x="370" y="1274" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="390" y="1258" width="791.7" height="18" rx="3" class="active"/>
+  <text x="1192" y="1273" class="value">19,559.8 (+2.1%)</text>
+
+  <text x="75" y="1310" class="group">Random read</text>
+  <text x="370" y="1338" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="390" y="1322" width="779.2" height="18" rx="3" class="base"/>
+  <text x="1179" y="1337" class="value">19,251.5 (baseline)</text>
+  <text x="370" y="1366" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="390" y="1350" width="785.5" height="18" rx="3" class="assets"/>
+  <text x="1186" y="1365" class="value">19,405.8 (+0.8%)</text>
+  <text x="370" y="1394" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="390" y="1378" width="780.0" height="18" rx="3" class="patched"/>
+  <text x="1180" y="1393" class="value">19,271.1 (+0.1%)</text>
+  <text x="370" y="1422" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="390" y="1406" width="791.8" height="18" rx="3" class="active"/>
+  <text x="1192" y="1421" class="value">19,562.2 (+1.6%)</text>
+
+  <text x="390" y="1458" text-anchor="middle" class="small">0</text>
+  <text x="592.4" y="1458" text-anchor="middle" class="small">5k</text>
+  <text x="794.8" y="1458" text-anchor="middle" class="small">10k</text>
+  <text x="997.1" y="1458" text-anchor="middle" class="small">15k</text>
+  <text x="1199.5" y="1458" text-anchor="middle" class="small">20k</text>
+  <text x="1240" y="1458" text-anchor="middle" class="small">21k IOPS</text>
+
+  <rect x="50" y="1510" width="1340" height="490" rx="10" class="panel"/>
+  <text x="75" y="1547" class="panel-title">D. Node OS-disk write IOPS</text>
+  <text x="75" y="1576" class="method">Test: fio measures writes to the node OS disk using the same command pattern as panel C.</text>
+  <text x="75" y="1600" class="method">One pipeline run/result per operation/build. Values vary widely across hosts, so these deltas are descriptive, not attributable.</text>
+
+  <line x1="390" y1="1620" x2="390" y2="1900" class="axis"/>
+  <line x1="602.5" y1="1620" x2="602.5" y2="1900" class="grid"/>
+  <line x1="815" y1="1620" x2="815" y2="1900" class="grid"/>
+  <line x1="1027.5" y1="1620" x2="1027.5" y2="1900" class="grid"/>
+  <line x1="1240" y1="1620" x2="1240" y2="1900" class="grid"/>
+
+  <text x="75" y="1642" class="group">Sequential write</text>
+  <text x="370" y="1670" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="390" y="1654" width="729.7" height="18" rx="3" class="base"/>
+  <text x="1130" y="1669" class="value">3,433.9 (baseline)</text>
+  <text x="370" y="1698" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="390" y="1682" width="564.2" height="18" rx="3" class="assets"/>
+  <text x="965" y="1697" class="value">2,655.2 (-22.7%)</text>
+  <text x="370" y="1726" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="390" y="1710" width="651.3" height="18" rx="3" class="patched"/>
+  <text x="1052" y="1725" class="value">3,064.9 (-10.7%)</text>
+  <text x="370" y="1754" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="390" y="1738" width="350.9" height="18" rx="3" class="active"/>
+  <text x="751" y="1753" class="value">1,651.1 (-51.9%)</text>
+
+  <text x="75" y="1790" class="group">Random write</text>
+  <text x="370" y="1818" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="390" y="1802" width="597.7" height="18" rx="3" class="base"/>
+  <text x="998" y="1817" class="value">2,812.8 (baseline)</text>
+  <text x="370" y="1846" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="390" y="1830" width="712.7" height="18" rx="3" class="assets"/>
+  <text x="1113" y="1845" class="value">3,353.7 (+19.2%)</text>
+  <text x="370" y="1874" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="390" y="1858" width="465.2" height="18" rx="3" class="patched"/>
+  <text x="866" y="1873" class="value">2,189.4 (-22.2%)</text>
+  <text x="370" y="1902" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="390" y="1886" width="490.2" height="18" rx="3" class="active"/>
+  <text x="891" y="1901" class="value">2,306.6 (-18.0%)</text>
+
+  <text x="390" y="1940" text-anchor="middle" class="small">0</text>
+  <text x="602.5" y="1940" text-anchor="middle" class="small">1k</text>
+  <text x="815" y="1940" text-anchor="middle" class="small">2k</text>
+  <text x="1027.5" y="1940" text-anchor="middle" class="small">3k</text>
+  <text x="1240" y="1940" text-anchor="middle" class="small">4k IOPS</text>
+
+  <rect x="50" y="2025" width="1340" height="70" rx="9" class="result"/>
+  <text x="75" y="2054" class="value">Result:</text>
+  <text x="135" y="2054" class="small">Kubernetes exec and OS-disk reads show no broad slowdown in the active build.</text>
+  <text x="75" y="2079" class="small">The host-exec test failed for the IPE audit + patched EROFS image; unreplicated write data remain too variable for attribution.</text>
+</svg>

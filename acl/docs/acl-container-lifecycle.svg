@@ -1,0 +1,209 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1910" viewBox="0 0 1440 1910" role="img" aria-labelledby="title desc">
+  <title id="title">Unsigned pod startup and signed image lifecycle by MAP build</title>
+  <desc id="desc">Panel A compares cold and host-cached Kubernetes pod startup for unsigned one-layer and eight-layer images. The timer runs from immediately before kubectl run until Kubernetes reports Running. Panel B compares cold and host-cached direct node-side pulls and Kubernetes pod startup for the byte-identical signed eight-layer image. Each label includes percent difference from the base image and lower values are better. Unsigned and signed pod startup each have two valid pipeline runs and 60 timing samples per condition for every image. Pull lifecycle has two runs and 20 samples for images with IPE disabled, and one valid run with 10 samples for the IPE audit image.</desc>
+  <style>
+    text { font-family: "Segoe UI", Arial, Helvetica, sans-serif; fill: #172033; }
+    .title { font-size: 32px; font-weight: 700; }
+    .subtitle { font-size: 16px; fill: #475569; }
+    .panel-title { font-size: 23px; font-weight: 700; }
+    .method { font-size: 15px; fill: #475569; }
+    .group { font-size: 17px; font-weight: 700; }
+    .legend { font-size: 15px; font-weight: 600; }
+    .small { font-size: 14px; fill: #4b5563; }
+    .value { font-size: 14px; font-weight: 700; }
+    .grid { stroke: #d8dee9; stroke-width: 1; }
+    .axis { stroke: #64748b; stroke-width: 1.5; }
+    .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.25; }
+    .base { fill: #6b7280; }
+    .assets { fill: #27845b; }
+    .patched { fill: #2563eb; }
+    .active { fill: #d97706; }
+    .result { fill: #fff7ed; stroke: #fdba74; stroke-width: 1.25; }
+  </style>
+
+  <rect x="0" y="0" width="1440" height="1910" fill="#f8fafc"/>
+  <text x="60" y="58" class="title">Container lifecycle: unsigned startup and signed-image path</text>
+  <text x="60" y="88" class="subtitle">All valid same-settings runs have equal run-level weight. Labels show change vs base; lower is better. Deltas are not isolated feature costs.</text>
+
+  <rect x="70" y="112" width="18" height="18" rx="3" class="base"/>
+  <text x="98" y="126" class="legend">Base image, base overlayfs</text>
+  <text x="98" y="148" class="small">MAP 1188747</text>
+  <rect x="720" y="112" width="18" height="18" rx="3" class="assets"/>
+  <text x="748" y="126" class="legend">IPE off, passive assets</text>
+  <text x="748" y="148" class="small">MAP 1191353</text>
+  <rect x="70" y="166" width="18" height="18" rx="3" class="patched"/>
+  <text x="98" y="180" class="legend">IPE off, passive assets + patched overlayfs</text>
+  <text x="98" y="202" class="small">MAP 1190061</text>
+  <rect x="720" y="166" width="18" height="18" rx="3" class="active"/>
+  <text x="748" y="180" class="legend">IPE audit, patched EROFS*</text>
+  <text x="748" y="202" class="small">MAP 1191171</text>
+  <text x="70" y="228" class="small">* Permissive policy evaluation: ipe.enforce=0 and ipe.success_audit=0; ALLOW verdicts are not logged, but DENY paths remain audit-visible.</text>
+
+  <rect x="50" y="250" width="1340" height="745" rx="10" class="panel"/>
+  <text x="75" y="287" class="panel-title">A. Unsigned Kubernetes pod startup</text>
+  <text x="75" y="316" class="method">Images: unsigned 1-layer Alpine (about 3.6 MB) and unsigned 8-layer nginx-compatible image (about 21 MB).</text>
+  <text x="75" y="340" class="method">Timer: immediately before kubectl run -&gt; tight polling stops when Kubernetes reports pod phase=Running on the pinned node.</text>
+  <text x="75" y="364" class="method">Cold proves the image is absent and uses imagePullPolicy=Always; cached proves it is already cached on the host and uses imagePullPolicy=Never.</text>
+  <text x="75" y="388" class="method">Every build: runs=2; 3 nodes x 10 iterations = 30/run and n=60 total per condition. Equal-weight means of run means.</text>
+
+  <line x1="400" y1="410" x2="400" y2="900" class="axis"/>
+  <line x1="521.4" y1="410" x2="521.4" y2="900" class="grid"/>
+  <line x1="642.9" y1="410" x2="642.9" y2="900" class="grid"/>
+  <line x1="764.3" y1="410" x2="764.3" y2="900" class="grid"/>
+  <line x1="885.7" y1="410" x2="885.7" y2="900" class="grid"/>
+  <line x1="1007.1" y1="410" x2="1007.1" y2="900" class="grid"/>
+  <line x1="1128.6" y1="410" x2="1128.6" y2="900" class="grid"/>
+  <line x1="1250" y1="410" x2="1250" y2="900" class="grid"/>
+
+  <text x="75" y="432" class="group">1-layer cold</text>
+  <text x="380" y="456" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="400" y="440" width="441.0" height="18" rx="3" class="base"/>
+  <text x="851" y="455" class="value">3.632 s (baseline)</text>
+  <text x="380" y="480" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="400" y="464" width="448.8" height="18" rx="3" class="assets"/>
+  <text x="859" y="479" class="value">3.696 s (+1.8%)</text>
+  <text x="380" y="504" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="400" y="488" width="459.9" height="18" rx="3" class="patched"/>
+  <text x="870" y="503" class="value">3.788 s (+4.3%)</text>
+  <text x="380" y="528" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="400" y="512" width="620.6" height="18" rx="3" class="active"/>
+  <text x="1031" y="527" class="value">5.111 s (+40.7%)</text>
+
+  <text x="75" y="557" class="group">1-layer cached</text>
+  <text x="380" y="581" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="400" y="565" width="155.2" height="18" rx="3" class="base"/>
+  <text x="565" y="580" class="value">1.278 s (baseline)</text>
+  <text x="380" y="605" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="400" y="589" width="157.0" height="18" rx="3" class="assets"/>
+  <text x="567" y="604" class="value">1.293 s (+1.2%)</text>
+  <text x="380" y="629" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="400" y="613" width="153.4" height="18" rx="3" class="patched"/>
+  <text x="563" y="628" class="value">1.263 s (-1.2%)</text>
+  <text x="380" y="653" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="400" y="637" width="371.3" height="18" rx="3" class="active"/>
+  <text x="781" y="652" class="value">3.057 s (+139.2%)</text>
+
+  <text x="75" y="682" class="group">8-layer cold</text>
+  <text x="380" y="706" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="400" y="690" width="554.9" height="18" rx="3" class="base"/>
+  <text x="965" y="705" class="value">4.570 s (baseline)</text>
+  <text x="380" y="730" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="400" y="714" width="556.4" height="18" rx="3" class="assets"/>
+  <text x="966" y="729" class="value">4.583 s (+0.3%)</text>
+  <text x="380" y="754" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="400" y="738" width="572.4" height="18" rx="3" class="patched"/>
+  <text x="982" y="753" class="value">4.714 s (+3.2%)</text>
+  <text x="380" y="778" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="400" y="762" width="831.4" height="18" rx="3" class="active"/>
+  <text x="1241" y="777" class="value">6.847 s (+49.8%)</text>
+
+  <text x="75" y="807" class="group">8-layer cached</text>
+  <text x="380" y="831" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="400" y="815" width="156.2" height="18" rx="3" class="base"/>
+  <text x="566" y="830" class="value">1.286 s (baseline)</text>
+  <text x="380" y="855" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="400" y="839" width="164.2" height="18" rx="3" class="assets"/>
+  <text x="574" y="854" class="value">1.352 s (+5.2%)</text>
+  <text x="380" y="879" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="400" y="863" width="151.3" height="18" rx="3" class="patched"/>
+  <text x="561" y="878" class="value">1.246 s (-3.1%)</text>
+  <text x="380" y="903" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="400" y="887" width="395.2" height="18" rx="3" class="active"/>
+  <text x="805" y="902" class="value">3.254 s (+153.1%)</text>
+
+  <text x="400" y="947" text-anchor="middle" class="small">0 s</text>
+  <text x="521.4" y="947" text-anchor="middle" class="small">1</text>
+  <text x="642.9" y="947" text-anchor="middle" class="small">2</text>
+  <text x="764.3" y="947" text-anchor="middle" class="small">3</text>
+  <text x="885.7" y="947" text-anchor="middle" class="small">4</text>
+  <text x="1007.1" y="947" text-anchor="middle" class="small">5</text>
+  <text x="1128.6" y="947" text-anchor="middle" class="small">6</text>
+  <text x="1250" y="947" text-anchor="middle" class="small">7 s</text>
+
+  <rect x="50" y="1020" width="1340" height="785" rx="10" class="panel"/>
+  <text x="75" y="1057" class="panel-title">B. Signed 8-layer pull and Kubernetes startup</text>
+  <text x="75" y="1086" class="method">Image: same manifest digest and bytes as panel A's unsigned 8-layer image (about 21 MB); signing differs via its referrer.</text>
+  <text x="75" y="1110" class="method">Pull: direct node-side crictl pull after verifying the image is absent or already cached on the host; debug-pod setup is outside the timer.</text>
+  <text x="75" y="1134" class="method">Pull values average per-run medians: IPE disabled uses 2 runs and 20 samples; IPE audit uses 1192978, 1 run and 10 samples.</text>
+  <text x="75" y="1158" class="method">Pod start: same kubectl run -&gt; observed Running boundary as panel A; cold includes the pull, while cached uses the image already cached on the host.</text>
+  <text x="75" y="1182" class="method">Pod values average run means: every build runs=2; 3 nodes x 10 iterations = 30/run and n=60 total per condition.</text>
+
+  <g transform="translate(0 40)">
+  <line x1="400" y1="1180" x2="400" y2="1670" class="axis"/>
+  <line x1="554.5" y1="1180" x2="554.5" y2="1670" class="grid"/>
+  <line x1="709.1" y1="1180" x2="709.1" y2="1670" class="grid"/>
+  <line x1="863.6" y1="1180" x2="863.6" y2="1670" class="grid"/>
+  <line x1="1018.2" y1="1180" x2="1018.2" y2="1670" class="grid"/>
+  <line x1="1172.7" y1="1180" x2="1172.7" y2="1670" class="grid"/>
+  <line x1="1250" y1="1180" x2="1250" y2="1670" class="grid"/>
+
+  <text x="75" y="1202" class="group">Cold pull - node-side crictl pull</text>
+  <text x="380" y="1226" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="400" y="1210" width="198.4" height="18" rx="3" class="base"/>
+  <text x="608" y="1225" class="value">2.568 s (baseline)</text>
+  <text x="380" y="1250" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="400" y="1234" width="195.4" height="18" rx="3" class="assets"/>
+  <text x="605" y="1249" class="value">2.528 s (-1.5%)</text>
+  <text x="380" y="1274" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="400" y="1258" width="210.9" height="18" rx="3" class="patched"/>
+  <text x="621" y="1273" class="value">2.730 s (+6.3%)</text>
+  <text x="380" y="1298" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="400" y="1282" width="509.7" height="18" rx="3" class="active"/>
+  <text x="920" y="1297" class="value">6.596 s (+156.9%)</text>
+
+  <text x="75" y="1327" class="group">Cached pull - node-side crictl pull</text>
+  <text x="380" y="1351" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="400" y="1335" width="26.7" height="18" rx="3" class="base"/>
+  <text x="437" y="1350" class="value">0.346 s (baseline)</text>
+  <text x="380" y="1375" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="400" y="1359" width="26.1" height="18" rx="3" class="assets"/>
+  <text x="436" y="1374" class="value">0.338 s (-2.2%)</text>
+  <text x="380" y="1399" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="400" y="1383" width="54.3" height="18" rx="3" class="patched"/>
+  <text x="464" y="1398" class="value">0.702 s (+102.9%)</text>
+  <text x="380" y="1423" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="400" y="1407" width="334.8" height="18" rx="3" class="active"/>
+  <text x="745" y="1422" class="value">4.332 s (+1,151.8%)</text>
+
+  <text x="75" y="1452" class="group">Cold pod start - kubectl run to Running</text>
+  <text x="380" y="1476" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="400" y="1460" width="344.5" height="18" rx="3" class="base"/>
+  <text x="755" y="1475" class="value">4.458 s (baseline)</text>
+  <text x="380" y="1500" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="400" y="1484" width="345.6" height="18" rx="3" class="assets"/>
+  <text x="756" y="1499" class="value">4.473 s (+0.3%)</text>
+  <text x="380" y="1524" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="400" y="1508" width="363.5" height="18" rx="3" class="patched"/>
+  <text x="774" y="1523" class="value">4.704 s (+5.5%)</text>
+  <text x="380" y="1548" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="400" y="1532" width="842.1" height="18" rx="3" class="active"/>
+  <text x="1253" y="1547" class="value">10.897 s (+144.4%)</text>
+
+  <text x="75" y="1577" class="group">Cached pod start - kubectl run to Running</text>
+  <text x="380" y="1601" text-anchor="end" class="small">Base image + base overlayfs</text>
+  <rect x="400" y="1585" width="99.4" height="18" rx="3" class="base"/>
+  <text x="509" y="1600" class="value">1.286 s (baseline)</text>
+  <text x="380" y="1625" text-anchor="end" class="small">IPE off + passive assets</text>
+  <rect x="400" y="1609" width="101.3" height="18" rx="3" class="assets"/>
+  <text x="511" y="1624" class="value">1.310 s (+1.9%)</text>
+  <text x="380" y="1649" text-anchor="end" class="small">IPE off + patched overlayfs</text>
+  <rect x="400" y="1633" width="97.5" height="18" rx="3" class="patched"/>
+  <text x="508" y="1648" class="value">1.262 s (-1.9%)</text>
+  <text x="380" y="1673" text-anchor="end" class="small">IPE audit + patched EROFS*</text>
+  <rect x="400" y="1657" width="256.6" height="18" rx="3" class="active"/>
+  <text x="667" y="1672" class="value">3.320 s (+158.2%)</text>
+
+  <text x="400" y="1715" text-anchor="middle" class="small">0 s</text>
+  <text x="554.5" y="1715" text-anchor="middle" class="small">2</text>
+  <text x="709.1" y="1715" text-anchor="middle" class="small">4</text>
+  <text x="863.6" y="1715" text-anchor="middle" class="small">6</text>
+  <text x="1018.2" y="1715" text-anchor="middle" class="small">8</text>
+  <text x="1172.7" y="1715" text-anchor="middle" class="small">10</text>
+  <text x="1250" y="1715" text-anchor="middle" class="small">11 s</text>
+  </g>
+
+  <rect x="50" y="1830" width="1340" height="60" rx="9" class="result"/>
+  <text x="75" y="1858" class="value">Result:</text>
+  <text x="135" y="1858" class="small">The active build is slower even for unsigned images, so the startup regression is not limited to signed verification.</text>
+  <text x="75" y="1881" class="small">The byte-identical signed 8-layer path adds larger pull/start costs; attribution still requires an IPE-off EROFS isolate.</text>
+</svg>
