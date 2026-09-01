@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "${TEST_DIR}"' EXIT
 
@@ -48,10 +48,11 @@ assert_docker_call() {
 }
 
 run_container() {
-    local mode="$1" log="$2" status="${3:-up}"
+    local mode="$1" signing_mode="$2" log="$3" status="${4:-up}"
     (
         cd "${TEST_DIR}"
-        ACL_IPE_ASSET_MODE="${mode}" \
+        ACL_IPE_MODE="${mode}" \
+        ACL_IPE_SIGNING_MODE="${signing_mode}" \
         FAKE_DOCKER_LOG="${log}" \
         FAKE_DOCKER_STATUS="${status}" \
             ./run_sdk_container -C fake-sdk -n reused-container -- true
@@ -60,18 +61,37 @@ run_container() {
 
 test_mode_forwarded() {
     local log="${TEST_DIR}/mode.log"
-    for mode in disabled ephemeral external; do
-        : > "${log}"
-        run_container "${mode}" "${log}"
-        grep -Fq $'\t-e\tACL_IPE_ASSET_MODE='"${mode}"$'\t' "${log}" ||
-            { echo "IPE asset mode ${mode} was not forwarded" >&2; return 1; }
+    local mode signing
+    for mode in disabled audit; do
+        for signing in ephemeral esrp; do
+            : > "${log}"
+            run_container "${mode}" "${signing}" "${log}"
+            grep -Fq $'\t-e\tACL_IPE_MODE='"${mode}"$'\t' "${log}" ||
+                { echo "IPE mode ${mode} was not forwarded" >&2; return 1; }
+            grep -Fq $'\t-e\tACL_IPE_SIGNING_MODE='"${signing}"$'\t' "${log}" ||
+                { echo "IPE signing mode ${signing} was not forwarded" >&2; return 1; }
+        done
     done
 }
 
 test_invalid_mode_rejected() {
     local log="${TEST_DIR}/invalid.log"
-    if run_container "invalid" "${log}" 2>/dev/null; then
+    if run_container "invalid" "ephemeral" "${log}" 2>/dev/null; then
         echo "invalid mode was accepted" >&2; return 1
+    fi
+}
+
+test_invalid_signing_mode_rejected() {
+    local log="${TEST_DIR}/invalid-signing.log"
+    if run_container "audit" "invalid" "${log}" 2>/dev/null; then
+        echo "invalid signing mode was accepted" >&2; return 1
+    fi
+}
+
+test_enforcing_mode_rejected() {
+    local log="${TEST_DIR}/enforcing.log"
+    if run_container "enforcing" "ephemeral" "${log}" 2>/dev/null; then
+        echo "reserved 'enforcing' mode was accepted" >&2; return 1
     fi
 }
 
@@ -93,6 +113,8 @@ test_untagged_checkout_version_fallback() {
 
 test_mode_forwarded
 test_invalid_mode_rejected
+test_invalid_signing_mode_rejected
+test_enforcing_mode_rejected
 test_untagged_checkout_version_fallback
 
-echo "run_sdk_container IPE asset mode tests passed"
+echo "run_sdk_container IPE mode tests passed"

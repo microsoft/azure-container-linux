@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 TEST_DIR="${SCRIPT_DIR}/__build__/ipe-policy-test.$$"
 mkdir -p "${TEST_DIR}"
 export TMPDIR="${TEST_DIR}"
@@ -33,28 +33,47 @@ prepare_case() {
 
 test_ipe_disabled_by_default() {
     prepare_case default
-    unset ACL_IPE_ASSET_MODE
+    unset ACL_IPE_MODE ACL_IPE_SIGNING_MODE
 
     rpm_install_ipe_policy "${CASE_ROOT}"
 
-    [[ "$(<"${BUILD_DIR}/ipe-asset-mode")" == "disabled" ]]
-    # No staged artifacts
+    # Absent marker means disabled; no marker file, no staged artifacts.
+    [[ ! -f "${BUILD_DIR}/ipe-signing-mode" ]]
     [[ ! -d "${BUILD_DIR}/acl-ipe-policy" ]]
 }
 
 test_ipe_disabled_stages_nothing() {
     prepare_case disabled-explicit
-    export ACL_IPE_ASSET_MODE=disabled
+    export ACL_IPE_MODE=disabled
+    unset ACL_IPE_SIGNING_MODE
 
     rpm_install_ipe_policy "${CASE_ROOT}"
 
-    [[ "$(<"${BUILD_DIR}/ipe-asset-mode")" == "disabled" ]]
+    [[ ! -f "${BUILD_DIR}/ipe-signing-mode" ]]
     [[ ! -d "${BUILD_DIR}/acl-ipe-policy" ]]
 }
 
-test_ephemeral_stages_candidate() {
-    prepare_case ephemeral
-    export ACL_IPE_ASSET_MODE=ephemeral
+test_disabled_cleanup_removes_stale_assets() {
+    prepare_case disabled-cleanup
+    mkdir -p "${BUILD_DIR}/acl-ipe-ephemeral" "${BUILD_DIR}/acl-ipe-policy"
+    printf 'stale-key\n' > "${BUILD_DIR}/acl-ipe-ephemeral/ca.key"
+    printf 'stale-cred\n' > "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred"
+    printf 'ephemeral\n' > "${BUILD_DIR}/ipe-signing-mode"
+
+    export ACL_IPE_MODE=disabled
+    unset ACL_IPE_SIGNING_MODE
+
+    rpm_install_ipe_policy "${CASE_ROOT}"
+
+    [[ ! -f "${BUILD_DIR}/ipe-signing-mode" ]]
+    [[ ! -d "${BUILD_DIR}/acl-ipe-policy" ]]
+    [[ ! -d "${BUILD_DIR}/acl-ipe-ephemeral" ]]
+}
+
+test_audit_ephemeral_stages_candidate() {
+    prepare_case audit-ephemeral
+    export ACL_IPE_MODE=audit
+    export ACL_IPE_SIGNING_MODE=ephemeral
 
     rpm_install_ipe_policy "${CASE_ROOT}"
 
@@ -66,12 +85,13 @@ test_ephemeral_stages_candidate() {
         -in "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred" \
         -noverify -out "${TEST_DIR}/verified.pol" >/dev/null 2>&1
     cmp -s "${policy}" "${TEST_DIR}/verified.pol"
-    [[ "$(<"${BUILD_DIR}/ipe-asset-mode")" == "ephemeral" ]]
+    [[ "$(<"${BUILD_DIR}/ipe-signing-mode")" == "ephemeral" ]]
 }
 
-test_external_stages_candidate() {
-    prepare_case external
-    export ACL_IPE_ASSET_MODE=external
+test_audit_esrp_stages_candidate() {
+    prepare_case audit-esrp
+    export ACL_IPE_MODE=audit
+    export ACL_IPE_SIGNING_MODE=esrp
 
     rpm_install_ipe_policy "${CASE_ROOT}"
 
@@ -82,7 +102,18 @@ test_external_stages_candidate() {
         -in "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred" \
         -noverify -out "${TEST_DIR}/ext-verified.pol" >/dev/null 2>&1
     cmp -s "${policy}" "${TEST_DIR}/ext-verified.pol"
-    [[ "$(<"${BUILD_DIR}/ipe-asset-mode")" == "external" ]]
+    [[ "$(<"${BUILD_DIR}/ipe-signing-mode")" == "esrp" ]]
+}
+
+test_enforcing_mode_rejected() {
+    prepare_case enforcing-rejected
+    export ACL_IPE_MODE=enforcing
+
+    if (rpm_install_ipe_policy "${CASE_ROOT}") 2>/dev/null; then
+        echo "reserved 'enforcing' mode was accepted by the producer" >&2
+        return 1
+    fi
+    unset ACL_IPE_MODE
 }
 
 test_verity_roothash_matches_kernel_input() {
@@ -139,12 +170,38 @@ test_vm_conversions_share_secure_boot_cert() {
     [[ "${sign_line}" -lt "${cert_arg_line}" ]]
 }
 
+test_markerless_secure_boot_cert_remains_disabled() {
+    local build_script="${SCRIPT_DIR}/acl/build_rpm_image.sh"
+    eval "$(sed -n '/^load_artifact_ipe_signing_mode() {/,/^}/p' "${build_script}")"
+    configure_ipe_mode() { :; }
+    error() { echo "$*" >&2; }
+
+    prepare_case markerless-secure-boot-cert
+    mkdir -p "${BUILD_DIR}/acl-ipe-ephemeral"
+    printf 'test-cert\n' > "${BUILD_DIR}/acl-ipe-ephemeral/uki-signing-ca.pem"
+    IPE_MODE_OVERRIDE_SET=false
+    ACL_IPE_MODE=audit
+    ACL_IPE_SIGNING_MODE=ephemeral
+
+    load_artifact_ipe_signing_mode "${BUILD_DIR}"
+    [[ "${ACL_IPE_MODE}" == "disabled" ]]
+
+    mkdir -p "${BUILD_DIR}/acl-ipe-policy"
+    if load_artifact_ipe_signing_mode "${BUILD_DIR}" 2>/dev/null; then
+        echo "markerless IPE policy assets were accepted" >&2
+        return 1
+    fi
+}
+
 test_ipe_disabled_by_default
 test_ipe_disabled_stages_nothing
-test_ephemeral_stages_candidate
-test_external_stages_candidate
+test_disabled_cleanup_removes_stale_assets
+test_audit_ephemeral_stages_candidate
+test_audit_esrp_stages_candidate
+test_enforcing_mode_rejected
 test_verity_roothash_matches_kernel_input
 test_uki_binds_policy_before_writing_cmdline
 test_vm_conversions_share_secure_boot_cert
+test_markerless_secure_boot_cert_remains_disabled
 
 echo "IPE policy input tests passed"

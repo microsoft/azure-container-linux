@@ -108,27 +108,38 @@ fi
 sed -i -e '/export INJECT_DOCKER_SYSEXT=/d' /home/sdk/.bashrc 2>/dev/null || true
 echo "export INJECT_DOCKER_SYSEXT='${INJECT_DOCKER_SYSEXT:-false}'" >> /home/sdk/.bashrc
 
-ACL_IPE_ASSET_MODE="${ACL_IPE_ASSET_MODE:-disabled}"
-case "${ACL_IPE_ASSET_MODE}" in
+ACL_IPE_MODE="${ACL_IPE_MODE:-disabled}"
+case "${ACL_IPE_MODE}" in
     disabled)
         ACL_IPE_CAPABLE=false
         ;;
-    ephemeral)
+    audit)
         ACL_IPE_CAPABLE=true
         ;;
-    external)
-        ACL_IPE_CAPABLE=true
+    enforcing)
+        echo "ERROR: ACL_IPE_MODE=enforcing is reserved and not supported by this build" >&2
+        exit 1
         ;;
     *)
-        echo "ERROR: ACL_IPE_ASSET_MODE must be disabled, ephemeral, or external (got: ${ACL_IPE_ASSET_MODE})" >&2
+        echo "ERROR: ACL_IPE_MODE must be disabled, audit, or enforcing (got: ${ACL_IPE_MODE})" >&2
+        exit 1
+        ;;
+esac
+ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE:-ephemeral}"
+case "${ACL_IPE_SIGNING_MODE}" in
+    ephemeral|esrp) ;;
+    *)
+        echo "ERROR: ACL_IPE_SIGNING_MODE must be ephemeral or esrp (got: ${ACL_IPE_SIGNING_MODE})" >&2
         exit 1
         ;;
 esac
 sed -i \
-    -e '/export ACL_IPE_ASSET_MODE=/d' \
+    -e '/export ACL_IPE_MODE=/d' \
+    -e '/export ACL_IPE_SIGNING_MODE=/d' \
     -e '/export ACL_IPE_CAPABLE=/d' \
     /home/sdk/.bashrc 2>/dev/null || true
-echo "export ACL_IPE_ASSET_MODE='${ACL_IPE_ASSET_MODE}'" >> /home/sdk/.bashrc
+echo "export ACL_IPE_MODE='${ACL_IPE_MODE}'" >> /home/sdk/.bashrc
+echo "export ACL_IPE_SIGNING_MODE='${ACL_IPE_SIGNING_MODE}'" >> /home/sdk/.bashrc
 echo "export ACL_IPE_CAPABLE='${ACL_IPE_CAPABLE}'" >> /home/sdk/.bashrc
 
 if [ $# -gt 0 ] ; then

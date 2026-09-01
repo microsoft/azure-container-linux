@@ -874,11 +874,16 @@ sslverify=1
 EOF
 }
 
-rpm_record_ipe_asset_mode() {
-    local ipe_asset_mode="$1"
+rpm_record_ipe_signing_mode() {
+    local ipe_signing_mode="$1"
     [[ -n "${BUILD_DIR:-}" ]] || return 0
-    printf '%s\n' "${ipe_asset_mode}" > "${BUILD_DIR}/ipe-asset-mode" ||
-        die "RPM mode: failed to record IPE asset mode"
+    printf '%s\n' "${ipe_signing_mode}" > "${BUILD_DIR}/ipe-signing-mode" ||
+        die "RPM mode: failed to record IPE signing mode"
+}
+
+rpm_clear_ipe_signing_mode() {
+    [[ -n "${BUILD_DIR:-}" ]] || return 0
+    rm -f -- "${BUILD_DIR}/ipe-signing-mode"
 }
 
 rpm_validate_ipe_policy_source() {
@@ -920,19 +925,26 @@ rpm_verify_ipe_policy_artifact() {
 
 rpm_install_ipe_policy() {
     local root_fs_dir="$1"
-    local ipe_asset_mode="${ACL_IPE_ASSET_MODE:-disabled}"
+    local ipe_mode="${ACL_IPE_MODE:-disabled}"
 
-    case "${ipe_asset_mode}" in
+    case "${ipe_mode}" in
         disabled)
             if [[ -n "${BUILD_DIR:-}" ]]; then
-                rm -rf -- "${BUILD_DIR}/acl-ipe-policy"
+                rm -rf -- "${BUILD_DIR}/acl-ipe-policy" "${BUILD_DIR}/acl-ipe-ephemeral"
             fi
-            rpm_record_ipe_asset_mode disabled
+            rpm_clear_ipe_signing_mode
             return 0
             ;;
-        ephemeral|external) ;;
-        *) die "Invalid ACL_IPE_ASSET_MODE: ${ipe_asset_mode}" ;;
+        audit) ;;
+        *) die "Invalid ACL_IPE_MODE: ${ipe_mode}" ;;
     esac
+
+    local ipe_signing_mode="${ACL_IPE_SIGNING_MODE:-ephemeral}"
+    case "${ipe_signing_mode}" in
+        ephemeral|esrp) ;;
+        *) die "Invalid ACL_IPE_SIGNING_MODE: ${ipe_signing_mode}" ;;
+    esac
+
     [[ "${BOOTLOADER_MODE:-uki}" == "uki" ]] ||
         die "RPM mode: IPE requires the UKI bootloader"
     [[ -n "${BUILD_DIR:-}" ]] ||
@@ -961,15 +973,16 @@ rpm_install_ipe_policy() {
     rpm_verify_ipe_policy_artifact \
         "${policy_src}" "${policy_sig}" "${verified_policy}"
 
-    # Stage the raw policy for the Pipelines collector (external mode replaces
-    # the candidate CMS later; the raw policy is used for external signing).
+    # Stage the raw policy for the Pipelines collector (esrp signing mode
+    # replaces the candidate CMS later; the raw policy is used for
+    # downstream signing).
     cp "${policy_src}" "${staged_raw}" ||
         die "RPM mode: failed to stage raw IPE policy"
 
     rm -rf "${work_dir}"
-    rpm_record_ipe_asset_mode "${ipe_asset_mode}"
+    rpm_record_ipe_signing_mode "${ipe_signing_mode}"
 
-    info "RPM mode: Staged ${ipe_asset_mode} IPE policy candidate at ${stage_dir}"
+    info "RPM mode: Staged ${ipe_signing_mode} IPE policy candidate at ${stage_dir}"
 }
 
 rpm_configure_selinux() {
@@ -1154,7 +1167,8 @@ export -f rpm_download_packages
 export -f rpm_use_official_repos
 export -f rpm_cleanup_build_dir
 export -f rpm_umount_pseudofs
-export -f rpm_record_ipe_asset_mode
+export -f rpm_record_ipe_signing_mode
+export -f rpm_clear_ipe_signing_mode
 export -f rpm_validate_ipe_policy_source
 export -f rpm_prepare_ipe_policy_artifact
 export -f rpm_verify_ipe_policy_artifact

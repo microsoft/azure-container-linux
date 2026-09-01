@@ -155,21 +155,22 @@ Build the Flatcar production image using RPM package sources.
 ./acl/build_rpm_image.sh --rebuild
 ```
 
-Development and test images can include IPE assets with an ephemeral attached
-PKCS#7 policy signature:
+Development and test images can include IPE assets signed with a build-local
+ephemeral PKCS#7 signature:
 
 ```bash
-./acl/build_rpm_image.sh --rebuild --ipe-asset-mode=ephemeral
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit --ipe-signing-mode=ephemeral
 ```
 
-Production IPE validation builds use `--ipe-asset-mode=external`; normal
-production pipeline defaults remain `disabled` until activation is approved.
-The build creates a build-local ephemeral candidate CMS so pre-publish VHDs
-remain bootable; the Pipelines collector exports the staged raw policy from
-`${BUILD_DIR}/acl-ipe-policy/` for external signing by definition 5425.
+Production IPE validation builds use `--ipe-signing-mode=esrp`; normal
+production pipeline defaults remain `--ipe-mode=disabled` until activation is
+approved. The build still creates a build-local ephemeral candidate CMS so
+pre-publish VHDs remain bootable; the Pipelines collector exports the staged
+raw policy from `${BUILD_DIR}/acl-ipe-policy/` for downstream ESRP signing by
+definition 5425.
 
 ```bash
-./acl/build_rpm_image.sh --rebuild --ipe-asset-mode=external
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit --ipe-signing-mode=esrp
 ```
 
 The candidate CMS is staged at
@@ -178,15 +179,18 @@ per-UKI `.extra.d` credential companion. The UKI cmdline includes an
 `acl.ipe.policy_sha256=<hash>` token that binds the credential to the signed
 kernel command line. At boot, the initramfs loader validates the credential
 SHA-256, loads the policy into the kernel IPE subsystem, and only activates it
-when Azure IMDS requests permissive mode. Loading is best effort on Azure;
-validation or loading failures are logged and leave IPE inactive without
-blocking boot.
+when Azure IMDS requests audit (permissive) mode. Loading is best effort on
+Azure; validation or loading failures are logged and leave IPE inactive
+without blocking boot. `enforcing` is reserved for future use: it is rejected
+at build time, and a manually set runtime `ipe=enforcing` request is logged
+as unsupported and left safely inactive — it never fails boot.
 
 IPE-capable VM images currently support only the Azure Secure Boot UKI path.
-QEMU image conversion must use `--ipe-asset-mode=disabled`, which is also the
+QEMU image conversion must use `--ipe-mode=disabled`, which is also the
 default.
 
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
+
 
 ### Phase 4: Build VM Image (Optional)
 

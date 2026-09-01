@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 LOADER="${SCRIPT_DIR}/build_library/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.sh"
 PROFILE_HELPER="${SCRIPT_DIR}/build_library/rpm/additional_files/acl-node-security-profile.sh"
 TMP_DIR="$(mktemp -d)"
@@ -72,16 +72,26 @@ test_missing_cmdline() {
 
 # ---- Test: valid load + inactive (IMDS off) ----
 test_valid_inactive_load() {
-    prepare_case valid-inactive
+    run_inactive_case valid-inactive off
+}
+
+# ---- Test: 'disabled' is accepted as an alias for 'off' ----
+test_valid_disabled_alias_inactive() {
+    run_inactive_case valid-disabled-alias disabled
+}
+
+run_inactive_case() {
+    local name="$1" imds_mode="$2"
+    prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
     local h
     h="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
     printf 'flatcar.oem.id=azure acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
 
-    # Override IMDS to return off
-    cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
-acl_security_profile() { printf '%s\n' 'ipe=off'; }
-acl_security_profile_value() { printf '%s\n' 'off'; }
+    # Override IMDS to return the requested inactive-style mode
+    cat > "${CASE_DIR}/security-profile.sh" <<EOF
+acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
+acl_security_profile_value() { printf '%s\n' '${imds_mode}'; }
 EOF
 
     # The policy is loaded into new_policy but not activated
@@ -97,7 +107,17 @@ EOF
 # We simulate this by using a named pipe so the policies directory appears
 # only after the loader writes to new_policy (passing the preexisting check).
 test_valid_permissive() {
-    prepare_case valid-permissive
+    run_active_case valid-permissive permissive
+}
+
+# ---- Test: 'audit' is accepted as an alias for 'permissive' ----
+test_valid_audit_alias_active() {
+    run_active_case valid-audit-alias audit
+}
+
+run_active_case() {
+    local name="$1" imds_mode="$2"
+    prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
     # Keep the writer blocked while the simulated kernel creates the policy
     # directory after accepting the first byte.
@@ -106,12 +126,17 @@ test_valid_permissive() {
     h="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
     printf 'flatcar.oem.id=azure acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
 
+    cat > "${CASE_DIR}/security-profile.sh" <<EOF
+acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
+acl_security_profile_value() { printf '%s\n' '${imds_mode}'; }
+EOF
+
     # Replace new_policy with a named pipe; a background reader simulates the
     # kernel creating the policy directory after the write.
     rm -f "${IPE_DIR}/new_policy"
     mkfifo "${IPE_DIR}/new_policy" 2>/dev/null || {
         # mkfifo unavailable (e.g. Windows) — skip this test
-        echo "skipping test_valid_permissive (mkfifo not available)"
+        echo "skipping run_active_case (mkfifo not available)"
         return 0
     }
     (
@@ -123,11 +148,40 @@ test_valid_permissive() {
         exec 3<&-
     ) &
 
-    run_loader "${CASE_DIR}/credential.p7b.cred"
+    local output
+    output="$(run_loader "${CASE_DIR}/credential.p7b.cred")"
     wait
+    grep -Fq "Using IPE mode '${imds_mode}'." <<< "${output}" ||
+        { echo "loader did not report requested mode '${imds_mode}'" >&2; return 1; }
     [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
     [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
 }
+
+# ---- Test: 'enforcing' is reserved; loader logs an explicit unsupported
+# diagnostic and falls back safely to inactive without failing boot ----
+test_enforcing_mode_safe_fallback() {
+    prepare_case enforcing-fallback
+    make_credential "${CASE_DIR}/credential.p7b.cred"
+    local h
+    h="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
+    printf 'flatcar.oem.id=azure acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
+
+    cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
+acl_security_profile() { printf '%s\n' 'ipe=enforcing'; }
+acl_security_profile_value() { printf '%s\n' 'enforcing'; }
+EOF
+
+    local output
+    output="$(run_loader "${CASE_DIR}/credential.p7b.cred")"
+    grep -Fq "IPE mode 'enforcing' is not supported at runtime; leaving IPE inactive." <<< "${output}" ||
+        { echo "missing explicit unsupported-mode diagnostic" >&2; return 1; }
+    grep -Fq "Using IPE mode 'off'." <<< "${output}" ||
+        { echo "loader did not fall back to inactive mode" >&2; return 1; }
+    # Verify policy was loaded but not activated, and boot was not blocked.
+    [[ -s "${IPE_DIR}/new_policy" ]]
+    [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
+}
+
 
 # ---- Test: duplicate token → skip IPE and continue boot ----
 test_duplicate_token() {
@@ -318,7 +372,10 @@ test_best_effort_service_wiring() {
 test_absent_token
 test_missing_cmdline
 test_valid_inactive_load
+test_valid_disabled_alias_inactive
 test_valid_permissive
+test_valid_audit_alias_active
+test_enforcing_mode_safe_fallback
 test_duplicate_token
 test_malformed_hash
 test_zero_hash

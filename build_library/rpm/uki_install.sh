@@ -61,7 +61,7 @@ esac
 # systemd-stub transports the IPE policy and root-hash signatures from the
 # UKI's .extra.d companion directory into the initramfs at boot. Build-time
 # images use one ephemeral certificate for the UKI and both credentials.
-# Definition 5425 replaces all three signatures for external-mode images.
+# Definition 5425 replaces all three signatures for esrp-mode images.
 IPE_VERITY_SIG_SOURCE=""
 IPE_VERITY_SIG_PATH=""
 

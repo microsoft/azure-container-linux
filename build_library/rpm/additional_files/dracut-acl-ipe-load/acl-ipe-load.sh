@@ -80,7 +80,11 @@ if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
     if security_profile="$(acl_security_profile)"; then
         requested_mode="$(acl_security_profile_value "${security_profile}" "ipe")"
         case "${requested_mode}" in
-            off|permissive) mode="${requested_mode}" ;;
+            disabled|off|audit|permissive) mode="${requested_mode}" ;;
+            enforcing)
+                log "IPE mode 'enforcing' is not supported at runtime; leaving IPE inactive."
+                mode="off"
+                ;;
             "") ;;
             *) log "Ignoring unrecognized IPE mode '${requested_mode}' from IMDS." ;;
         esac
@@ -90,10 +94,12 @@ if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
 fi
 log "Using IPE mode '${mode}'."
 
-if [[ "${mode}" == "off" ]]; then
-    log "IPE mode is off; policy loaded but activation skipped."
-    exit 0
-fi
+case "${mode}" in
+    disabled|off)
+        log "IPE mode is ${mode}; policy loaded but activation skipped."
+        exit 0
+        ;;
+esac
 
 write_value "${IPE_DIR}/enforce" 0 ||
     skip "failed to set IPE enforce=0 (${mode})"

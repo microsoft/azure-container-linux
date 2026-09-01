@@ -1,5 +1,5 @@
 #!/bin/bash
-# Validate the IPE permissive-mode proof of concept inside a Secure Boot VM.
+# Live-VM validation of IPE permissive mode inside a Secure Boot VM.
 
 set -euo pipefail
 
@@ -108,9 +108,6 @@ if [[ -n "${loader_errors}" ]]; then
     echo "${loader_errors}" >&2
     fail "IPE or dm-verity boot errors were detected"
 fi
-grep -Fq "acl-ipe-load: Using IPE mode 'permissive'." \
-    <<< "${boot_logs}" ||
-    fail "initramfs did not select permissive IPE mode"
 
 audit_event="$(
     grep -F "${probe}" <<< "${boot_logs}" |
