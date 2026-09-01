@@ -1,0 +1,107 @@
+From 38aa4465f55980b51aa787a8823adea874aed54b Mon Sep 17 00:00:00 2001
+From: Dallas Delaney <dadelan@microsoft.com>
+Date: Tue, 1 Sep 2026 04:03:15 +0000
+Subject: [PATCH] cri: refresh cached snapshotters after unpack
+
+An unpack into another snapshotter updates config-blob labels without changing the image ID. Refresh the existing image-store entry before the same-ID pin fast path so CRI does not repeatedly pull an already-unpacked sandbox image.
+
+Replace the cached snapshotter set from the authoritative labels, preserving reference aggregation and per-reference pin state.
+
+Acl-Patch-Group: acl-multi-snapshotter-cache-fix
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
+Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
+---
+ internal/cri/store/image/image.go      | 10 ++++-
+ internal/cri/store/image/image_test.go | 52 ++++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+), 1 deletion(-)
+
+diff --git a/internal/cri/store/image/image.go b/internal/cri/store/image/image.go
+index a42108d9e..dead0cfce 100644
+--- a/internal/cri/store/image/image.go
++++ b/internal/cri/store/image/image.go
+@@ -133,7 +133,14 @@ func (s *Store) update(ref string, img *Image) error {
+ 	}
+ 	if oldExist {
+ 		if oldID == img.ID {
+-			if s.store.isPinned(img.ID, ref) == img.Pinned {
++			wasPinned := s.store.isPinned(img.ID, ref)
++			// Unpacking into another snapshotter updates the config labels
++			// without changing the image ID. Refresh that cached metadata
++			// before taking the pin-only fast path.
++			if err := s.store.add(*img); err != nil {
++				return err
++			}
++			if wasPinned == img.Pinned {
+ 				return nil
+ 			}
+ 			if img.Pinned {
+@@ -274,6 +281,7 @@ func (s *store) add(img Image) error {
+ 	// Or else, merge and sort the references.
+ 	i.References = docker.Sort(util.MergeStringSlices(i.References, img.References))
+ 	i.Pinned = i.Pinned || img.Pinned
++	i.Snapshotters = img.Snapshotters
+ 	s.images[img.ID] = i
+ 	return nil
+ }
+diff --git a/internal/cri/store/image/image_test.go b/internal/cri/store/image/image_test.go
+index 59b223590..74a318f89 100644
+--- a/internal/cri/store/image/image_test.go
++++ b/internal/cri/store/image/image_test.go
+@@ -316,3 +316,55 @@ func TestImageStore(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestImageStoreRefreshesSnapshotters(t *testing.T) {
++	const (
++		id  = "sha256:1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
++		ref = "containerd.io/ref-1"
++	)
++
++	for _, test := range []struct {
++		name    string
++		pinned  bool
++		initial map[string]struct{}
++	}{
++		{
++			name:    "unpinned image",
++			initial: map[string]struct{}{"overlayfs": {}},
++		},
++		{
++			name:    "pinned image drops stale snapshotter",
++			pinned:  true,
++			initial: map[string]struct{}{"overlayfs": {}, "erofs": {}},
++		},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			assert := assertlib.New(t)
++			s, err := NewFakeStore([]Image{{
++				ID:           id,
++				ChainID:      "test-chain-id-1",
++				References:   []string{ref},
++				Size:         10,
++				Pinned:       test.pinned,
++				Snapshotters: test.initial,
++			}})
++			assert.NoError(err)
++
++			updated := Image{
++				ID:           id,
++				ChainID:      "test-chain-id-1",
++				References:   []string{ref},
++				Size:         10,
++				Pinned:       test.pinned,
++				Snapshotters: map[string]struct{}{"erofs": {}},
++			}
++			assert.NoError(s.update(ref, &updated))
++
++			got, err := s.Get(id)
++			assert.NoError(err)
++			assert.Equal(map[string]struct{}{"erofs": {}}, got.Snapshotters)
++			assert.Equal(test.pinned, got.Pinned)
++			assert.Equal(test.pinned, s.store.isPinned(id, ref))
++		})
++	}
++}

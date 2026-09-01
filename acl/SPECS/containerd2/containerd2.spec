@@ -26,12 +26,12 @@ Version: 2.2.4
 # Release: 1, 2, ...). The 6xxx range succeeds the prior 5xxx steamboat
 # RPM stream and the 4xxx 2.2.0-patch-based / 3xxx fork-tarball builds.
 # The ".verity" suffix marks the dm-verity erofs snapshotter patch set
-# (Patch8-16 of PATCHES.md). No .commit_hash tag since the upstream is an
+# (Patch8-17 of PATCHES.md). No .commit_hash tag since the upstream is an
 # immutable release tag.
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 6022.verity%{?dist}
+Release: 6023.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -94,6 +94,8 @@ Source9: containerd-acl-select-profile
 # Patch16:  Replace full precomputed EROFS blobs with signed tar indexes and
 #           Merkle trees. Reconstruct the exact EROFS data device from the
 #           decompressed OCI tar stream and verify it before use.
+# Patch17:  Refresh the CRI image cache's authoritative snapshotter set after
+#           same-image unpack so cached sandbox images are not pulled again.
 #           See PATCHES.md for the author/commit provenance.
 # ============================================================================
 
@@ -127,6 +129,8 @@ Patch14: 0010-erofs-test-pass-default-shared-layer-context.patch
 Patch15: 0011-erofs-retain-referrers-for-deferred-unpack.patch
 # Replacement-only signed EROFS tar-index wire format.
 Patch16: 0012-erofs-use-signed-tar-index-referrers.patch
+# Refresh multi-snapshotter cache metadata after same-image unpack.
+Patch17: 0013-cri-refresh-multi-snapshotter-cache.patch
 
 %{?systemd_requires}
 
@@ -272,6 +276,12 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Tue Sep 01 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6023.verity
+- Patch17: refresh cached snapshotter metadata when an existing image is
+  unpacked into another snapshotter without changing its image ID.
+- Eliminate redundant pause-image pulls on subsequent pod sandboxes while
+  preserving per-reference pinning and authoritative label removal.
+
 * Wed Aug 26 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6022.verity
 - Patch16: replace full precomputed EROFS blobs with compact signed tar indexes
   and reconstruct each verified data device from the OCI tar stream.
