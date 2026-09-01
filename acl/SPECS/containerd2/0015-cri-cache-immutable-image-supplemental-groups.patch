@@ -1,0 +1,776 @@
+From 5ca7d24b3d48acd6d8752e24444a9b3596752e3d Mon Sep 17 00:00:00 2001
+From: Dallas Delaney <dadelan@microsoft.com>
+Date: Tue, 1 Sep 2026 23:32:40 +0000
+Subject: [PATCH] cri: cache immutable image supplemental groups
+
+Resolve image-defined supplemental groups through a temporary view of the committed image ChainID and cache successful results in a bounded LRU. Keep container-specific primary and explicit groups outside the cached value while coalescing concurrent misses without blocking cancellation.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
+Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
+---
+ internal/cri/opts/spec_opts.go                | 107 +++++++++++
+ internal/cri/opts/spec_opts_test.go           | 134 ++++++++++++++
+ internal/cri/server/container_create.go       |   7 +-
+ internal/cri/server/container_create_linux.go |  17 +-
+ .../cri/server/container_create_linux_test.go |   2 +-
+ internal/cri/server/container_create_other.go |   2 +-
+ .../cri/server/container_create_windows.go    |   2 +-
+ internal/cri/server/service.go                |   3 +
+ .../cri/server/supplemental_groups_cache.go   | 142 ++++++++++++++
+ .../server/supplemental_groups_cache_test.go  | 173 ++++++++++++++++++
+ 10 files changed, 575 insertions(+), 14 deletions(-)
+ create mode 100644 internal/cri/server/supplemental_groups_cache.go
+ create mode 100644 internal/cri/server/supplemental_groups_cache_test.go
+
+diff --git a/internal/cri/opts/spec_opts.go b/internal/cri/opts/spec_opts.go
+index 2baf188b8..6bc268e7a 100644
+--- a/internal/cri/opts/spec_opts.go
++++ b/internal/cri/opts/spec_opts.go
+@@ -23,6 +23,7 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"sort"
++	"strconv"
+ 	"strings"
+ 
+ 	imagespec "github.com/opencontainers/image-spec/specs-go/v1"
+@@ -30,6 +31,7 @@ import (
+ 	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
+ 
+ 	"github.com/containerd/containerd/v2/core/containers"
++	"github.com/containerd/containerd/v2/core/snapshots"
+ 	"github.com/containerd/containerd/v2/internal/cri/util"
+ 	"github.com/containerd/containerd/v2/pkg/oci"
+ )
+@@ -162,6 +164,111 @@ func WithAdditionalGIDs(userstr string) oci.SpecOpts {
+ 	}
+ }
+ 
++type SupplementalGroupsCacheKey struct {
++	Snapshotter string
++	ChainID     string
++	User        string
++	PrimaryGID  uint32
++}
++
++type SupplementalGroupsCache interface {
++	Resolve(
++		ctx context.Context,
++		key SupplementalGroupsCacheKey,
++		resolver func(context.Context) ([]uint32, error),
++	) ([]uint32, error)
++}
++
++// WithCachedAdditionalGIDs resolves image-defined supplemental groups from the
++// immutable committed image snapshot. lookupUsername is set only when the user
++// was selected by name; otherwise the effective UID in the current spec is used.
++func WithCachedAdditionalGIDs(cache SupplementalGroupsCache, chainID, lookupUsername string) oci.SpecOpts {
++	return func(ctx context.Context, client oci.Client, c *containers.Container, s *runtimespec.Spec) error {
++		if s.Process == nil {
++			s.Process = &runtimespec.Process{}
++		}
++		lookupUser := lookupUsername
++		if lookupUser == "" {
++			lookupUser = strconv.FormatUint(uint64(s.Process.User.UID), 10)
++		}
++
++		resolveFrom := func(container *containers.Container, spec *runtimespec.Spec) error {
++			existing := append([]uint32(nil), s.Process.User.AdditionalGids...)
++			if err := oci.WithAdditionalGIDs(lookupUser)(ctx, client, container, spec); err != nil {
++				return err
++			}
++			resolved := append([]uint32(nil), spec.Process.User.AdditionalGids...)
++			s.Process.User.AdditionalGids = mergeGids(existing, []uint32{s.Process.User.GID})
++			s.Process.User.AdditionalGids = mergeGids(s.Process.User.AdditionalGids, withoutGID(resolved, spec.Process.User.GID))
++			return nil
++		}
++
++		if cache == nil || chainID == "" || c.Snapshotter == "" || c.SnapshotKey == "" || client == nil {
++			return resolveFrom(c, s)
++		}
++		snapshotter := client.SnapshotService(c.Snapshotter)
++		if snapshotter == nil {
++			return resolveFrom(c, s)
++		}
++		info, err := snapshotter.Stat(ctx, chainID)
++		if err != nil || info.Kind != snapshots.KindCommitted {
++			return resolveFrom(c, s)
++		}
++
++		key := SupplementalGroupsCacheKey{
++			Snapshotter: c.Snapshotter,
++			ChainID:     chainID,
++			User:        lookupUser,
++			PrimaryGID:  s.Process.User.GID,
++		}
++		imageGIDs, err := cache.Resolve(ctx, key, func(resolveCtx context.Context) (gids []uint32, retErr error) {
++			viewKey := "supplemental-groups-" + util.GenerateID()
++			if _, err := snapshotter.View(resolveCtx, viewKey, chainID); err != nil {
++				return nil, fmt.Errorf("create immutable image view for supplemental groups: %w", err)
++			}
++			defer func() {
++				if err := snapshotter.Remove(context.WithoutCancel(resolveCtx), viewKey); err != nil {
++					retErr = errors.Join(retErr, fmt.Errorf("remove supplemental groups image view %q: %w", viewKey, err))
++				}
++			}()
++
++			imageContainer := *c
++			imageContainer.SnapshotKey = viewKey
++			probe := &runtimespec.Spec{
++				Process: &runtimespec.Process{
++					User: runtimespec.User{
++						UID: s.Process.User.UID,
++						GID: s.Process.User.GID,
++					},
++				},
++				Linux:   s.Linux,
++				Windows: s.Windows,
++			}
++			if err := oci.WithAdditionalGIDs(lookupUser)(resolveCtx, client, &imageContainer, probe); err != nil {
++				return nil, err
++			}
++			return withoutGID(probe.Process.User.AdditionalGids, probe.Process.User.GID), nil
++		})
++		if err != nil {
++			return fmt.Errorf("resolve supplemental groups from image snapshot %s: %w", chainID, err)
++		}
++
++		s.Process.User.AdditionalGids = mergeGids(s.Process.User.AdditionalGids, []uint32{s.Process.User.GID})
++		s.Process.User.AdditionalGids = mergeGids(s.Process.User.AdditionalGids, imageGIDs)
++		return nil
++	}
++}
++
++func withoutGID(gids []uint32, excluded uint32) []uint32 {
++	filtered := make([]uint32, 0, len(gids))
++	for _, gid := range gids {
++		if gid != excluded {
++			filtered = append(filtered, gid)
++		}
++	}
++	return filtered
++}
++
+ func mergeGids(gids1, gids2 []uint32) []uint32 {
+ 	gidsMap := make(map[uint32]struct{})
+ 	for _, gid1 := range gids1 {
+diff --git a/internal/cri/opts/spec_opts_test.go b/internal/cri/opts/spec_opts_test.go
+index 3892e4cc4..df5139bd9 100644
+--- a/internal/cri/opts/spec_opts_test.go
++++ b/internal/cri/opts/spec_opts_test.go
+@@ -17,10 +17,17 @@
+ package opts
+ 
+ import (
++	"context"
+ 	"sort"
+ 	"testing"
+ 
++	"github.com/containerd/containerd/v2/core/containers"
++	"github.com/containerd/containerd/v2/core/mount"
++	"github.com/containerd/containerd/v2/core/snapshots"
++	"github.com/containerd/containerd/v2/pkg/oci"
++	runtimespec "github.com/opencontainers/runtime-spec/specs-go"
+ 	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
+ 	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
+ )
+ 
+@@ -44,3 +51,130 @@ func TestOrderedMounts(t *testing.T) {
+ 	sort.Stable(orderedMounts(mounts))
+ 	assert.Equal(t, expected, mounts)
+ }
++
++func TestWithCachedAdditionalGIDs(t *testing.T) {
++	snapshotter := &committedSnapshotter{}
++	client := snapshotClient{snapshotter: snapshotter}
++	cache := &recordingSupplementalGroupsCache{gids: []uint32{11111}}
++	container := &containers.Container{
++		Snapshotter: "erofs",
++		SnapshotKey: "active-container",
++	}
++	spec := &runtimespec.Spec{
++		Process: &runtimespec.Process{
++			User: runtimespec.User{
++				UID:            1000,
++				GID:            2000,
++				AdditionalGids: []uint32{3333},
++			},
++		},
++	}
++
++	err := WithCachedAdditionalGIDs(cache, "chain-id", "")(
++		context.Background(),
++		client,
++		container,
++		spec,
++	)
++	require.NoError(t, err)
++	assert.Equal(t, []uint32{2000, 3333, 11111}, spec.Process.User.AdditionalGids)
++	require.Len(t, cache.keys, 1)
++	assert.Equal(t, SupplementalGroupsCacheKey{
++		Snapshotter: "erofs",
++		ChainID:     "chain-id",
++		User:        "1000",
++		PrimaryGID:  2000,
++	}, cache.keys[0])
++
++	spec.Process.User.GID = 4000
++	spec.Process.User.AdditionalGids = []uint32{5555}
++	err = WithCachedAdditionalGIDs(cache, "chain-id", "")(
++		context.Background(),
++		client,
++		container,
++		spec,
++	)
++	require.NoError(t, err)
++	assert.Equal(t, []uint32{4000, 5555, 11111}, spec.Process.User.AdditionalGids)
++	assert.Equal(t, uint32(4000), cache.keys[1].PrimaryGID)
++	assert.NotEqual(t, cache.keys[0], cache.keys[1], "different primary groups need independent image-group results")
++
++	spec.Process.User.UID = 0
++	spec.Process.User.GID = 0
++	spec.Process.User.AdditionalGids = nil
++	err = WithCachedAdditionalGIDs(cache, "chain-id", "alice")(
++		context.Background(),
++		client,
++		container,
++		spec,
++	)
++	require.NoError(t, err)
++	assert.Equal(t, "alice", cache.keys[2].User)
++	assert.Equal(t, uint32(0), cache.keys[2].PrimaryGID)
++}
++
++type recordingSupplementalGroupsCache struct {
++	keys []SupplementalGroupsCacheKey
++	gids []uint32
++}
++
++func (c *recordingSupplementalGroupsCache) Resolve(
++	_ context.Context,
++	key SupplementalGroupsCacheKey,
++	_ func(context.Context) ([]uint32, error),
++) ([]uint32, error) {
++	c.keys = append(c.keys, key)
++	return append([]uint32(nil), c.gids...), nil
++}
++
++type snapshotClient struct {
++	snapshotter snapshots.Snapshotter
++}
++
++func (c snapshotClient) SnapshotService(string) snapshots.Snapshotter {
++	return c.snapshotter
++}
++
++type committedSnapshotter struct{}
++
++func (*committedSnapshotter) Stat(context.Context, string) (snapshots.Info, error) {
++	return snapshots.Info{Kind: snapshots.KindCommitted}, nil
++}
++
++func (*committedSnapshotter) Update(context.Context, snapshots.Info, ...string) (snapshots.Info, error) {
++	panic("unexpected Update")
++}
++
++func (*committedSnapshotter) Usage(context.Context, string) (snapshots.Usage, error) {
++	panic("unexpected Usage")
++}
++
++func (*committedSnapshotter) Mounts(context.Context, string) ([]mount.Mount, error) {
++	panic("unexpected Mounts")
++}
++
++func (*committedSnapshotter) Prepare(context.Context, string, string, ...snapshots.Opt) ([]mount.Mount, error) {
++	panic("unexpected Prepare")
++}
++
++func (*committedSnapshotter) View(context.Context, string, string, ...snapshots.Opt) ([]mount.Mount, error) {
++	panic("unexpected View")
++}
++
++func (*committedSnapshotter) Commit(context.Context, string, string, ...snapshots.Opt) error {
++	panic("unexpected Commit")
++}
++
++func (*committedSnapshotter) Remove(context.Context, string) error {
++	panic("unexpected Remove")
++}
++
++func (*committedSnapshotter) Walk(context.Context, snapshots.WalkFunc, ...string) error {
++	panic("unexpected Walk")
++}
++
++func (*committedSnapshotter) Close() error {
++	return nil
++}
++
++var _ oci.Client = snapshotClient{}
+diff --git a/internal/cri/server/container_create.go b/internal/cri/server/container_create.go
+index bcc5080d5..0e2439cb7 100644
+--- a/internal/cri/server/container_create.go
++++ b/internal/cri/server/container_create.go
+@@ -190,6 +190,7 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
+ 			sandbox:               &sandbox,
+ 			sandboxID:             sandboxID,
+ 			imageID:               image.ID,
++			imageChainID:          image.ChainID,
+ 			containerConfig:       config,
+ 			imageConfig:           &image.ImageSpec.Config,
+ 			podSandboxConfig:      sandboxConfig,
+@@ -215,6 +216,7 @@ type createContainerRequest struct {
+ 	sandbox               *sandbox.Sandbox
+ 	sandboxID             string
+ 	imageID               string
++	imageChainID          string
+ 	containerConfig       *runtime.ContainerConfig
+ 	imageConfig           *imagespec.ImageConfig
+ 	podSandboxConfig      *runtime.PodSandboxConfig
+@@ -399,7 +401,7 @@ func (c *criService) createContainer(r *createContainerRequest) (_ string, retEr
+ 		}
+ 	}()
+ 
+-	specOpts, err := c.platformSpecOpts(platform, r.containerConfig, r.imageConfig)
++	specOpts, err := c.platformSpecOpts(platform, r.containerConfig, r.imageConfig, r.imageChainID)
+ 	if err != nil {
+ 		return "", fmt.Errorf("failed to get container spec opts: %w", err)
+ 	}
+@@ -585,6 +587,7 @@ func (c *criService) platformSpecOpts(
+ 	platform imagespec.Platform,
+ 	config *runtime.ContainerConfig,
+ 	imageConfig *imagespec.ImageConfig,
++	imageChainID string,
+ ) ([]oci.SpecOpts, error) {
+ 	var specOpts []oci.SpecOpts
+ 
+@@ -618,7 +621,7 @@ func (c *criService) platformSpecOpts(
+ 
+ 	// Now grab the truly platform specific options (seccomp, apparmor etc. for linux
+ 	// for example).
+-	ctrSpecOpts, err := c.containerSpecOpts(config, imageConfig)
++	ctrSpecOpts, err := c.containerSpecOpts(config, imageConfig, imageChainID)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/internal/cri/server/container_create_linux.go b/internal/cri/server/container_create_linux.go
+index 5c80088dd..b6e2c8ed3 100644
+--- a/internal/cri/server/container_create_linux.go
++++ b/internal/cri/server/container_create_linux.go
+@@ -31,19 +31,18 @@ import (
+ 	"github.com/containerd/containerd/v2/internal/cri/sputil"
+ )
+ 
+-func (c *criService) containerSpecOpts(config *runtime.ContainerConfig, imageConfig *imagespec.ImageConfig) ([]oci.SpecOpts, error) {
++func (c *criService) containerSpecOpts(config *runtime.ContainerConfig, imageConfig *imagespec.ImageConfig, imageChainID string) ([]oci.SpecOpts, error) {
+ 	var (
+ 		specOpts []oci.SpecOpts
+ 		err      error
+ 	)
+ 	securityContext := config.GetLinux().GetSecurityContext()
+-	userstr := "0" // runtime default
+-	if securityContext.GetRunAsUsername() != "" {
+-		userstr = securityContext.GetRunAsUsername()
+-	} else if securityContext.GetRunAsUser() != nil {
+-		userstr = strconv.FormatInt(securityContext.GetRunAsUser().GetValue(), 10)
+-	} else if imageConfig.User != "" {
+-		userstr, _, _ = strings.Cut(imageConfig.User, ":")
++	lookupUsername := securityContext.GetRunAsUsername()
++	if lookupUsername == "" && securityContext.GetRunAsUser() == nil && imageConfig.User != "" {
++		imageUser, _, _ := strings.Cut(imageConfig.User, ":")
++		if _, err := strconv.ParseUint(imageUser, 10, 32); err != nil {
++			lookupUsername = imageUser
++		}
+ 	}
+ 
+ 	switch securityContext.GetSupplementalGroupsPolicy() {
+@@ -51,7 +50,7 @@ func (c *criService) containerSpecOpts(config *runtime.ContainerConfig, imageCon
+ 		// merging group defined in /etc/passwd
+ 		// and SupplementalGroups defined in security context
+ 		specOpts = append(specOpts,
+-			customopts.WithAdditionalGIDs(userstr),
++			customopts.WithCachedAdditionalGIDs(&c.supplementalGroupsCache, imageChainID, lookupUsername),
+ 			customopts.WithSupplementalGroups(securityContext.GetSupplementalGroups()),
+ 		)
+ 	case runtime.SupplementalGroupsPolicy_Strict:
+diff --git a/internal/cri/server/container_create_linux_test.go b/internal/cri/server/container_create_linux_test.go
+index b9c19ef5d..dfef18c99 100644
+--- a/internal/cri/server/container_create_linux_test.go
++++ b/internal/cri/server/container_create_linux_test.go
+@@ -1173,7 +1173,7 @@ additional-group-for-root:x:22222:root
+ 			require.NoError(t, err)
+ 
+ 			spec.Root.Path = tempRootDir // simulating /etc/{passwd, group}
+-			opts, err := c.platformSpecOpts(platforms.DefaultSpec(), containerConfig, imageConfig)
++			opts, err := c.platformSpecOpts(platforms.DefaultSpec(), containerConfig, imageConfig, "")
+ 			require.NoError(t, err)
+ 			oci.ApplyOpts(ctx, nil, testContainer, spec, opts...)
+ 
+diff --git a/internal/cri/server/container_create_other.go b/internal/cri/server/container_create_other.go
+index 47a11ffd1..c6084041a 100644
+--- a/internal/cri/server/container_create_other.go
++++ b/internal/cri/server/container_create_other.go
+@@ -26,7 +26,7 @@ import (
+ 	"github.com/containerd/containerd/v2/pkg/oci"
+ )
+ 
+-func (c *criService) containerSpecOpts(config *runtime.ContainerConfig, imageConfig *imagespec.ImageConfig) ([]oci.SpecOpts, error) {
++func (c *criService) containerSpecOpts(config *runtime.ContainerConfig, imageConfig *imagespec.ImageConfig, imageChainID string) ([]oci.SpecOpts, error) {
+ 	return []oci.SpecOpts{}, nil
+ }
+ 
+diff --git a/internal/cri/server/container_create_windows.go b/internal/cri/server/container_create_windows.go
+index 137eb9678..f572db27e 100644
+--- a/internal/cri/server/container_create_windows.go
++++ b/internal/cri/server/container_create_windows.go
+@@ -27,7 +27,7 @@ import (
+ )
+ 
+ // No extra spec options needed for windows.
+-func (c *criService) containerSpecOpts(config *runtime.ContainerConfig, imageConfig *imagespec.ImageConfig) ([]oci.SpecOpts, error) {
++func (c *criService) containerSpecOpts(config *runtime.ContainerConfig, imageConfig *imagespec.ImageConfig, imageChainID string) ([]oci.SpecOpts, error) {
+ 	return nil, nil
+ }
+ 
+diff --git a/internal/cri/server/service.go b/internal/cri/server/service.go
+index e5cfd6f00..93f3f91c3 100644
+--- a/internal/cri/server/service.go
++++ b/internal/cri/server/service.go
+@@ -161,6 +161,9 @@ type criService struct {
+ 	runtimeHandlers map[string]*runtime.RuntimeHandler
+ 	// runtimeFeatures container runtime features info
+ 	runtimeFeatures *runtime.RuntimeFeatures
++	// supplementalGroupsCache avoids mounting an immutable image rootfs for
++	// every container that uses SupplementalGroupsPolicy=Merge.
++	supplementalGroupsCache supplementalGroupsCache
+ }
+ 
+ type CRIServiceOptions struct {
+diff --git a/internal/cri/server/supplemental_groups_cache.go b/internal/cri/server/supplemental_groups_cache.go
+new file mode 100644
+index 000000000..827dde806
+--- /dev/null
++++ b/internal/cri/server/supplemental_groups_cache.go
+@@ -0,0 +1,142 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package server
++
++import (
++	"container/list"
++	"context"
++	"sync"
++
++	customopts "github.com/containerd/containerd/v2/internal/cri/opts"
++)
++
++const defaultSupplementalGroupsCacheEntries = 1024
++
++type supplementalGroupsCacheEntry struct {
++	key  customopts.SupplementalGroupsCacheKey
++	gids []uint32
++}
++
++type supplementalGroupsCacheCall struct {
++	done chan struct{}
++	gids []uint32
++	err  error
++}
++
++type supplementalGroupsCache struct {
++	mu         sync.Mutex
++	entries    map[customopts.SupplementalGroupsCacheKey]*list.Element
++	lru        list.List
++	maxEntries int
++
++	callMu sync.Mutex
++	calls  map[customopts.SupplementalGroupsCacheKey]*supplementalGroupsCacheCall
++}
++
++func (c *supplementalGroupsCache) Resolve(
++	ctx context.Context,
++	key customopts.SupplementalGroupsCacheKey,
++	resolver func(context.Context) ([]uint32, error),
++) ([]uint32, error) {
++	if gids, ok := c.get(key); ok {
++		return gids, nil
++	}
++
++	c.callMu.Lock()
++	if call, ok := c.calls[key]; ok {
++		c.callMu.Unlock()
++		select {
++		case <-call.done:
++			return cloneGIDs(call.gids), call.err
++		case <-ctx.Done():
++			return nil, ctx.Err()
++		}
++	}
++	if c.calls == nil {
++		c.calls = make(map[customopts.SupplementalGroupsCacheKey]*supplementalGroupsCacheCall)
++	}
++	call := &supplementalGroupsCacheCall{done: make(chan struct{})}
++	c.calls[key] = call
++	c.callMu.Unlock()
++
++	gids, ok := c.get(key)
++	if !ok {
++		gids, call.err = resolver(ctx)
++		if call.err == nil {
++			c.add(key, gids)
++		}
++	}
++
++	c.callMu.Lock()
++	call.gids = cloneGIDs(gids)
++	delete(c.calls, key)
++	close(call.done)
++	c.callMu.Unlock()
++
++	if call.err != nil {
++		return nil, call.err
++	}
++	return cloneGIDs(gids), nil
++}
++
++func (c *supplementalGroupsCache) get(key customopts.SupplementalGroupsCacheKey) ([]uint32, bool) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	element, ok := c.entries[key]
++	if !ok {
++		return nil, false
++	}
++	c.lru.MoveToFront(element)
++	entry := element.Value.(supplementalGroupsCacheEntry)
++	return cloneGIDs(entry.gids), true
++}
++
++func (c *supplementalGroupsCache) add(key customopts.SupplementalGroupsCacheKey, gids []uint32) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	if c.entries == nil {
++		c.entries = make(map[customopts.SupplementalGroupsCacheKey]*list.Element)
++	}
++	if element, ok := c.entries[key]; ok {
++		element.Value = supplementalGroupsCacheEntry{key: key, gids: cloneGIDs(gids)}
++		c.lru.MoveToFront(element)
++		return
++	}
++
++	element := c.lru.PushFront(supplementalGroupsCacheEntry{
++		key:  key,
++		gids: cloneGIDs(gids),
++	})
++	c.entries[key] = element
++
++	maxEntries := c.maxEntries
++	if maxEntries <= 0 {
++		maxEntries = defaultSupplementalGroupsCacheEntries
++	}
++	if c.lru.Len() <= maxEntries {
++		return
++	}
++	oldest := c.lru.Back()
++	delete(c.entries, oldest.Value.(supplementalGroupsCacheEntry).key)
++	c.lru.Remove(oldest)
++}
++
++func cloneGIDs(gids []uint32) []uint32 {
++	return append([]uint32(nil), gids...)
++}
+diff --git a/internal/cri/server/supplemental_groups_cache_test.go b/internal/cri/server/supplemental_groups_cache_test.go
+new file mode 100644
+index 000000000..86de8e5cc
+--- /dev/null
++++ b/internal/cri/server/supplemental_groups_cache_test.go
+@@ -0,0 +1,173 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package server
++
++import (
++	"context"
++	"sync"
++	"sync/atomic"
++	"testing"
++
++	customopts "github.com/containerd/containerd/v2/internal/cri/opts"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++func TestSupplementalGroupsCache(t *testing.T) {
++	t.Run("copies cached values", func(t *testing.T) {
++		cache := supplementalGroupsCache{}
++		calls := 0
++		source := []uint32{1, 2}
++		key := customopts.SupplementalGroupsCacheKey{Snapshotter: "erofs", ChainID: "chain", User: "0"}
++		resolver := func(context.Context) ([]uint32, error) {
++			calls++
++			return source, nil
++		}
++
++		first, err := cache.Resolve(context.Background(), key, resolver)
++		require.NoError(t, err)
++		source[1] = 88
++		first[0] = 99
++
++		second, err := cache.Resolve(context.Background(), key, resolver)
++		require.NoError(t, err)
++		assert.Equal(t, []uint32{1, 2}, second)
++		assert.Equal(t, 1, calls)
++	})
++
++	t.Run("evicts least recently used entry", func(t *testing.T) {
++		cache := supplementalGroupsCache{maxEntries: 2}
++		for _, key := range []string{"one", "two"} {
++			_, err := cache.Resolve(context.Background(), cacheKey(key), func(context.Context) ([]uint32, error) {
++				return []uint32{1}, nil
++			})
++			require.NoError(t, err)
++		}
++		_, err := cache.Resolve(context.Background(), cacheKey("one"), func(context.Context) ([]uint32, error) {
++			t.Fatal("recent entry should have been cached")
++			return nil, nil
++		})
++		require.NoError(t, err)
++		_, err = cache.Resolve(context.Background(), cacheKey("three"), func(context.Context) ([]uint32, error) {
++			return []uint32{3}, nil
++		})
++		require.NoError(t, err)
++
++		calls := 0
++		_, err = cache.Resolve(context.Background(), cacheKey("two"), func(context.Context) ([]uint32, error) {
++			calls++
++			return []uint32{2}, nil
++		})
++		require.NoError(t, err)
++		assert.Equal(t, 1, calls)
++	})
++
++	t.Run("coalesces concurrent misses", func(t *testing.T) {
++		cache := supplementalGroupsCache{}
++		var calls atomic.Int32
++		started := make(chan struct{})
++		release := make(chan struct{})
++		resolver := func(context.Context) ([]uint32, error) {
++			if calls.Add(1) == 1 {
++				close(started)
++			}
++			<-release
++			return []uint32{42}, nil
++		}
++
++		const workers = 8
++		results := make(chan []uint32, workers)
++		errs := make(chan error, workers)
++		var wg sync.WaitGroup
++		for range workers {
++			wg.Add(1)
++			go func() {
++				defer wg.Done()
++				gids, err := cache.Resolve(context.Background(), cacheKey("shared"), resolver)
++				results <- gids
++				errs <- err
++			}()
++		}
++		<-started
++		close(release)
++		wg.Wait()
++		close(results)
++		close(errs)
++
++		for err := range errs {
++			require.NoError(t, err)
++		}
++		for gids := range results {
++			assert.Equal(t, []uint32{42}, gids)
++		}
++		assert.EqualValues(t, 1, calls.Load())
++	})
++
++	t.Run("does not cache errors", func(t *testing.T) {
++		cache := supplementalGroupsCache{}
++		calls := 0
++		resolver := func(context.Context) ([]uint32, error) {
++			calls++
++			if calls == 1 {
++				return nil, assert.AnError
++			}
++			return []uint32{7}, nil
++		}
++
++		_, err := cache.Resolve(context.Background(), cacheKey("error"), resolver)
++		require.ErrorIs(t, err, assert.AnError)
++		gids, err := cache.Resolve(context.Background(), cacheKey("error"), resolver)
++		require.NoError(t, err)
++		assert.Equal(t, []uint32{7}, gids)
++		assert.Equal(t, 2, calls)
++	})
++
++	t.Run("waiting caller can cancel", func(t *testing.T) {
++		cache := supplementalGroupsCache{}
++		started := make(chan struct{})
++		release := make(chan struct{})
++		firstDone := make(chan error, 1)
++		go func() {
++			_, err := cache.Resolve(context.Background(), cacheKey("cancel"), func(context.Context) ([]uint32, error) {
++				close(started)
++				<-release
++				return []uint32{8}, nil
++			})
++			firstDone <- err
++		}()
++		<-started
++
++		ctx, cancel := context.WithCancel(context.Background())
++		cancel()
++		_, err := cache.Resolve(ctx, cacheKey("cancel"), func(context.Context) ([]uint32, error) {
++			t.Fatal("waiting caller must not run the resolver")
++			return nil, nil
++		})
++		require.ErrorIs(t, err, context.Canceled)
++
++		close(release)
++		require.NoError(t, <-firstDone)
++	})
++}
++
++func cacheKey(chainID string) customopts.SupplementalGroupsCacheKey {
++	return customopts.SupplementalGroupsCacheKey{
++		Snapshotter: "erofs",
++		ChainID:     chainID,
++		User:        "0",
++	}
++}

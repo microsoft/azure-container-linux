@@ -1,6 +1,6 @@
 # containerd2 patch series
 
-Reference for the 18-patch series in the active spec. Engineering rationale,
+Reference for the 20-patch series in the active spec. Engineering rationale,
 history, and triage notes live here so the `.spec` stays terse.
 
 ## Layout
@@ -8,7 +8,7 @@ history, and triage notes live here so the `.spec` stays terse.
 | # in spec | Origin | Purpose |
 |-----------|--------|---------|
 | Patch0-7  | AzureLinux 3.0-dev baseline | 8 carry-patches verbatim from microsoft/azurelinux@origin/3.0-dev:SPECS/containerd2 at commit 5a4864f9 (containerd2-2.2.4-2). |
-| Patch8    | dm-verity baseline | Upstream `add-signature-support` (aadagarwal). Split off by author so it can be dropped once it merges into azurelinux, leaving Patch9-17 unchanged. |
+| Patch8    | dm-verity baseline | Upstream `add-signature-support` (aadagarwal). Split off by author so it can be dropped once it merges into azurelinux, leaving Patch9-19 unchanged. |
 | Patch9    | ACL integration | Derives referrer discovery and snapshotter-side formatting from the erofs differ's capability, and adds the ACL entry points. Leaves Patch8's defaults untouched. |
 | Patch10   | precomputed artifacts | Consumes signed precomputed EROFS/Merkle bundles and selects the newest. |
 | Patch11   | EROFS SELinux sharing | Makes every consumer of an EROFS layer request one synthesised `context=`, so a layer can be mounted by more than one container. Independent of dm-verity; touches only upstream code. |
@@ -18,6 +18,8 @@ history, and triage notes live here so the `.spec` stays terse.
 | Patch15   | deferred signed unpack | Retains the selected signed EROFS referrer graph for fetch-only and non-capable unpack paths, including overlayfs, and reconstructs it during first-use EROFS unpack with fail-closed applier enforcement. |
 | Patch16   | signed tar-index replacement | Replaces full precomputed EROFS blobs with compact signed tar indexes and Merkle trees, then reconstructs and verifies the EROFS data device from the OCI tar stream. |
 | Patch17   | multi-snapshotter cache refresh | Refreshes the CRI image cache after a same-image unpack so its snapshotter set follows authoritative content labels and cached sandbox images are not pulled again. |
+| Patch18   | signed-metadata activation policy | Uses dm-verity only for layers carrying validated signature and root-hash metadata, persists that policy across ChainID reuse, validates concrete differ/snapshotter capability pairs, and preserves legacy unsigned upgrade compatibility. |
+| Patch19   | supplemental-group cache | Resolves image-defined supplemental groups from an immutable committed ChainID view and caches successful results in a bounded CRI LRU keyed by snapshotter, ChainID, user, and primary GID. |
 
 ## Source of truth
 
@@ -46,6 +48,8 @@ v2.2.4  193637f7ee8ae5f5aa5248f49e7baa3e6164966e   ( == %define commit_hash )
           └─ 3f2b140ed  transfer: advertise dm-verity referrer retention
               └─ 20fcf6669  erofs: consume signed dm-verity tar indexes
                   └─ 38aa4465f  cri: refresh cached snapshotters after unpack
+                      └─ b11cdce43  erofs: gate dm-verity on signed metadata
+                          └─ 5ca7d24b3  cri: cache immutable image supplemental groups
 ```
 
 Patch0-15 live on `dadelan/acl-erofs`. Patch16 is the exact child commit
@@ -54,7 +58,9 @@ earlier SHAs are informational; their **trailers** are what the grouped export
 commands below resolve, so a rebase does not invalidate the procedure. Patch16
 is intentionally pinned by exact SHA while it remains an isolated replacement
 prototype. Patch17 is its exact child commit `38aa4465f` on
-`dadelan/erofs-latency-cache-fix`.
+`dadelan/erofs-latency-cache-fix`. Patches18-19 are exact consecutive commits
+`b11cdce43` and `5ca7d24b3` on
+`dadelan/erofs-referrer-gated-performance`.
 
 The platform tag does matter, and it has gone stale once: until 2026-08-04
 `acl/platform-v2.2.4` still pointed at `2a27bae8a` from before a branch
@@ -80,6 +86,8 @@ reviewable commits while the spec keeps one cohesive patch.
 | `acl-dmverity-deferred-unpack` (plus predecessor) | `e670c411f`, `636e3078a`, `b90e6ec66`, `3f2b140ed` | Patch15 |
 | *(isolated exact commit)* | `20fcf6669` | Patch16 |
 | `acl-multi-snapshotter-cache-fix` | `38aa4465f` | Patch17 |
+| *(isolated exact commit)* | `b11cdce43` | Patch18 |
+| *(isolated exact commit)* | `5ca7d24b3` | Patch19 |
 
 containerd does **not** inspect IPE policy. Layer signatures are passed to the
 kernel whenever they are present and the feature is enabled; the kernel alone
@@ -418,6 +426,42 @@ snapshotter set is replaced from the current labels rather than unioned, so
 removed labels cannot leave stale-positive cache entries. Existing reference
 aggregation and per-reference pin handling remain unchanged.
 
+## Patch18 — activate dm-verity only for signed metadata
+
+Patch18 changes optional dm-verity from a global EROFS formatting mode into a
+per-layer signed-metadata policy. A layer with a validated signature and root
+hash is materialized with dm-verity; a layer with no signed referrer remains
+plain EROFS. Partial or contradictory metadata fails closed, and
+`require_signatures=true` still rejects unsigned layers.
+
+Compact snapshot labels persist the materialization version, state, root hash,
+and signature digest. Existing or concurrently committed ChainID snapshots are
+validated before reuse, so a legacy/plain or differently signed snapshot cannot
+silently satisfy a signed request. Newly protected layers also carry a
+`.sig-required` marker: default `auto` mode can mount legacy unsigned snapshots
+that have old `.dmverity` metadata as plain EROFS during upgrade, while a
+missing signature on a newly protected layer still fails closed.
+
+Capability checks bind referrer discovery and required-signature policy to the
+actual selected differ/snapshotter pair across local pull, deferred CRI unpack,
+and transfer unpack. `dmverity_mode=off` remains a true opt-out, while
+`dmverity_mode=on` is required when the differ requires signatures.
+
+## Patch19 — cache immutable image supplemental groups
+
+Kubernetes' default `SupplementalGroupsPolicy=Merge` reads `/etc/passwd` and
+`/etc/group` before task creation. On EROFS this activates every lower layer
+once for the lookup and again for the task, accounting for most of the measured
+eight-layer cached-start penalty.
+
+Patch19 resolves image-defined memberships from a temporary read-only view of
+the committed image ChainID rather than the writable container snapshot. A
+1024-entry LRU caches successful results by snapshotter, ChainID, canonical
+user, and effective primary GID. Concurrent misses are coalesced, waiting
+callers remain cancellable, errors are not cached, and all slices are copied at
+the cache boundary. Container-specific primary and explicitly requested groups
+are merged after lookup, preserving Merge semantics.
+
 ## Regeneration procedure
 
 Patches are **exported from commits**, not diffed between hand-built trees:
@@ -435,6 +479,8 @@ TESTFIX=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverit
 DEFERRED=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-deferred-unpack')
 TARINDEX=$(git rev-parse 20fcf666959f20ff85029905febd23b59d9beb3f)
 CACHEFIX=$(git rev-parse 38aa4465f55980b51aa787a8823adea874aed54b)
+SIGNEDGATE=$(git rev-parse b11cdce43526a4186b4380c0e6208eec78fdd16b)
+GROUPCACHE=$(git rev-parse 5ca7d24b3d48acd6d8752e24444a9b3596752e3d)
 
 git diff $BASE   $AADHAR  # -> Patch8   (prepend the From:/Subject: header)
 git diff $AADHAR $INT     # -> Patch9
@@ -446,15 +492,16 @@ git diff $LOCK   $TESTFIX # -> Patch14
 git diff $TESTFIX $DEFERRED # -> Patch15 (prepend the documented squash header)
 git format-patch -1 --stdout --no-signature $TARINDEX # -> Patch16
 git format-patch -1 --stdout --no-signature $CACHEFIX # -> Patch17
+git format-patch -1 --stdout --no-signature $SIGNEDGATE # -> Patch18
+git format-patch -1 --stdout --no-signature $GROUPCACHE # -> Patch19
 ```
 
 Grouped boundaries are the **last** commit carrying their group trailer, so the
 groups must stay contiguous and in patch order on the branch. Patch12,
 Patch15's original `e670c411f` commit, Patch16's `20fcf6669` commit, and
 Patch17's `38aa4465f` commit remain fixed points in the series; Patch15's
-grouped boundary must descend from its original commit, Patch16 must remain an
-immediate child of that boundary, and Patch17 must remain an immediate child
-of Patch16.
+grouped boundary must descend from its original commit, and Patches16-19 must
+remain consecutive exact commits through `5ca7d24b3`.
 
 Each exported file keeps a `From:`/`Subject:` header plus a body listing the
 commits it squashes, so a reviewer can always get back to the individual
@@ -466,19 +513,20 @@ commits. `patch -p1` ignores the header, exactly as it does for a
 Run all five after regenerating. The first is the one that matters most: it is
 what proves the patch files and the branch have not diverged.
 
-1. **Tree equality.** Apply Patch0-17 to the pristine `Source0` tarball with
+1. **Tree equality.** Apply Patch0-19 to the pristine `Source0` tarball with
    `patch -p1 --fuzz=0 --no-backup-if-mismatch` (what `%autosetup -p1` does)
-   and `diff -r` the result against a worktree at exact commit `38aa4465f`
-   (`dadelan/erofs-latency-cache-fix`). Must be **identical**.
+   and `diff -r` the result against a worktree at exact commit `5ca7d24b3`
+   (`dadelan/erofs-referrer-gated-performance`). Must be **identical**.
 2. **Cross-compile.** `GOOS=linux`, `GOOS=windows`, and `GOOS=darwin`
    `go build ./...` must all pass. `plugins/snapshots/erofs/erofs.go` carries
    no build constraint, so Linux-only symbols referenced from it break the
    non-Linux builds — this has regressed before.
 3. **gofmt.** `gofmt -l` must be silent. containerd CI enforces it.
 4. **Feature tests.**
-   `go test ./core/images/... ./core/transfer/local/... ./internal/cri/opts/... ./internal/cri/server/images/... ./internal/cri/store/image/... ./internal/dmverity/... ./internal/erofsutils/... ./pkg/snapshotters/... ./plugins/cri/images/... ./plugins/diff/erofs/... ./plugins/mount/erofs/... ./plugins/services/diff/... ./plugins/snapshots/erofs/...`
-   Then run `go test -race ./internal/cri/store/image/...` for Patch17's
-   same-ID metadata and pin-state path.
+   `go test ./client/... ./core/images/... ./core/transfer/local/... ./core/unpack/... ./internal/cri/opts/... ./internal/cri/server/... ./internal/cri/store/image/... ./internal/dmverity/... ./internal/erofsutils/... ./pkg/rootfs/... ./pkg/snapshotters/... ./plugins/cri/images/... ./plugins/diff/erofs/... ./plugins/mount/erofs/... ./plugins/services/diff/... ./plugins/snapshots/erofs/... ./plugins/transfer/...`
+   Then run
+   `go test -race ./internal/cri/store/image/... ./internal/cri/opts/... ./internal/cri/server/...`
+   for Patches17 and 19's image-cache and concurrent group-cache paths.
 5. **Plugin graph.** `go build -o /tmp/ctrd ./cmd/containerd && /tmp/ctrd config dump`
    must exit 0. `registry.Graph` has no cycle detection, so a bad `Requires` edge
    is a startup stack overflow that compiles, passes `gofmt`, passes every unit

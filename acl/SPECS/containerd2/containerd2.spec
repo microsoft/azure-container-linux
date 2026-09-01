@@ -28,7 +28,7 @@ Version: 2.2.4
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 9005.mirrortest%{?dist}
+Release: 9006.mirrortest%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -95,6 +95,11 @@ Source10: mcr-mirror-hosts.toml
 #           decompressed OCI tar stream and verify it before use.
 # Patch17:  Refresh the CRI image cache's authoritative snapshotter set after
 #           same-image unpack so cached sandbox images are not pulled again.
+# Patch18:  Gate dm-verity materialization on validated signed metadata, carry
+#           policy through ChainID reuse, and preserve legacy unsigned upgrade
+#           compatibility without weakening protected snapshots.
+# Patch19:  Cache immutable image supplemental-group lookups so warm container
+#           creation avoids the extra complete-rootfs activation.
 #           See PATCHES.md for the author/commit provenance.
 # ============================================================================
 
@@ -130,6 +135,10 @@ Patch15: 0011-erofs-retain-referrers-for-deferred-unpack.patch
 Patch16: 0012-erofs-use-signed-tar-index-referrers.patch
 # Refresh multi-snapshotter cache metadata after same-image unpack.
 Patch17: 0013-cri-refresh-multi-snapshotter-cache.patch
+# Use dm-verity only for layers carrying validated signed metadata.
+Patch18: 0014-erofs-gate-dmverity-on-signed-metadata.patch
+# Cache image supplemental-group lookups by immutable rootfs identity.
+Patch19: 0015-cri-cache-immutable-image-supplemental-groups.patch
 
 %{?systemd_requires}
 
@@ -282,6 +291,14 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Tue Sep 01 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9006.mirrortest
+- Patch18: activate dm-verity only for layers carrying validated signed
+  metadata; unsigned optional layers remain plain EROFS, protected ChainID
+  reuse fails closed, and legacy unsigned sidecars remain upgrade-compatible.
+- Patch19: cache immutable image supplemental-group lookups in a bounded CRI
+  LRU so repeated Merge-policy container starts avoid one full-rootfs
+  activation.
+
 * Tue Sep 01 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9005.mirrortest
 - Carry Patch17 from the 6023.verity stack so same-image EROFS unpacks refresh
   cached snapshotter metadata instead of pulling pause for every pod sandbox.

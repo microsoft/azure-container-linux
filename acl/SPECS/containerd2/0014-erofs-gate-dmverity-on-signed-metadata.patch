@@ -1,0 +1,2096 @@
+From b11cdce43526a4186b4380c0e6208eec78fdd16b Mon Sep 17 00:00:00 2001
+From: Dallas Delaney <dadelan@microsoft.com>
+Date: Tue, 1 Sep 2026 23:32:26 +0000
+Subject: [PATCH] erofs: gate dm-verity on signed metadata
+
+Use dm-verity only when a layer carries validated signature and root-hash metadata, while preserving plain EROFS for unsigned layers in optional mode. Persist materialization policy across ChainID reuse, validate concrete differ/snapshotter capability pairs, and retain upgrade compatibility for legacy unsigned snapshots.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
+Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
+---
+ client/client.go                              |  49 +++++
+ client/dmverity_test.go                       |  96 +++++++++
+ client/image.go                               |  14 +-
+ client/pull.go                                |   4 +-
+ core/unpack/unpacker.go                       |  27 ++-
+ docs/snapshotters/erofs.md                    |  48 +++--
+ internal/cri/opts/container.go                |   4 +-
+ internal/dmverity/dmverity.go                 |  14 +-
+ pkg/rootfs/apply.go                           |  23 +-
+ pkg/rootfs/apply_test.go                      | 137 ++++++++++++
+ pkg/snapshotters/dmverity_policy.go           | 139 +++++++++++++
+ pkg/snapshotters/dmverity_policy_test.go      |  91 ++++++++
+ plugins/cri/images/plugin.go                  |  86 +++++---
+ plugins/diff/erofs/differ.go                  |  52 +++--
+ .../erofs/differ_apply_policy_linux_test.go   | 196 ++++++++++++++++++
+ plugins/diff/erofs/differ_policy_test.go      |  92 ++++++++
+ plugins/diff/erofs/plugin/plugin.go           |   9 +-
+ plugins/mount/erofs/plugin_linux.go           |  27 ++-
+ plugins/mount/erofs/plugin_linux_test.go      |  30 +++
+ plugins/services/diff/local.go                |  35 +++-
+ plugins/services/diff/local_test.go           |  23 +-
+ plugins/snapshots/erofs/erofs.go              |  81 +++++---
+ plugins/snapshots/erofs/erofs_linux_test.go   |  87 ++++++--
+ plugins/snapshots/erofs/plugin/plugin.go      |   7 +-
+ plugins/snapshots/erofs/plugin/plugin_test.go |   2 +-
+ plugins/transfer/plugin.go                    |  52 +++--
+ plugins/types.go                              |   7 +
+ 27 files changed, 1277 insertions(+), 155 deletions(-)
+ create mode 100644 client/dmverity_test.go
+ create mode 100644 pkg/rootfs/apply_test.go
+ create mode 100644 pkg/snapshotters/dmverity_policy.go
+ create mode 100644 pkg/snapshotters/dmverity_policy_test.go
+ create mode 100644 plugins/diff/erofs/differ_apply_policy_linux_test.go
+ create mode 100644 plugins/diff/erofs/differ_policy_test.go
+
+diff --git a/client/client.go b/client/client.go
+index 7d56674a1..7de90e001 100644
+--- a/client/client.go
++++ b/client/client.go
+@@ -22,6 +22,7 @@ import (
+ 	"encoding/json"
+ 	"fmt"
+ 	"runtime"
++	"slices"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -78,6 +79,7 @@ import (
+ 	ptypes "github.com/containerd/containerd/v2/pkg/protobuf/types"
+ 	"github.com/containerd/containerd/v2/pkg/tracing"
+ 	"github.com/containerd/containerd/v2/plugins"
++	pluginservices "github.com/containerd/containerd/v2/plugins/services"
+ )
+ 
+ func init() {
+@@ -987,6 +989,53 @@ func (c *Client) GetSnapshotterCapabilities(ctx context.Context, snapshotterName
+ 	return sn.Capabilities, nil
+ }
+ 
++// GetUnpackSnapshotterCapabilities returns snapshotter capabilities filtered
++// through the selected diff-service applier. Optional dm-verity support is
++// disabled when the selected applier cannot materialize protected layers, and
++// required-policy mismatches are rejected.
++func (c *Client) GetUnpackSnapshotterCapabilities(ctx context.Context, snapshotterName string) ([]string, error) {
++	snapshotterCapabilities, err := c.GetSnapshotterCapabilities(ctx, snapshotterName)
++	if err != nil {
++		return nil, err
++	}
++
++	filters := []string{fmt.Sprintf("type==%s, id==%s", plugins.ServicePlugin, pluginservices.DiffService)}
++	resp, err := c.IntrospectionService().Plugins(ctx, filters...)
++	if err != nil {
++		return nil, err
++	}
++	if len(resp.Plugins) == 0 {
++		return nil, fmt.Errorf("inspection service could not find diff service plugin")
++	}
++	return effectiveDmverityCapabilities(snapshotterCapabilities, resp.Plugins[0].Capabilities)
++}
++
++func effectiveDmverityCapabilities(snapshotterCapabilities, diffCapabilities []string) ([]string, error) {
++	diffSupportsDmverity := slices.Contains(diffCapabilities, plugins.CapabilityDmverityReferrers)
++	snapshotterUsesErofs := slices.Contains(snapshotterCapabilities, plugins.CapabilityErofsLayers)
++	snapshotterRequiresDmverity := slices.Contains(snapshotterCapabilities, plugins.CapabilityDmveritySignaturesRequired)
++	if snapshotterRequiresDmverity && !diffSupportsDmverity {
++		return nil, fmt.Errorf("snapshotter requires dm-verity signatures but the diff service cannot materialize protected layers")
++	}
++	if snapshotterUsesErofs &&
++		slices.Contains(diffCapabilities, plugins.CapabilityDmveritySignaturesRequired) &&
++		!snapshotterRequiresDmverity {
++		return nil, fmt.Errorf("diff service requires dm-verity signatures but the snapshotter permits plain mounts")
++	}
++	if diffSupportsDmverity {
++		return snapshotterCapabilities, nil
++	}
++
++	effective := make([]string, 0, len(snapshotterCapabilities))
++	for _, capability := range snapshotterCapabilities {
++		if capability != plugins.CapabilityDmverityReferrers &&
++			capability != plugins.CapabilityDmveritySignaturesRequired {
++			effective = append(effective, capability)
++		}
++	}
++	return effective, nil
++}
++
+ type RuntimeVersion struct {
+ 	Version  string
+ 	Revision string
+diff --git a/client/dmverity_test.go b/client/dmverity_test.go
+new file mode 100644
+index 000000000..b82e5745b
+--- /dev/null
++++ b/client/dmverity_test.go
+@@ -0,0 +1,96 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package client
++
++import (
++	"testing"
++
++	"github.com/containerd/containerd/v2/plugins"
++	"github.com/stretchr/testify/require"
++)
++
++func TestEffectiveDmverityCapabilities(t *testing.T) {
++	erofs := plugins.CapabilityErofsLayers
++	referrers := plugins.CapabilityDmverityReferrers
++	required := plugins.CapabilityDmveritySignaturesRequired
++
++	tests := []struct {
++		name        string
++		snapshotter []string
++		differ      []string
++		want        []string
++		wantError   bool
++	}{
++		{
++			name:        "unsupported snapshotter is unchanged",
++			snapshotter: []string{"rebase"},
++			want:        []string{"rebase"},
++		},
++		{
++			name:        "optional snapshotter disables dmverity without capable differ",
++			snapshotter: []string{"rebase", erofs, referrers},
++			want:        []string{"rebase", erofs},
++		},
++		{
++			name:        "matching optional path stays enabled",
++			snapshotter: []string{"rebase", erofs, referrers},
++			differ:      []string{referrers},
++			want:        []string{"rebase", erofs, referrers},
++		},
++		{
++			name:        "required snapshotter rejects incapable differ",
++			snapshotter: []string{erofs, referrers, required},
++			wantError:   true,
++		},
++		{
++			name:        "required differ rejects optional snapshotter",
++			snapshotter: []string{erofs, referrers},
++			differ:      []string{referrers, required},
++			wantError:   true,
++		},
++		{
++			name:        "required differ rejects disabled erofs snapshotter",
++			snapshotter: []string{erofs},
++			differ:      []string{referrers, required},
++			wantError:   true,
++		},
++		{
++			name:        "required erofs differ permits unrelated snapshotter fallback",
++			snapshotter: []string{"overlay"},
++			differ:      []string{referrers, required},
++			want:        []string{"overlay"},
++		},
++		{
++			name:        "matching required path stays enabled",
++			snapshotter: []string{erofs, referrers, required},
++			differ:      []string{referrers, required},
++			want:        []string{erofs, referrers, required},
++		},
++	}
++
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			got, err := effectiveDmverityCapabilities(test.snapshotter, test.differ)
++			if test.wantError {
++				require.Error(t, err)
++				return
++			}
++			require.NoError(t, err)
++			require.Equal(t, test.want, got)
++		})
++	}
++}
+diff --git a/client/image.go b/client/image.go
+index 3101ae4e9..142c14377 100644
+--- a/client/image.go
++++ b/client/image.go
+@@ -323,9 +323,9 @@ func (i *image) Unpack(ctx context.Context, snapshotterName string, opts ...Unpa
+ 	if err != nil {
+ 		return err
+ 	}
+-	capabilities, err := i.client.GetSnapshotterCapabilities(ctx, snapshotterName)
++	capabilities, err := i.client.GetUnpackSnapshotterCapabilities(ctx, snapshotterName)
+ 	if err != nil {
+-		return err
++		return fmt.Errorf("validate dm-verity unpack configuration: %w", err)
+ 	}
+ 
+ 	manifestDesc, manifest, err := images.ManifestWithDescriptor(ctx, i.ContentStore(), i.i.Target, i.platform)
+@@ -377,6 +377,16 @@ func (i *image) Unpack(ctx context.Context, snapshotterName string, opts ...Unpa
+ 			snapshotters.TargetManifestDigestLabel: i.Target().Digest.String(),
+ 			snapshotters.TargetRefLabel:            i.Name(),
+ 		}))
++		if slices.Contains(capabilities, plugins.CapabilityDmverityReferrers) {
++			materializationLabels, err := snapshotters.DmveritySnapshotLabels(
++				layer.Blob,
++				slices.Contains(capabilities, plugins.CapabilityDmveritySignaturesRequired),
++			)
++			if err != nil {
++				return fmt.Errorf("validate dm-verity policy for layer %s: %w", layer.Blob.Digest, err)
++			}
++			snOpts = append(snOpts, snapshots.WithLabels(materializationLabels))
++		}
+ 		unpacked, err = rootfs.ApplyLayerWithOpts(ctx, layer, chain, sn, a, snOpts, config.ApplyOpts)
+ 		if err != nil {
+ 			return fmt.Errorf("apply layer error for %q: %w", i.Name(), err)
+diff --git a/client/pull.go b/client/pull.go
+index 743539430..abec72c4a 100644
+--- a/client/pull.go
++++ b/client/pull.go
+@@ -98,9 +98,9 @@ func (c *Client) Pull(ctx context.Context, ref string, opts ...RemoteOpt) (_ Ima
+ 		}
+ 		span.SetAttributes(tracing.Attribute("snapshotter.name", snapshotterName))
+ 
+-		snCapabilities, err := c.GetSnapshotterCapabilities(ctx, snapshotterName)
++		snCapabilities, err := c.GetUnpackSnapshotterCapabilities(ctx, snapshotterName)
+ 		if err != nil {
+-			return nil, fmt.Errorf("unable to get snapshotter capabilities: %w", err)
++			return nil, fmt.Errorf("validate dm-verity unpack configuration: %w", err)
+ 		}
+ 
+ 		var uconfig UnpackConfig
+diff --git a/core/unpack/unpacker.go b/core/unpack/unpacker.go
+index a5763edeb..f0a92f8ec 100644
+--- a/core/unpack/unpacker.go
++++ b/core/unpack/unpacker.go
+@@ -45,7 +45,9 @@ import (
+ 	"github.com/containerd/containerd/v2/internal/cleanup"
+ 	"github.com/containerd/containerd/v2/internal/kmutex"
+ 	"github.com/containerd/containerd/v2/pkg/labels"
++	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
+ 	"github.com/containerd/containerd/v2/pkg/tracing"
++	"github.com/containerd/containerd/v2/plugins"
+ )
+ 
+ const (
+@@ -397,6 +399,19 @@ func (u *Unpacker) unpack(
+ 			snapshotLabels = make(map[string]string)
+ 		}
+ 		snapshotLabels[labelSnapshotRef] = chainID
++		var expectedDmverityLabels map[string]string
++		if slices.Contains(unpack.SnapshotterCapabilities, plugins.CapabilityDmverityReferrers) {
++			expectedDmverityLabels, err = snpkg.DmveritySnapshotLabels(
++				desc,
++				slices.Contains(unpack.SnapshotterCapabilities, plugins.CapabilityDmveritySignaturesRequired),
++			)
++			if err != nil {
++				return nil, fmt.Errorf("validate dm-verity policy for layer %s: %w", desc.Digest, err)
++			}
++			for key, value := range expectedDmverityLabels {
++				snapshotLabels[key] = value
++			}
++		}
+ 
+ 		var (
+ 			key    string
+@@ -410,13 +425,16 @@ func (u *Unpacker) unpack(
+ 			mounts, err = sn.Prepare(ctx, key, parent, opts...)
+ 			if err != nil {
+ 				if errdefs.IsAlreadyExists(err) {
+-					if _, err := sn.Stat(ctx, chainID); err != nil {
++					if info, err := sn.Stat(ctx, chainID); err != nil {
+ 						if !errdefs.IsNotFound(err) {
+ 							return nil, fmt.Errorf("failed to stat snapshot %s: %w", chainID, err)
+ 						}
+ 						// Try again, this should be rare, log it
+ 						log.G(ctx).WithField("key", key).WithField("chainid", chainID).Debug("extraction snapshot already exists, chain id not found")
+ 					} else {
++						if err := snpkg.ValidateDmveritySnapshot(info.Labels, expectedDmverityLabels); err != nil {
++							return nil, fmt.Errorf("existing snapshot %s does not satisfy dm-verity policy: %w", chainID, err)
++						}
+ 						// no need to handle, snapshot now found with chain id
+ 						return nil, nil
+ 					}
+@@ -488,6 +506,13 @@ func (u *Unpacker) unpack(
+ 					if err = sn.Commit(ctx, chainID, key, opts...); err != nil {
+ 						cleanup.Do(ctx, abort)
+ 						if errdefs.IsAlreadyExists(err) {
++							info, statErr := sn.Stat(ctx, chainID)
++							if statErr != nil {
++								return fmt.Errorf("failed to stat concurrently committed snapshot %s: %w", chainID, statErr)
++							}
++							if policyErr := snpkg.ValidateDmveritySnapshot(info.Labels, expectedDmverityLabels); policyErr != nil {
++								return fmt.Errorf("concurrently committed snapshot %s does not satisfy dm-verity policy: %w", chainID, policyErr)
++							}
+ 							return nil
+ 						}
+ 						return fmt.Errorf("failed to commit snapshot %s: %w", key, err)
+diff --git a/docs/snapshotters/erofs.md b/docs/snapshotters/erofs.md
+index bab7bd665..2ce2f4a17 100644
+--- a/docs/snapshotters/erofs.md
++++ b/docs/snapshotters/erofs.md
+@@ -187,21 +187,38 @@ Go library, eliminating the need for external `veritysetup` command-line tools.
+ This requires a Linux kernel with dm-verity support (CONFIG_DM_VERITY) and the
+ device-mapper kernel module loaded.
+ 
+-The differ must be configured to generate dm-verity metadata:
++The differ must be configured to discover and consume signed dm-verity
++metadata:
+ 
+ ```toml
+ [plugins."io.containerd.differ.v1.erofs"]
+   enable_dmverity = true
+ ```
+ 
+-When dm-verity is enabled, the EROFS differ formats each layer with dm-verity
+-by appending a Merkle hash tree to the EROFS blob and generating a root hash.
+-The hash tree is stored inline within the layer blob itself.
+-The root hash and hash offset are saved in a `.dmverity` metadata file alongside the
+-layer blob in JSON format. All other dm-verity parameters (block sizes, salt, etc.)
+-are stored in a superblock within the layer blob and are auto-detected when mounting.
+-Regular mode uses 4096-byte blocks (standard page size), while tar-index mode uses
+-512-byte blocks (dm-verity logical_block_size constraint).
++When dm-verity is enabled, layers carrying a valid signature and root-hash
++annotation are materialized with dm-verity metadata. A precomputed referrer
++supplies the EROFS tar index and Merkle tree; a signed layer without
++precomputed artifacts is formatted locally and its computed root hash must
++match the signed value. Unsigned layers remain ordinary EROFS unless
++`require_signatures` rejects them.
++
++Protected layers carry a `.dmverity` metadata sidecar, a non-empty `.sig`
++PKCS#7 sidecar, and an internal `.sig-required` marker. The marker lets `auto`
++mode distinguish newly protected materializations from unsigned snapshots
++created by older versions that formatted every layer with dm-verity metadata.
++Incomplete protected materializations fail closed; legacy metadata without a
++signature mounts as plain EROFS during upgrade. Committed snapshots also record
++compact materialization labels (version, root hash, and signature digest). If a
++ChainID was previously unpacked as plain EROFS, a later signed pull will refuse
++to reuse it silently; remove the stale snapshot and pull again.
++
++Locally formatted layers store the hash tree inline within the layer blob. The
++root hash and hash offset are saved in a `.dmverity` metadata file alongside
++the layer blob in JSON format. All other dm-verity parameters (block sizes,
++salt, etc.) are stored in a superblock within the layer blob and are
++auto-detected when mounting. Regular mode uses 4096-byte blocks (standard page
++size), while tar-index mode uses 512-byte blocks (dm-verity
++logical_block_size constraint).
+ 
+ The snapshotter can be configured to control dm-verity behavior using `dmverity_mode`:
+ 
+@@ -224,6 +241,11 @@ The available modes are:
+   Layers are mounted as regular EROFS without integrity verification. Use this for
+   compatibility or when dm-verity overhead is unacceptable.
+ 
++If the differ uses `require_signatures = true`, the snapshotter must use
++`dmverity_mode = "on"`. Containerd rejects a configuration that asks the differ
++to require signatures while allowing the snapshotter to mount pre-existing
++plain snapshots.
++
+ Discovery of dm-verity referrers (per-layer signatures and precomputed EROFS
+ artifacts) requires an extra registry lookup during pull and import, so it is
+ performed only when a differ that consumes those artifacts is loaded. The EROFS
+@@ -240,7 +262,7 @@ from that capability, so no additional configuration is needed. With
+ performed and pull behaves exactly as it does without this feature.
+ 
+ When mounting a layer with dm-verity enabled, the snapshotter reads the metadata
+-from the `.dmverity` file and creates a dm-verity device. The dm-verity library
++from the `.dmverity` file, requires its `.sig` sidecar, and creates a dm-verity device. The dm-verity library
+ automatically reads all parameters from the superblock, ensuring that any corruption
+ or tampering will be detected at read time. The dm-verity device is then mounted as
+ the backing layer in the OverlayFS stack
+@@ -277,13 +299,15 @@ If dm-verity is enabled, a `.dmverity` metadata file will also be present:
+   fs
+   layer.erofs
+   layer.erofs.dmverity
++  layer.erofs.sig
+   work
+ ```
+ 
+ Then the EROFS snapshotter will check for the existence of `layer.erofs`: it
+ will mount the EROFS layer blob to `fs/` and return a valid overlayfs mount
+-with all parent layers. If dm-verity is enabled and the `.dmverity` file exists,
+-the snapshotter will create a dm-verity device and mount that instead.
++with all parent layers. If dm-verity is enabled and both protected sidecars
++exist, the snapshotter will create a dm-verity device and mount that instead.
++Missing or malformed protected metadata never falls back to a plain mount.
+ 
+ If other differs (not the EROFS differ) are used, the EROFS snapshotter will
+ convert the flat directory into an EROFS layer blob on Commit instead.
+diff --git a/internal/cri/opts/container.go b/internal/cri/opts/container.go
+index e99d32de5..b92242a88 100644
+--- a/internal/cri/opts/container.go
++++ b/internal/cri/opts/container.go
+@@ -72,9 +72,9 @@ func unpackImage(ctx context.Context, client *containerd.Client, i containerd.Im
+ 		matcher = platforms.Default()
+ 	}
+ 
+-	capabilities, err := client.GetSnapshotterCapabilities(ctx, snapshotter)
++	capabilities, err := client.GetUnpackSnapshotterCapabilities(ctx, snapshotter)
+ 	if err != nil {
+-		return err
++		return fmt.Errorf("validate dm-verity unpack configuration: %w", err)
+ 	}
+ 
+ 	u, err := unpack.NewUnpacker(
+diff --git a/internal/dmverity/dmverity.go b/internal/dmverity/dmverity.go
+index 246d65817..13c5494a8 100644
+--- a/internal/dmverity/dmverity.go
++++ b/internal/dmverity/dmverity.go
+@@ -63,17 +63,24 @@ func MetadataPath(layerBlobPath string) string {
+ }
+ 
+ // SignaturePath returns the path to the dm-verity signature file for a layer.
+-// The signature file contains the base64-encoded PKCS7 signature for root hash verification.
++// The signature file contains the decoded PKCS7 signature for root hash verification.
+ func SignaturePath(layerBlobPath string) string {
+ 	return layerBlobPath + ".sig"
+ }
+ 
++// SignatureRequiredPath returns the marker path used to distinguish protected
++// materializations from legacy unsigned layers that were formatted with
++// dm-verity metadata before signatures became the activation gate.
++func SignatureRequiredPath(layerBlobPath string) string {
++	return layerBlobPath + ".sig-required"
++}
++
+ // HashDevicePath returns the path used for a separate precomputed Merkle tree.
+ func HashDevicePath(layerBlobPath string) string {
+ 	return layerBlobPath + ".hashtree"
+ }
+ 
+-// WriteSignature writes a base64-encoded signature to the signature file for a layer.
++// WriteSignature decodes and writes a base64-encoded signature for a layer.
+ func WriteSignature(layerBlobPath string, base64Sig string) error {
+ 	sigPath := SignaturePath(layerBlobPath)
+ 	sigBytes, err := base64.StdEncoding.DecodeString(base64Sig)
+@@ -83,6 +90,9 @@ func WriteSignature(layerBlobPath string, base64Sig string) error {
+ 	if err := os.WriteFile(sigPath, sigBytes, 0644); err != nil {
+ 		return fmt.Errorf("failed to write signature file: %w", err)
+ 	}
++	if err := os.WriteFile(SignatureRequiredPath(layerBlobPath), []byte("1\n"), 0644); err != nil {
++		return fmt.Errorf("failed to write signature-required marker: %w", err)
++	}
+ 	return nil
+ }
+ 
+diff --git a/pkg/rootfs/apply.go b/pkg/rootfs/apply.go
+index 2955d549f..d0ee8ebf0 100644
+--- a/pkg/rootfs/apply.go
++++ b/pkg/rootfs/apply.go
+@@ -26,6 +26,7 @@ import (
+ 	"github.com/containerd/containerd/v2/core/diff"
+ 	"github.com/containerd/containerd/v2/core/mount"
+ 	"github.com/containerd/containerd/v2/core/snapshots"
++	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
+ 	"github.com/containerd/errdefs"
+ 	"github.com/containerd/log"
+ 	"github.com/opencontainers/go-digest"
+@@ -93,7 +94,8 @@ func ApplyLayerWithOpts(ctx context.Context, layer Layer, chain []digest.Digest,
+ 		chainID = identity.ChainID(append(chain, layer.Diff.Digest)).String()
+ 		applied bool
+ 	)
+-	if _, err := sn.Stat(ctx, chainID); err != nil {
++	info, err := sn.Stat(ctx, chainID)
++	if err != nil {
+ 		if !errdefs.IsNotFound(err) {
+ 			return false, fmt.Errorf("failed to stat snapshot %s: %w", chainID, err)
+ 		}
+@@ -102,9 +104,18 @@ func ApplyLayerWithOpts(ctx context.Context, layer Layer, chain []digest.Digest,
+ 			if !errdefs.IsAlreadyExists(err) {
+ 				return false, err
+ 			}
++			info, err := sn.Stat(ctx, chainID)
++			if err != nil {
++				return false, fmt.Errorf("failed to stat concurrently committed snapshot %s: %w", chainID, err)
++			}
++			if err := validateDmveritySnapshot(info, opts); err != nil {
++				return false, fmt.Errorf("concurrently committed snapshot %s does not satisfy dm-verity policy: %w", chainID, err)
++			}
+ 		} else {
+ 			applied = true
+ 		}
++	} else if err := validateDmveritySnapshot(info, opts); err != nil {
++		return false, fmt.Errorf("existing snapshot %s does not satisfy dm-verity policy: %w", chainID, err)
+ 	}
+ 	return applied, nil
+ 
+@@ -177,6 +188,16 @@ func applyLayers(ctx context.Context, layers []Layer, chain []digest.Digest, sn
+ 	return nil
+ }
+ 
++func validateDmveritySnapshot(info snapshots.Info, opts []snapshots.Opt) error {
++	var expected snapshots.Info
++	for _, opt := range opts {
++		if err := opt(&expected); err != nil {
++			return err
++		}
++	}
++	return snpkg.ValidateDmveritySnapshot(info.Labels, expected.Labels)
++}
++
+ func uniquePart() string {
+ 	t := time.Now()
+ 	var b [3]byte
+diff --git a/pkg/rootfs/apply_test.go b/pkg/rootfs/apply_test.go
+new file mode 100644
+index 000000000..342f03295
+--- /dev/null
++++ b/pkg/rootfs/apply_test.go
+@@ -0,0 +1,137 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package rootfs
++
++import (
++	"context"
++	"testing"
++
++	"github.com/containerd/containerd/v2/core/mount"
++	"github.com/containerd/containerd/v2/core/snapshots"
++	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
++	"github.com/opencontainers/go-digest"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++func TestApplyLayerValidatesExistingDmverityMaterialization(t *testing.T) {
++	signed := map[string]string{
++		snpkg.DmverityMaterializationVersionLabel:         snpkg.DmverityMaterializationVersion,
++		snpkg.DmverityMaterializationStateLabel:           snpkg.DmverityMaterializationStateSigned,
++		snpkg.DmverityMaterializationRootHashLabel:        digest.FromString("root").Hex(),
++		snpkg.DmverityMaterializationSignatureDigestLabel: digest.FromString("signature").String(),
++	}
++	plain := map[string]string{
++		snpkg.DmverityMaterializationVersionLabel: snpkg.DmverityMaterializationVersion,
++		snpkg.DmverityMaterializationStateLabel:   snpkg.DmverityMaterializationStatePlain,
++	}
++	layer := Layer{Diff: descriptor(digest.FromString("layer"))}
++
++	t.Run("matching signed snapshot is reused", func(t *testing.T) {
++		snapshotter := &statOnlySnapshotter{info: snapshots.Info{Kind: snapshots.KindCommitted, Labels: signed}}
++		applied, err := ApplyLayerWithOpts(
++			context.Background(),
++			layer,
++			nil,
++			snapshotter,
++			nil,
++			[]snapshots.Opt{snapshots.WithLabels(signed)},
++			nil,
++		)
++		require.NoError(t, err)
++		assert.False(t, applied)
++	})
++
++	t.Run("plain snapshot cannot satisfy signed request", func(t *testing.T) {
++		snapshotter := &statOnlySnapshotter{info: snapshots.Info{Kind: snapshots.KindCommitted, Labels: plain}}
++		_, err := ApplyLayerWithOpts(
++			context.Background(),
++			layer,
++			nil,
++			snapshotter,
++			nil,
++			[]snapshots.Opt{snapshots.WithLabels(signed)},
++			nil,
++		)
++		require.ErrorContains(t, err, "does not satisfy dm-verity policy")
++	})
++
++	t.Run("legacy snapshot remains valid for plain request", func(t *testing.T) {
++		snapshotter := &statOnlySnapshotter{info: snapshots.Info{Kind: snapshots.KindCommitted}}
++		applied, err := ApplyLayerWithOpts(
++			context.Background(),
++			layer,
++			nil,
++			snapshotter,
++			nil,
++			[]snapshots.Opt{snapshots.WithLabels(plain)},
++			nil,
++		)
++		require.NoError(t, err)
++		assert.False(t, applied)
++	})
++}
++
++func descriptor(dgst digest.Digest) ocispec.Descriptor {
++	return ocispec.Descriptor{Digest: dgst}
++}
++
++type statOnlySnapshotter struct {
++	info snapshots.Info
++	err  error
++}
++
++func (s *statOnlySnapshotter) Stat(context.Context, string) (snapshots.Info, error) {
++	return s.info, s.err
++}
++
++func (*statOnlySnapshotter) Update(context.Context, snapshots.Info, ...string) (snapshots.Info, error) {
++	panic("unexpected Update")
++}
++
++func (*statOnlySnapshotter) Usage(context.Context, string) (snapshots.Usage, error) {
++	panic("unexpected Usage")
++}
++
++func (*statOnlySnapshotter) Mounts(context.Context, string) ([]mount.Mount, error) {
++	panic("unexpected Mounts")
++}
++
++func (*statOnlySnapshotter) Prepare(context.Context, string, string, ...snapshots.Opt) ([]mount.Mount, error) {
++	panic("unexpected Prepare")
++}
++
++func (*statOnlySnapshotter) View(context.Context, string, string, ...snapshots.Opt) ([]mount.Mount, error) {
++	panic("unexpected View")
++}
++
++func (*statOnlySnapshotter) Commit(context.Context, string, string, ...snapshots.Opt) error {
++	panic("unexpected Commit")
++}
++
++func (*statOnlySnapshotter) Remove(context.Context, string) error {
++	panic("unexpected Remove")
++}
++
++func (*statOnlySnapshotter) Walk(context.Context, snapshots.WalkFunc, ...string) error {
++	panic("unexpected Walk")
++}
++
++func (*statOnlySnapshotter) Close() error {
++	return nil
++}
+diff --git a/pkg/snapshotters/dmverity_policy.go b/pkg/snapshotters/dmverity_policy.go
+new file mode 100644
+index 000000000..f730b6c1c
+--- /dev/null
++++ b/pkg/snapshotters/dmverity_policy.go
+@@ -0,0 +1,139 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package snapshotters
++
++import (
++	"encoding/base64"
++	"fmt"
++
++	"github.com/opencontainers/go-digest"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++)
++
++const (
++	DmverityMaterializationVersionLabel         = "containerd.io/snapshot/dmverity.version"
++	DmverityMaterializationStateLabel           = "containerd.io/snapshot/dmverity.state"
++	DmverityMaterializationRootHashLabel        = "containerd.io/snapshot/dmverity.root-hash"
++	DmverityMaterializationSignatureDigestLabel = "containerd.io/snapshot/dmverity.signature-digest"
++
++	DmverityMaterializationVersion     = "1"
++	DmverityMaterializationStatePlain  = "plain"
++	DmverityMaterializationStateSigned = "signed"
++)
++
++// DmveritySnapshotLabels describes the expected on-disk materialization for a
++// layer handled by a dm-verity-aware EROFS snapshotter.
++func DmveritySnapshotLabels(desc ocispec.Descriptor, requireSignature bool) (map[string]string, error) {
++	signature := desc.Annotations[TargetLayerSignatureLabel]
++	rootHash := desc.Annotations[TargetLayerRootHashLabel]
++	tarIndex := desc.Annotations[TargetLayerTarIndexDescriptorLabel]
++	merkleTree := desc.Annotations[TargetLayerMerkleTreeDescriptorLabel]
++
++	labels := map[string]string{
++		DmverityMaterializationVersionLabel: DmverityMaterializationVersion,
++		DmverityMaterializationStateLabel:   DmverityMaterializationStatePlain,
++	}
++	if signature == "" {
++		if rootHash != "" || tarIndex != "" || merkleTree != "" {
++			return nil, fmt.Errorf("layer %s has dm-verity metadata without a signature", desc.Digest)
++		}
++		if requireSignature {
++			return nil, fmt.Errorf("dm-verity signature required but not present on layer %s", desc.Digest)
++		}
++		return labels, nil
++	}
++	if rootHash == "" {
++		return nil, fmt.Errorf("dm-verity signature present but missing expected root hash for layer %s", desc.Digest)
++	}
++	if (tarIndex == "") != (merkleTree == "") {
++		return nil, fmt.Errorf("layer %s has incomplete precomputed dm-verity artifacts", desc.Digest)
++	}
++	signatureBytes, err := base64.StdEncoding.DecodeString(signature)
++	if err != nil {
++		return nil, fmt.Errorf("layer %s has invalid dm-verity signature encoding: %w", desc.Digest, err)
++	}
++
++	labels[DmverityMaterializationStateLabel] = DmverityMaterializationStateSigned
++	labels[DmverityMaterializationRootHashLabel] = rootHash
++	labels[DmverityMaterializationSignatureDigestLabel] = digest.FromBytes(signatureBytes).String()
++	return labels, nil
++}
++
++// ValidateDmveritySnapshot checks that an existing ChainID snapshot satisfies
++// the materialization requested for the current layer. A signed snapshot is
++// safe to reuse for a plain request, but a plain, legacy, or differently signed
++// snapshot must never satisfy a signed request.
++func ValidateDmveritySnapshot(existing, expected map[string]string) error {
++	if expected[DmverityMaterializationVersionLabel] == "" {
++		return nil
++	}
++
++	switch expected[DmverityMaterializationStateLabel] {
++	case DmverityMaterializationStatePlain:
++		switch existing[DmverityMaterializationStateLabel] {
++		case "", DmverityMaterializationStatePlain:
++			return nil
++		case DmverityMaterializationStateSigned:
++			return validateSignedMaterialization(existing)
++		default:
++			return fmt.Errorf("existing snapshot has unknown dm-verity materialization state %q", existing[DmverityMaterializationStateLabel])
++		}
++	case DmverityMaterializationStateSigned:
++		if err := validateSignedMaterialization(existing); err != nil {
++			return err
++		}
++		if existing[DmverityMaterializationRootHashLabel] != expected[DmverityMaterializationRootHashLabel] {
++			return fmt.Errorf(
++				"existing snapshot dm-verity root hash %q does not match required root hash %q",
++				existing[DmverityMaterializationRootHashLabel],
++				expected[DmverityMaterializationRootHashLabel],
++			)
++		}
++		if existing[DmverityMaterializationSignatureDigestLabel] != expected[DmverityMaterializationSignatureDigestLabel] {
++			return fmt.Errorf(
++				"existing snapshot dm-verity signature digest %q does not match required digest %q",
++				existing[DmverityMaterializationSignatureDigestLabel],
++				expected[DmverityMaterializationSignatureDigestLabel],
++			)
++		}
++		return nil
++	default:
++		return fmt.Errorf("invalid expected dm-verity materialization state %q", expected[DmverityMaterializationStateLabel])
++	}
++}
++
++func validateSignedMaterialization(labels map[string]string) error {
++	if labels[DmverityMaterializationVersionLabel] != DmverityMaterializationVersion {
++		return fmt.Errorf(
++			"existing signed snapshot has unsupported dm-verity materialization version %q",
++			labels[DmverityMaterializationVersionLabel],
++		)
++	}
++	if labels[DmverityMaterializationStateLabel] != DmverityMaterializationStateSigned {
++		return fmt.Errorf(
++			"existing snapshot is not signed dm-verity materialization (state %q)",
++			labels[DmverityMaterializationStateLabel],
++		)
++	}
++	if labels[DmverityMaterializationRootHashLabel] == "" {
++		return fmt.Errorf("existing signed snapshot is missing its dm-verity root hash label")
++	}
++	if _, err := digest.Parse(labels[DmverityMaterializationSignatureDigestLabel]); err != nil {
++		return fmt.Errorf("existing signed snapshot has invalid dm-verity signature digest label: %w", err)
++	}
++	return nil
++}
+diff --git a/pkg/snapshotters/dmverity_policy_test.go b/pkg/snapshotters/dmverity_policy_test.go
+new file mode 100644
+index 000000000..a55611c6c
+--- /dev/null
++++ b/pkg/snapshotters/dmverity_policy_test.go
+@@ -0,0 +1,91 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package snapshotters
++
++import (
++	"encoding/base64"
++	"testing"
++
++	"github.com/opencontainers/go-digest"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++func TestDmveritySnapshotLabels(t *testing.T) {
++	layer := func(annotations map[string]string) ocispec.Descriptor {
++		return ocispec.Descriptor{
++			Digest:      digest.FromString("layer"),
++			Annotations: annotations,
++		}
++	}
++
++	plain, err := DmveritySnapshotLabels(layer(nil), false)
++	require.NoError(t, err)
++	assert.Equal(t, DmverityMaterializationStatePlain, plain[DmverityMaterializationStateLabel])
++
++	_, err = DmveritySnapshotLabels(layer(nil), true)
++	require.ErrorContains(t, err, "signature required")
++
++	signature := []byte("signature")
++	signed, err := DmveritySnapshotLabels(layer(map[string]string{
++		TargetLayerSignatureLabel: base64.StdEncoding.EncodeToString(signature),
++		TargetLayerRootHashLabel:  digest.FromString("root").Hex(),
++	}), false)
++	require.NoError(t, err)
++	assert.Equal(t, DmverityMaterializationStateSigned, signed[DmverityMaterializationStateLabel])
++	assert.Equal(t, digest.FromBytes(signature).String(), signed[DmverityMaterializationSignatureDigestLabel])
++
++	_, err = DmveritySnapshotLabels(layer(map[string]string{
++		TargetLayerRootHashLabel: digest.FromString("root").Hex(),
++	}), false)
++	require.ErrorContains(t, err, "without a signature")
++
++	_, err = DmveritySnapshotLabels(layer(map[string]string{
++		TargetLayerSignatureLabel: "not-base64",
++		TargetLayerRootHashLabel:  digest.FromString("root").Hex(),
++	}), false)
++	require.ErrorContains(t, err, "invalid dm-verity signature encoding")
++}
++
++func TestValidateDmveritySnapshot(t *testing.T) {
++	plain := map[string]string{
++		DmverityMaterializationVersionLabel: DmverityMaterializationVersion,
++		DmverityMaterializationStateLabel:   DmverityMaterializationStatePlain,
++	}
++	signed := map[string]string{
++		DmverityMaterializationVersionLabel:         DmverityMaterializationVersion,
++		DmverityMaterializationStateLabel:           DmverityMaterializationStateSigned,
++		DmverityMaterializationRootHashLabel:        digest.FromString("root").Hex(),
++		DmverityMaterializationSignatureDigestLabel: digest.FromString("signature").String(),
++	}
++
++	assert.NoError(t, ValidateDmveritySnapshot(nil, plain))
++	assert.NoError(t, ValidateDmveritySnapshot(plain, plain))
++	assert.NoError(t, ValidateDmveritySnapshot(signed, plain))
++	assert.NoError(t, ValidateDmveritySnapshot(signed, signed))
++
++	require.ErrorContains(t, ValidateDmveritySnapshot(nil, signed), "unsupported dm-verity materialization version")
++	require.ErrorContains(t, ValidateDmveritySnapshot(plain, signed), "not signed")
++
++	different := make(map[string]string, len(signed))
++	for key, value := range signed {
++		different[key] = value
++	}
++	different[DmverityMaterializationRootHashLabel] = digest.FromString("other").Hex()
++	require.ErrorContains(t, ValidateDmveritySnapshot(different, signed), "does not match required root hash")
++}
+diff --git a/plugins/cri/images/plugin.go b/plugins/cri/images/plugin.go
+index f0f356463..422a49ff7 100644
+--- a/plugins/cri/images/plugin.go
++++ b/plugins/cri/images/plugin.go
+@@ -112,46 +112,49 @@ func init() {
+ 				}
+ 				snapshotters[name] = struct{}{}
+ 			}
+-			var dmveritySnapshotter string
++			var dmveritySnapshotters, requiredSnapshotters, erofsSnapshotters []string
+ 			for name := range snapshotters {
+-				if p := ic.Plugins().Get(plugins.SnapshotPlugin, name); p != nil &&
+-					slices.Contains(p.Meta.Capabilities, plugins.CapabilityDmverityReferrers) {
+-					dmveritySnapshotter = name
+-					break
++				p := ic.Plugins().Get(plugins.SnapshotPlugin, name)
++				if p == nil {
++					continue
++				}
++				if slices.Contains(p.Meta.Capabilities, plugins.CapabilityErofsLayers) {
++					erofsSnapshotters = append(erofsSnapshotters, name)
++				}
++				if slices.Contains(p.Meta.Capabilities, plugins.CapabilityDmverityReferrers) {
++					dmveritySnapshotters = append(dmveritySnapshotters, name)
++				}
++				if slices.Contains(p.Meta.Capabilities, plugins.CapabilityDmveritySignaturesRequired) {
++					requiredSnapshotters = append(requiredSnapshotters, name)
+ 				}
+ 			}
+-			if dmveritySnapshotter != "" && !dmverityDifferAvailable {
+-				return nil, fmt.Errorf(
+-					"snapshotter %q enables dm-verity referrers but no capable differ is available",
+-					dmveritySnapshotter,
+-				)
+-			}
+-			if dmveritySnapshotter != "" {
+-				config.EnableDmverityReferrers = true
+-				log.G(ic.Context).Debugf(
+-					"enabling dm-verity referrer discovery for snapshotter %q",
+-					dmveritySnapshotter,
+-				)
+-			}
++			slices.Sort(dmveritySnapshotters)
++			slices.Sort(requiredSnapshotters)
++			slices.Sort(erofsSnapshotters)
+ 
+-			// Local pulls and first-use unpack after a fetch-only transfer both
+-			// apply layers through the diff service. Require its first applier
+-			// to consume dm-verity artifacts; a merely loaded capable differ is
+-			// insufficient because an earlier walking differ can consume the
+-			// layer without verification.
+-			if config.EnableDmverityReferrers {
++			if dmverityDifferAvailable || len(requiredSnapshotters) > 0 {
+ 				ds, err := ic.GetByID(plugins.ServicePlugin, services.DiffService)
+ 				if err != nil {
+-					return nil, fmt.Errorf("dm-verity referrer discovery is enabled but the diff service is unavailable: %w", err)
++					return nil, fmt.Errorf("validate dm-verity diff service: %w", err)
+ 				}
+ 				reporter, ok := ds.(interface {
+ 					DmverityAppliers() (ordered []string, capable []string)
+ 				})
+ 				if !ok {
+-					return nil, fmt.Errorf("dm-verity referrer discovery is enabled but the diff service cannot report applier capabilities")
++					return nil, fmt.Errorf("diff service cannot report dm-verity applier capabilities")
+ 				}
+ 				ordered, capable := reporter.DmverityAppliers()
+-				if len(capable) == 0 {
++				selectedCapable := len(ordered) > 0 && len(capable) > 0 && ordered[0] == capable[0]
++
++				if len(requiredSnapshotters) > 0 && !selectedCapable {
++					return nil, fmt.Errorf(
++						"snapshotter(s) [%s] require dm-verity signatures but the diff service applier chain [%s] "+
++							"cannot materialize protected layers",
++						strings.Join(requiredSnapshotters, ", "),
++						strings.Join(ordered, ", "),
++					)
++				}
++				if dmverityDifferAvailable && len(dmveritySnapshotters) > 0 && !selectedCapable {
+ 					return nil, fmt.Errorf(
+ 						"dm-verity referrer discovery is enabled but the diff service applier chain [%s] "+
+ 							"cannot consume dm-verity artifacts during local or deferred unpack; add a "+
+@@ -159,11 +162,30 @@ func init() {
+ 							"[plugins.\"io.containerd.service.v1.diff-service\"] default",
+ 						strings.Join(ordered, ", "))
+ 				}
+-				if ordered[0] != capable[0] {
+-					return nil, fmt.Errorf(
+-						"dm-verity capable differ %q must be first in the diff service order [%s] "+
+-							"so local and deferred unpack cannot bypass dm-verity verification",
+-						capable[0], strings.Join(ordered, ", "))
++				if requiredReporter, ok := ds.(interface {
++					DmveritySignaturesRequired() bool
++				}); ok && requiredReporter.DmveritySignaturesRequired() {
++					var incompatible []string
++					for _, name := range erofsSnapshotters {
++						p := ic.Plugins().Get(plugins.SnapshotPlugin, name)
++						if p == nil || !slices.Contains(p.Meta.Capabilities, plugins.CapabilityDmveritySignaturesRequired) {
++							incompatible = append(incompatible, name)
++						}
++					}
++					if len(incompatible) > 0 {
++						return nil, fmt.Errorf(
++							"dm-verity signatures are required but EROFS snapshotter(s) [%s] permit plain mounts; "+
++								"set dmverity_mode = \"on\"",
++							strings.Join(incompatible, ", "),
++						)
++					}
++				}
++				if dmverityDifferAvailable && len(dmveritySnapshotters) > 0 {
++					config.EnableDmverityReferrers = true
++					log.G(ic.Context).Debugf(
++						"enabling dm-verity referrer discovery for snapshotter(s) [%s]",
++						strings.Join(dmveritySnapshotters, ", "),
++					)
+ 				}
+ 			}
+ 
+diff --git a/plugins/diff/erofs/differ.go b/plugins/diff/erofs/differ.go
+index f1a561d70..bf013376d 100644
+--- a/plugins/diff/erofs/differ.go
++++ b/plugins/diff/erofs/differ.go
+@@ -55,7 +55,7 @@ type erofsDiff struct {
+ 	// enableTarIndex enables generating tar index for tar content
+ 	// instead of fully converting the tar to EROFS format
+ 	enableTarIndex bool
+-	// enableDmverity enables formatting layers with dm-verity after creation
++	// enableDmverity enables consuming signed dm-verity layer metadata.
+ 	enableDmverity bool
+ 	// requireSignatures requires dm-verity signatures to be present on layers
+ 	// when dm-verity is enabled. If true, Apply will fail if a layer lacks a signature.
+@@ -79,7 +79,7 @@ func WithTarIndexMode() DifferOpt {
+ 	}
+ }
+ 
+-// WithDmverity enables dm-verity formatting for EROFS layers
++// WithDmverity enables dm-verity for layers carrying signed metadata.
+ func WithDmverity() DifferOpt {
+ 	return func(d *erofsDiff) {
+ 		d.enableDmverity = true
+@@ -168,6 +168,10 @@ func (s erofsDiff) Apply(ctx context.Context, desc ocispec.Descriptor, mounts []
+ 	defer ra.Close()
+ 
+ 	layerBlobPath := path.Join(layer, "layer.erofs")
++	useDmverity, err := s.dmverityForLayer(desc)
++	if err != nil {
++		return emptyDesc, err
++	}
+ 	if native {
+ 		f, err := os.Create(layerBlobPath)
+ 		if err != nil {
+@@ -178,11 +182,10 @@ func (s erofsDiff) Apply(ctx context.Context, desc ocispec.Descriptor, mounts []
+ 		if err != nil {
+ 			return emptyDesc, err
+ 		}
+-		// A native EROFS layer is written to disk verbatim, but it is still a
+-		// layer the dm-verity policy applies to. Skipping the block below would
+-		// let a registry opt out of integrity and signature enforcement purely
+-		// by publishing its layers with an EROFS media type.
+-		if s.enableDmverity {
++		// Native EROFS layers follow the same signed-metadata policy as tar
++		// layers. A valid signature still covers the root hash computed from
++		// the native blob; an unsigned layer remains ordinary EROFS.
++		if useDmverity {
+ 			rootHash, err := s.formatDmverityLayer(ctx, layerBlobPath)
+ 			if err != nil {
+ 				return emptyDesc, fmt.Errorf("failed to format dm-verity layer: %w", err)
+@@ -210,14 +213,16 @@ func (s erofsDiff) Apply(ctx context.Context, desc ocispec.Descriptor, mounts []
+ 		r: io.TeeReader(processor, digester.Hash()),
+ 	}
+ 
+-	if used, err := s.applyPrecomputedArtifacts(ctx, desc, layerBlobPath, rc); err != nil {
+-		return emptyDesc, err
+-	} else if used {
+-		return ocispec.Descriptor{
+-			MediaType: ocispec.MediaTypeImageLayer,
+-			Size:      rc.c,
+-			Digest:    digester.Digest(),
+-		}, nil
++	if useDmverity {
++		if used, err := s.applyPrecomputedArtifacts(ctx, desc, layerBlobPath, rc); err != nil {
++			return emptyDesc, err
++		} else if used {
++			return ocispec.Descriptor{
++				MediaType: ocispec.MediaTypeImageLayer,
++				Size:      rc.c,
++				Digest:    digester.Digest(),
++			}, nil
++		}
+ 	}
+ 
+ 	// Choose between tar index or tar conversion mode
+@@ -244,8 +249,10 @@ func (s erofsDiff) Apply(ctx context.Context, desc ocispec.Descriptor, mounts []
+ 		return emptyDesc, err
+ 	}
+ 
+-	// Format with dm-verity if enabled
+-	if s.enableDmverity {
++	// Locally format only a layer carrying signed dm-verity metadata. Merely
++	// enabling referrer support must not impose mapper overhead on unsigned
++	// images.
++	if useDmverity {
+ 		rootHash, err := s.formatDmverityLayer(ctx, layerBlobPath)
+ 		if err != nil {
+ 			return emptyDesc, fmt.Errorf("failed to format dm-verity layer: %w", err)
+@@ -263,6 +270,17 @@ func (s erofsDiff) Apply(ctx context.Context, desc ocispec.Descriptor, mounts []
+ 	}, nil
+ }
+ 
++func (s erofsDiff) dmverityForLayer(desc ocispec.Descriptor) (bool, error) {
++	if !s.enableDmverity {
++		return false, nil
++	}
++	labels, err := snpkg.DmveritySnapshotLabels(desc, s.requireSignatures)
++	if err != nil {
++		return false, err
++	}
++	return labels[snpkg.DmverityMaterializationStateLabel] == snpkg.DmverityMaterializationStateSigned, nil
++}
++
+ func (s erofsDiff) writeLayerSignature(ctx context.Context, desc ocispec.Descriptor, layerBlobPath, actualRootHash string) error {
+ 	sig := desc.Annotations[snpkg.TargetLayerSignatureLabel]
+ 	switch {
+diff --git a/plugins/diff/erofs/differ_apply_policy_linux_test.go b/plugins/diff/erofs/differ_apply_policy_linux_test.go
+new file mode 100644
+index 000000000..cbc557713
+--- /dev/null
++++ b/plugins/diff/erofs/differ_apply_policy_linux_test.go
+@@ -0,0 +1,196 @@
++//go:build linux
++
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package erofs
++
++import (
++	"archive/tar"
++	"bytes"
++	"context"
++	"encoding/base64"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/containerd/containerd/v2/core/mount"
++	"github.com/containerd/containerd/v2/internal/dmverity"
++	"github.com/containerd/containerd/v2/internal/erofsutils"
++	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
++	"github.com/containerd/containerd/v2/plugins/content/local"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++func TestApplyNativeDmverityPolicy(t *testing.T) {
++	ctx := context.Background()
++	cs, err := local.NewStore(t.TempDir())
++	require.NoError(t, err)
++	data := bytes.Repeat([]byte("native erofs test data"), 512)
++	desc := writeTestBlob(t, ctx, cs, data, "application/vnd.containerd.test.layer.erofs")
++
++	probe := filepath.Join(t.TempDir(), "probe.erofs")
++	require.NoError(t, os.WriteFile(probe, data, 0600))
++	rootHash, err := dmverity.FormatLayerBlob(ctx, probe, 4096)
++	require.NoError(t, err)
++	signed := desc
++	signed.Annotations = map[string]string{
++		snpkg.TargetLayerSignatureLabel: base64.StdEncoding.EncodeToString([]byte("signature")),
++		snpkg.TargetLayerRootHashLabel:  rootHash,
++	}
++
++	t.Run("disabled ignores complete annotations", func(t *testing.T) {
++		layer, mounts := newPolicyLayer(t)
++		_, err := NewErofsDiffer(cs).Apply(ctx, signed, mounts)
++		require.NoError(t, err)
++		assertNoDmveritySidecars(t, layer)
++	})
++
++	t.Run("disabled ignores partial annotations", func(t *testing.T) {
++		layer, mounts := newPolicyLayer(t)
++		partial := desc
++		partial.Annotations = map[string]string{
++			snpkg.TargetLayerRootHashLabel: rootHash,
++		}
++		_, err := NewErofsDiffer(cs).Apply(ctx, partial, mounts)
++		require.NoError(t, err)
++		assertNoDmveritySidecars(t, layer)
++	})
++
++	t.Run("optional unsigned remains plain", func(t *testing.T) {
++		layer, mounts := newPolicyLayer(t)
++		_, err := NewErofsDiffer(cs, WithDmverity()).Apply(ctx, desc, mounts)
++		require.NoError(t, err)
++		assertNoDmveritySidecars(t, layer)
++	})
++
++	t.Run("required unsigned fails", func(t *testing.T) {
++		layer, mounts := newPolicyLayer(t)
++		_, err := NewErofsDiffer(cs, WithDmverity(), WithRequireSignatures()).Apply(ctx, desc, mounts)
++		require.ErrorContains(t, err, "signature required")
++		assertNoDmveritySidecars(t, layer)
++	})
++
++	t.Run("signed creates protected sidecars", func(t *testing.T) {
++		layer, mounts := newPolicyLayer(t)
++		_, err := NewErofsDiffer(cs, WithDmverity()).Apply(ctx, signed, mounts)
++		require.NoError(t, err)
++		assertDmveritySidecars(t, layer)
++	})
++}
++
++func TestApplyTarDmverityPolicy(t *testing.T) {
++	supported, err := erofsutils.SupportGenerateFromTar()
++	if err != nil || !supported {
++		t.Skip("mkfs.erofs tar mode is unavailable")
++	}
++
++	ctx := context.Background()
++	cs, err := local.NewStore(t.TempDir())
++	require.NoError(t, err)
++	tarData := policyTar(t)
++	desc := writeTestBlob(t, ctx, cs, tarData, ocispec.MediaTypeImageLayer)
++	differ := NewErofsDiffer(
++		cs,
++		WithDmverity(),
++		WithMkfsOptions([]string{"-T0"}),
++	)
++
++	plainLayer, plainMounts := newPolicyLayer(t)
++	_, err = differ.Apply(ctx, desc, plainMounts)
++	require.NoError(t, err)
++	assertNoDmveritySidecars(t, plainLayer)
++
++	probe := filepath.Join(t.TempDir(), "probe.erofs")
++	require.NoError(t, copyFile(filepath.Join(plainLayer, "layer.erofs"), probe))
++	rootHash, err := dmverity.FormatLayerBlob(ctx, probe, 4096)
++	require.NoError(t, err)
++
++	signed := desc
++	signed.Annotations = map[string]string{
++		snpkg.TargetLayerSignatureLabel: base64.StdEncoding.EncodeToString([]byte("signature")),
++		snpkg.TargetLayerRootHashLabel:  rootHash,
++	}
++	signedLayer, signedMounts := newPolicyLayer(t)
++	_, err = differ.Apply(ctx, signed, signedMounts)
++	require.NoError(t, err)
++	assertDmveritySidecars(t, signedLayer)
++}
++
++func newPolicyLayer(t *testing.T) (string, []mount.Mount) {
++	t.Helper()
++	layer := t.TempDir()
++	require.NoError(t, os.WriteFile(filepath.Join(layer, ".erofslayer"), nil, 0600))
++	return layer, []mount.Mount{{
++		Type:   "bind",
++		Source: filepath.Join(layer, "layer.erofs"),
++	}}
++}
++
++func assertNoDmveritySidecars(t *testing.T, layer string) {
++	t.Helper()
++	for _, path := range []string{
++		dmverity.MetadataPath(filepath.Join(layer, "layer.erofs")),
++		dmverity.SignaturePath(filepath.Join(layer, "layer.erofs")),
++		dmverity.SignatureRequiredPath(filepath.Join(layer, "layer.erofs")),
++		dmverity.HashDevicePath(filepath.Join(layer, "layer.erofs")),
++	} {
++		_, err := os.Stat(path)
++		assert.ErrorIs(t, err, os.ErrNotExist, path)
++	}
++}
++
++func assertDmveritySidecars(t *testing.T, layer string) {
++	t.Helper()
++	for _, path := range []string{
++		dmverity.MetadataPath(filepath.Join(layer, "layer.erofs")),
++		dmverity.SignaturePath(filepath.Join(layer, "layer.erofs")),
++		dmverity.SignatureRequiredPath(filepath.Join(layer, "layer.erofs")),
++	} {
++		info, err := os.Stat(path)
++		require.NoError(t, err, path)
++		assert.Positive(t, info.Size(), path)
++	}
++}
++
++func policyTar(t *testing.T) []byte {
++	t.Helper()
++	var data bytes.Buffer
++	writer := tar.NewWriter(&data)
++	content := []byte("hello dm-verity\n")
++	require.NoError(t, writer.WriteHeader(&tar.Header{
++		Name:     "hello.txt",
++		Mode:     0644,
++		Size:     int64(len(content)),
++		ModTime:  time.Unix(0, 0),
++		Typeflag: tar.TypeReg,
++	}))
++	_, err := writer.Write(content)
++	require.NoError(t, err)
++	require.NoError(t, writer.Close())
++	return data.Bytes()
++}
++
++func copyFile(source, target string) error {
++	data, err := os.ReadFile(source)
++	if err != nil {
++		return err
++	}
++	return os.WriteFile(target, data, 0600)
++}
+diff --git a/plugins/diff/erofs/differ_policy_test.go b/plugins/diff/erofs/differ_policy_test.go
+new file mode 100644
+index 000000000..c5e908e6d
+--- /dev/null
++++ b/plugins/diff/erofs/differ_policy_test.go
+@@ -0,0 +1,92 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package erofs
++
++import (
++	"encoding/base64"
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/opencontainers/go-digest"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++
++	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
++)
++
++func TestDmverityForLayer(t *testing.T) {
++	layer := func(annotations map[string]string) ocispec.Descriptor {
++		return ocispec.Descriptor{
++			Digest:      digest.FromString("layer"),
++			Annotations: annotations,
++		}
++	}
++	signed := map[string]string{
++		snpkg.TargetLayerSignatureLabel: base64.StdEncoding.EncodeToString([]byte("signature")),
++		snpkg.TargetLayerRootHashLabel:  digest.FromString("root").Hex(),
++	}
++
++	t.Run("disabled ignores annotations", func(t *testing.T) {
++		use, err := (erofsDiff{}).dmverityForLayer(layer(signed))
++		require.NoError(t, err)
++		assert.False(t, use)
++	})
++
++	t.Run("unsigned layer remains plain erofs", func(t *testing.T) {
++		use, err := (erofsDiff{enableDmverity: true}).dmverityForLayer(layer(nil))
++		require.NoError(t, err)
++		assert.False(t, use)
++	})
++
++	t.Run("required signature fails closed", func(t *testing.T) {
++		_, err := (erofsDiff{
++			enableDmverity:    true,
++			requireSignatures: true,
++		}).dmverityForLayer(layer(nil))
++		require.ErrorContains(t, err, "signature required")
++	})
++
++	t.Run("signed layer uses dm-verity", func(t *testing.T) {
++		use, err := (erofsDiff{enableDmverity: true}).dmverityForLayer(layer(signed))
++		require.NoError(t, err)
++		assert.True(t, use)
++	})
++
++	t.Run("signature requires root hash", func(t *testing.T) {
++		_, err := (erofsDiff{enableDmverity: true}).dmverityForLayer(layer(map[string]string{
++			snpkg.TargetLayerSignatureLabel: base64.StdEncoding.EncodeToString([]byte("signature")),
++		}))
++		require.ErrorContains(t, err, "missing expected root hash")
++	})
++
++	t.Run("metadata without signature fails closed", func(t *testing.T) {
++		_, err := (erofsDiff{enableDmverity: true}).dmverityForLayer(layer(map[string]string{
++			snpkg.TargetLayerRootHashLabel: digest.FromString("root").Hex(),
++		}))
++		require.ErrorContains(t, err, "metadata without a signature")
++	})
++
++	t.Run("precomputed artifacts must be paired", func(t *testing.T) {
++		_, err := (erofsDiff{enableDmverity: true}).dmverityForLayer(layer(map[string]string{
++			snpkg.TargetLayerSignatureLabel:          base64.StdEncoding.EncodeToString([]byte("signature")),
++			snpkg.TargetLayerRootHashLabel:           digest.FromString("root").Hex(),
++			snpkg.TargetLayerTarIndexDescriptorLabel: "{}",
++		}))
++		require.ErrorContains(t, err, "incomplete precomputed dm-verity artifacts")
++	})
++}
+diff --git a/plugins/diff/erofs/plugin/plugin.go b/plugins/diff/erofs/plugin/plugin.go
+index 9a40bda49..2a4848155 100644
+--- a/plugins/diff/erofs/plugin/plugin.go
++++ b/plugins/diff/erofs/plugin/plugin.go
+@@ -39,13 +39,15 @@ type Config struct {
+ 	// for tar content without extracting the tar
+ 	EnableTarIndex bool `toml:"enable_tar_index"`
+ 
+-	// EnableDmverity enables dm-verity formatting for EROFS layers
+-	// Linux only
++	// EnableDmverity enables discovery and enforcement of signed dm-verity
++	// metadata for EROFS layers. Unsigned layers remain ordinary EROFS unless
++	// RequireSignatures rejects them.
+ 	EnableDmverity bool `toml:"enable_dmverity"`
+ 
+ 	// RequireSignatures requires dm-verity signatures to be present on all layers.
+ 	// When enabled, layer application will fail if a signature is not present.
+-	// Only has effect when EnableDmverity is true.
++	// EnableDmverity must be true and the EROFS snapshotter must use
++	// dmverity_mode = "on", so pre-existing plain snapshots cannot be mounted.
+ 	RequireSignatures bool `toml:"require_signatures"`
+ }
+ 
+@@ -106,6 +108,7 @@ func init() {
+ 
+ 				if config.RequireSignatures {
+ 					opts = append(opts, erofs.WithRequireSignatures())
++					ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmveritySignaturesRequired)
+ 				}
+ 
+ 				// Advertise that this differ consumes dm-verity referrer
+diff --git a/plugins/mount/erofs/plugin_linux.go b/plugins/mount/erofs/plugin_linux.go
+index fef721d41..78ee27525 100644
+--- a/plugins/mount/erofs/plugin_linux.go
++++ b/plugins/mount/erofs/plugin_linux.go
+@@ -178,6 +178,11 @@ func sharedLayerMountOptions(opts []string, selinuxEnabled bool, sharedLayerCont
+ // returned device has been mounted or rolled back. Returning while the device is
+ // merely created is exactly the zero-open window described on the mutex.
+ func openOrReuseDmverityDevice(ctx context.Context, source, deviceName string, metadata *dmverity.DmverityMetadata) (string, error) {
++	signatureFile, err := requiredDmveritySignature(source)
++	if err != nil {
++		return "", err
++	}
++
+ 	devicePath := dmverity.DevicePath(deviceName)
+ 	if _, err := os.Stat(devicePath); !os.IsNotExist(err) {
+ 		// Device-mapper names are host-global while snapshot IDs are only
+@@ -191,13 +196,7 @@ func openOrReuseDmverityDevice(ctx context.Context, source, deviceName string, m
+ 		return devicePath, nil
+ 	}
+ 
+-	// Use signature file if it exists (written by the differ during Apply)
+-	signatureFile := dmverity.SignaturePath(source)
+-	if _, err := os.Stat(signatureFile); err != nil {
+-		signatureFile = ""
+-	} else {
+-		log.G(ctx).WithField("root_hash", metadata.RootHash).Info("Using signature for dm-verity")
+-	}
++	log.G(ctx).WithField("root_hash", metadata.RootHash).Info("Using signature for dm-verity")
+ 
+ 	log.G(ctx).WithFields(log.Fields{
+ 		"source":      source,
+@@ -206,7 +205,7 @@ func openOrReuseDmverityDevice(ctx context.Context, source, deviceName string, m
+ 	}).Debug("opening dm-verity device")
+ 
+ 	hashDevice := dmverity.ResolveHashDevice(source, metadata)
+-	devicePath, err := dmverity.OpenWithSignature(source, deviceName, hashDevice, metadata.RootHash, metadata.HashOffset, nil, signatureFile)
++	devicePath, err = dmverity.OpenWithSignature(source, deviceName, hashDevice, metadata.RootHash, metadata.HashOffset, nil, signatureFile)
+ 	if err != nil {
+ 		return "", fmt.Errorf("failed to open dm-verity device: %w", err)
+ 	}
+@@ -229,6 +228,18 @@ func openOrReuseDmverityDevice(ctx context.Context, source, deviceName string, m
+ 	return devicePath, nil
+ }
+ 
++func requiredDmveritySignature(source string) (string, error) {
++	signatureFile := dmverity.SignaturePath(source)
++	info, err := os.Stat(signatureFile)
++	if err != nil {
++		return "", fmt.Errorf("layer %q has dm-verity metadata but no usable signature: %w", source, err)
++	}
++	if !info.Mode().IsRegular() || info.Size() == 0 {
++		return "", fmt.Errorf("layer %q has dm-verity metadata but signature %q is not a non-empty regular file", source, signatureFile)
++	}
++	return signatureFile, nil
++}
++
+ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string, _ []mount.ActiveMount) (mount.ActiveMount, error) {
+ 	if m.Type != "erofs" {
+ 		return mount.ActiveMount{}, errdefs.ErrNotImplemented
+diff --git a/plugins/mount/erofs/plugin_linux_test.go b/plugins/mount/erofs/plugin_linux_test.go
+index 46d98a64f..c3aaffd58 100644
+--- a/plugins/mount/erofs/plugin_linux_test.go
++++ b/plugins/mount/erofs/plugin_linux_test.go
+@@ -18,6 +18,7 @@ package erofs
+ 
+ import (
+ 	"context"
++	"os"
+ 	"path/filepath"
+ 	"slices"
+ 	"strings"
+@@ -27,6 +28,35 @@ import (
+ 	"github.com/containerd/containerd/v2/internal/dmverity"
+ )
+ 
++func TestRequiredDmveritySignature(t *testing.T) {
++	layer := filepath.Join(t.TempDir(), "layer.erofs")
++
++	_, err := requiredDmveritySignature(layer)
++	if err == nil {
++		t.Fatal("expected a missing signature to fail")
++	}
++
++	signaturePath := dmverity.SignaturePath(layer)
++	if err := os.WriteFile(signaturePath, nil, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	_, err = requiredDmveritySignature(layer)
++	if err == nil {
++		t.Fatal("expected an empty signature to fail")
++	}
++
++	if err := os.WriteFile(signaturePath, []byte("signature"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	got, err := requiredDmveritySignature(layer)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if got != signaturePath {
++		t.Fatalf("requiredDmveritySignature() = %q, want %q", got, signaturePath)
++	}
++}
++
+ func TestSharedLayerMountOptions(t *testing.T) {
+ 	const shared = `context="` + defaultSharedLayerContext + `"`
+ 
+diff --git a/plugins/services/diff/local.go b/plugins/services/diff/local.go
+index 698f7270a..77c107eeb 100644
+--- a/plugins/services/diff/local.go
++++ b/plugins/services/diff/local.go
+@@ -76,6 +76,7 @@ func init() {
+ 			orderedNames := ic.Config.(*config).Order
+ 			ordered := make([]differ, len(orderedNames))
+ 			var dmverityCapable []string
++			var dmverityConfigured, dmverityRequired bool
+ 			for i, n := range orderedNames {
+ 				d, ok := differs[n]
+ 				if !ok {
+@@ -90,14 +91,26 @@ func init() {
+ 				if p := ic.Plugins().Get(plugins.DiffPlugin, n); p != nil &&
+ 					slices.Contains(p.Meta.Capabilities, plugins.CapabilityDmverityReferrers) {
+ 					dmverityCapable = append(dmverityCapable, n)
++					dmverityConfigured = true
++					if i == 0 && slices.Contains(p.Meta.Capabilities, plugins.CapabilityDmveritySignaturesRequired) {
++						dmverityRequired = true
++					}
++				}
++			}
++			if len(orderedNames) > 0 && len(dmverityCapable) > 0 && orderedNames[0] == dmverityCapable[0] {
++				ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
++				if dmverityRequired {
++					ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmveritySignaturesRequired)
+ 				}
+ 			}
+ 
+ 			return &local{
+-				differs:         ordered,
+-				orderedNames:    orderedNames,
+-				dmverityCapable: dmverityCapable,
+-				syncfs:          syncFs,
++				differs:            ordered,
++				orderedNames:       orderedNames,
++				dmverityCapable:    dmverityCapable,
++				dmverityConfigured: dmverityConfigured,
++				dmverityRequired:   dmverityRequired,
++				syncfs:             syncFs,
+ 			}, nil
+ 		},
+ 	})
+@@ -111,7 +124,12 @@ type local struct {
+ 	// dmverityCapable lists the ordered differs that advertise
+ 	// plugins.CapabilityDmverityReferrers.
+ 	dmverityCapable []string
+-	syncfs          bool
++	// dmverityConfigured distinguishes an opted-out service from an invalid
++	// ordered differ chain. Runtime-only annotations are ignored when the
++	// feature is not configured.
++	dmverityConfigured bool
++	dmverityRequired   bool
++	syncfs             bool
+ }
+ 
+ var _ diffapi.DiffClient = &local{}
+@@ -128,6 +146,10 @@ func (l *local) DmverityAppliers() (ordered []string, capable []string) {
+ 	return l.orderedNames, l.dmverityCapable
+ }
+ 
++func (l *local) DmveritySignaturesRequired() bool {
++	return l.dmverityRequired
++}
++
+ func (l *local) Apply(ctx context.Context, er *diffapi.ApplyRequest, _ ...grpc.CallOption) (*diffapi.ApplyResponse, error) {
+ 	var (
+ 		ocidesc ocispec.Descriptor
+@@ -176,6 +198,9 @@ func (l *local) validateDmverityApply(desc ocispec.Descriptor, mounts []mount.Mo
+ 		desc.Annotations[snapshotters.TargetLayerMerkleTreeDescriptorLabel] == "" {
+ 		return nil
+ 	}
++	if !l.dmverityConfigured {
++		return nil
++	}
+ 	if len(mounts) == 0 {
+ 		return nil
+ 	}
+diff --git a/plugins/services/diff/local_test.go b/plugins/services/diff/local_test.go
+index cf6e36977..b02f6b8c4 100644
+--- a/plugins/services/diff/local_test.go
++++ b/plugins/services/diff/local_test.go
+@@ -45,16 +45,26 @@ func TestValidateDmverityApply(t *testing.T) {
+ 		wantError bool
+ 	}{
+ 		{
+-			name:      "no capable differ",
+-			service:   local{orderedNames: []string{"walking"}},
++			name: "configured without capable ordered differ",
++			service: local{
++				orderedNames:       []string{"walking"},
++				dmverityConfigured: true,
++			},
+ 			mounts:    erofsMounts,
+ 			wantError: true,
+ 		},
++		{
++			name:      "feature disabled ignores annotations",
++			service:   local{orderedNames: []string{"walking"}},
++			mounts:    erofsMounts,
++			wantError: false,
++		},
+ 		{
+ 			name: "capable differ is not first",
+ 			service: local{
+-				orderedNames:    []string{"walking", "erofs"},
+-				dmverityCapable: []string{"erofs"},
++				orderedNames:       []string{"walking", "erofs"},
++				dmverityCapable:    []string{"erofs"},
++				dmverityConfigured: true,
+ 			},
+ 			mounts:    erofsMounts,
+ 			wantError: true,
+@@ -62,8 +72,9 @@ func TestValidateDmverityApply(t *testing.T) {
+ 		{
+ 			name: "capable differ is first",
+ 			service: local{
+-				orderedNames:    []string{"erofs", "walking"},
+-				dmverityCapable: []string{"erofs"},
++				orderedNames:       []string{"erofs", "walking"},
++				dmverityCapable:    []string{"erofs"},
++				dmverityConfigured: true,
+ 			},
+ 			mounts: erofsMounts,
+ 		},
+diff --git a/plugins/snapshots/erofs/erofs.go b/plugins/snapshots/erofs/erofs.go
+index bf193371c..f401858ba 100644
+--- a/plugins/snapshots/erofs/erofs.go
++++ b/plugins/snapshots/erofs/erofs.go
+@@ -239,32 +239,63 @@ func (s *snapshotter) prepareDirectory(ctx context.Context, snapshotDir string,
+ // applyDmverityPolicy validates and applies dm-verity policy for a layer.
+ // Returns the X-containerd.dmverity option if needed, or empty string otherwise.
+ func (s *snapshotter) applyDmverityPolicy(layerBlob string) (string, error) {
+-	// Parse the sidecar rather than just stat'ing it. Existence alone says
+-	// nothing about whether the metadata can actually drive a dm-verity
+-	// device, so a truncated or malformed file would otherwise satisfy mode
+-	// "on" here and then silently degrade to a plain mount in the mount
+-	// handler.
+-	metadataExists := false
+-	if _, err := dmverity.ReadMetadata(layerBlob); err == nil {
+-		metadataExists = true
+-	} else if !errors.Is(err, os.ErrNotExist) && s.dmverityMode != "off" {
+-		return "", fmt.Errorf("layer %s has unusable dm-verity metadata: %w", layerBlob, err)
+-	}
+-
+-	// Validate dmverityMode policy: mode "on" requires .dmverity metadata to exist
+-	if s.dmverityMode == "on" && !metadataExists {
+-		return "", fmt.Errorf("dm-verity mode is 'on' but .dmverity metadata not found for layer %s", layerBlob)
+-	}
+-
+-	// Only return option if metadata exists and we need to override the default "auto" behavior
+-	// This keeps standard EROFS mounts (without dm-verity) unchanged
+-	if metadataExists && s.dmverityMode != "auto" {
+-		// Mode "off": disables dm-verity even though metadata exists
+-		// Mode "on": explicitly enables dm-verity (though "auto" would do the same)
+-		return fmt.Sprintf("X-containerd.dmverity=%s", s.dmverityMode), nil
++	if s.dmverityMode == "off" {
++		return "X-containerd.dmverity=off", nil
++	}
++
++	signaturePath := dmverity.SignaturePath(layerBlob)
++	signatureInfo, signatureErr := os.Stat(signaturePath)
++	switch {
++	case signatureErr == nil && (!signatureInfo.Mode().IsRegular() || signatureInfo.Size() == 0):
++		return "", fmt.Errorf("layer %s has dm-verity signature %s that is not a non-empty regular file", layerBlob, signaturePath)
++	case signatureErr != nil && !errors.Is(signatureErr, os.ErrNotExist):
++		return "", fmt.Errorf("failed to inspect dm-verity signature for layer %s: %w", layerBlob, signatureErr)
++	}
++	signatureExists := signatureErr == nil
++
++	requiredPath := dmverity.SignatureRequiredPath(layerBlob)
++	requiredInfo, requiredErr := os.Stat(requiredPath)
++	switch {
++	case requiredErr == nil && (!requiredInfo.Mode().IsRegular() || requiredInfo.Size() == 0):
++		return "", fmt.Errorf("layer %s has invalid signature-required marker %s", layerBlob, requiredPath)
++	case requiredErr != nil && !errors.Is(requiredErr, os.ErrNotExist):
++		return "", fmt.Errorf("failed to inspect signature-required marker for layer %s: %w", layerBlob, requiredErr)
++	}
++	signatureRequired := requiredErr == nil
++
++	_, metadataErr := dmverity.ReadMetadata(layerBlob)
++	switch {
++	case metadataErr == nil:
++		if signatureExists {
++			if s.dmverityMode == "on" {
++				return "X-containerd.dmverity=on", nil
++			}
++			return "", nil
++		}
++		if signatureRequired || s.dmverityMode == "on" {
++			return "", fmt.Errorf("layer %s has dm-verity metadata but no usable signature", layerBlob)
++		}
++		// Before signature-gated materialization, optional mode formatted every
++		// layer and left metadata without a signature. Mount those legacy
++		// unsigned layers as plain EROFS during upgrade.
++		return "X-containerd.dmverity=off", nil
++	case errors.Is(metadataErr, os.ErrNotExist):
++		if signatureExists || signatureRequired {
++			return "", fmt.Errorf("layer %s has dm-verity signature state but no metadata", layerBlob)
++		}
++		if s.dmverityMode == "on" {
++			return "", fmt.Errorf("dm-verity mode is 'on' but .dmverity metadata not found for layer %s", layerBlob)
++		}
++		return "", nil
++	default:
++		if signatureExists || signatureRequired || s.dmverityMode == "on" {
++			return "", fmt.Errorf("layer %s has unusable dm-verity metadata: %w", layerBlob, metadataErr)
++		}
++		// A malformed unsigned legacy sidecar cannot drive a mapper, but it is
++		// safe to ignore when optional policy explicitly falls back to plain
++		// EROFS.
++		return "X-containerd.dmverity=off", nil
+ 	}
+-
+-	return "", nil
+ }
+ 
+ // createErofsMount creates a mount specification for an EROFS layer.
+diff --git a/plugins/snapshots/erofs/erofs_linux_test.go b/plugins/snapshots/erofs/erofs_linux_test.go
+index 206a23fe9..bc5685e8f 100644
+--- a/plugins/snapshots/erofs/erofs_linux_test.go
++++ b/plugins/snapshots/erofs/erofs_linux_test.go
+@@ -371,7 +371,12 @@ func createDmverityMetadata(t *testing.T, layerBlob string) {
+ 	metadataPath := layerBlob + ".dmverity"
+ 	err := os.WriteFile(metadataPath, []byte(testDmverityMetadata), 0644)
+ 	require.NoError(t, err)
+-	t.Cleanup(func() { os.Remove(metadataPath) })
++	signaturePath := dmverity.SignaturePath(layerBlob)
++	require.NoError(t, os.WriteFile(signaturePath, []byte("signature"), 0644))
++	t.Cleanup(func() {
++		os.Remove(metadataPath)
++		os.Remove(signaturePath)
++	})
+ }
+ 
+ // Helper to create a test layer blob file
+@@ -400,7 +405,7 @@ func TestCreateErofsMount(t *testing.T) {
+ 		assert.Equal(t, "erofs", m.Type)
+ 		assert.Equal(t, layerBlob, m.Source)
+ 		// No X-containerd.dmverity option needed since no .dmverity metadata exists
+-		assert.Equal(t, []string{"ro", "loop"}, m.Options)
++		assert.Equal(t, []string{"ro", "loop", "X-containerd.dmverity=off"}, m.Options)
+ 	})
+ 
+ 	t.Run("always returns erofs mount type", func(t *testing.T) {
+@@ -436,31 +441,26 @@ func TestCreateErofsMount(t *testing.T) {
+ 	})
+ }
+ 
+-// TestDmverityEndToEnd tests the full workflow: differ creates dm-verity layer,
+-// snapshotter mounts it via mount manager, and cleanup on removal
+-func TestDmverityEndToEnd(t *testing.T) {
++// TestOptionalDmverityUnsignedEndToEnd verifies that enabling dm-verity
++// discovery does not materialize or mount dm-verity for an unsigned image.
++func TestOptionalDmverityUnsignedEndToEnd(t *testing.T) {
+ 	testutil.RequiresRoot(t)
+ 
+-	supported, err := dmverity.IsSupported()
+-	if err != nil || !supported {
+-		t.Skip("dm-verity is not supported on this system")
+-	}
+-
+ 	t.Run("with regular mode", func(t *testing.T) {
+-		testDmverityEndToEndWithMode(t, false)
++		testOptionalDmverityUnsignedEndToEndWithMode(t, false)
+ 	})
+ 
+ 	tarSupported, err := erofsutils.SupportGenerateFromTar()
+ 	if err == nil && tarSupported {
+ 		t.Run("with tar index mode", func(t *testing.T) {
+-			testDmverityEndToEndWithMode(t, true)
++			testOptionalDmverityUnsignedEndToEndWithMode(t, true)
+ 		})
+ 	} else {
+ 		t.Logf("Skipping tar index mode test: mkfs.erofs does not support tar mode")
+ 	}
+ }
+ 
+-func testDmverityEndToEndWithMode(t *testing.T, useTarIndex bool) {
++func testOptionalDmverityUnsignedEndToEndWithMode(t *testing.T, useTarIndex bool) {
+ 	ctx := context.Background()
+ 	ctx = namespaces.WithNamespace(ctx, "test")
+ 	tempDir := t.TempDir()
+@@ -486,7 +486,7 @@ func testDmverityEndToEndWithMode(t *testing.T, useTarIndex bool) {
+ 	differ := erofsdiffer.NewErofsDiffer(contentStore, differOpts...)
+ 
+ 	snapshotRoot := filepath.Join(tempDir, "snapshots")
+-	sn, err := NewSnapshotter(snapshotRoot, WithDmverityMode("on"))
++	sn, err := NewSnapshotter(snapshotRoot, WithDmverityMode("auto"))
+ 	require.NoError(t, err)
+ 	defer sn.Close()
+ 
+@@ -536,19 +536,19 @@ func testDmverityEndToEndWithMode(t *testing.T, useTarIndex bool) {
+ 	})
+ 	require.NoError(t, err)
+ 
+-	// Differ should create .dmverity metadata alongside layer
++	// The unsigned layer must remain ordinary EROFS even though discovery is
++	// enabled.
+ 	layerPath := s.layerBlobPath(snapshotID)
+-	metadataPath := layerPath + ".dmverity"
+-
+-	metadataData, err := os.ReadFile(metadataPath)
+-	require.NoError(t, err, ".dmverity file should exist")
+-	require.NotEmpty(t, metadataData, "metadata should not be empty")
++	_, err = os.Stat(dmverity.MetadataPath(layerPath))
++	assert.ErrorIs(t, err, os.ErrNotExist)
++	_, err = os.Stat(dmverity.SignaturePath(layerPath))
++	assert.ErrorIs(t, err, os.ErrNotExist)
+ 
+ 	viewKey := "test-view"
+ 	viewMounts, err := sn.View(ctx, viewKey, commitKey)
+ 	require.NoError(t, err)
+ 
+-	// Mount handler (not snapshotter) activates dm-verity
++	// The mount handler receives an ordinary EROFS layer.
+ 	require.Len(t, viewMounts, 1)
+ 	assert.Equal(t, "erofs", viewMounts[0].Type)
+ 	assert.Contains(t, viewMounts[0].Options, "ro")
+@@ -567,7 +567,7 @@ func testDmverityEndToEndWithMode(t *testing.T, useTarIndex bool) {
+ 	require.NotEmpty(t, actualMountPoint, "mount point should be set by EROFS handler")
+ 
+ 	testData, err := os.ReadFile(filepath.Join(actualMountPoint, "test-file.txt"))
+-	require.NoError(t, err, "should be able to read test file from dm-verity mount")
++	require.NoError(t, err, "should be able to read test file from EROFS mount")
+ 	assert.Equal(t, testFileContent, string(testData))
+ 
+ 	nestedData, err := os.ReadFile(filepath.Join(actualMountPoint, "testdir", "nested.txt"))
+@@ -679,6 +679,16 @@ func TestApplyDmverityPolicy(t *testing.T) {
+ 		assert.Equal(t, "X-containerd.dmverity=off", opt)
+ 	})
+ 
++	t.Run("mode off ignores malformed metadata", func(t *testing.T) {
++		malformedLayer := filepath.Join(tmpDir, "malformed.erofs")
++		require.NoError(t, os.WriteFile(dmverity.MetadataPath(malformedLayer), []byte("{"), 0644))
++
++		s := &snapshotter{dmverityMode: "off"}
++		opt, err := s.applyDmverityPolicy(malformedLayer)
++		require.NoError(t, err)
++		assert.Equal(t, "X-containerd.dmverity=off", opt)
++	})
++
+ 	t.Run("mode on returns dmverity=on when metadata exists", func(t *testing.T) {
+ 		createDmverityMetadata(t, layerBlob)
+ 
+@@ -702,4 +712,37 @@ func TestApplyDmverityPolicy(t *testing.T) {
+ 		require.NoError(t, err)
+ 		assert.Empty(t, opt) // auto mode doesn't add explicit option
+ 	})
++
++	t.Run("protected metadata without signature fails closed", func(t *testing.T) {
++		metadataPath := dmverity.MetadataPath(layerBlob)
++		require.NoError(t, os.WriteFile(metadataPath, []byte(testDmverityMetadata), 0644))
++		t.Cleanup(func() { os.Remove(metadataPath) })
++		requiredPath := dmverity.SignatureRequiredPath(layerBlob)
++		require.NoError(t, os.WriteFile(requiredPath, []byte("1\n"), 0644))
++		t.Cleanup(func() { os.Remove(requiredPath) })
++
++		s := &snapshotter{dmverityMode: "auto"}
++		_, err := s.applyDmverityPolicy(layerBlob)
++		require.ErrorContains(t, err, "no usable signature")
++	})
++
++	t.Run("legacy unsigned metadata mounts plain in auto mode", func(t *testing.T) {
++		legacyLayer := filepath.Join(tmpDir, "legacy.erofs")
++		require.NoError(t, os.WriteFile(dmverity.MetadataPath(legacyLayer), []byte(testDmverityMetadata), 0644))
++
++		s := &snapshotter{dmverityMode: "auto"}
++		opt, err := s.applyDmverityPolicy(legacyLayer)
++		require.NoError(t, err)
++		assert.Equal(t, "X-containerd.dmverity=off", opt)
++	})
++
++	t.Run("signature without metadata fails closed", func(t *testing.T) {
++		signaturePath := dmverity.SignaturePath(layerBlob)
++		require.NoError(t, os.WriteFile(signaturePath, []byte("signature"), 0644))
++		t.Cleanup(func() { os.Remove(signaturePath) })
++
++		s := &snapshotter{dmverityMode: "auto"}
++		_, err := s.applyDmverityPolicy(layerBlob)
++		require.ErrorContains(t, err, "signature state but no metadata")
++	})
+ }
+diff --git a/plugins/snapshots/erofs/plugin/plugin.go b/plugins/snapshots/erofs/plugin/plugin.go
+index 0a610d537..29ae14e63 100644
+--- a/plugins/snapshots/erofs/plugin/plugin.go
++++ b/plugins/snapshots/erofs/plugin/plugin.go
+@@ -96,15 +96,18 @@ func init() {
+ 			}
+ 
+ 			ic.Meta.Exports[plugins.SnapshotterRootDir] = root
+-			ic.Meta.Capabilities = append(ic.Meta.Capabilities, "rebase")
++			ic.Meta.Capabilities = append(ic.Meta.Capabilities, "rebase", plugins.CapabilityErofsLayers)
+ 			if dmverityReferrersEnabled(config.DmverityMode) {
+ 				ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
+ 			}
++			if config.DmverityMode == "on" {
++				ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmveritySignaturesRequired)
++			}
+ 			return erofs.NewSnapshotter(root, opts...)
+ 		},
+ 	})
+ }
+ 
+ func dmverityReferrersEnabled(mode string) bool {
+-	return mode == "auto" || mode == "on"
++	return mode == "" || mode == "auto" || mode == "on"
+ }
+diff --git a/plugins/snapshots/erofs/plugin/plugin_test.go b/plugins/snapshots/erofs/plugin/plugin_test.go
+index 1cf4f71fb..6aae908ce 100644
+--- a/plugins/snapshots/erofs/plugin/plugin_test.go
++++ b/plugins/snapshots/erofs/plugin/plugin_test.go
+@@ -23,7 +23,7 @@ func TestDmverityReferrersEnabled(t *testing.T) {
+ 		mode string
+ 		want bool
+ 	}{
+-		{mode: "", want: false},
++		{mode: "", want: true},
+ 		{mode: "off", want: false},
+ 		{mode: "auto", want: true},
+ 		{mode: "on", want: true},
+diff --git a/plugins/transfer/plugin.go b/plugins/transfer/plugin.go
+index 366575f33..fc3f02e8d 100644
+--- a/plugins/transfer/plugin.go
++++ b/plugins/transfer/plugin.go
+@@ -167,18 +167,46 @@ func init() {
+ 
+ 				// Referrer discovery requires both the differ that consumes the
+ 				// artifacts and a snapshotter that mounts the signed result.
+-				if dp := ic.Plugins().Get(plugins.DiffPlugin, applierID); dp != nil &&
+-					slices.Contains(dp.Meta.Capabilities, plugins.CapabilityDmverityReferrers) &&
+-					slices.Contains(snCapabilities, plugins.CapabilityDmverityReferrers) {
+-					if !lc.EnableDmverityReferrers {
+-						ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
++				effectiveSnapshotterCapabilities := snCapabilities
++				if dp := ic.Plugins().Get(plugins.DiffPlugin, applierID); dp != nil {
++					differSupportsDmverity := slices.Contains(dp.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
++					differRequiresDmverity := slices.Contains(dp.Meta.Capabilities, plugins.CapabilityDmveritySignaturesRequired)
++					snapshotterUsesErofs := slices.Contains(snCapabilities, plugins.CapabilityErofsLayers)
++					snapshotterSupportsDmverity := slices.Contains(snCapabilities, plugins.CapabilityDmverityReferrers)
++					snapshotterRequiresDmverity := slices.Contains(snCapabilities, plugins.CapabilityDmveritySignaturesRequired)
++					if differRequiresDmverity && snapshotterUsesErofs && !snapshotterRequiresDmverity {
++						return nil, fmt.Errorf(
++							"differ %q requires dm-verity signatures but snapshotter %q does not require protected mounts; set dmverity_mode = \"on\"",
++							applierID,
++							uc.Snapshotter,
++						)
++					}
++					if snapshotterRequiresDmverity && !differSupportsDmverity {
++						return nil, fmt.Errorf(
++							"snapshotter %q requires dm-verity signatures but differ %q cannot materialize protected layers",
++							uc.Snapshotter,
++							applierID,
++						)
++					}
++					if differSupportsDmverity && snapshotterSupportsDmverity {
++						if !lc.EnableDmverityReferrers {
++							ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
++						}
++						lc.EnableDmverityReferrers = true
++						log.G(ic.Context).Debugf(
++							"enabling dm-verity referrer discovery for differ %q and snapshotter %q",
++							applierID,
++							uc.Snapshotter,
++						)
++					} else {
++						effectiveSnapshotterCapabilities = make([]string, 0, len(snCapabilities))
++						for _, capability := range snCapabilities {
++							if capability != plugins.CapabilityDmverityReferrers &&
++								capability != plugins.CapabilityDmveritySignaturesRequired {
++								effectiveSnapshotterCapabilities = append(effectiveSnapshotterCapabilities, capability)
++							}
++						}
+ 					}
+-					lc.EnableDmverityReferrers = true
+-					log.G(ic.Context).Debugf(
+-						"enabling dm-verity referrer discovery for differ %q and snapshotter %q",
+-						applierID,
+-						uc.Snapshotter,
+-					)
+ 				}
+ 
+ 				// If CheckPlatformSupported is false, we will match all platforms
+@@ -191,7 +219,7 @@ func init() {
+ 					SnapshotterKey:          uc.Snapshotter,
+ 					Snapshotter:             sn,
+ 					SnapshotterExports:      snExports,
+-					SnapshotterCapabilities: snCapabilities,
++					SnapshotterCapabilities: effectiveSnapshotterCapabilities,
+ 					Applier:                 applier,
+ 					ConfigType:              uc.ConfigType,
+ 					LayerTypes:              uc.LayerTypes,
+diff --git a/plugins/types.go b/plugins/types.go
+index fb0c292e5..b4a10baab 100644
+--- a/plugins/types.go
++++ b/plugins/types.go
+@@ -113,4 +113,11 @@ const (
+ 	// dm-verity referrer artifacts and by a snapshotter that can mount their
+ 	// signed result. Pull and deferred-unpack paths require both sides.
+ 	CapabilityDmverityReferrers = "dmverity-referrers"
++	// CapabilityErofsLayers is advertised by snapshotters whose snapshots are
++	// materialized as EROFS layers, independent of dm-verity mode.
++	CapabilityErofsLayers = "erofs-layers"
++	// CapabilityDmveritySignaturesRequired is advertised by a differ that
++	// rejects unsigned layers and by a snapshotter configured to reject
++	// unprotected EROFS mounts.
++	CapabilityDmveritySignaturesRequired = "dmverity-signatures-required"
+ )
