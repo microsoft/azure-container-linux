@@ -109,7 +109,8 @@ tests:
   - name: acl.ignition.v1.users
   - name: acl.ignition.v2.users
 
-  - name: acl.packages.package-manifest
+  # TEMPORARY (AB#23640): Enable acl.packages.package-manifest in kola_enforcing.yaml once the mantle LKG carries it
+  # - name: acl.packages.package-manifest
 
   - name: bpf.execsnoop
     exceptions:
