@@ -21,14 +21,14 @@ Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 # Tracks the AzureLinux 3.0-dev containerd2 baseline at Version 2.2.4.
 Version: 2.2.4
-# This test branch carries the complete 6022.verity tar-index patch stack but
+# This test branch carries the complete 6023.verity tar-index patch stack but
 # uses the isolated 9000.mirrortest release band so its forced MCR mirror cannot
 # collide with the PR-ready 6xxx package stream. No .commit_hash tag is needed
 # because the upstream release tag is immutable.
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 9004.mirrortest%{?dist}
+Release: 9005.mirrortest%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -93,6 +93,8 @@ Source10: mcr-mirror-hosts.toml
 # Patch16:  Replace full precomputed EROFS blobs with signed tar indexes and
 #           Merkle trees. Reconstruct the exact EROFS data device from the
 #           decompressed OCI tar stream and verify it before use.
+# Patch17:  Refresh the CRI image cache's authoritative snapshotter set after
+#           same-image unpack so cached sandbox images are not pulled again.
 #           See PATCHES.md for the author/commit provenance.
 # ============================================================================
 
@@ -126,6 +128,8 @@ Patch14: 0010-erofs-test-pass-default-shared-layer-context.patch
 Patch15: 0011-erofs-retain-referrers-for-deferred-unpack.patch
 # Replacement-only signed EROFS tar-index wire format.
 Patch16: 0012-erofs-use-signed-tar-index-referrers.patch
+# Refresh multi-snapshotter cache metadata after same-image unpack.
+Patch17: 0013-cri-refresh-multi-snapshotter-cache.patch
 
 %{?systemd_requires}
 
@@ -278,6 +282,12 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Tue Sep 01 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9005.mirrortest
+- Carry Patch17 from the 6023.verity stack so same-image EROFS unpacks refresh
+  cached snapshotter metadata instead of pulling pause for every pod sandbox.
+- Preserve the isolated strict MCR mirror used by the signed tar-index
+  AgentBaker performance prototype.
+
 * Thu Aug 27 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9004.mirrortest
 - Carry the complete 6022.verity signed tar-index stack in the isolated mirror
   package used by the AgentBaker performance prototype.
