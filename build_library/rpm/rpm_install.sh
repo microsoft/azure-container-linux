@@ -719,8 +719,13 @@ rpm_install_package_using_portage_name() {
         local source=$(get_package_status "$dep")
         case "$source" in
             RPM)
-                local rpm_name=$(get_rpm_package_name "$dep")
-                [[ -n "$rpm_name" ]] && rpm_pkgs+=("$rpm_name")
+                local rpm_names
+                rpm_names=$(get_rpm_package_name "$dep")
+                if [[ -n "$rpm_names" ]]; then
+                    local mapped_rpms=()
+                    read -r -a mapped_rpms <<< "$rpm_names"
+                    rpm_pkgs+=("${mapped_rpms[@]}")
+                fi
                 ;;
             PORTAGE)
                 portage_pkgs+=("$dep")
@@ -753,7 +758,8 @@ rpm_install_package_using_portage_name() {
     if [[ ${#rpm_pkgs[@]} -gt 0 ]]; then
         info "Step 3: Installing RPM packages..."
         # Remove duplicates
-        local unique_rpm_pkgs=($(printf '%s\n' "${rpm_pkgs[@]}" | sort -u))
+        local unique_rpm_pkgs=()
+        mapfile -t unique_rpm_pkgs < <(printf '%s\n' "${rpm_pkgs[@]}" | sort -u)
         rpm_install_package "${root_fs_dir}" "${unique_rpm_pkgs[@]}" || {
             error "Failed to install RPM packages during RPM mode installation"
             error "Root filesystem: ${root_fs_dir}"
@@ -866,6 +872,117 @@ enabled=1
 skip_if_unavailable=True
 sslverify=1
 EOF
+}
+
+rpm_record_ipe_signing_mode() {
+    local ipe_signing_mode="$1"
+    [[ -n "${BUILD_DIR:-}" ]] || return 0
+    printf '%s\n' "${ipe_signing_mode}" > "${BUILD_DIR}/ipe-signing-mode" ||
+        die "RPM mode: failed to record IPE signing mode"
+}
+
+rpm_clear_ipe_signing_mode() {
+    [[ -n "${BUILD_DIR:-}" ]] || return 0
+    rm -f -- "${BUILD_DIR}/ipe-signing-mode"
+}
+
+rpm_validate_ipe_policy_source() {
+    local policy_src="$1"
+    [[ -f "${policy_src}" ]] ||
+        die "RPM mode: IPE policy source not found: ${policy_src}"
+    grep -Fq 'op=EXECUTE dmverity_signature=TRUE action=ALLOW' "${policy_src}" ||
+        die "RPM mode: IPE policy does not trust verified dm-verity signatures"
+}
+
+rpm_prepare_ipe_policy_artifact() {
+    local policy_src="$1" policy_sig="$2" cert_dir="$3"
+    local key="${cert_dir}/ca.key"
+    local cert="${cert_dir}/uki-signing-ca.pem"
+
+    "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" ||
+        die "RPM mode: IPE could not ensure ephemeral signing cert"
+    if ! openssl smime -sign -binary \
+            -in "${policy_src}" \
+            -signer "${cert}" \
+            -inkey "${key}" \
+            -noattr -nodetach -nosmimecap \
+            -outform der \
+            -out "${policy_sig}" 2>/dev/null || [[ ! -s "${policy_sig}" ]]; then
+        die "RPM mode: IPE failed to sign policy"
+    fi
+}
+
+rpm_verify_ipe_policy_artifact() {
+    local policy_src="$1" policy_sig="$2" verified_policy="$3"
+    if ! openssl smime -verify -inform der -binary \
+            -in "${policy_sig}" -noverify \
+            -out "${verified_policy}" >/dev/null 2>&1; then
+        die "RPM mode: IPE policy is not a valid attached DER PKCS#7 artifact"
+    fi
+    cmp -s "${policy_src}" "${verified_policy}" ||
+        die "RPM mode: verified IPE policy content differs from source policy"
+}
+
+rpm_install_ipe_policy() {
+    local root_fs_dir="$1"
+    local ipe_mode="${ACL_IPE_MODE:-disabled}"
+
+    case "${ipe_mode}" in
+        disabled)
+            if [[ -n "${BUILD_DIR:-}" ]]; then
+                rm -rf -- "${BUILD_DIR}/acl-ipe-policy" "${BUILD_DIR}/acl-ipe-ephemeral"
+            fi
+            rpm_clear_ipe_signing_mode
+            return 0
+            ;;
+        audit) ;;
+        *) die "Invalid ACL_IPE_MODE: ${ipe_mode}" ;;
+    esac
+
+    local ipe_signing_mode="${ACL_IPE_SIGNING_MODE:-ephemeral}"
+    case "${ipe_signing_mode}" in
+        ephemeral|esrp) ;;
+        *) die "Invalid ACL_IPE_SIGNING_MODE: ${ipe_signing_mode}" ;;
+    esac
+
+    [[ "${BOOTLOADER_MODE:-uki}" == "uki" ]] ||
+        die "RPM mode: IPE requires the UKI bootloader"
+    [[ -n "${BUILD_DIR:-}" ]] ||
+        die "RPM mode: BUILD_DIR is not set; cannot create IPE signing assets"
+
+    local policy_src="${BUILD_LIBRARY_DIR}/rpm/additional_files/ipe/acl-ipe-boot-policy.pol"
+
+    rpm_validate_ipe_policy_source "${policy_src}"
+
+    local cert_dir
+    cert_dir="$(readlink -f "${BUILD_DIR}")/acl-ipe-ephemeral"
+
+    # Stage directory for Pipelines collector and uki_install.sh.
+    local stage_dir="${BUILD_DIR}/acl-ipe-policy"
+    rm -rf -- "${stage_dir}"
+    mkdir -p "${stage_dir}"
+
+    local policy_sig="${stage_dir}/acl-ipe-policy.p7b.cred"
+    local staged_raw="${stage_dir}/acl-ipe-boot-policy.pol"
+    local work_dir verified_policy
+    work_dir="$(mktemp -d)"
+    verified_policy="${work_dir}/acl-ipe-boot-policy.verified.pol"
+
+    rpm_prepare_ipe_policy_artifact \
+        "${policy_src}" "${policy_sig}" "${cert_dir}"
+    rpm_verify_ipe_policy_artifact \
+        "${policy_src}" "${policy_sig}" "${verified_policy}"
+
+    # Stage the raw policy for the Pipelines collector (esrp signing mode
+    # replaces the candidate CMS later; the raw policy is used for
+    # downstream signing).
+    cp "${policy_src}" "${staged_raw}" ||
+        die "RPM mode: failed to stage raw IPE policy"
+
+    rm -rf "${work_dir}"
+    rpm_record_ipe_signing_mode "${ipe_signing_mode}"
+
+    info "RPM mode: Staged ${ipe_signing_mode} IPE policy candidate at ${stage_dir}"
 }
 
 rpm_configure_selinux() {
@@ -1050,4 +1167,10 @@ export -f rpm_download_packages
 export -f rpm_use_official_repos
 export -f rpm_cleanup_build_dir
 export -f rpm_umount_pseudofs
+export -f rpm_record_ipe_signing_mode
+export -f rpm_clear_ipe_signing_mode
+export -f rpm_validate_ipe_policy_source
+export -f rpm_prepare_ipe_policy_artifact
+export -f rpm_verify_ipe_policy_artifact
+export -f rpm_install_ipe_policy
 export -f rpm_configure_selinux

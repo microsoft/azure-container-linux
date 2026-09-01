@@ -35,6 +35,9 @@
 #   --download-rpms                      [no-op] Kept for pipeline compatibility
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
 #   --help                               Show this help message
+#   --ipe-mode=MODE                       IPE runtime mode: disabled|audit|enforcing (default: disabled)
+#                                        'enforcing' is reserved and rejected at build time.
+#   --ipe-signing-mode=MODE              IPE signing mode: ephemeral|esrp (default: ephemeral)
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
@@ -171,6 +174,19 @@ export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
+# Build-time IPE mode and signing mode. Runtime activation is selected only
+# through the Azure IMDS acl-node-security-profile tag.
+IPE_MODE_OVERRIDE_SET=false
+if [[ -v ACL_IPE_MODE ]]; then
+    IPE_MODE_OVERRIDE_SET=true
+fi
+ACL_IPE_MODE="${ACL_IPE_MODE:-disabled}"
+
+IPE_SIGNING_MODE_OVERRIDE_SET=false
+if [[ -v ACL_IPE_SIGNING_MODE ]]; then
+    IPE_SIGNING_MODE_OVERRIDE_SET=true
+fi
+ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE:-ephemeral}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
@@ -231,6 +247,117 @@ show_help() {
     exit 0
 }
 
+validate_ipe_boot_path() {
+    local vm_type="${1:-}"
+
+    [[ "${ACL_IPE_CAPABLE}" == "false" ]] && return 0
+    if [[ "${BOOTLOADER_MODE}" != "uki" ]]; then
+        error "IPE requires BOOTLOADER_MODE=uki"
+        return 1
+    fi
+    if [[ "${SECURE_BOOT_ENABLED:-true}" != "true" ]]; then
+        error "IPE requires Secure Boot"
+        return 1
+    fi
+    if [[ "${vm_type}" == "qemu" ]]; then
+        error "IPE is supported only by the Azure Secure Boot UKI path"
+        return 1
+    fi
+}
+
+validate_ipe_mode_value() {
+    case "${ACL_IPE_MODE}" in
+        disabled|audit) ;;
+        enforcing)
+            error "IPE mode 'enforcing' is reserved for future use and is not supported by this build (use 'audit' or 'disabled')"
+            return 1
+            ;;
+        *)
+            error "Invalid IPE mode: ${ACL_IPE_MODE} (expected disabled, audit, or enforcing)"
+            return 1
+            ;;
+    esac
+}
+
+configure_ipe_mode() {
+    validate_ipe_mode_value || return 1
+    case "${ACL_IPE_MODE}" in
+        disabled) ACL_IPE_CAPABLE=false ;;
+        audit)    ACL_IPE_CAPABLE=true ;;
+    esac
+    case "${ACL_IPE_SIGNING_MODE}" in
+        ephemeral|esrp) ;;
+        *)
+            error "Invalid IPE signing mode: ${ACL_IPE_SIGNING_MODE} (expected ephemeral or esrp)"
+            return 1
+            ;;
+    esac
+    export ACL_IPE_MODE ACL_IPE_SIGNING_MODE ACL_IPE_CAPABLE
+}
+
+load_artifact_ipe_signing_mode() {
+    local artifact_dir="$1"
+    local marker_file="${artifact_dir}/ipe-signing-mode"
+    local artifact_signing_mode
+
+    if [[ ! -r "${marker_file}" ]]; then
+        if [[ -d "${artifact_dir}/acl-ipe-policy" ]]; then
+            error "IPE policy assets found without ${marker_file}"
+            return 1
+        fi
+        if [[ "${IPE_MODE_OVERRIDE_SET}" == "true" &&
+            "${ACL_IPE_MODE}" != "disabled" ]]; then
+            error "Source image has no IPE assets; rebuild it with --ipe-mode=audit"
+            return 1
+        fi
+        ACL_IPE_MODE=disabled
+        configure_ipe_mode
+        return 0
+    fi
+
+    read -r artifact_signing_mode < "${marker_file}"
+    case "${artifact_signing_mode}" in
+        ephemeral|esrp) ;;
+        *)
+            error "Invalid IPE signing mode in ${marker_file}: ${artifact_signing_mode}"
+            return 1
+            ;;
+    esac
+
+    if [[ "${IPE_MODE_OVERRIDE_SET}" != "true" ]]; then
+        ACL_IPE_MODE=audit
+    elif [[ "${ACL_IPE_MODE}" == "disabled" ]]; then
+        error "Requested IPE mode 'disabled' does not match source image, which has IPE assets (signing mode '${artifact_signing_mode}')"
+        return 1
+    fi
+
+    if [[ "${IPE_SIGNING_MODE_OVERRIDE_SET}" == "true" &&
+        "${ACL_IPE_SIGNING_MODE}" != "${artifact_signing_mode}" ]]; then
+        error "Requested IPE signing mode '${ACL_IPE_SIGNING_MODE}' does not match source image signing mode '${artifact_signing_mode}'"
+        return 1
+    fi
+    ACL_IPE_SIGNING_MODE="${artifact_signing_mode}"
+
+    configure_ipe_mode
+}
+
+operation_uses_vm_image() {
+    [[ "$BUILD_VM_IMAGE" == "true" ]] ||
+        [[ "$BUILD_TEST_IMAGE" == "true" ]] ||
+        [[ "$START_VM" == "true" ]] ||
+        [[ "$RUN_KOLA_TESTS" == "true" ]]
+}
+
+operation_uses_gallery_image() {
+    [[ -n "$ACG_IMAGE_VERSION_ID" ]] || [[ "$REUSE_IMAGE" == "true" ]]
+}
+
+operation_uses_local_image_artifact() {
+    [[ "$BUILD_IMAGE" != "true" ]] &&
+        ! operation_uses_gallery_image &&
+        operation_uses_vm_image
+}
+
 # Parse command line arguments
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -249,6 +376,26 @@ parse_args() {
                 ;;
             --group)
                 GROUP="$2"
+                shift 2
+                ;;
+            --ipe-mode=*)
+                ACL_IPE_MODE="${1#*=}"
+                IPE_MODE_OVERRIDE_SET=true
+                shift
+                ;;
+            --ipe-mode)
+                ACL_IPE_MODE="$2"
+                IPE_MODE_OVERRIDE_SET=true
+                shift 2
+                ;;
+            --ipe-signing-mode=*)
+                ACL_IPE_SIGNING_MODE="${1#*=}"
+                IPE_SIGNING_MODE_OVERRIDE_SET=true
+                shift
+                ;;
+            --ipe-signing-mode)
+                ACL_IPE_SIGNING_MODE="$2"
+                IPE_SIGNING_MODE_OVERRIDE_SET=true
                 shift 2
                 ;;
             --img-name=*)
@@ -601,6 +748,10 @@ parse_args() {
         esac
     done
 
+    # Fail unsupported IPE modes as early as possible, before any
+    # staging/build work (including artifact/gallery-image inspection below).
+    validate_ipe_mode_value || exit 1
+
     # Validate --retry value
     if [[ "$RETRY_ATTEMPTS" != "0" ]]; then
         if ! [[ "$RETRY_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
@@ -612,6 +763,19 @@ parse_args() {
             exit 1
         fi
     fi
+
+    if operation_uses_local_image_artifact; then
+        load_artifact_ipe_signing_mode \
+            "${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest" ||
+            exit 1
+    fi
+    if operation_uses_gallery_image &&
+        [[ "${START_VM}" == "true" || "${RUN_KOLA_TESTS}" == "true" ]] &&
+        [[ "${IPE_MODE_OVERRIDE_SET}" == "false" ]]; then
+        warn "ACL_IPE_MODE is not set for gallery image validation; defaulting to disabled"
+    fi
+
+    configure_ipe_mode || exit 1
 
     # Normalize group name
     case "$GROUP" in
@@ -636,10 +800,19 @@ parse_args() {
                 ;;
         esac
     fi
+    local ipe_vm_type=""
+    if operation_uses_vm_image; then
+        ipe_vm_type="${VM_TYPE}"
+    fi
+    validate_ipe_boot_path "${ipe_vm_type}" || exit 1
 
     # Add platform-specific host-side tests when --run-tests is used.
     if [[ "${RUN_TESTS:-false}" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
         RUN_HOST_SCRIPTS+=("./acl/tests/run-selinux-toggle-test.sh")
+        if [[ "${ACL_IPE_CAPABLE}" == "true" ]] &&
+            [[ "${SECURE_BOOT_ENABLED:-true}" == "true" ]]; then
+            RUN_HOST_SCRIPTS+=("./acl/tests/ipe/run-ipe-mode-toggle-test.sh")
+        fi
     fi
 
     if [[ "$REUSE_IMAGE" == "true" ]]; then
@@ -870,6 +1043,7 @@ build_image() {
     info "  Output:          ${OUTPUT_ROOT}"
     info "  Staging Dir:     ${STAGING_DIR}"
     info "  Force Rebuild:   ${FORCE_REBUILD}"
+    info "  IPE Mode:        ${ACL_IPE_MODE} (signing: ${ACL_IPE_SIGNING_MODE})"
     echo
 
     # Count RPMs
@@ -1054,6 +1228,9 @@ build_vm_image() {
     # pulling a stale version.txt into local dev builds.
     local version_args=()
     local from_dir="${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest"
+    load_artifact_ipe_signing_mode "${from_dir}" || exit 1
+    validate_ipe_boot_path "${vm_type}" || exit 1
+
     if [[ "${NO_TTY:-false}" == "true" ]] && [[ -f "${from_dir}/version.txt" ]]; then
         info "Installing artifact version.txt into manifest location (CI mode)"
         cp "${from_dir}/version.txt" \
@@ -1261,6 +1438,7 @@ main() {
 
     section "Azure Container Linux Image Builder"
     info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"
+    info "IPE mode: ${ACL_IPE_MODE} (signing: ${ACL_IPE_SIGNING_MODE})"
 
     check_prerequisites
     print_summary

@@ -934,7 +934,12 @@ validate_main() {
             local host_failed=0
             for script in "${RUN_HOST_SCRIPTS[@]}"; do
                 info "Running host script: $script"
-                local host_args=("--vm-type=${VM_TYPE}" "--ssh-user=${VM_SSH_USER}")
+                local host_args=(
+                    "--vm-type=${VM_TYPE}"
+                    "--ssh-user=${VM_SSH_USER}"
+                    "--ssh-timeout=${VM_SSH_TIMEOUT}"
+                    "--boot-timeout=${VM_BOOT_TIMEOUT}"
+                )
                 [[ -n "${VM_SSH_KEY:-}" ]] && host_args+=("--ssh-key=${VM_SSH_KEY}")
                 if SCRIPT_DIR="${SCRIPT_DIR}" bash "$script" "${host_args[@]}"; then
                     info "Host script completed: $script"
