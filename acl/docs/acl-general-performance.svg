@@ -62,7 +62,7 @@
   <rect x="390" y="440" width="777.2" height="22" rx="3" class="patched"/>
   <text x="1177" y="457" class="value">246.9 ms (+2.1%)</text>
   <text x="370" y="498" text-anchor="end" class="small">IPE audit + Patch17 EROFS*</text>
-  <text x="400" y="497" class="small">Not run in performance build 1194985</text>
+  <text x="400" y="497" class="small">Core profile did not request this scenario</text>
 
   <text x="390" y="554" text-anchor="middle" class="small">0 ms</text>
   <text x="547.4" y="554" text-anchor="middle" class="small">50</text>
@@ -127,7 +127,7 @@
   <rect x="390" y="1230" width="782.7" height="18" rx="3" class="patched"/>
   <text x="1183" y="1245" class="value">19,336.8 (+0.9%)</text>
   <text x="370" y="1274" text-anchor="end" class="small">IPE audit + Patch17 EROFS*</text>
-  <text x="400" y="1273" class="small">Not run in 1194985</text>
+  <text x="400" y="1273" class="small">Core profile did not request this scenario</text>
 
   <text x="75" y="1310" class="group">Random read</text>
   <text x="370" y="1338" text-anchor="end" class="small">Base image + base overlayfs</text>
@@ -140,7 +140,7 @@
   <rect x="390" y="1378" width="780.0" height="18" rx="3" class="patched"/>
   <text x="1180" y="1393" class="value">19,271.1 (+0.1%)</text>
   <text x="370" y="1422" text-anchor="end" class="small">IPE audit + Patch17 EROFS*</text>
-  <text x="400" y="1421" class="small">Not run in 1194985</text>
+  <text x="400" y="1421" class="small">Core profile did not request this scenario</text>
 
   <text x="390" y="1458" text-anchor="middle" class="small">0</text>
   <text x="592.4" y="1458" text-anchor="middle" class="small">5k</text>
@@ -171,7 +171,7 @@
   <rect x="390" y="1710" width="651.3" height="18" rx="3" class="patched"/>
   <text x="1052" y="1725" class="value">3,064.9 (-10.7%)</text>
   <text x="370" y="1754" text-anchor="end" class="small">IPE audit + Patch17 EROFS*</text>
-  <text x="400" y="1753" class="small">Not run in 1194985</text>
+  <text x="400" y="1753" class="small">Core profile did not request this scenario</text>
 
   <text x="75" y="1790" class="group">Random write</text>
   <text x="370" y="1818" text-anchor="end" class="small">Base image + base overlayfs</text>
@@ -184,7 +184,7 @@
   <rect x="390" y="1858" width="465.2" height="18" rx="3" class="patched"/>
   <text x="866" y="1873" class="value">2,189.4 (-22.2%)</text>
   <text x="370" y="1902" text-anchor="end" class="small">IPE audit + Patch17 EROFS*</text>
-  <text x="400" y="1901" class="small">Not run in 1194985</text>
+  <text x="400" y="1901" class="small">Core profile did not request this scenario</text>
 
   <text x="390" y="1940" text-anchor="middle" class="small">0</text>
   <text x="602.5" y="1940" text-anchor="middle" class="small">1k</text>
@@ -195,5 +195,5 @@
   <rect x="50" y="2025" width="1340" height="70" rx="9" class="result"/>
   <text x="75" y="2054" class="value">Result:</text>
   <text x="135" y="2054" class="small">Patch17 EROFS host-local exec measured 622.9 us with expected permissive audit records and no visible regression.</text>
-  <text x="75" y="2079" class="small">Current Patch17 EROFS Kubernetes-exec and OS-disk results are not available; superseded values are intentionally omitted.</text>
+  <text x="75" y="2079" class="small">The 1194985 core profile did not request Kubernetes exec or OS-disk fio; superseded values are intentionally omitted.</text>
 </svg>

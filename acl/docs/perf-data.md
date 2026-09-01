@@ -51,6 +51,14 @@ for each IPE-off build. Host-local results pool two runs with 50 batch means
 per run for each IPE-off build; the Patch17 EROFS result has one run with 50
 batch means. Every batch contains 2,000 direct host executions.
 
+Performance run `1194985` used `benchmarkProfile=core` with
+`targetScenarios=use-profile`. The core profile intentionally omits
+`AclExecLatency` and the four OS-disk fio scenarios, so those Patch17 rows are
+missing because they were never requested, not because they failed. A custom
+`targetScenarios` override can add those measurements without selecting the
+full profile's destructive reboot and boot-time tail. Core does retain
+`AclExecOverhead`, which is why the 622.9-us host-local result is present.
+
 | Configuration | `kubectl exec` mean (SD) | `kubectl exec` p50 / max | Host-local `/bin/true` mean (SD) |
 |---|---:|---:|---:|
 | Base image, base overlayfs | 241.7 ms (16.9 ms) (**baseline**) | 240.2 / 283.5 ms | 731.1 us (105.7 us) per exec (**baseline**) |
