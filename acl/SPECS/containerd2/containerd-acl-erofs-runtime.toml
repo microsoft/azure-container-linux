@@ -18,3 +18,8 @@ version = 2
   # Deferred first-use unpack runs through the generic diff service. The EROFS
   # differ must see signed EROFS layers before the walking fallback.
   default = ["erofs", "walking"]
+
+[plugins."io.containerd.mount-handler.v1.erofs"]
+  # Keep verified mappings warm only when this EROFS runtime delta is selected.
+  # The overlayfs composition root never imports this setting.
+  dmverity_cache_size = 32

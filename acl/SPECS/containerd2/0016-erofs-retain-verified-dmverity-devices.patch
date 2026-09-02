@@ -1,0 +1,1463 @@
+From 2d654689a29321a6221a920f9934cc52bad533cf Mon Sep 17 00:00:00 2001
+From: Dallas Delaney <dadelan@microsoft.com>
+Date: Wed, 2 Sep 2026 00:45:25 +0000
+Subject: [PATCH] erofs: retain verified dm-verity devices
+
+Keep a bounded, opt-in LRU of zero-open dm-verity mappings so sequential signed EROFS mounts reuse verified kernel state instead of rebuilding loops and mapper tables. Scope mapper names and lifecycle locks per snapshotter root, verify the signed table before every reuse, and invalidate mappings when snapshots are removed. The regular overlayfs path remains untouched.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
+Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
+---
+ docs/snapshotters/erofs.md                    |  24 ++
+ internal/dmverity/device.go                   |  53 ++++
+ internal/dmverity/device_test.go              |  59 ++++
+ internal/dmverity/dmverity.go                 |   6 +
+ internal/dmverity/dmverity_linux.go           |  88 +++++-
+ internal/dmverity/dmverity_other.go           |   8 +-
+ internal/dmverity/dmverity_test.go            |  38 ++-
+ plugins/mount/erofs/dmverity_cache_linux.go   | 270 ++++++++++++++++++
+ .../mount/erofs/dmverity_cache_linux_test.go  | 212 ++++++++++++++
+ plugins/mount/erofs/plugin_linux.go           | 226 ++++++++-------
+ plugins/mount/erofs/plugin_linux_test.go      |  22 +-
+ .../snapshots/erofs/dmverity_cleanup_linux.go |  61 ++++
+ .../snapshots/erofs/dmverity_cleanup_other.go |  23 ++
+ plugins/snapshots/erofs/erofs.go              |  14 +-
+ 14 files changed, 967 insertions(+), 137 deletions(-)
+ create mode 100644 internal/dmverity/device.go
+ create mode 100644 internal/dmverity/device_test.go
+ create mode 100644 plugins/mount/erofs/dmverity_cache_linux.go
+ create mode 100644 plugins/mount/erofs/dmverity_cache_linux_test.go
+ create mode 100644 plugins/snapshots/erofs/dmverity_cleanup_linux.go
+ create mode 100644 plugins/snapshots/erofs/dmverity_cleanup_other.go
+
+diff --git a/docs/snapshotters/erofs.md b/docs/snapshotters/erofs.md
+index 2ce2f4a17..268121d73 100644
+--- a/docs/snapshotters/erofs.md
++++ b/docs/snapshotters/erofs.md
+@@ -246,6 +246,30 @@ If the differ uses `require_signatures = true`, the snapshotter must use
+ to require signatures while allowing the snapshotter to mount pre-existing
+ plain snapshots.
+ 
++Verified dm-verity devices can optionally be retained across sequential EROFS
++mounts:
++
++```toml
++[plugins."io.containerd.mount-handler.v1.erofs"]
++  dmverity_cache_size = 32
++```
++
++The value is the maximum number of idle devices kept in a least-recently-used
++cache. The default is `0`, which closes a device after its final mount as before.
++Every reuse still verifies the live device-mapper table against the layer's
++signed root hash, and active mounts remain protected by the kernel's device open
++count. Idle devices beyond the configured bound are closed without a timer.
++After a containerd restart, idle devices left by the previous process are
++discarded before the first protected EROFS mount; busy devices are adopted only
++after normal table verification. Mapper names include the snapshotter root, so
++separate containerd roots do not collide. Legacy unscoped mapper names are
++cleaned during this startup reconciliation. Removing a snapshot closes its idle
++mapper immediately; if a running container still holds it open, the final
++unmount closes it rather than returning it to the cache.
++
++This cache is entered only by protected EROFS mounts. It does not change
++overlayfs pull, unpack, mount, or task-creation paths.
++
+ Discovery of dm-verity referrers (per-layer signatures and precomputed EROFS
+ artifacts) requires an extra registry lookup during pull and import, so it is
+ performed only when a differ that consumes those artifacts is loaded. The EROFS
+diff --git a/internal/dmverity/device.go b/internal/dmverity/device.go
+new file mode 100644
+index 000000000..e5124989b
+--- /dev/null
++++ b/internal/dmverity/device.go
+@@ -0,0 +1,53 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package dmverity
++
++import (
++	"context"
++	"crypto/sha256"
++	"fmt"
++	"path/filepath"
++
++	"github.com/containerd/containerd/v2/internal/kmutex"
++)
++
++const ErofsDeviceNamePrefix = "containerd-erofs-"
++
++var deviceLocks = kmutex.New()
++
++// ErofsDevicePrefix scopes device-mapper names to one snapshotter root.
++func ErofsDevicePrefix(layerPath string) string {
++	root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Clean(layerPath))))
++	sum := sha256.Sum256([]byte(root))
++	return fmt.Sprintf("%s%x-", ErofsDeviceNamePrefix, sum[:16])
++}
++
++// ErofsDeviceName returns the stable mapper name for an EROFS layer.
++func ErofsDeviceName(layerPath string) string {
++	snapshotID := filepath.Base(filepath.Dir(filepath.Clean(layerPath)))
++	return ErofsDevicePrefix(layerPath) + snapshotID
++}
++
++// LockDevice serializes lifecycle operations for one host-global mapper name.
++func LockDevice(ctx context.Context, deviceName string) (func(), error) {
++	if err := deviceLocks.Lock(ctx, deviceName); err != nil {
++		return nil, err
++	}
++	return func() {
++		deviceLocks.Unlock(deviceName)
++	}, nil
++}
+diff --git a/internal/dmverity/device_test.go b/internal/dmverity/device_test.go
+new file mode 100644
+index 000000000..8d672a31b
+--- /dev/null
++++ b/internal/dmverity/device_test.go
+@@ -0,0 +1,59 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package dmverity
++
++import (
++	"context"
++	"errors"
++	"strings"
++	"testing"
++)
++
++func TestErofsDeviceNameScopesSnapshotterRoot(t *testing.T) {
++	first := ErofsDeviceName("/var/lib/containerd/erofs-a/snapshots/42/layer.erofs")
++	second := ErofsDeviceName("/var/lib/containerd/erofs-b/snapshots/42/layer.erofs")
++
++	if first == second {
++		t.Fatalf("different snapshotter roots produced the same device name %q", first)
++	}
++	if !strings.HasSuffix(first, "-42") {
++		t.Fatalf("device name %q does not preserve snapshot ID", first)
++	}
++	if !strings.HasPrefix(first, ErofsDeviceNamePrefix) {
++		t.Fatalf("device name %q does not use prefix %q", first, ErofsDeviceNamePrefix)
++	}
++}
++
++func TestDeviceLocksAreKeyed(t *testing.T) {
++	unlockFirst, err := LockDevice(context.Background(), "first")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer unlockFirst()
++
++	unlockSecond, err := LockDevice(context.Background(), "second")
++	if err != nil {
++		t.Fatalf("different device lock contended: %v", err)
++	}
++	unlockSecond()
++
++	ctx, cancel := context.WithCancel(context.Background())
++	cancel()
++	if _, err := LockDevice(ctx, "first"); !errors.Is(err, context.Canceled) {
++		t.Fatalf("same device lock returned %v, want context cancellation", err)
++	}
++}
+diff --git a/internal/dmverity/dmverity.go b/internal/dmverity/dmverity.go
+index 13c5494a8..e1dac3685 100644
+--- a/internal/dmverity/dmverity.go
++++ b/internal/dmverity/dmverity.go
+@@ -100,6 +100,12 @@ func DevicePath(name string) string {
+ 	return fmt.Sprintf("/dev/mapper/%s", name)
+ }
+ 
++// DeviceInfo describes the lifecycle state needed by dm-verity mount handlers.
++type DeviceInfo struct {
++	Exists    bool
++	OpenCount int32
++}
++
+ type DmverityMetadata struct {
+ 	RootHash   string `json:"roothash"`
+ 	HashOffset uint64 `json:"hashoffset"`
+diff --git a/internal/dmverity/dmverity_linux.go b/internal/dmverity/dmverity_linux.go
+index 616366844..df5529e4c 100644
+--- a/internal/dmverity/dmverity_linux.go
++++ b/internal/dmverity/dmverity_linux.go
+@@ -19,12 +19,17 @@ package dmverity
+ import (
+ 	"bytes"
+ 	"context"
++	"encoding/hex"
+ 	"fmt"
+ 	"os"
+ 	"runtime"
++	"slices"
++	"strconv"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/containerd/containerd/v2/core/mount"
++	dm "github.com/containerd/go-dmverity/pkg/dm"
+ 	"github.com/containerd/go-dmverity/pkg/utils"
+ 	"github.com/containerd/go-dmverity/pkg/verity"
+ 	"github.com/containerd/log"
+@@ -428,17 +433,86 @@ func FormatLayerBlob(ctx context.Context, layerBlobPath string, blockSize uint32
+ 	return rootHash, nil
+ }
+ 
+-// VerifyDevice ensures an existing dm-verity device matches the expected metadata and is healthy.
+-func VerifyDevice(name string, rootHash string) error {
++// InspectDevice returns the kernel open count for an active device.
++func InspectDevice(name string) (DeviceInfo, error) {
++	control, err := dm.Open()
++	if err != nil {
++		return DeviceInfo{}, fmt.Errorf("open device-mapper control: %w", err)
++	}
++	defer control.Close()
++
++	status, err := control.DeviceStatus(name)
++	if err != nil {
++		return DeviceInfo{}, fmt.Errorf("inspect dm-verity device %q: %w", name, err)
++	}
++	if !status.ActivePresent {
++		return DeviceInfo{Exists: true, OpenCount: status.OpenCount}, fmt.Errorf("dm-verity device %q has no active table", name)
++	}
++	return DeviceInfo{Exists: true, OpenCount: status.OpenCount}, nil
++}
++
++// VerifySignedDevice ensures an existing dm-verity device matches the expected
++// signed metadata and is healthy.
++func VerifySignedDevice(name string, rootHash string) (DeviceInfo, error) {
+ 	rootDigest, err := utils.ParseRootHash(rootHash)
+ 	if err != nil {
+-		return fmt.Errorf("invalid root hash: %w", err)
++		return DeviceInfo{}, fmt.Errorf("invalid root hash: %w", err)
+ 	}
+ 
+-	// Use library's Check to verify device status and root hash
+-	if !verity.Check(name, rootDigest) {
+-		return fmt.Errorf("dm-verity device %q verification failed", name)
++	control, err := dm.Open()
++	if err != nil {
++		return DeviceInfo{}, fmt.Errorf("open device-mapper control: %w", err)
+ 	}
++	defer control.Close()
+ 
+-	return nil
++	status, err := control.DeviceStatus(name)
++	if err != nil {
++		return DeviceInfo{}, fmt.Errorf("inspect dm-verity device %q: %w", name, err)
++	}
++	info := DeviceInfo{Exists: true, OpenCount: status.OpenCount}
++	if !status.ActivePresent || status.TargetCount != 1 {
++		return info, fmt.Errorf("dm-verity device %q does not have one active target", name)
++	}
++
++	verityStatus, err := control.TableStatus(name, false)
++	if err != nil {
++		return info, fmt.Errorf("read dm-verity device %q status: %w", name, err)
++	}
++	if !slices.Contains(strings.Fields(verityStatus), "V") {
++		return info, fmt.Errorf("dm-verity device %q is not in the verified state", name)
++	}
++
++	table, err := control.TableStatus(name, true)
++	if err != nil {
++		return info, fmt.Errorf("read dm-verity device %q table: %w", name, err)
++	}
++	if err := verifySignedVerityTable(table, hex.EncodeToString(rootDigest)); err != nil {
++		return info, fmt.Errorf("verify dm-verity device %q table: %w", name, err)
++	}
++	return info, nil
++}
++
++func verifySignedVerityTable(table, expectedRootHash string) error {
++	fields := strings.Fields(table)
++	if len(fields) < 10 {
++		return fmt.Errorf("invalid verity table with %d fields", len(fields))
++	}
++	if !strings.EqualFold(fields[8], expectedRootHash) {
++		return fmt.Errorf("root hash is %q, expected %q", fields[8], expectedRootHash)
++	}
++	if len(fields) == 10 {
++		return fmt.Errorf("verity table does not require a root-hash signature")
++	}
++
++	optionCount, err := strconv.Atoi(fields[10])
++	if err != nil || optionCount < 0 || len(fields) != 11+optionCount {
++		return fmt.Errorf("invalid verity optional-argument count %q", fields[10])
++	}
++	options := fields[11:]
++	for i := 0; i+1 < len(options); i++ {
++		if options[i] == "root_hash_sig_key_desc" && options[i+1] != "" {
++			return nil
++		}
++	}
++	return fmt.Errorf("verity table does not require a root-hash signature")
+ }
+diff --git a/internal/dmverity/dmverity_other.go b/internal/dmverity/dmverity_other.go
+index 788b2bfed..22074400c 100644
+--- a/internal/dmverity/dmverity_other.go
++++ b/internal/dmverity/dmverity_other.go
+@@ -52,8 +52,12 @@ func Close(_ string) error {
+ 	return errUnsupported
+ }
+ 
+-func VerifyDevice(_ string, _ string) error {
+-	return errUnsupported
++func InspectDevice(_ string) (DeviceInfo, error) {
++	return DeviceInfo{}, errUnsupported
++}
++
++func VerifySignedDevice(_ string, _ string) (DeviceInfo, error) {
++	return DeviceInfo{}, errUnsupported
+ }
+ 
+ // FormatLayerBlob appends a dm-verity hash tree to an EROFS layer blob. It is
+diff --git a/internal/dmverity/dmverity_test.go b/internal/dmverity/dmverity_test.go
+index 15d08c0e2..19e2d90b0 100644
+--- a/internal/dmverity/dmverity_test.go
++++ b/internal/dmverity/dmverity_test.go
+@@ -71,6 +71,11 @@ func TestDMVerity(t *testing.T) {
+ 
+ 			waitForDevice(t, devicePath)
+ 
++			info, err := VerifySignedDevice(deviceName, rootHash)
++			assert.ErrorContains(t, err, "does not require a root-hash signature")
++			assert.True(t, info.Exists)
++			assert.Zero(t, info.OpenCount)
++
+ 			// Close device
+ 			err = Close(deviceName)
+ 			assert.NoError(t, err)
+@@ -260,6 +265,26 @@ func TestDevicePath(t *testing.T) {
+ 	assert.Equal(t, "/dev/mapper/containerd-erofs-abc123", DevicePath("containerd-erofs-abc123"))
+ }
+ 
++func TestVerifySignedVerityTable(t *testing.T) {
++	rootHash := strings.Repeat("ab", 32)
++	salt := strings.Repeat("cd", 32)
++	base := "1 7:0 7:1 512 512 8 9 sha256 " + rootHash + " " + salt
++
++	assert.NoError(t, verifySignedVerityTable(
++		base+" 2 root_hash_sig_key_desc cryptsetup:test",
++		rootHash,
++	))
++	assert.ErrorContains(t, verifySignedVerityTable(base, rootHash), "does not require")
++	assert.ErrorContains(t, verifySignedVerityTable(
++		"1 7:0 7:1 512 512 8 9 sha256 "+salt+" "+rootHash+" 2 root_hash_sig_key_desc cryptsetup:test",
++		rootHash,
++	), "root hash is")
++	assert.ErrorContains(t, verifySignedVerityTable(
++		base+" 1 root_hash_sig_key_desc",
++		rootHash,
++	), "does not require")
++}
++
+ func TestReadMetadata(t *testing.T) {
+ 	tmpDir := t.TempDir()
+ 
+@@ -349,22 +374,21 @@ func TestErrorHandling(t *testing.T) {
+ 		assert.Error(t, err)
+ 	})
+ 
+-	t.Run("VerifyDevice_EmptyRootHash", func(t *testing.T) {
+-		err := VerifyDevice("test-device", "")
++	t.Run("VerifySignedDevice_EmptyRootHash", func(t *testing.T) {
++		_, err := VerifySignedDevice("test-device", "")
+ 		assert.Error(t, err)
+ 		assert.Contains(t, err.Error(), "invalid root hash")
+ 	})
+ 
+-	t.Run("VerifyDevice_InvalidRootHash", func(t *testing.T) {
+-		err := VerifyDevice("test-device", "not-valid-hex")
++	t.Run("VerifySignedDevice_InvalidRootHash", func(t *testing.T) {
++		_, err := VerifySignedDevice("test-device", "not-valid-hex")
+ 		assert.Error(t, err)
+ 		assert.Contains(t, err.Error(), "invalid root hash")
+ 	})
+ 
+-	t.Run("VerifyDevice_NonexistentDevice", func(t *testing.T) {
+-		err := VerifyDevice("nonexistent-device-12345", "abc123def456")
++	t.Run("VerifySignedDevice_NonexistentDevice", func(t *testing.T) {
++		_, err := VerifySignedDevice("nonexistent-device-12345", "abc123def456")
+ 		assert.Error(t, err)
+-		assert.Contains(t, err.Error(), "verification failed")
+ 	})
+ 
+ 	t.Run("Format_InvalidSalt", func(t *testing.T) {
+diff --git a/plugins/mount/erofs/dmverity_cache_linux.go b/plugins/mount/erofs/dmverity_cache_linux.go
+new file mode 100644
+index 000000000..c9779509a
+--- /dev/null
++++ b/plugins/mount/erofs/dmverity_cache_linux.go
+@@ -0,0 +1,270 @@
++//go:build linux
++
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package erofs
++
++import (
++	"container/list"
++	"context"
++	"errors"
++	"fmt"
++	"os"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"sync"
++
++	"github.com/containerd/log"
++
++	"github.com/containerd/containerd/v2/internal/dmverity"
++
++	"golang.org/x/sys/unix"
++)
++
++type retainedDmverityDevice struct {
++	name   string
++	source string
++}
++
++// retainedDmverityDevices is a bounded cache of mapper names, not a source of
++// trust. Mount removes a name before reuse and verifies the live mapper table
++// against the signed root hash every time.
++type retainedDmverityDevices struct {
++	mu             sync.Mutex
++	entries        map[string]*list.Element
++	mountedSources map[string]string
++	lru            list.List
++	maxEntries     int
++
++	prepareMu   sync.Mutex
++	prepared    map[string]struct{}
++	listDevices func(string) ([]string, error)
++	closeDevice func(string) error
++	statSource  func(string) error
++}
++
++func newRetainedDmverityDevices(maxEntries int) *retainedDmverityDevices {
++	return &retainedDmverityDevices{
++		maxEntries:  maxEntries,
++		listDevices: listHostDmverityDevices,
++		closeDevice: dmverity.Close,
++		statSource: func(source string) error {
++			_, err := os.Stat(source)
++			return err
++		},
++	}
++}
++
++func (c *retainedDmverityDevices) enabled() bool {
++	return c.maxEntries > 0
++}
++
++// prepare removes idle devices left by a previous containerd process. Busy
++// devices remain valid and are verified by the normal mount path before reuse.
++func (c *retainedDmverityDevices) prepare(ctx context.Context, source string) {
++	if !c.enabled() {
++		return
++	}
++
++	devicePrefix := dmverity.ErofsDevicePrefix(source)
++
++	c.prepareMu.Lock()
++	if _, ok := c.prepared[devicePrefix]; ok {
++		c.prepareMu.Unlock()
++		return
++	}
++	devices, err := c.listDevices(devicePrefix)
++	if err != nil {
++		c.prepareMu.Unlock()
++		log.G(ctx).WithError(err).WithField("device-prefix", devicePrefix).Warn("failed to list retained dm-verity devices")
++		return
++	}
++	if c.prepared == nil {
++		c.prepared = make(map[string]struct{})
++	}
++	c.prepared[devicePrefix] = struct{}{}
++	c.prepareMu.Unlock()
++
++	c.close(context.WithoutCancel(ctx), devices, "startup cleanup")
++}
++
++// take removes a device from the idle LRU before a mount attempts to reuse it.
++func (c *retainedDmverityDevices) take(deviceName string) bool {
++	if !c.enabled() {
++		return false
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	element, ok := c.entries[deviceName]
++	if !ok {
++		return false
++	}
++	delete(c.entries, deviceName)
++	c.lru.Remove(element)
++	return true
++}
++
++func (c *retainedDmverityDevices) recordMount(deviceName, source string) {
++	if !c.enabled() {
++		return
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	if c.mountedSources == nil {
++		c.mountedSources = make(map[string]string)
++	}
++	c.mountedSources[deviceName] = source
++}
++
++func (c *retainedDmverityDevices) mountedSource(deviceName string) (string, bool) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	source, ok := c.mountedSources[deviceName]
++	return source, ok
++}
++
++func (c *retainedDmverityDevices) contains(deviceName string) bool {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	_, ok := c.entries[deviceName]
++	return ok
++}
++
++// retain marks a successfully unmounted device as idle and returns devices
++// that exceed the configured bound, from least to most recently used.
++func (c *retainedDmverityDevices) retain(deviceName, source string) []string {
++	if !c.enabled() {
++		return nil
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	if c.entries == nil {
++		c.entries = make(map[string]*list.Element)
++	}
++	delete(c.mountedSources, deviceName)
++	if element, ok := c.entries[deviceName]; ok {
++		element.Value = retainedDmverityDevice{name: deviceName, source: source}
++		c.lru.MoveToFront(element)
++		return nil
++	}
++
++	c.entries[deviceName] = c.lru.PushFront(retainedDmverityDevice{
++		name:   deviceName,
++		source: source,
++	})
++
++	var evicted []string
++	for name, element := range c.entries {
++		entry := element.Value.(retainedDmverityDevice)
++		if c.statSource(entry.source) == nil {
++			continue
++		}
++		delete(c.entries, name)
++		c.lru.Remove(element)
++		evicted = append(evicted, name)
++	}
++	for c.lru.Len() > c.maxEntries {
++		oldest := c.lru.Back()
++		name := oldest.Value.(retainedDmverityDevice).name
++		delete(c.entries, name)
++		c.lru.Remove(oldest)
++		evicted = append(evicted, name)
++	}
++	return evicted
++}
++
++func (c *retainedDmverityDevices) forgetMount(deviceName string) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	delete(c.mountedSources, deviceName)
++}
++
++func (c *retainedDmverityDevices) close(ctx context.Context, deviceNames []string, reason string) {
++	for _, deviceName := range deviceNames {
++		unlock, err := dmverity.LockDevice(ctx, deviceName)
++		if err != nil {
++			log.G(ctx).WithError(err).WithField("device", deviceName).Warn("failed to lock dm-verity device for cleanup")
++			continue
++		}
++
++		c.closeLocked(ctx, deviceName, reason)
++		unlock()
++	}
++}
++
++// closeLocked closes one device while its keyed lifecycle lock is held.
++func (c *retainedDmverityDevices) closeLocked(ctx context.Context, deviceName, reason string) {
++	err := c.closeDevice(deviceName)
++	switch {
++	case err == nil:
++		log.G(ctx).WithFields(log.Fields{
++			"device": deviceName,
++			"reason": reason,
++		}).Debug("dm-verity device closed")
++	case errors.Is(err, unix.EBUSY):
++		// A mounted filesystem owns the authoritative kernel reference. Its
++		// final handler-driven unmount can retain the device again.
++		log.G(ctx).WithFields(log.Fields{
++			"device": deviceName,
++			"reason": reason,
++		}).Debug("dm-verity device is still active")
++	case errors.Is(err, unix.ENXIO), errors.Is(err, os.ErrNotExist):
++		// Another cleanup path won the race.
++		log.G(ctx).WithFields(log.Fields{
++			"device": deviceName,
++			"reason": reason,
++		}).Debug("dm-verity device is already absent")
++	default:
++		log.G(ctx).WithError(err).WithFields(log.Fields{
++			"device": deviceName,
++			"reason": reason,
++		}).Warn("failed to close dm-verity device")
++	}
++}
++
++func listHostDmverityDevices(devicePrefix string) ([]string, error) {
++	deviceDir := filepath.Dir(dmverity.DevicePath("placeholder"))
++	entries, err := os.ReadDir(deviceDir)
++	if err != nil {
++		return nil, fmt.Errorf("read device-mapper directory %q: %w", deviceDir, err)
++	}
++
++	devices := make([]string, 0, len(entries))
++	for _, entry := range entries {
++		if strings.HasPrefix(entry.Name(), devicePrefix) || isLegacyDmverityDeviceName(entry.Name()) {
++			devices = append(devices, entry.Name())
++		}
++	}
++	return devices, nil
++}
++
++func isLegacyDmverityDeviceName(deviceName string) bool {
++	snapshotID, ok := strings.CutPrefix(deviceName, dmverity.ErofsDeviceNamePrefix)
++	if !ok {
++		return false
++	}
++	_, err := strconv.ParseUint(snapshotID, 10, 64)
++	return err == nil
++}
+diff --git a/plugins/mount/erofs/dmverity_cache_linux_test.go b/plugins/mount/erofs/dmverity_cache_linux_test.go
+new file mode 100644
+index 000000000..5df9723b4
+--- /dev/null
++++ b/plugins/mount/erofs/dmverity_cache_linux_test.go
+@@ -0,0 +1,212 @@
++//go:build linux
++
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package erofs
++
++import (
++	"context"
++	"errors"
++	"slices"
++	"testing"
++
++	"github.com/containerd/containerd/v2/core/mount"
++	"github.com/containerd/containerd/v2/internal/dmverity"
++	"github.com/containerd/errdefs"
++
++	"golang.org/x/sys/unix"
++)
++
++func TestRetainedDmverityDevicesLRU(t *testing.T) {
++	cache := newRetainedDmverityDevices(2)
++	cache.statSource = func(string) error { return nil }
++
++	if evicted := cache.retain("a", "source-a"); len(evicted) != 0 {
++		t.Fatalf("retain(a) evicted %v", evicted)
++	}
++	if evicted := cache.retain("b", "source-b"); len(evicted) != 0 {
++		t.Fatalf("retain(b) evicted %v", evicted)
++	}
++	if !cache.take("a") {
++		t.Fatal("take(a) did not find retained device")
++	}
++	if cache.take("a") {
++		t.Fatal("take(a) found device twice")
++	}
++	if evicted := cache.retain("a", "source-a"); len(evicted) != 0 {
++		t.Fatalf("retain(a) after take evicted %v", evicted)
++	}
++
++	if evicted := cache.retain("c", "source-c"); !slices.Equal(evicted, []string{"b"}) {
++		t.Fatalf("retain(c) evicted %v, want [b]", evicted)
++	}
++	if cache.take("b") {
++		t.Fatal("evicted device b remained in cache")
++	}
++	if !cache.take("a") || !cache.take("c") {
++		t.Fatal("most recently used devices were not retained")
++	}
++}
++
++func TestRetainedDmverityDevicesDisabled(t *testing.T) {
++	cache := newRetainedDmverityDevices(0)
++	listed := false
++	cache.listDevices = func(string) ([]string, error) {
++		listed = true
++		return nil, nil
++	}
++
++	cache.prepare(context.Background(), "/root/snapshots/1/layer.erofs")
++	if listed {
++		t.Fatal("disabled cache enumerated device-mapper devices")
++	}
++	if cache.take("a") {
++		t.Fatal("disabled cache retained a device")
++	}
++	if evicted := cache.retain("a", "source-a"); len(evicted) != 0 {
++		t.Fatalf("disabled cache returned evictions: %v", evicted)
++	}
++}
++
++func TestRetainedDmverityDevicesEvictsRemovedSources(t *testing.T) {
++	cache := newRetainedDmverityDevices(3)
++	removed := map[string]bool{}
++	cache.statSource = func(source string) error {
++		if removed[source] {
++			return errors.New("removed")
++		}
++		return nil
++	}
++
++	cache.retain("a", "source-a")
++	cache.retain("b", "source-b")
++	removed["source-a"] = true
++
++	if evicted := cache.retain("c", "source-c"); !slices.Equal(evicted, []string{"a"}) {
++		t.Fatalf("retain(c) evicted %v, want removed device [a]", evicted)
++	}
++}
++
++func TestRetainedDmverityDevicesTracksMountedSource(t *testing.T) {
++	cache := newRetainedDmverityDevices(1)
++	cache.statSource = func(string) error { return nil }
++
++	cache.recordMount("a", "source-a")
++	source, ok := cache.mountedSource("a")
++	if !ok || source != "source-a" {
++		t.Fatalf("mounted source = %q, %v", source, ok)
++	}
++
++	cache.retain("a", source)
++	if _, ok := cache.mountedSource("a"); ok {
++		t.Fatal("idle device remained in mounted-source tracking")
++	}
++	if !cache.contains("a") {
++		t.Fatal("retained device is not discoverable by a concurrent final unmount")
++	}
++}
++
++func TestOverlayMountDoesNotEnterDmverityCache(t *testing.T) {
++	handler := newErofsMountHandler("", 2)
++	listed := false
++	handler.retainedDmverity.listDevices = func(string) ([]string, error) {
++		listed = true
++		return nil, nil
++	}
++
++	_, err := handler.Mount(context.Background(), mount.Mount{Type: "overlay"}, t.TempDir(), nil)
++	if !errdefs.IsNotImplemented(err) {
++		t.Fatalf("overlay mount returned %v, want not implemented", err)
++	}
++	if listed {
++		t.Fatal("overlay mount entered dm-verity cache setup")
++	}
++}
++
++func TestRetainedDmverityDevicesStartupCleanupRunsOnce(t *testing.T) {
++	cache := newRetainedDmverityDevices(2)
++	source := "/root/snapshots/1/layer.erofs"
++	prefix := dmverity.ErofsDevicePrefix(source)
++	cache.listDevices = func(gotPrefix string) ([]string, error) {
++		if gotPrefix != prefix {
++			t.Fatalf("list prefix = %q, want %q", gotPrefix, prefix)
++		}
++		return []string{prefix + "a", prefix + "b"}, nil
++	}
++
++	var closed []string
++	cache.closeDevice = func(deviceName string) error {
++		closed = append(closed, deviceName)
++		if deviceName == prefix+"b" {
++			return unix.EBUSY
++		}
++		return nil
++	}
++
++	cache.prepare(context.Background(), source)
++	cache.prepare(context.Background(), source)
++
++	if !slices.Equal(closed, []string{prefix + "a", prefix + "b"}) {
++		t.Fatalf("startup cleanup closed %v", closed)
++	}
++}
++
++func TestRetainedDmverityDevicesStartupCleanupRetriesListFailure(t *testing.T) {
++	cache := newRetainedDmverityDevices(1)
++	source := "/root/snapshots/1/layer.erofs"
++	deviceName := dmverity.ErofsDeviceName(source)
++
++	listCalls := 0
++	cache.listDevices = func(string) ([]string, error) {
++		listCalls++
++		if listCalls == 1 {
++			return nil, errors.New("temporary failure")
++		}
++		return []string{deviceName}, nil
++	}
++	closeCalls := 0
++	cache.closeDevice = func(string) error {
++		closeCalls++
++		return nil
++	}
++
++	cache.prepare(context.Background(), source)
++	cache.prepare(context.Background(), source)
++	cache.prepare(context.Background(), source)
++
++	if listCalls != 2 {
++		t.Fatalf("list calls = %d, want 2", listCalls)
++	}
++	if closeCalls != 1 {
++		t.Fatalf("close calls = %d, want 1", closeCalls)
++	}
++}
++
++func TestLegacyDmverityDeviceName(t *testing.T) {
++	for _, tc := range []struct {
++		name   string
++		legacy bool
++	}{
++		{name: "containerd-erofs-42", legacy: true},
++		{name: "containerd-erofs-deadbeefdeadbeef-42", legacy: false},
++		{name: "unrelated-42", legacy: false},
++	} {
++		if got := isLegacyDmverityDeviceName(tc.name); got != tc.legacy {
++			t.Errorf("isLegacyDmverityDeviceName(%q) = %v, want %v", tc.name, got, tc.legacy)
++		}
++	}
++}
+diff --git a/plugins/mount/erofs/plugin_linux.go b/plugins/mount/erofs/plugin_linux.go
+index 78ee27525..4eb0164d5 100644
+--- a/plugins/mount/erofs/plugin_linux.go
++++ b/plugins/mount/erofs/plugin_linux.go
+@@ -21,10 +21,8 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"os"
+-	"path/filepath"
+ 	"runtime"
+ 	"strings"
+-	"sync"
+ 	"time"
+ 
+ 	"github.com/containerd/log"
+@@ -48,60 +46,24 @@ type erofsMountHandler struct {
+ 	// for. Configurable because the value is policy-specific and upstream
+ 	// containerd cannot assume a distro's type names.
+ 	sharedLayerContext string
++	retainedDmverity   *retainedDmverityDevices
+ }
+ 
+ // NewErofsMountHandler creates a new EROFS mount handler that supports dm-verity
+ func NewErofsMountHandler(sharedLayerContext string) mount.Handler {
++	return newErofsMountHandler(sharedLayerContext, 0)
++}
++
++func newErofsMountHandler(sharedLayerContext string, dmverityCacheSize int) *erofsMountHandler {
+ 	if sharedLayerContext == "" {
+ 		sharedLayerContext = defaultSharedLayerContext
+ 	}
+-	return &erofsMountHandler{sharedLayerContext: sharedLayerContext}
++	return &erofsMountHandler{
++		sharedLayerContext: sharedLayerContext,
++		retainedDmverity:   newRetainedDmverityDevices(dmverityCacheSize),
++	}
+ }
+ 
+-// dmverityLifecycleMu serializes the whole lifetime of a shared dm-verity
+-// mapper: inspect-or-create and the mount that follows it, against unmount and
+-// the removal that follows that.
+-//
+-// Device-mapper names are derived from the snapshot ID, so two concurrent mounts
+-// of the same layer -- routine when several pods start from one image -- can both
+-// observe the device as absent and both call into the create path. The loser's
+-// DM_DEV_CREATE fails because the name is taken, and its cleanup then removes the
+-// winner's device out from under a live mount.
+-//
+-// Covering only create was not enough, and shipped a bug. The kernel refuses
+-// DM_DEV_REMOVE with EBUSY while any filesystem holds the mapper open, so a
+-// mapper with live mounts is safe -- but verification does not open it. Between
+-// the moment the last mount goes away and the moment a new mount(2) lands, the
+-// open count is zero and removal succeeds. A starting container that has already
+-// passed its existence check then finds the device gone mid-verify and fails with
+-// what reads as an integrity error:
+-//
+-//	container A: mount.Unmount(path)                 -- open count drops to 0
+-//	container B: os.Stat(/dev/mapper/...)            -- present
+-//	container B: DeviceStatus                        -- ActivePresent
+-//	container A: RemoveDevice                        -- succeeds, nothing has it open
+-//	container B: TableStatus                         -- ENXIO
+-//	container B: "refusing to reuse existing dm-verity device ... verification failed"
+-//
+-// Widening the guarded section to include the mount(2) closes that gap: B's mount
+-// either happens before A's removal is allowed to run, in which case the open
+-// count is non-zero and the kernel returns EBUSY, or after A has fully removed the
+-// device, in which case B sees it absent and creates it. There is no longer a
+-// window where the device is visible, unopened, and about to be removed.
+-//
+-// The kernel's open count is the authoritative reference count for a shared
+-// mapper, which is why there is no userspace count here: a userspace count would
+-// start at zero after a containerd restart while mounts and mappers are still
+-// live. EBUSY from Close is the expected outcome for a device someone else is
+-// using, not an error.
+-//
+-// One global lock is enough for now. The guarded section is a handful of ioctls
+-// plus one mount(2), it is taken only by layers that actually carry dm-verity,
+-// and same-device operations are the ones that must serialize anyway. If mount
+-// convoying ever shows up in a burst benchmark, shard it per device name -- the
+-// invariant is per-mapper, not global.
+-var dmverityLifecycleMu sync.Mutex
+-
+ // selinuxContextOpt is the superblock-wide SELinux mount option. Unlike
+ // defcontext=/rootcontext=, it labels the whole superblock, so every mount of a
+ // given device must agree on its value.
+@@ -174,9 +136,10 @@ func sharedLayerMountOptions(opts []string, selinuxEnabled bool, sharedLayerCont
+ // openOrReuseDmverityDevice returns the /dev/mapper path for a layer, creating
+ // the device if it does not already exist and validating it if it does.
+ //
+-// The caller must hold dmverityLifecycleMu, and must keep holding it until the
+-// returned device has been mounted or rolled back. Returning while the device is
+-// merely created is exactly the zero-open window described on the mutex.
++// The caller must hold the keyed lifecycle lock for deviceName until the
++// returned device has been mounted or rolled back. Returning while the device
++// is merely created would leave a zero-open window in which another unmount
++// could remove it before mount(2).
+ func openOrReuseDmverityDevice(ctx context.Context, source, deviceName string, metadata *dmverity.DmverityMetadata) (string, error) {
+ 	signatureFile, err := requiredDmveritySignature(source)
+ 	if err != nil {
+@@ -184,17 +147,22 @@ func openOrReuseDmverityDevice(ctx context.Context, source, deviceName string, m
+ 	}
+ 
+ 	devicePath := dmverity.DevicePath(deviceName)
+-	if _, err := os.Stat(devicePath); !os.IsNotExist(err) {
+-		// Device-mapper names are host-global while snapshot IDs are only
+-		// unique within a snapshotter root, so an existing device of this
+-		// name is not necessarily this layer. Confirm the live table's root
+-		// hash before trusting it.
+-		if err := dmverity.VerifyDevice(deviceName, metadata.RootHash); err != nil {
+-			return "", fmt.Errorf("refusing to reuse existing dm-verity device %q: %w", deviceName, err)
+-		}
++	deviceInfo, verifyErr := dmverity.VerifySignedDevice(deviceName, metadata.RootHash)
++	if verifyErr == nil {
+ 		log.G(ctx).WithField("device", devicePath).Debug("dm-verity device already exists, reusing")
+ 		return devicePath, nil
+ 	}
++	if deviceInfo.Exists {
++		if deviceInfo.OpenCount != 0 {
++			return "", fmt.Errorf("refusing to reuse existing dm-verity device %q: %w", deviceName, verifyErr)
++		}
++		if err := dmverity.Close(deviceName); err != nil && !errors.Is(err, unix.ENXIO) {
++			return "", fmt.Errorf("remove invalid idle dm-verity device %q: %w", deviceName, err)
++		}
++		log.G(ctx).WithError(verifyErr).WithField("device", devicePath).Warn("recreating invalid idle dm-verity device")
++	} else if !errors.Is(verifyErr, unix.ENXIO) && !errors.Is(verifyErr, os.ErrNotExist) {
++		return "", fmt.Errorf("inspect existing dm-verity device %q: %w", deviceName, verifyErr)
++	}
+ 
+ 	log.G(ctx).WithField("root_hash", metadata.RootHash).Info("Using signature for dm-verity")
+ 
+@@ -245,7 +213,10 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ 		return mount.ActiveMount{}, errdefs.ErrNotImplemented
+ 	}
+ 
+-	var dmverityDevice string
++	var (
++		dmverityDevice string
++		dmveritySource string
++	)
+ 
+ 	// Check for dmverity mode in mount options
+ 	dmverityMode := "auto" // default
+@@ -282,12 +253,6 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ 	if metadata != nil {
+ 		log.G(ctx).WithField("source", m.Source).Debug("detected dm-verity metadata, setting up dm-verity device")
+ 
+-		// Held until Mount returns, so it covers the mount(2) below and every
+-		// rollback Close on the way out. Deferred inside this block on purpose:
+-		// a layer with no dm-verity metadata never contends for it.
+-		dmverityLifecycleMu.Lock()
+-		defer dmverityLifecycleMu.Unlock()
+-
+ 		supported, err := dmverity.IsSupported()
+ 		if err != nil {
+ 			return mount.ActiveMount{}, fmt.Errorf("layer %q requires dm-verity but support could not be determined: %w", m.Source, err)
+@@ -296,16 +261,28 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ 			return mount.ActiveMount{}, fmt.Errorf("layer %q requires dm-verity but the system does not provide it", m.Source)
+ 		}
+ 
+-		// Extract snapshot ID from source path
+-		// Path format: {root}/snapshots/{id}/layer.erofs
+-		snapshotID := filepath.Base(filepath.Dir(m.Source))
+-		deviceName := fmt.Sprintf("containerd-erofs-%s", snapshotID)
++		deviceName := dmverity.ErofsDeviceName(m.Source)
++
++		// Cache setup is reached only for a protected EROFS layer. Overlayfs
++		// and plain EROFS mounts never scan or lock the device-mapper namespace.
++		h.retainedDmverity.prepare(ctx, m.Source)
++		unlock, err := dmverity.LockDevice(ctx, deviceName)
++		if err != nil {
++			return mount.ActiveMount{}, fmt.Errorf("lock dm-verity device %q: %w", deviceName, err)
++		}
++		defer unlock()
++
++		wasRetained := h.retainedDmverity.take(deviceName)
+ 
+ 		devicePath, err := openOrReuseDmverityDevice(ctx, m.Source, deviceName, metadata)
+ 		if err != nil {
++			if wasRetained {
++				h.retainedDmverity.closeLocked(ctx, deviceName, "failed retained-device reuse")
++			}
+ 			return mount.ActiveMount{}, err
+ 		}
+ 		dmverityDevice = deviceName
++		dmveritySource = m.Source
+ 
+ 		m.Source = devicePath
+ 	}
+@@ -315,7 +292,7 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ 
+ 	if err := os.MkdirAll(mp, 0700); err != nil {
+ 		if dmverityDevice != "" {
+-			dmverity.Close(dmverityDevice)
++			h.retainedDmverity.closeLocked(ctx, dmverityDevice, "mount rollback")
+ 		}
+ 		return mount.ActiveMount{}, err
+ 	}
+@@ -362,7 +339,7 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ 				loop, err := mount.SetupLoop(strings.TrimPrefix(v, "device="), params)
+ 				if err != nil {
+ 					if dmverityDevice != "" {
+-						dmverity.Close(dmverityDevice)
++						h.retainedDmverity.closeLocked(ctx, dmverityDevice, "mount rollback")
+ 					}
+ 					return mount.ActiveMount{}, err
+ 				}
+@@ -372,17 +349,21 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ 		err = m.Mount(mp)
+ 		if err != nil {
+ 			if dmverityDevice != "" {
+-				dmverity.Close(dmverityDevice)
++				h.retainedDmverity.closeLocked(ctx, dmverityDevice, "mount rollback")
+ 			}
+ 			return mount.ActiveMount{}, err
+ 		}
+ 	} else if err != nil {
+ 		if dmverityDevice != "" {
+-			dmverity.Close(dmverityDevice)
++			h.retainedDmverity.closeLocked(ctx, dmverityDevice, "mount rollback")
+ 		}
+ 		return mount.ActiveMount{}, err
+ 	}
+ 
++	if dmverityDevice != "" {
++		h.retainedDmverity.recordMount(dmverityDevice, dmveritySource)
++	}
++
+ 	t := time.Now()
+ 	return mount.ActiveMount{
+ 		Mount:      m,
+@@ -397,47 +378,83 @@ func (h *erofsMountHandler) Unmount(ctx context.Context, path string) error {
+ 	mountInfo, err := mount.Lookup(path)
+ 	if err == nil {
+ 		source := mountInfo.Source
+-		if strings.HasPrefix(source, "/dev/mapper/containerd-erofs-") {
+-			deviceName = strings.TrimPrefix(source, "/dev/mapper/")
++		devicePathPrefix := dmverity.DevicePath(dmverity.ErofsDeviceNamePrefix)
++		if strings.HasPrefix(source, devicePathPrefix) {
++			deviceName = strings.TrimPrefix(source, dmverity.DevicePath(""))
+ 		}
+ 	}
+ 
+-	err = mount.Unmount(path, 0)
+-
+-	if deviceName != "" {
+-		// Only the removal needs the lock, not the unmount above. The window
+-		// that caused the bug was a removal landing between another mounter's
+-		// verify and its mount(2); holding the lock here and across that whole
+-		// section on the mount side closes it. Once this lock is acquired the
+-		// competing mounter has either not started (it will then find the
+-		// device absent and create it) or has already completed its mount(2)
+-		// (the open count is non-zero and the kernel returns EBUSY). Leaving
+-		// mount.Unmount outside avoids serialising unmounts for no gain.
+-		dmverityLifecycleMu.Lock()
+-		defer dmverityLifecycleMu.Unlock()
+-
+-		log.G(ctx).WithFields(log.Fields{
+-			"mount-point": path,
+-			"device":      deviceName,
+-		}).Debug("attempting to close dm-verity device")
+-
+-		// EBUSY here is the normal outcome when another container still has the
+-		// layer mounted: the kernel's open count is the reference count, and it
+-		// is refusing to remove a device in use. Debug, not error.
+-		if closeErr := dmverity.Close(deviceName); closeErr != nil {
+-			log.G(ctx).WithError(closeErr).WithField("device", deviceName).Debug("unable to close dm-verity device")
+-		} else {
+-			log.G(ctx).WithField("device", deviceName).Debug("dm-verity device closed successfully")
++	if deviceName == "" {
++		return mount.Unmount(path, 0)
++	}
++
++	if err := mount.Unmount(path, 0); err != nil {
++		return err
++	}
++
++	unlock, err := dmverity.LockDevice(context.WithoutCancel(ctx), deviceName)
++	if err != nil {
++		return fmt.Errorf("lock dm-verity device %q: %w", deviceName, err)
++	}
++
++	if !h.retainedDmverity.enabled() {
++		h.retainedDmverity.closeLocked(ctx, deviceName, "final unmount")
++		unlock()
++		return nil
++	}
++
++	deviceInfo, inspectErr := dmverity.InspectDevice(deviceName)
++	if inspectErr != nil {
++		h.retainedDmverity.closeLocked(ctx, deviceName, "uninspectable device after unmount")
++		h.retainedDmverity.forgetMount(deviceName)
++		unlock()
++		return nil
++	}
++	if deviceInfo.OpenCount != 0 {
++		unlock()
++		return nil
++	}
++
++	source, known := h.retainedDmverity.mountedSource(deviceName)
++	if !known {
++		if h.retainedDmverity.contains(deviceName) {
++			unlock()
++			return nil
+ 		}
++		h.retainedDmverity.closeLocked(ctx, deviceName, "untracked device after restart")
++		unlock()
++		return nil
++	}
++	if _, err := os.Stat(source); err != nil {
++		log.G(ctx).WithError(err).WithFields(log.Fields{
++			"device": deviceName,
++			"source": source,
++		}).Warn("not retaining dm-verity device with unavailable backing layer")
++		h.retainedDmverity.closeLocked(ctx, deviceName, "removed EROFS layer")
++		h.retainedDmverity.forgetMount(deviceName)
++		unlock()
++		return nil
+ 	}
+ 
+-	return err
++	evicted := h.retainedDmverity.retain(deviceName, source)
++	log.G(ctx).WithFields(log.Fields{
++		"mount-point": path,
++		"device":      deviceName,
++	}).Debug("retained idle dm-verity device")
++	unlock()
++
++	h.retainedDmverity.close(context.WithoutCancel(ctx), evicted, "idle cache eviction")
++	return nil
+ }
+ 
+ type Config struct {
+ 	// SharedLayerContext overrides the SELinux label applied to shared EROFS
+ 	// layer mounts. Empty uses defaultSharedLayerContext.
+ 	SharedLayerContext string `toml:"shared_layer_context"`
++
++	// DmverityCacheSize bounds the number of verified, idle dm-verity devices
++	// retained for sequential EROFS mounts. Zero disables retention.
++	DmverityCacheSize int `toml:"dmverity_cache_size"`
+ }
+ 
+ func init() {
+@@ -451,7 +468,10 @@ func init() {
+ 			ic.Meta.Platforms = append(ic.Meta.Platforms, p)
+ 
+ 			cfg := ic.Config.(*Config)
+-			return NewErofsMountHandler(cfg.SharedLayerContext), nil
++			if cfg.DmverityCacheSize < 0 {
++				return nil, fmt.Errorf("dmverity_cache_size must not be negative")
++			}
++			return newErofsMountHandler(cfg.SharedLayerContext, cfg.DmverityCacheSize), nil
+ 		},
+ 	})
+ }
+diff --git a/plugins/mount/erofs/plugin_linux_test.go b/plugins/mount/erofs/plugin_linux_test.go
+index c3aaffd58..0d4cf8733 100644
+--- a/plugins/mount/erofs/plugin_linux_test.go
++++ b/plugins/mount/erofs/plugin_linux_test.go
+@@ -150,22 +150,22 @@ func TestSharedLayerMountOptionsConverge(t *testing.T) {
+ }
+ 
+ // TestOpenOrReuseDmverityDeviceDoesNotSelfLock guards the reentrancy hazard
+-// introduced when dmverityLifecycleMu was widened from "guard the create" to
++// introduced when the lifecycle lock was widened from "guard the create" to
+ // "guard the whole mount lifecycle".
+ //
+-// The lock is now taken by Mount, above the call to openOrReuseDmverityDevice,
+-// and is held until Mount returns. Go mutexes are not reentrant, so if anyone
+-// reinstates the Lock/Unlock pair that used to live inside the helper, every
+-// dm-verity mount deadlocks permanently -- and it deadlocks in the field, on the
+-// first layer that carries verity metadata, not in any test that does not hold
+-// the lock first.
++// The keyed lock is taken by Mount above the helper and held until Mount
++// returns. It is not reentrant, so the helper must not acquire it again.
+ //
+ // This reproduces the caller's contract: acquire the lock, then call the helper.
+ // The call is expected to fail (there is no such device and no privilege to
+ // create one); all that matters is that it returns at all.
+ func TestOpenOrReuseDmverityDeviceDoesNotSelfLock(t *testing.T) {
+-	dmverityLifecycleMu.Lock()
+-	defer dmverityLifecycleMu.Unlock()
++	const deviceName = "containerd-erofs-selflock-probe-does-not-exist"
++	unlock, err := dmverity.LockDevice(context.Background(), deviceName)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer unlock()
+ 
+ 	done := make(chan struct{})
+ 	go func() {
+@@ -175,7 +175,7 @@ func TestOpenOrReuseDmverityDeviceDoesNotSelfLock(t *testing.T) {
+ 		_, _ = openOrReuseDmverityDevice(
+ 			context.Background(),
+ 			filepath.Join(t.TempDir(), "layer.erofs"),
+-			"containerd-erofs-selflock-probe-does-not-exist",
++			deviceName,
+ 			&dmverity.DmverityMetadata{RootHash: strings.Repeat("00", 32)},
+ 		)
+ 	}()
+@@ -183,7 +183,7 @@ func TestOpenOrReuseDmverityDeviceDoesNotSelfLock(t *testing.T) {
+ 	select {
+ 	case <-done:
+ 	case <-time.After(30 * time.Second):
+-		t.Fatal("openOrReuseDmverityDevice blocked while the caller held dmverityLifecycleMu: " +
++		t.Fatal("openOrReuseDmverityDevice blocked while the caller held its keyed lifecycle lock: " +
+ 			"it must not lock the mutex itself, the caller already holds it")
+ 	}
+ }
+diff --git a/plugins/snapshots/erofs/dmverity_cleanup_linux.go b/plugins/snapshots/erofs/dmverity_cleanup_linux.go
+new file mode 100644
+index 000000000..79442bcc1
+--- /dev/null
++++ b/plugins/snapshots/erofs/dmverity_cleanup_linux.go
+@@ -0,0 +1,61 @@
++//go:build linux
++
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package erofs
++
++import (
++	"context"
++	"errors"
++	"os"
++
++	"github.com/containerd/log"
++
++	"github.com/containerd/containerd/v2/internal/dmverity"
++
++	"golang.org/x/sys/unix"
++)
++
++func releaseDmverityDevice(ctx context.Context, layerPath string) {
++	if _, err := os.Stat(dmverity.MetadataPath(layerPath)); err != nil {
++		if os.IsNotExist(err) {
++			return
++		}
++		log.G(ctx).WithError(err).WithField("layer", layerPath).Warn("failed to inspect dm-verity metadata during snapshot removal")
++	}
++
++	deviceName := dmverity.ErofsDeviceName(layerPath)
++	unlock, err := dmverity.LockDevice(context.WithoutCancel(ctx), deviceName)
++	if err != nil {
++		log.G(ctx).WithError(err).WithField("device", deviceName).Warn("failed to lock dm-verity device during snapshot removal")
++		return
++	}
++	defer unlock()
++
++	err = dmverity.Close(deviceName)
++	switch {
++	case err == nil:
++		log.G(ctx).WithField("device", deviceName).Debug("closed idle dm-verity device during snapshot removal")
++	case errors.Is(err, unix.EBUSY):
++		// A running container still owns the backing inode. Its final unmount
++		// closes the mapper instead of retaining a now-removed source.
++		log.G(ctx).WithField("device", deviceName).Debug("dm-verity device remains active during snapshot removal")
++	case errors.Is(err, unix.ENXIO), errors.Is(err, os.ErrNotExist):
++	default:
++		log.G(ctx).WithError(err).WithField("device", deviceName).Warn("failed to close dm-verity device during snapshot removal")
++	}
++}
+diff --git a/plugins/snapshots/erofs/dmverity_cleanup_other.go b/plugins/snapshots/erofs/dmverity_cleanup_other.go
+new file mode 100644
+index 000000000..80ac576b5
+--- /dev/null
++++ b/plugins/snapshots/erofs/dmverity_cleanup_other.go
+@@ -0,0 +1,23 @@
++//go:build !linux
++
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package erofs
++
++import "context"
++
++func releaseDmverityDevice(context.Context, string) {}
+diff --git a/plugins/snapshots/erofs/erofs.go b/plugins/snapshots/erofs/erofs.go
+index f401858ba..e8db2674b 100644
+--- a/plugins/snapshots/erofs/erofs.go
++++ b/plugins/snapshots/erofs/erofs.go
+@@ -669,18 +669,20 @@ func (s *snapshotter) getCleanupDirectories(ctx context.Context) ([]string, erro
+ func (s *snapshotter) Remove(ctx context.Context, key string) (err error) {
+ 	var removals []string
+ 	var id string
++	var kind snapshots.Kind
+ 	// Remove directories after the transaction is closed, failures must not
+ 	// return error since the transaction is committed with the removal
+ 	// key no longer available.
+ 	defer func() {
+ 		if err == nil {
++			if kind == snapshots.KindCommitted {
++				releaseDmverityDevice(ctx, s.layerBlobPath(id))
++			}
++
+ 			if err := cleanupUpper(s.upperPath(id)); err != nil {
+ 				log.G(ctx).WithError(err).WithField("id", id).Warnf("failed to cleanup upperdir")
+ 			}
+ 
+-			// Note: dm-verity device cleanup is handled by the EROFS mount handler
+-			// during Deactivate/Unmount, not here in Remove()
+-
+ 			for _, dir := range removals {
+ 				if err := os.RemoveAll(dir); err != nil {
+ 					log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
+@@ -689,9 +691,7 @@ func (s *snapshotter) Remove(ctx context.Context, key string) (err error) {
+ 		}
+ 	}()
+ 	return s.ms.WithTransaction(ctx, true, func(ctx context.Context) error {
+-		var k snapshots.Kind
+-
+-		id, k, err = storage.Remove(ctx, key)
++		id, kind, err = storage.Remove(ctx, key)
+ 		if err != nil {
+ 			return fmt.Errorf("failed to remove snapshot %s: %w", key, err)
+ 		}
+@@ -701,7 +701,7 @@ func (s *snapshotter) Remove(ctx context.Context, key string) (err error) {
+ 			return fmt.Errorf("unable to get directories for removal: %w", err)
+ 		}
+ 		// The layer blob is only persisted for committed snapshots.
+-		if k == snapshots.KindCommitted {
++		if kind == snapshots.KindCommitted {
+ 			// Clear IMMUTABLE_FL before removal, since this flag avoids it.
+ 			err = setImmutable(s.layerBlobPath(id), false)
+ 			if err != nil && !errdefs.IsNotImplemented(err) {

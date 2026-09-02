@@ -28,7 +28,7 @@ Version: 2.2.4
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 9006.mirrortest%{?dist}
+Release: 9007.mirrortest%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -100,6 +100,8 @@ Source10: mcr-mirror-hosts.toml
 #           compatibility without weakening protected snapshots.
 # Patch19:  Cache immutable image supplemental-group lookups so warm container
 #           creation avoids the extra complete-rootfs activation.
+# Patch20:  Retain a bounded set of verified idle dm-verity mappings for
+#           sequential signed EROFS starts. Overlayfs remains unchanged.
 #           See PATCHES.md for the author/commit provenance.
 # ============================================================================
 
@@ -139,6 +141,8 @@ Patch17: 0013-cri-refresh-multi-snapshotter-cache.patch
 Patch18: 0014-erofs-gate-dmverity-on-signed-metadata.patch
 # Cache image supplemental-group lookups by immutable rootfs identity.
 Patch19: 0015-cri-cache-immutable-image-supplemental-groups.patch
+# Reuse verified dm-verity mappings across sequential signed EROFS mounts.
+Patch20: 0016-erofs-retain-verified-dmverity-devices.patch
 
 %{?systemd_requires}
 
@@ -291,6 +295,13 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Wed Sep 02 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9007.mirrortest
+- Patch20: retain up to 32 verified idle dm-verity mappings for sequential
+  signed EROFS mounts, with per-device locking, root-scoped names, bounded LRU
+  eviction, restart reconciliation, and snapshot-removal cleanup.
+- Configure the cache only in the EROFS runtime delta; the regular overlayfs
+  profile remains on the default disabled path.
+
 * Tue Sep 01 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9006.mirrortest
 - Patch18: activate dm-verity only for layers carrying validated signed
   metadata; unsigned optional layers remain plain EROFS, protected ChainID
