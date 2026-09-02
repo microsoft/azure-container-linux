@@ -1,0 +1,182 @@
+From bb1f520598621d964413bb4521a89bb420dc6b49 Mon Sep 17 00:00:00 2001
+From: Dallas Delaney <dadelan@microsoft.com>
+Date: Wed, 2 Sep 2026 18:17:03 +0000
+Subject: [PATCH] cri: isolate canceled supplemental-group lookups
+
+Allow healthy waiters to retry when a coalesced lookup failed only because the leader request was canceled. Preserve shared failures for ordinary resolver errors and keep successful results bounded by the existing LRU.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
+Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
+---
+ .../cri/server/supplemental_groups_cache.go   | 77 +++++++++++--------
+ .../server/supplemental_groups_cache_test.go  | 46 +++++++++++
+ 2 files changed, 89 insertions(+), 34 deletions(-)
+
+diff --git a/internal/cri/server/supplemental_groups_cache.go b/internal/cri/server/supplemental_groups_cache.go
+index 827dde806..ced0dd468 100644
+--- a/internal/cri/server/supplemental_groups_cache.go
++++ b/internal/cri/server/supplemental_groups_cache.go
+@@ -19,6 +19,7 @@ package server
+ import (
+ 	"container/list"
+ 	"context"
++	"errors"
+ 	"sync"
+ 
+ 	customopts "github.com/containerd/containerd/v2/internal/cri/opts"
+@@ -32,9 +33,10 @@ type supplementalGroupsCacheEntry struct {
+ }
+ 
+ type supplementalGroupsCacheCall struct {
+-	done chan struct{}
+-	gids []uint32
+-	err  error
++	done  chan struct{}
++	gids  []uint32
++	err   error
++	retry bool
+ }
+ 
+ type supplementalGroupsCache struct {
+@@ -52,45 +54,52 @@ func (c *supplementalGroupsCache) Resolve(
+ 	key customopts.SupplementalGroupsCacheKey,
+ 	resolver func(context.Context) ([]uint32, error),
+ ) ([]uint32, error) {
+-	if gids, ok := c.get(key); ok {
+-		return gids, nil
+-	}
++	for {
++		if gids, ok := c.get(key); ok {
++			return gids, nil
++		}
+ 
+-	c.callMu.Lock()
+-	if call, ok := c.calls[key]; ok {
+-		c.callMu.Unlock()
+-		select {
+-		case <-call.done:
+-			return cloneGIDs(call.gids), call.err
+-		case <-ctx.Done():
+-			return nil, ctx.Err()
++		c.callMu.Lock()
++		if call, ok := c.calls[key]; ok {
++			c.callMu.Unlock()
++			select {
++			case <-call.done:
++				if call.retry && ctx.Err() == nil {
++					continue
++				}
++				return cloneGIDs(call.gids), call.err
++			case <-ctx.Done():
++				return nil, ctx.Err()
++			}
+ 		}
+-	}
+-	if c.calls == nil {
+-		c.calls = make(map[customopts.SupplementalGroupsCacheKey]*supplementalGroupsCacheCall)
+-	}
+-	call := &supplementalGroupsCacheCall{done: make(chan struct{})}
+-	c.calls[key] = call
+-	c.callMu.Unlock()
++		if c.calls == nil {
++			c.calls = make(map[customopts.SupplementalGroupsCacheKey]*supplementalGroupsCacheCall)
++		}
++		call := &supplementalGroupsCacheCall{done: make(chan struct{})}
++		c.calls[key] = call
++		c.callMu.Unlock()
+ 
+-	gids, ok := c.get(key)
+-	if !ok {
+-		gids, call.err = resolver(ctx)
+-		if call.err == nil {
+-			c.add(key, gids)
++		gids, ok := c.get(key)
++		if !ok {
++			gids, call.err = resolver(ctx)
++			if call.err == nil {
++				c.add(key, gids)
++			} else if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(call.err, ctxErr) {
++				call.retry = true
++			}
+ 		}
+-	}
+ 
+-	c.callMu.Lock()
+-	call.gids = cloneGIDs(gids)
+-	delete(c.calls, key)
+-	close(call.done)
+-	c.callMu.Unlock()
++		c.callMu.Lock()
++		call.gids = cloneGIDs(gids)
++		delete(c.calls, key)
++		close(call.done)
++		c.callMu.Unlock()
+ 
+-	if call.err != nil {
++		if call.err == nil {
++			return cloneGIDs(gids), nil
++		}
+ 		return nil, call.err
+ 	}
+-	return cloneGIDs(gids), nil
+ }
+ 
+ func (c *supplementalGroupsCache) get(key customopts.SupplementalGroupsCacheKey) ([]uint32, bool) {
+diff --git a/internal/cri/server/supplemental_groups_cache_test.go b/internal/cri/server/supplemental_groups_cache_test.go
+index 86de8e5cc..49a58e17c 100644
+--- a/internal/cri/server/supplemental_groups_cache_test.go
++++ b/internal/cri/server/supplemental_groups_cache_test.go
+@@ -162,6 +162,52 @@ func TestSupplementalGroupsCache(t *testing.T) {
+ 		close(release)
+ 		require.NoError(t, <-firstDone)
+ 	})
++
++	t.Run("healthy waiter retries canceled leader", func(t *testing.T) {
++		cache := supplementalGroupsCache{}
++		key := cacheKey("leader-cancel")
++		leaderStarted := make(chan struct{})
++		leaderCanReturn := make(chan struct{})
++		var calls atomic.Int32
++		resolver := func(ctx context.Context) ([]uint32, error) {
++			if calls.Add(1) == 1 {
++				close(leaderStarted)
++				<-ctx.Done()
++				<-leaderCanReturn
++				return nil, ctx.Err()
++			}
++			return []uint32{9}, nil
++		}
++
++		leaderCtx, cancelLeader := context.WithCancel(context.Background())
++		leaderDone := make(chan error, 1)
++		go func() {
++			_, err := cache.Resolve(leaderCtx, key, resolver)
++			leaderDone <- err
++		}()
++		<-leaderStarted
++
++		waiterDone := make(chan struct {
++			gids []uint32
++			err  error
++		}, 1)
++		go func() {
++			gids, err := cache.Resolve(context.Background(), key, resolver)
++			waiterDone <- struct {
++				gids []uint32
++				err  error
++			}{gids: gids, err: err}
++		}()
++
++		cancelLeader()
++		close(leaderCanReturn)
++		require.ErrorIs(t, <-leaderDone, context.Canceled)
++
++		result := <-waiterDone
++		require.NoError(t, result.err)
++		assert.Equal(t, []uint32{9}, result.gids)
++		assert.EqualValues(t, 2, calls.Load())
++	})
+ }
+ 
+ func cacheKey(chainID string) customopts.SupplementalGroupsCacheKey {

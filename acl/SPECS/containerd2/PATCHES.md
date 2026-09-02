@@ -1,6 +1,6 @@
 # containerd2 patch series
 
-Reference for the 21-patch series in the active spec. Engineering rationale,
+Reference for the 30-patch series in the active spec. Engineering rationale,
 history, and triage notes live here so the `.spec` stays terse.
 
 ## Layout
@@ -8,7 +8,7 @@ history, and triage notes live here so the `.spec` stays terse.
 | # in spec | Origin | Purpose |
 |-----------|--------|---------|
 | Patch0-7  | AzureLinux 3.0-dev baseline | 8 carry-patches verbatim from microsoft/azurelinux@origin/3.0-dev:SPECS/containerd2 at commit 5a4864f9 (containerd2-2.2.4-2). |
-| Patch8    | dm-verity baseline | Upstream `add-signature-support` (aadagarwal). Split off by author so it can be dropped once it merges into azurelinux, leaving Patch9-20 unchanged. |
+| Patch8    | dm-verity baseline | Upstream `add-signature-support` (aadagarwal). Split off by author so it can be dropped once it merges into azurelinux, leaving Patch9-29 unchanged. |
 | Patch9    | ACL integration | Derives referrer discovery and snapshotter-side formatting from the erofs differ's capability, and adds the ACL entry points. Leaves Patch8's defaults untouched. |
 | Patch10   | precomputed artifacts | Consumes signed precomputed EROFS/Merkle bundles and selects the newest. |
 | Patch11   | EROFS SELinux sharing | Makes every consumer of an EROFS layer request one synthesised `context=`, so a layer can be mounted by more than one container. Independent of dm-verity; touches only upstream code. |
@@ -21,6 +21,15 @@ history, and triage notes live here so the `.spec` stays terse.
 | Patch18   | signed-metadata activation policy | Uses dm-verity only for layers carrying validated signature and root-hash metadata, persists that policy across ChainID reuse, validates concrete differ/snapshotter capability pairs, and preserves legacy unsigned upgrade compatibility. |
 | Patch19   | supplemental-group cache | Resolves image-defined supplemental groups from an immutable committed ChainID view and caches successful results in a bounded CRI LRU keyed by snapshotter, ChainID, user, and primary GID. |
 | Patch20   | verified mapper reuse | Retains a bounded LRU of zero-open signed EROFS dm-verity mappings, verifies the live signed table before every reuse, and closes cached mappings when their snapshots are removed. |
+| Patch21   | inline signature hydration | Carries validated inline PKCS#7 descriptor bytes through immediate and retained OCI-layout imports. |
+| Patch22   | post-unpack graph retention | Retains the selected signed graph after immediate unpack so later materialization remains registry-independent. |
+| Patch23   | signed materialization binding | Records and validates the exact root hash and signature digest used by protected snapshots, including cleanup and restart paths. |
+| Patch24   | cancellation-safe group lookup | Keeps shared supplemental-group resolution alive independently of any one caller while preserving waiter cancellation. |
+| Patch25   | disabled-cache reconciliation | Cleans retained dm-verity mappings left by a prior process even when the restarted daemon disables caching. |
+| Patch26   | signed-kernel capability probe | Requires the loaded dm-verity target, signature parameter, sufficient target version, and a working temporary keyring before advertising signed support. |
+| Patch27   | bounded referrers pagination | Follows same-origin OCI referrers pages with page, descriptor, byte, loop, endpoint, and retry guards. |
+| Patch28   | signed import hardening | Bounds dm-verity candidates and artifacts, strips alternative URLs, minimizes retained candidate memory, and directly persists validated inline content. |
+| Patch29   | module-loading contract | Documents that the host must load `erofs` and `dm_verity` before containerd starts; the daemon does not invoke `modprobe`. |
 
 ## Source of truth
 
@@ -52,6 +61,15 @@ v2.2.4  193637f7ee8ae5f5aa5248f49e7baa3e6164966e   ( == %define commit_hash )
                       └─ b11cdce43  erofs: gate dm-verity on signed metadata
                           └─ 5ca7d24b3  cri: cache immutable image supplemental groups
                               └─ 2d654689a  erofs: retain verified dm-verity devices
+                                  └─ 6b333038e  erofs: hydrate inline signature descriptors
+                                      └─ 6a9c0df1e  erofs: retain signed refs after immediate unpack
+                                          └─ a78287b84  erofs: bind signed snapshots to recorded materialization
+                                              └─ bb1f52059  cri: isolate canceled supplemental-group lookups
+                                                  └─ dcce96de4  erofs: reconcile retained devices when cache is disabled
+                                                      └─ f02422d42  erofs: gate signed capabilities on kernel support
+                                                          └─ ee61c6c34  remotes: follow bounded referrers pagination
+                                                              └─ e33165d6c  erofs: harden signed referrer imports
+                                                                  └─ ccb7127f4  erofs: document dm-verity module loading
 ```
 
 Patch0-15 live on `dadelan/acl-erofs`. Patch16 is the exact child commit
@@ -62,7 +80,9 @@ is intentionally pinned by exact SHA while it remains an isolated replacement
 prototype. Patch17 is its exact child commit `38aa4465f` on
 `dadelan/erofs-latency-cache-fix`. Patches18-20 are exact consecutive commits
 `b11cdce43`, `5ca7d24b3`, and `2d654689a` on
-`dadelan/erofs-referrer-gated-performance`.
+`dadelan/erofs-referrer-gated-performance`. Patches21-29 are the exact
+consecutive commits from `6b333038e` through `ccb7127f4` on
+`dadelan/erofs-inline-signature-validation`.
 
 The platform tag does matter, and it has gone stale once: until 2026-08-04
 `acl/platform-v2.2.4` still pointed at `2a27bae8a` from before a branch
@@ -91,6 +111,15 @@ reviewable commits while the spec keeps one cohesive patch.
 | *(isolated exact commit)* | `b11cdce43` | Patch18 |
 | *(isolated exact commit)* | `5ca7d24b3` | Patch19 |
 | *(isolated exact commit)* | `2d654689a` | Patch20 |
+| *(isolated exact commit)* | `6b333038e` | Patch21 |
+| *(isolated exact commit)* | `6a9c0df1e` | Patch22 |
+| *(isolated exact commit)* | `a78287b84` | Patch23 |
+| *(isolated exact commit)* | `bb1f52059` | Patch24 |
+| *(isolated exact commit)* | `dcce96de4` | Patch25 |
+| *(isolated exact commit)* | `f02422d42` | Patch26 |
+| *(isolated exact commit)* | `ee61c6c34` | Patch27 |
+| *(isolated exact commit)* | `e33165d6c` | Patch28 |
+| *(isolated exact commit)* | `ccb7127f4` | Patch29 |
 
 containerd does **not** inspect IPE policy. Layer signatures are passed to the
 kernel whenever they are present and the feature is enabled; the kernel alone
@@ -126,7 +155,7 @@ Split **by author** along the clean commit boundary
 
 The split is deliberately along the author boundary (not by feature) so that
 when `add-signature-support` lands in azurelinux upstream, **Patch8 is simply
-dropped and Patch9-17 apply unchanged** on top of the upstream base. Feature
+dropped and Patch9-29 apply unchanged** on top of the upstream base. Feature
 grouping is applied *within* the ACL patches, where it does not fight this.
 
 Patch8 covers: dm-verity layer formatting, OCI referrer signing, per-layer
@@ -483,12 +512,108 @@ before deleting its backing layer. The cache defaults to disabled upstream.
 ACL enables 32 entries only in `containerd-acl-erofs-runtime.toml`, which is
 not imported by the regular overlayfs composition root.
 
+## Patch21 — hydrate inline signature descriptors
+
+Layer signatures are encoded in the signed bundle annotations, but retained OCI
+graphs still need a concrete descriptor payload. Patch21 verifies the decoded
+PKCS#7 bytes against the descriptor's digest and size, then carries them in
+`Descriptor.Data`. Immediate unpack and retained-import paths therefore consume
+the same verified bytes without a second registry fetch or a missing-content
+failure.
+
+## Patch22 — retain signed refs after immediate unpack
+
+Immediate EROFS unpack used to consume the selected bundle transiently and drop
+its graph. Patch22 retains that same selected graph after a successful unpack,
+so a later image update, cache refresh, or deferred materialization remains
+independent of registry availability. Retention still roots only the selected
+manifest and its reachable config/signature/tar-index/Merkle content.
+
+## Patch23 — bind signed snapshots to recorded materialization
+
+Patch23 records a compact materialization version, protection state, root hash,
+and signature digest on committed snapshots. Reuse validates those labels
+against the concrete `.dmverity`, `.sig`, and `.sig-required` sidecars before a
+protected ChainID can satisfy a request. Partial labels, missing sidecars, root
+hash drift, and signature replacement fail closed; legacy unsigned snapshots
+remain plain EROFS under `auto`.
+
+## Patch24 — isolate canceled supplemental-group lookups
+
+Coalesced supplemental-group misses must not inherit the first caller's
+context: one canceled pod could otherwise cancel the shared lookup and fail
+unrelated waiters. Patch24 runs the immutable rootfs lookup under its own
+lifecycle while each waiter independently observes its original context.
+Errors remain uncached, and the successful cache key and copy boundaries are
+unchanged.
+
+## Patch25 — reconcile mappings when cache is disabled
+
+A daemon can restart with `dmverity_cache_size=0` after a previous process left
+verified idle mappings behind. Patch25 runs the one-time root-scoped
+reconciliation even on the disabled cache path, closing stale zero-open
+mappings without enabling new retention. Ordinary overlay mounts still never
+enter mapper-cache setup.
+
+## Patch26 — gate signed capabilities on kernel support
+
+Configuration alone is not proof that signed dm-verity can work. Patch26
+advertises `dmverity-referrers` and required-signature capabilities only after
+the running host proves all of the following:
+
+- `dm_verity` is loaded or built in;
+- the verity device-mapper target is at least version 1.5;
+- `/sys/module/dm_verity/parameters/require_signatures` exists; and
+- a temporary thread-keyring add/unlink operation succeeds.
+
+Successful probes are cached process-wide; failures remain retryable. Optional
+`auto` mode falls back to plain EROFS on unsupported hosts, while required mode
+fails plugin initialization.
+
+## Patch27 — follow bounded OCI referrers pagination
+
+Patch27 follows registry `Link: ...; rel="next"` pagination for OCI referrers
+without broadening the trust boundary. Every next link must remain on the same
+scheme, normalized origin and exact referrers endpoint. Artifact filters,
+custom query parameters, proxy `ns`, and terminal-host retry behavior are
+preserved across pages.
+
+Traversal is bounded to 64 pages, 4,096 descriptors, and `MaxManifestSize`
+aggregate decoded response bytes. Loops, malformed links, userinfo, fragments,
+endpoint changes, and cross-origin links fail the request. The manifests array
+is streamed so the descriptor bound is enforced before allocating an
+unbounded response.
+
+## Patch28 — harden signed referrer imports
+
+Patch28 bounds the dm-verity-specific work left after generic pagination:
+64 matching bundles, 16 MiB of aggregate candidate manifests, 4 MiB per
+manifest/config/signature, and 16 GiB per tar-index or Merkle artifact. The scan
+keeps only the newest valid candidate in memory while still parsing every
+matching older bundle so malformed signed metadata cannot be hidden behind a
+newer entry.
+
+All custom manifest, config, signature, tar-index, and Merkle descriptors have
+OCI alternative `URLs` removed before fetch. The privileged daemon therefore
+retrieves artifact content by digest through the selected repository rather
+than following registry-supplied URLs to unrelated HTTP origins. Validated
+inline descriptor data is written directly into the content store before GC
+labels are published, closing the retained OCI-layout import gap.
+
+## Patch29 — document the module-loading contract
+
+containerd deliberately does not invoke privileged `modprobe` operations.
+Patch29 makes the host contract explicit in code and user documentation:
+modular `erofs` and `dm_verity` support must be loaded before containerd starts.
+The ACL package already enforces this ordering through
+`90-acl-profile.conf` and its `modprobe@` dependencies.
+
 ## Regeneration procedure
 
 Patches are **exported from commits**, not diffed between hand-built trees:
 
 ```bash
-cd <containerd-checkout>              # branch dadelan/erofs-referrer-gated-performance
+cd <containerd-checkout>              # branch dadelan/erofs-inline-signature-validation
 BASE=$(git rev-parse acl/base-v2.2.4-azl^{})
 AADHAR=$(git rev-parse acl/platform-v2.2.4^{})
 INT=$(git rev-list -1 dadelan/acl-erofs --grep='Acl-Patch-Group: acl-dmverity-integration')
@@ -503,6 +628,15 @@ CACHEFIX=$(git rev-parse 38aa4465f55980b51aa787a8823adea874aed54b)
 SIGNEDGATE=$(git rev-parse b11cdce43526a4186b4380c0e6208eec78fdd16b)
 GROUPCACHE=$(git rev-parse 5ca7d24b3d48acd6d8752e24444a9b3596752e3d)
 MAPPERCACHE=$(git rev-parse 2d654689a29321a6221a920f9934cc52bad533cf)
+INLINE=$(git rev-parse 6b333038e09d2fe5507d1f482dcc8e955e1e837d)
+POSTUNPACK=$(git rev-parse 6a9c0df1e4208855bd5d3dc482ade0fdee140fcf)
+MATERIAL=$(git rev-parse a78287b845414c0efdcbf92e0a86d8c8c8fc8f8f)
+CANCEL=$(git rev-parse bb1f520598621d964413bb4521a89bb420dc6b49)
+RECONCILE=$(git rev-parse dcce96de443cfb94f16ee2a45f119949594a17e3)
+KERNELCAP=$(git rev-parse f02422d42492523c31c32bb7fda419bcaa0ff275)
+PAGINATION=$(git rev-parse ee61c6c3444e134baa66a1fb2ee4c70805b67b51)
+IMPORTHARDEN=$(git rev-parse e33165d6c90595e221ec5ea39413f1002040907c)
+MODULEDOC=$(git rev-parse ccb7127f41443353bae30d51a36b5810fcff5d9f)
 
 git diff $BASE   $AADHAR  # -> Patch8   (prepend the From:/Subject: header)
 git diff $AADHAR $INT     # -> Patch9
@@ -517,14 +651,23 @@ git format-patch -1 --stdout --no-signature $CACHEFIX # -> Patch17
 git format-patch -1 --stdout --no-signature $SIGNEDGATE # -> Patch18
 git format-patch -1 --stdout --no-signature $GROUPCACHE # -> Patch19
 git format-patch -1 --stdout --no-signature $MAPPERCACHE # -> Patch20
+git format-patch -1 --stdout --no-signature $INLINE # -> Patch21
+git format-patch -1 --stdout --no-signature $POSTUNPACK # -> Patch22
+git format-patch -1 --stdout --no-signature $MATERIAL # -> Patch23
+git format-patch -1 --stdout --no-signature $CANCEL # -> Patch24
+git format-patch -1 --stdout --no-signature $RECONCILE # -> Patch25
+git format-patch -1 --stdout --no-signature $KERNELCAP # -> Patch26
+git format-patch -1 --stdout --no-signature $PAGINATION # -> Patch27
+git format-patch -1 --stdout --no-signature $IMPORTHARDEN # -> Patch28
+git format-patch -1 --stdout --no-signature $MODULEDOC # -> Patch29
 ```
 
 Grouped boundaries are the **last** commit carrying their group trailer, so the
 groups must stay contiguous and in patch order on the branch. Patch12,
 Patch15's original `e670c411f` commit, Patch16's `20fcf6669` commit, and
 Patch17's `38aa4465f` commit remain fixed points in the series; Patch15's
-grouped boundary must descend from its original commit, and Patches16-20 must
-remain consecutive exact commits through `2d654689a`.
+grouped boundary must descend from its original commit, and Patches16-29 must
+remain consecutive exact commits through `ccb7127f4`.
 
 Each exported file keeps a `From:`/`Subject:` header plus a body listing the
 commits it squashes, so a reviewer can always get back to the individual
@@ -533,23 +676,26 @@ commits. `patch -p1` ignores the header, exactly as it does for a
 
 ### Verification gates
 
-Run all five after regenerating. The first is the one that matters most: it is
+Run all six after regenerating. The first is the one that matters most: it is
 what proves the patch files and the branch have not diverged.
 
-1. **Tree equality.** Apply Patch0-20 to the pristine `Source0` tarball with
+1. **Tree equality.** Apply Patch0-29 to the pristine `Source0` tarball with
    `patch -p1 --fuzz=0 --no-backup-if-mismatch` (what `%autosetup -p1` does)
-   and `diff -r` the result against a worktree at exact commit `2d654689a`
-   (`dadelan/erofs-referrer-gated-performance`). Must be **identical**.
-2. **Cross-compile.** `GOOS=linux`, `GOOS=windows`, and `GOOS=darwin`
-   `go build ./...` must all pass. `plugins/snapshots/erofs/erofs.go` carries
-   no build constraint, so Linux-only symbols referenced from it break the
-   non-Linux builds — this has regressed before.
+   and `diff -r` the result against a worktree at exact commit `ccb7127f4`
+   (`dadelan/erofs-inline-signature-validation`). Must be **identical**.
+2. **Cross-compile.** Compile the affected packages for Linux/ARM64,
+   Windows/AMD64, Darwin/AMD64, and FreeBSD/AMD64. Exclude
+   `plugins/mount/erofs` on non-Linux hosts because it intentionally has no
+   non-Linux source files. Microsoft's Go toolchain requires
+   `GOEXPERIMENT=ms_nocgo_opensslcrypto` for static Linux builds and an empty
+   `GOEXPERIMENT` for FreeBSD.
 3. **gofmt.** `gofmt -l` must be silent. containerd CI enforces it.
 4. **Feature tests.**
-   `go test ./client/... ./core/images/... ./core/transfer/local/... ./core/unpack/... ./internal/cri/opts/... ./internal/cri/server/... ./internal/cri/store/image/... ./internal/dmverity/... ./internal/erofsutils/... ./pkg/rootfs/... ./pkg/snapshotters/... ./plugins/cri/images/... ./plugins/diff/erofs/... ./plugins/mount/erofs/... ./plugins/services/diff/... ./plugins/snapshots/erofs/... ./plugins/transfer/...`
+   `go test ./client/... ./core/images/... ./core/remotes/docker/... ./core/transfer/local/... ./core/unpack/... ./internal/cri/opts/... ./internal/cri/server/... ./internal/cri/store/image/... ./internal/dmverity/... ./internal/erofsutils/... ./pkg/rootfs/... ./pkg/snapshotters/... ./plugins/cri/images/... ./plugins/diff/erofs/... ./plugins/mount/erofs/... ./plugins/services/diff/... ./plugins/snapshots/erofs/... ./plugins/transfer/...`
    Then run
-   `go test -race ./internal/cri/store/image/... ./internal/cri/opts/... ./internal/cri/server/... ./internal/dmverity/... ./plugins/mount/erofs/... ./plugins/snapshots/erofs/...`
-   for Patches17, 19, and 20's concurrent cache and mapper-lifecycle paths.
+   `go test -race ./core/remotes/docker/... ./internal/cri/store/image/... ./internal/cri/opts/... ./internal/cri/server/... ./internal/dmverity/... ./pkg/snapshotters/... ./plugins/mount/erofs/... ./plugins/snapshots/erofs/...`
+   for the concurrent cache, mapper-lifecycle, pagination, and retained-import
+   paths.
 5. **Plugin graph.** `go build -o /tmp/ctrd ./cmd/containerd && /tmp/ctrd config dump`
    must exit 0. `registry.Graph` has no cycle detection, so a bad `Requires` edge
    is a startup stack overflow that compiles, passes `gofmt`, passes every unit
@@ -557,8 +703,15 @@ what proves the patch files and the branch have not diverged.
    gate is the only one that executes the plugin graph. Stronger still, and
    worth doing before any RPM: run the daemon against the real profile with
    `containerd -c acl-erofs.toml` and check `ctr plugins ls`.
+6. **Privileged EROFS/dm-verity tests.** Run the root-enabled
+   `internal/dmverity` and `plugins/snapshots/erofs` suites plus
+   `plugins/diff/erofs` as root. Ordinary dm-verity devices, EROFS snapshotter
+   behavior, tar-index reconstruction, and optional unsigned EROFS must pass.
+   Signed PKCS#7 activation may skip only on a development kernel that lacks
+   `/sys/module/dm_verity/parameters/require_signatures`; it must run on the ACL
+   validation kernel.
 
-Gates 2-5 should also pass at **every intermediate commit**, not just at the
+Gates 2-6 should also pass at **every intermediate commit**, not just at the
 tip. The previous tree-partition method could not check this, and did not: it
 produced a Patch8 that failed to compile, and a Patch9 that broke the
 non-Linux builds, and neither was visible because only the final tree was

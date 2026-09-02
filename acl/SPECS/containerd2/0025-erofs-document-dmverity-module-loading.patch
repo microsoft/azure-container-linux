@@ -1,0 +1,64 @@
+From ccb7127f41443353bae30d51a36b5810fcff5d9f Mon Sep 17 00:00:00 2001
+From: Dallas Delaney <dadelan@microsoft.com>
+Date: Wed, 2 Sep 2026 21:29:48 +0000
+Subject: [PATCH] erofs: document dm-verity module loading
+
+Keep module loading as a host responsibility and make the startup contract explicit instead of teaching the containerd daemon to invoke privileged modprobe operations.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
+Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
+---
+ docs/snapshotters/erofs.md          |  3 +++
+ internal/dmverity/dmverity_linux.go | 11 ++++++++---
+ 2 files changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/docs/snapshotters/erofs.md b/docs/snapshotters/erofs.md
+index 85ec8544f..7138a9219 100644
+--- a/docs/snapshotters/erofs.md
++++ b/docs/snapshotters/erofs.md
+@@ -191,6 +191,9 @@ keyring support. Capability discovery requires the read-only
+ upstream Linux 5.13 and later (or an equivalent backport). The probe checks that
+ the mechanism is available to containerd; signature activation still requires
+ the signing certificate chain to be enrolled in a trusted kernel keyring.
++When dm-verity is built as a module, load `dm_verity` before containerd starts
++(for example with a systemd `modprobe@dm_verity.service` dependency).
++Containerd does not invoke `modprobe` during plugin initialization.
+ 
+ The differ must be configured to discover and consume signed dm-verity
+ metadata:
+diff --git a/internal/dmverity/dmverity_linux.go b/internal/dmverity/dmverity_linux.go
+index f362bcdac..4faf6d609 100644
+--- a/internal/dmverity/dmverity_linux.go
++++ b/internal/dmverity/dmverity_linux.go
+@@ -43,13 +43,17 @@ var signatureSupportCache struct {
+ 	supported bool
+ }
+ 
+-// IsSupported reports whether the kernel can back a dm-verity device.
++// IsSupported reports whether the dm-verity target is currently available.
+ //
+ // A false return with a nil error means the answer is determinate: dm-verity
+ // is genuinely unavailable, and callers may skip cleanly. A non-nil error
+ // means the answer is indeterminate — the check itself could not be
+ // completed — and callers should treat that as a hard failure rather than
+ // assume absence.
++//
++// This check does not load kernel modules. Hosts using a modular target must
++// load dm_verity before containerd starts, just as the EROFS snapshotter
++// requires erofs to be loaded before plugin initialization.
+ func IsSupported() (bool, error) {
+ 	// dm-verity may be a loadable module or built into the kernel. Checking
+ 	// only /proc/modules reports unsupported on a CONFIG_DM_VERITY=y kernel and
+@@ -71,8 +75,9 @@ func IsSupported() (bool, error) {
+ 		return false, fmt.Errorf("failed to stat /sys/module/dm_verity: %w", err)
+ 	}
+ 
+-	// Both probes succeeded and neither found dm-verity, so this is a
+-	// determinate "not available" rather than a failed check.
++	// Both probes succeeded and neither found a loaded or built-in dm-verity
++	// target, so this is a determinate "not available" rather than a failed
++	// check.
+ 	return false, nil
+ }
+ 

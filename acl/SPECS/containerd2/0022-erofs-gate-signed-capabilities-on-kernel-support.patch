@@ -1,0 +1,539 @@
+From f02422d42492523c31c32bb7fda419bcaa0ff275 Mon Sep 17 00:00:00 2001
+From: Dallas Delaney <dadelan@microsoft.com>
+Date: Wed, 2 Sep 2026 19:16:57 +0000
+Subject: [PATCH] erofs: gate signed capabilities on kernel support
+
+Probe dm-verity, root-hash signature support, and usable thread keyrings before advertising signed referrer handling. Required modes fail during initialization while optional modes remain available as plain EROFS.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
+Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
+---
+ docs/snapshotters/erofs.md                    | 27 +++++--
+ internal/dmverity/dmverity_linux.go           | 77 +++++++++++++++++++
+ internal/dmverity/dmverity_other.go           |  6 ++
+ internal/dmverity/dmverity_test.go            | 52 +++++++++++++
+ plugins/diff/erofs/plugin/plugin.go           | 39 ++++++----
+ plugins/diff/erofs/plugin/plugin_test.go      | 50 ++++++++++++
+ plugins/snapshots/erofs/erofs.go              |  8 +-
+ plugins/snapshots/erofs/erofs_linux_test.go   |  5 +-
+ plugins/snapshots/erofs/plugin/plugin.go      | 30 +++++++-
+ plugins/snapshots/erofs/plugin/plugin_test.go | 27 +++++--
+ 10 files changed, 281 insertions(+), 40 deletions(-)
+ create mode 100644 plugins/diff/erofs/plugin/plugin_test.go
+
+diff --git a/docs/snapshotters/erofs.md b/docs/snapshotters/erofs.md
+index 268121d73..85ec8544f 100644
+--- a/docs/snapshotters/erofs.md
++++ b/docs/snapshotters/erofs.md
+@@ -184,8 +184,13 @@ The EROFS snapshotter supports device-mapper verity to provide block-level integ
+ verification for each EROFS layer. This method creates a dm-verity device for each
+ layer and mounts it read-only. The dm-verity implementation uses the `go-dmverity`
+ Go library, eliminating the need for external `veritysetup` command-line tools.
+-This requires a Linux kernel with dm-verity support (CONFIG_DM_VERITY) and the
+-device-mapper kernel module loaded.
++Signed mappings require a Linux kernel with dm-verity support, a verity target
++version of at least 1.5, `CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG`, and kernel
++keyring support. Capability discovery requires the read-only
++`/sys/module/dm_verity/parameters/require_signatures` feature marker exposed by
++upstream Linux 5.13 and later (or an equivalent backport). The probe checks that
++the mechanism is available to containerd; signature activation still requires
++the signing certificate chain to be enrolled in a trusted kernel keyring.
+ 
+ The differ must be configured to discover and consume signed dm-verity
+ metadata:
+@@ -231,11 +236,13 @@ The available modes are:
+ 
+ - `"auto"` (default): Uses dm-verity if `.dmverity` metadata exists for a layer,
+   otherwise mounts as regular EROFS. This allows mixing dm-verity and non-dm-verity
+-  layers in the same system.
++  layers in the same system. If signed mappings are unavailable, the plugin
++  does not advertise referrer support and continues with plain EROFS.
+ 
+ - `"on"`: Requires dm-verity for all layers. If a layer lacks `.dmverity` metadata,
+-  mounting will fail with an error. Use this mode when you want to enforce integrity
+-  verification for all layers.
++  mounting will fail with an error. Plugin initialization also fails if the host
++  cannot activate signed dm-verity mappings. Use this mode when you want to enforce
++  integrity verification for all layers.
+ 
+ - `"off"`: Disables dm-verity completely, even if `.dmverity` metadata exists.
+   Layers are mounted as regular EROFS without integrity verification. Use this for
+@@ -272,8 +279,9 @@ overlayfs pull, unpack, mount, or task-creation paths.
+ 
+ Discovery of dm-verity referrers (per-layer signatures and precomputed EROFS
+ artifacts) requires an extra registry lookup during pull and import, so it is
+-performed only when a differ that consumes those artifacts is loaded. The EROFS
+-differ advertises this when `enable_dmverity` is set:
++performed only when a differ that can consume those artifacts is loaded. The
++EROFS differ advertises this when `enable_dmverity` is set and the signed
++dm-verity capability probe succeeds:
+ 
+ ```toml
+ [plugins."io.containerd.differ.v1.erofs"]
+@@ -283,7 +291,10 @@ differ advertises this when `enable_dmverity` is set:
+ Both the transfer service and the CRI image service derive referrer discovery
+ from that capability, so no additional configuration is needed. With
+ `enable_dmverity` disabled, which is the default, no referrer lookup is
+-performed and pull behaves exactly as it does without this feature.
++performed and pull behaves exactly as it does without this feature. If
++`enable_dmverity` is optional and the host lacks signed mapping support, the
++differ remains available but applies layers as plain EROFS. Setting
++`require_signatures = true` instead makes plugin initialization fail.
+ 
+ When mounting a layer with dm-verity enabled, the snapshotter reads the metadata
+ from the `.dmverity` file, requires its `.sig` sidecar, and creates a dm-verity device. The dm-verity library
+diff --git a/internal/dmverity/dmverity_linux.go b/internal/dmverity/dmverity_linux.go
+index 02877679f..f362bcdac 100644
+--- a/internal/dmverity/dmverity_linux.go
++++ b/internal/dmverity/dmverity_linux.go
+@@ -26,16 +26,23 @@ import (
+ 	"slices"
+ 	"strconv"
+ 	"strings"
++	"sync"
+ 	"time"
+ 
+ 	"github.com/containerd/containerd/v2/core/mount"
+ 	dm "github.com/containerd/go-dmverity/pkg/dm"
++	"github.com/containerd/go-dmverity/pkg/keyring"
+ 	"github.com/containerd/go-dmverity/pkg/utils"
+ 	"github.com/containerd/go-dmverity/pkg/verity"
+ 	"github.com/containerd/log"
+ 	"github.com/google/uuid"
+ )
+ 
++var signatureSupportCache struct {
++	sync.Mutex
++	supported bool
++}
++
+ // IsSupported reports whether the kernel can back a dm-verity device.
+ //
+ // A false return with a nil error means the answer is determinate: dm-verity
+@@ -69,6 +76,76 @@ func IsSupported() (bool, error) {
+ 	return false, nil
+ }
+ 
++// CheckSignatureSupport verifies that the kernel can activate dm-verity
++// mappings that require a root-hash signature from a kernel keyring.
++func CheckSignatureSupport() error {
++	signatureSupportCache.Lock()
++	defer signatureSupportCache.Unlock()
++
++	if signatureSupportCache.supported {
++		return nil
++	}
++	if err := checkSignatureSupport(IsSupported, checkVeritySignatureSupport, checkKeyringAccess); err != nil {
++		return err
++	}
++	signatureSupportCache.supported = true
++	return nil
++}
++
++func checkSignatureSupport(
++	checkDmverity func() (bool, error),
++	checkTarget func() error,
++	checkKeyring func() error,
++) error {
++	supported, err := checkDmverity()
++	if err != nil {
++		return fmt.Errorf("check dm-verity support: %w", err)
++	}
++	if !supported {
++		return fmt.Errorf("dm-verity is unavailable")
++	}
++	if err := checkTarget(); err != nil {
++		return fmt.Errorf("check dm-verity signature support: %w", err)
++	}
++	if err := checkKeyring(); err != nil {
++		return fmt.Errorf("check kernel keyring support: %w", err)
++	}
++	return nil
++}
++
++func checkKeyringAccess() error {
++	runtime.LockOSThread()
++	defer runtime.UnlockOSThread()
++
++	keyID, err := keyring.AddKeyToThreadKeyring(
++		"user",
++		"containerd:dmverity-capability-probe",
++		[]byte{0},
++	)
++	if err != nil {
++		return err
++	}
++	if err := keyring.UnlinkKeyFromThreadKeyring(keyID); err != nil {
++		return err
++	}
++	return nil
++}
++
++func checkVeritySignatureSupport() error {
++	if err := dm.CheckVeritySignatureSupport(); err != nil {
++		return err
++	}
++	const signatureParameter = "/sys/module/dm_verity/parameters/require_signatures"
++	if _, err := os.Stat(signatureParameter); err != nil {
++		return fmt.Errorf(
++			"kernel does not expose %s; signed dm-verity discovery requires CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG and its read-only feature marker: %w",
++			signatureParameter,
++			err,
++		)
++	}
++	return nil
++}
++
+ func convertToVerityParams(opts *DmverityOptions) (verity.Params, error) {
+ 	params := verity.DefaultParams()
+ 
+diff --git a/internal/dmverity/dmverity_other.go b/internal/dmverity/dmverity_other.go
+index 6da02d0a8..4eeea217f 100644
+--- a/internal/dmverity/dmverity_other.go
++++ b/internal/dmverity/dmverity_other.go
+@@ -32,6 +32,12 @@ func IsSupported() (bool, error) {
+ 	return false, nil
+ }
+ 
++// CheckSignatureSupport reports that signed dm-verity mappings are
++// unavailable on non-Linux platforms.
++func CheckSignatureSupport() error {
++	return errUnsupported
++}
++
+ func Format(_ string, _ string, _ *DmverityOptions) (string, error) {
+ 	return "", errUnsupported
+ }
+diff --git a/internal/dmverity/dmverity_test.go b/internal/dmverity/dmverity_test.go
+index fdf8ab48d..e0467dd8d 100644
+--- a/internal/dmverity/dmverity_test.go
++++ b/internal/dmverity/dmverity_test.go
+@@ -20,6 +20,7 @@ package dmverity
+ 
+ import (
+ 	"encoding/base64"
++	"errors"
+ 	"os"
+ 	"path/filepath"
+ 	"strings"
+@@ -36,6 +37,57 @@ const (
+ 	testDeviceName = "test-verity-device"
+ )
+ 
++func TestCheckSignatureSupport(t *testing.T) {
++	checkError := errors.New("probe failed")
++	tests := []struct {
++		name          string
++		dmverity      bool
++		dmverityError error
++		keyringError  error
++		targetError   error
++		wantError     string
++	}{
++		{name: "supported", dmverity: true},
++		{name: "dm-verity unavailable", wantError: "dm-verity is unavailable"},
++		{name: "dm-verity probe failed", dmverityError: checkError, wantError: "check dm-verity support"},
++		{name: "keyring unavailable", dmverity: true, keyringError: checkError, wantError: "check kernel keyring support"},
++		{name: "signature target unavailable", dmverity: true, targetError: checkError, wantError: "check dm-verity signature support"},
++	}
++
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			keyringChecked := false
++			targetChecked := false
++			err := checkSignatureSupport(
++				func() (bool, error) {
++					return test.dmverity, test.dmverityError
++				},
++				func() error {
++					targetChecked = true
++					return test.targetError
++				},
++				func() error {
++					keyringChecked = true
++					return test.keyringError
++				},
++			)
++
++			if test.wantError == "" {
++				assert.NoError(t, err)
++			} else {
++				assert.ErrorContains(t, err, test.wantError)
++			}
++			if !test.dmverity || test.dmverityError != nil {
++				assert.False(t, keyringChecked)
++				assert.False(t, targetChecked)
++			}
++			if test.targetError != nil {
++				assert.False(t, keyringChecked)
++			}
++		})
++	}
++}
++
+ func TestDMVerity(t *testing.T) {
+ 	testutil.RequiresRoot(t)
+ 
+diff --git a/plugins/diff/erofs/plugin/plugin.go b/plugins/diff/erofs/plugin/plugin.go
+index 2a4848155..16c990bdf 100644
+--- a/plugins/diff/erofs/plugin/plugin.go
++++ b/plugins/diff/erofs/plugin/plugin.go
+@@ -19,6 +19,7 @@ package plugin
+ import (
+ 	"fmt"
+ 
++	"github.com/containerd/log"
+ 	"github.com/containerd/platforms"
+ 	"github.com/containerd/plugin"
+ 	"github.com/containerd/plugin/registry"
+@@ -97,27 +98,37 @@ func init() {
+ 			}
+ 
+ 			if config.EnableDmverity {
+-				supported, err := dmverity.IsSupported()
++				supportErr := dmverity.CheckSignatureSupport()
++				enableDmverity, err := dmverityEnabled(config.RequireSignatures, supportErr)
+ 				if err != nil {
+-					return nil, fmt.Errorf("dm-verity support check failed: %w", err)
++					return nil, err
+ 				}
+-				if !supported {
+-					return nil, fmt.Errorf("dm-verity is not supported on this system (no dm_verity module loaded and no built-in verity target): %w", plugin.ErrSkipPlugin)
++				if supportErr != nil {
++					log.G(ic.Context).WithError(supportErr).Warn("signed dm-verity support is unavailable; applying layers as plain EROFS")
+ 				}
+-				opts = append(opts, erofs.WithDmverity())
+-
+-				if config.RequireSignatures {
+-					opts = append(opts, erofs.WithRequireSignatures())
+-					ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmveritySignaturesRequired)
++				if enableDmverity {
++					opts = append(opts, erofs.WithDmverity())
++
++					if config.RequireSignatures {
++						opts = append(opts, erofs.WithRequireSignatures())
++						ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmveritySignaturesRequired)
++					}
++
++					// Advertise that this differ consumes dm-verity referrer
++					// artifacts so pull implementations enable referrer discovery
++					// without requiring separate configuration.
++					ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
+ 				}
+-
+-				// Advertise that this differ consumes dm-verity referrer
+-				// artifacts so pull implementations enable referrer discovery
+-				// without requiring separate configuration.
+-				ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
+ 			}
+ 
+ 			return erofs.NewErofsDiffer(cs, opts...), nil
+ 		},
+ 	})
+ }
++
++func dmverityEnabled(required bool, supportErr error) (bool, error) {
++	if required && supportErr != nil {
++		return false, fmt.Errorf("erofs differ: require_signatures is true but signed dm-verity mappings are unavailable: %w", supportErr)
++	}
++	return supportErr == nil, nil
++}
+diff --git a/plugins/diff/erofs/plugin/plugin_test.go b/plugins/diff/erofs/plugin/plugin_test.go
+new file mode 100644
+index 000000000..451db7677
+--- /dev/null
++++ b/plugins/diff/erofs/plugin/plugin_test.go
+@@ -0,0 +1,50 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package plugin
++
++import (
++	"errors"
++	"testing"
++)
++
++func TestDmverityEnabled(t *testing.T) {
++	probeError := errors.New("probe failed")
++	tests := []struct {
++		name      string
++		required  bool
++		probeErr  error
++		want      bool
++		wantError bool
++	}{
++		{name: "optional supported", want: true},
++		{name: "optional probe failure", probeErr: probeError},
++		{name: "required supported", required: true, want: true},
++		{name: "required probe failure", required: true, probeErr: probeError, wantError: true},
++	}
++
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			got, err := dmverityEnabled(test.required, test.probeErr)
++			if got != test.want {
++				t.Fatalf("dmverityEnabled() = %v, want %v", got, test.want)
++			}
++			if (err != nil) != test.wantError {
++				t.Fatalf("dmverityEnabled() error = %v, wantError %v", err, test.wantError)
++			}
++		})
++	}
++}
+diff --git a/plugins/snapshots/erofs/erofs.go b/plugins/snapshots/erofs/erofs.go
+index f800c3cb8..8a98354d0 100644
+--- a/plugins/snapshots/erofs/erofs.go
++++ b/plugins/snapshots/erofs/erofs.go
+@@ -125,12 +125,8 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
+ 	}
+ 
+ 	if config.dmverityMode == "on" {
+-		supported, err := dmverity.IsSupported()
+-		if err != nil {
+-			return nil, fmt.Errorf("failed to check dm-verity support: %w", err)
+-		}
+-		if !supported {
+-			return nil, fmt.Errorf("dmverity_mode is 'on' but dm-verity is not supported on this system")
++		if err := dmverity.CheckSignatureSupport(); err != nil {
++			return nil, fmt.Errorf("dmverity_mode is 'on' but signed dm-verity mappings are unavailable: %w", err)
+ 		}
+ 	}
+ 
+diff --git a/plugins/snapshots/erofs/erofs_linux_test.go b/plugins/snapshots/erofs/erofs_linux_test.go
+index d80fcc739..cf1d23d7d 100644
+--- a/plugins/snapshots/erofs/erofs_linux_test.go
++++ b/plugins/snapshots/erofs/erofs_linux_test.go
+@@ -621,9 +621,8 @@ func TestDmverityModeValidation(t *testing.T) {
+ 	})
+ 
+ 	t.Run("accepts valid on mode when dm-verity is supported", func(t *testing.T) {
+-		supported, err := dmverity.IsSupported()
+-		if err != nil || !supported {
+-			t.Skip("dm-verity not supported, skipping")
++		if err := dmverity.CheckSignatureSupport(); err != nil {
++			t.Skip("signed dm-verity mappings not supported, skipping")
+ 		}
+ 
+ 		root := filepath.Join(tmpDir, "on")
+diff --git a/plugins/snapshots/erofs/plugin/plugin.go b/plugins/snapshots/erofs/plugin/plugin.go
+index 29ae14e63..041b9b066 100644
+--- a/plugins/snapshots/erofs/plugin/plugin.go
++++ b/plugins/snapshots/erofs/plugin/plugin.go
+@@ -20,10 +20,12 @@ import (
+ 	"errors"
+ 	"fmt"
+ 
++	"github.com/containerd/log"
+ 	"github.com/containerd/platforms"
+ 	"github.com/containerd/plugin"
+ 	"github.com/containerd/plugin/registry"
+ 
++	"github.com/containerd/containerd/v2/internal/dmverity"
+ 	"github.com/containerd/containerd/v2/plugins"
+ 	"github.com/containerd/containerd/v2/plugins/snapshots/erofs"
+ 	"github.com/docker/go-units"
+@@ -95,9 +97,26 @@ func init() {
+ 				opts = append(opts, erofs.WithDmverityMode(config.DmverityMode))
+ 			}
+ 
++			var signatureSupportErr error
++			if dmverityModeUsesSignatures(config.DmverityMode) {
++				signatureSupportErr = dmverity.CheckSignatureSupport()
++			}
++			enableDmverity, err := dmverityEnabled(config.DmverityMode, signatureSupportErr)
++			if err != nil {
++				return nil, err
++			}
++			if signatureSupportErr != nil {
++				entry := log.G(ic.Context).WithError(signatureSupportErr)
++				if config.DmverityMode == "" {
++					entry.Debug("signed dm-verity support is unavailable; disabling referrer discovery")
++				} else {
++					entry.Warn("signed dm-verity support is unavailable; disabling referrer discovery")
++				}
++			}
++
+ 			ic.Meta.Exports[plugins.SnapshotterRootDir] = root
+ 			ic.Meta.Capabilities = append(ic.Meta.Capabilities, "rebase", plugins.CapabilityErofsLayers)
+-			if dmverityReferrersEnabled(config.DmverityMode) {
++			if enableDmverity {
+ 				ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
+ 			}
+ 			if config.DmverityMode == "on" {
+@@ -108,6 +127,13 @@ func init() {
+ 	})
+ }
+ 
+-func dmverityReferrersEnabled(mode string) bool {
++func dmverityModeUsesSignatures(mode string) bool {
+ 	return mode == "" || mode == "auto" || mode == "on"
+ }
++
++func dmverityEnabled(mode string, supportErr error) (bool, error) {
++	if mode == "on" && supportErr != nil {
++		return false, fmt.Errorf("erofs snapshotter: dmverity_mode is \"on\" but signed dm-verity mappings are unavailable: %w", supportErr)
++	}
++	return dmverityModeUsesSignatures(mode) && supportErr == nil, nil
++}
+diff --git a/plugins/snapshots/erofs/plugin/plugin_test.go b/plugins/snapshots/erofs/plugin/plugin_test.go
+index 6aae908ce..468f871e6 100644
+--- a/plugins/snapshots/erofs/plugin/plugin_test.go
++++ b/plugins/snapshots/erofs/plugin/plugin_test.go
+@@ -16,22 +16,35 @@
+ 
+ package plugin
+ 
+-import "testing"
++import (
++	"errors"
++	"testing"
++)
+ 
+-func TestDmverityReferrersEnabled(t *testing.T) {
++func TestDmverityEnabled(t *testing.T) {
++	probeError := errors.New("probe failed")
+ 	tests := []struct {
+-		mode string
+-		want bool
++		mode      string
++		probeErr  error
++		want      bool
++		wantError bool
+ 	}{
+ 		{mode: "", want: true},
+-		{mode: "off", want: false},
++		{mode: "off"},
+ 		{mode: "auto", want: true},
++		{mode: "auto", probeErr: probeError},
+ 		{mode: "on", want: true},
++		{mode: "on", probeErr: probeError, wantError: true},
++		{mode: "invalid"},
+ 	}
+ 	for _, test := range tests {
+ 		t.Run(test.mode, func(t *testing.T) {
+-			if got := dmverityReferrersEnabled(test.mode); got != test.want {
+-				t.Fatalf("dmverityReferrersEnabled(%q) = %v, want %v", test.mode, got, test.want)
++			got, err := dmverityEnabled(test.mode, test.probeErr)
++			if got != test.want {
++				t.Fatalf("dmverityEnabled(%q) = %v, want %v", test.mode, got, test.want)
++			}
++			if (err != nil) != test.wantError {
++				t.Fatalf("dmverityEnabled(%q) error = %v, wantError %v", test.mode, err, test.wantError)
+ 			}
+ 		})
+ 	}

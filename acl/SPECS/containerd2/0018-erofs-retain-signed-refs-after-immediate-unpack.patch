@@ -1,0 +1,116 @@
+From 6a9c0df1e4208855bd5d3dc482ade0fdee140fcf Mon Sep 17 00:00:00 2001
+From: Dallas Delaney <dadelan@microsoft.com>
+Date: Wed, 2 Sep 2026 17:48:24 +0000
+Subject: [PATCH] erofs: retain signed refs after immediate unpack
+
+Persist and GC-root the selected dm-verity referrer graph for both transfer-service and CRI local pulls. Later Image.Unpack calls can now reconstruct the same signed materialization instead of treating an immediately unpacked image as unsigned.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
+Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
+---
+ core/transfer/local/dmverity.go          |  6 +++---
+ core/transfer/local/pull_test.go         |  2 +-
+ internal/cri/server/images/image_pull.go |  6 +++++-
+ internal/cri/server/images/service.go    |  3 +++
+ pkg/snapshotters/signatures.go           | 12 +++++++++++-
+ 5 files changed, 23 insertions(+), 6 deletions(-)
+
+diff --git a/core/transfer/local/dmverity.go b/core/transfer/local/dmverity.go
+index f7c23886b..51c41cabf 100644
+--- a/core/transfer/local/dmverity.go
++++ b/core/transfer/local/dmverity.go
+@@ -43,9 +43,9 @@ func selectDmverityReferrerMode(enabled, unpackCapable bool) dmverityReferrerMod
+ 
+ func appendDmverityReferrerHandler(handler images.Handler, fetcher remotes.Fetcher, store content.Store, mode dmverityReferrerMode) images.Handler {
+ 	switch mode {
+-	case dmverityReferrersForImmediateUnpack:
+-		return snpkg.AppendSignatureHandlerWrapper(fetcher)(handler)
+-	case dmverityReferrersRetained:
++	case dmverityReferrersForImmediateUnpack, dmverityReferrersRetained:
++		// Immediate unpack still retains the selected graph so a later
++		// Image.Unpack can reconstruct the same signed materialization.
+ 		return snpkg.AppendRetainedSignatureHandlerWrapper(fetcher, store)(handler)
+ 	default:
+ 		return handler
+diff --git a/core/transfer/local/pull_test.go b/core/transfer/local/pull_test.go
+index 0a53e921b..25be14f42 100644
+--- a/core/transfer/local/pull_test.go
++++ b/core/transfer/local/pull_test.go
+@@ -164,7 +164,7 @@ func TestSelectDmverityReferrerMode(t *testing.T) {
+ 			expected: dmverityReferrersDisabled,
+ 		},
+ 		{
+-			name:          "capable EROFS unpack uses transient annotations",
++			name:          "capable EROFS unpack retains signed referrers",
+ 			enabled:       true,
+ 			unpackCapable: true,
+ 			expected:      dmverityReferrersForImmediateUnpack,
+diff --git a/internal/cri/server/images/image_pull.go b/internal/cri/server/images/image_pull.go
+index 05cc46098..047179fa3 100644
+--- a/internal/cri/server/images/image_pull.go
++++ b/internal/cri/server/images/image_pull.go
+@@ -279,7 +279,11 @@ func (c *CRIImageService) pullImageWithLocalPull(
+ 	}
+ 	if c.config.EnableDmverityReferrers {
+ 		if slices.Contains(c.snapshotterCapabilities[snapshotter], plugins.CapabilityDmverityReferrers) {
+-			handlerWrappers = append(handlerWrappers, snpkg.AppendSignatureHandlerWrapperFromResolver(resolver, ref))
++			handlerWrappers = append(handlerWrappers, snpkg.AppendRetainedSignatureHandlerWrapperFromResolver(
++				resolver,
++				ref,
++				c.content,
++			))
+ 		}
+ 	}
+ 	if len(handlerWrappers) > 0 {
+diff --git a/internal/cri/server/images/service.go b/internal/cri/server/images/service.go
+index 5e2b0d9a3..b19d893e6 100644
+--- a/internal/cri/server/images/service.go
++++ b/internal/cri/server/images/service.go
+@@ -58,6 +58,8 @@ type CRIImageService struct {
+ 	// images is the lower level image store used for raw storage,
+ 	// no event publishing should currently be assumed
+ 	images images.Store
++	// content is the content store used to retain auxiliary image artifacts.
++	content content.Store
+ 	// client is a subset of the containerd client
+ 	// and will be replaced by image store and transfer service
+ 	client imageClient
+@@ -123,6 +125,7 @@ func NewService(config criconfig.ImageConfig, options *CRIImageServiceOptions) (
+ 	svc := CRIImageService{
+ 		config:                      config,
+ 		images:                      options.Images,
++		content:                     options.Content,
+ 		client:                      options.Client,
+ 		imageStore:                  imagestore.NewStore(options.Images, options.Content, platforms.Default()),
+ 		imageFSPaths:                options.ImageFSPaths,
+diff --git a/pkg/snapshotters/signatures.go b/pkg/snapshotters/signatures.go
+index 25d745ce1..825923b9f 100644
+--- a/pkg/snapshotters/signatures.go
++++ b/pkg/snapshotters/signatures.go
+@@ -410,6 +410,16 @@ func AppendRetainedSignatureHandlerWrapper(fetcher remotes.Fetcher, store conten
+ 
+ // AppendSignatureHandlerWrapperFromResolver lazily creates a fetcher from a resolver.
+ func AppendSignatureHandlerWrapperFromResolver(resolver remotes.Resolver, ref string) func(f images.Handler) images.Handler {
++	return appendSignatureHandlerWrapperFromResolver(resolver, ref, nil)
++}
++
++// AppendRetainedSignatureHandlerWrapperFromResolver lazily creates a fetcher
++// and persists the selected referrer graph for later unpack operations.
++func AppendRetainedSignatureHandlerWrapperFromResolver(resolver remotes.Resolver, ref string, store content.Store) func(f images.Handler) images.Handler {
++	return appendSignatureHandlerWrapperFromResolver(resolver, ref, store)
++}
++
++func appendSignatureHandlerWrapperFromResolver(resolver remotes.Resolver, ref string, store content.Store) func(f images.Handler) images.Handler {
+ 	var (
+ 		fetcher     remotes.Fetcher
+ 		fetcherOnce sync.Once
+@@ -423,7 +433,7 @@ func AppendSignatureHandlerWrapperFromResolver(resolver remotes.Resolver, ref st
+ 			if fetcherErr != nil {
+ 				return nil, fmt.Errorf("create fetcher for dm-verity artifact lookup: %w", fetcherErr)
+ 			}
+-			return signatureHandler(f, fetcher, nil, false).Handle(ctx, desc)
++			return signatureHandler(f, fetcher, store, false).Handle(ctx, desc)
+ 		})
+ 	}
+ }

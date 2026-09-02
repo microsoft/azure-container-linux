@@ -4,6 +4,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SELECTOR="${REPO_ROOT}/acl/SPECS/containerd2/containerd-acl-select-profile"
+EROFS_PROFILE="${REPO_ROOT}/acl/SPECS/containerd2/containerd-acl-erofs.toml"
 MANGLE="${REPO_ROOT}/build_library/rpm/sysext_mangle_containerd-flatcar.sh"
 BUILD_SCRIPT="${REPO_ROOT}/acl/build_rpm_image.sh"
 SYSEXT_PROD_BUILDER="${REPO_ROOT}/build_library/sysext_prod_builder"
@@ -74,6 +75,8 @@ test_features() {
 grep -Fq 'ACL_EROFS_ENABLE="${ACL_EROFS_ENABLE:-0}"' "${BUILD_SCRIPT}"
 grep -Fq '"ACL_FEATURES=${ACL_FEATURES:-}"' "${SYSEXT_PROD_BUILDER}"
 grep -Fq '"ACL_FEATURES=${ACL_FEATURES:-}"' "${STANDALONE_SYSEXT_UTIL}"
+[[ "$(grep -Fc 'platform = "linux/amd64"' "${EROFS_PROFILE}")" -eq 2 ]]
+[[ "$(grep -Fc 'platform = "linux/arm64"' "${EROFS_PROFILE}")" -eq 2 ]]
 test_features 0 disabled "" ""
 test_features 0 ephemeral "" erofs
 test_features 0 external base "base,erofs"

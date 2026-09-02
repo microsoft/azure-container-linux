@@ -25,8 +25,9 @@ version = 2
 
 [plugins."io.containerd.transfer.v1.local"]
   # Defining unpack_config REPLACES containerd's built-in default of
-  # {platform, overlayfs, walking differ}, so preserve that path alongside
-  # EROFS. getSupportedPlatform selects only the requested combination.
+  # {platform, overlayfs, walking differ}, so preserve that path for every
+  # supported ACL architecture alongside EROFS. getSupportedPlatform selects
+  # only the requested combination.
   [[plugins."io.containerd.transfer.v1.local".unpack_config]]
     platform = "linux/amd64"
     snapshotter = "overlayfs"
@@ -34,6 +35,16 @@ version = 2
 
   [[plugins."io.containerd.transfer.v1.local".unpack_config]]
     platform = "linux/amd64"
+    snapshotter = "erofs"
+    differ = "erofs"
+
+  [[plugins."io.containerd.transfer.v1.local".unpack_config]]
+    platform = "linux/arm64"
+    snapshotter = "overlayfs"
+    differ = "walking"
+
+  [[plugins."io.containerd.transfer.v1.local".unpack_config]]
+    platform = "linux/arm64"
     snapshotter = "erofs"
     differ = "erofs"
 

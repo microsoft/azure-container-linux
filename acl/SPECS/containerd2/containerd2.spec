@@ -21,14 +21,14 @@ Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 # Tracks the AzureLinux 3.0-dev containerd2 baseline at Version 2.2.4.
 Version: 2.2.4
-# This test branch carries the complete 6023.verity tar-index patch stack but
-# uses the isolated 9000.mirrortest release band so its forced MCR mirror cannot
-# collide with the PR-ready 6xxx package stream. No .commit_hash tag is needed
-# because the upstream release tag is immutable.
+# This test branch carries the complete signed tar-index and referrer-hardening
+# stack but uses the isolated 9000.mirrortest release band so its forced MCR
+# mirror cannot collide with the PR-ready 6xxx package stream. No .commit_hash
+# tag is needed because the upstream release tag is immutable.
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 9007.mirrortest%{?dist}
+Release: 9008.mirrortest%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -102,6 +102,24 @@ Source10: mcr-mirror-hosts.toml
 #           creation avoids the extra complete-rootfs activation.
 # Patch20:  Retain a bounded set of verified idle dm-verity mappings for
 #           sequential signed EROFS starts. Overlayfs remains unchanged.
+# Patch21:  Hydrate validated inline signature descriptors for both immediate
+#           and retained OCI-layout imports.
+# Patch22:  Retain the selected signed graph after immediate unpack so later
+#           materialization does not depend on another registry traversal.
+# Patch23:  Bind protected snapshots to the exact recorded root hash and
+#           signature materialization, including restart-safe cleanup.
+# Patch24:  Isolate coalesced supplemental-group lookups from caller
+#           cancellation while keeping every waiter independently cancellable.
+# Patch25:  Reconcile stale retained dm-verity devices even when mapper caching
+#           is disabled in the new process.
+# Patch26:  Advertise signed dm-verity capability only after probing the loaded
+#           kernel target, signature parameter, and temporary keyring.
+# Patch27:  Follow bounded same-origin OCI referrers pagination while
+#           preserving filters, proxy namespace, and retry behavior.
+# Patch28:  Bound dm-verity bundle resources, keep artifact fetches
+#           repository-scoped, and persist validated inline content directly.
+# Patch29:  Document that loading erofs and dm_verity before containerd starts
+#           remains the host's responsibility.
 #           See PATCHES.md for the author/commit provenance.
 # ============================================================================
 
@@ -143,6 +161,24 @@ Patch18: 0014-erofs-gate-dmverity-on-signed-metadata.patch
 Patch19: 0015-cri-cache-immutable-image-supplemental-groups.patch
 # Reuse verified dm-verity mappings across sequential signed EROFS mounts.
 Patch20: 0016-erofs-retain-verified-dmverity-devices.patch
+# Preserve verified inline signatures across import paths.
+Patch21: 0017-erofs-hydrate-inline-signature-descriptors.patch
+# Retain signed graphs after immediate unpack.
+Patch22: 0018-erofs-retain-signed-refs-after-immediate-unpack.patch
+# Bind signed snapshots to their recorded materialization.
+Patch23: 0019-erofs-bind-signed-snapshots-to-recorded-materialization.patch
+# Keep coalesced supplemental-group work independent of caller cancellation.
+Patch24: 0020-cri-isolate-canceled-supplemental-group-lookups.patch
+# Reconcile retained mappings when caching is disabled.
+Patch25: 0021-erofs-reconcile-retained-devices-when-cache-disabled.patch
+# Gate signed capabilities on actual kernel support.
+Patch26: 0022-erofs-gate-signed-capabilities-on-kernel-support.patch
+# Follow bounded same-origin OCI referrers pagination.
+Patch27: 0023-remotes-follow-bounded-referrers-pagination.patch
+# Harden retained signed-referrer imports and resource use.
+Patch28: 0024-erofs-harden-signed-referrer-imports.patch
+# Keep kernel-module loading as an explicit host contract.
+Patch29: 0025-erofs-document-dmverity-module-loading.patch
 
 %{?systemd_requires}
 
@@ -295,6 +331,15 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Wed Sep 02 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9008.mirrortest
+- Patch21-25 harden retained signed materialization, preserve inline signature
+  content, isolate canceled group lookups, and reconcile stale mapper state.
+- Patch26-29 add the signed-kernel capability probe, bounded same-origin
+  referrers pagination, repository-scoped resource-bounded imports, and the
+  explicit host module-loading contract.
+- Preserve overlayfs and EROFS transfer combinations for both AMD64 and ARM64;
+  importing the ACL profile no longer replaces ARM64's default unpack path.
+
 * Wed Sep 02 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9007.mirrortest
 - Patch20: retain up to 32 verified idle dm-verity mappings for sequential
   signed EROFS mounts, with per-device locking, root-scoped names, bounded LRU
