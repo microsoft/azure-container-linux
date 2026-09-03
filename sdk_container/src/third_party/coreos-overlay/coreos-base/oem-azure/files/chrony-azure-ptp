@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-config_dir="/run/chrony/conf.d"
+config_dir="/run/chrony-azure/conf.d"
 config_file="${config_dir}/azure-ptp.conf"
 
 install -d -m 0755 "${config_dir}"

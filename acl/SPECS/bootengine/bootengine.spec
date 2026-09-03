@@ -73,10 +73,9 @@ chmod +x \
 %{_sbindir}/update-bootengine
 
 %changelog
-* Mon Aug 17 2026 Mayank Singh <mayansingh@microsoft.com> - 0.0.38-3
-- decrypt-root: fix first-boot ordering race that dropped the decryption job
-  and fell through to the dracut emergency shell (Before= root-device/sysroot,
-  drop After=ignition-disks.service).
+* Thu Aug 13 2026 Mayank Singh <mayansingh@microsoft.com> - 0.0.38-3
+- decrypt-root: run after Ignition disk provisioning and before initramfs waits
+  for the encrypted root device.
 
 * Tue May 06 2026 Lanze Liu <lanzeliu@microsoft.com> - 0.0.38-2
 - Update firstboot addon removal to use glob pattern for UAPI UKI naming
