@@ -1,6 +1,6 @@
 # containerd2 patch series
 
-Reference for the 30-patch series in the active spec. Engineering rationale,
+Reference for the 31-patch series in the active spec. Engineering rationale,
 history, and triage notes live here so the `.spec` stays terse.
 
 ## Layout
@@ -8,7 +8,7 @@ history, and triage notes live here so the `.spec` stays terse.
 | # in spec | Origin | Purpose |
 |-----------|--------|---------|
 | Patch0-7  | AzureLinux 3.0-dev baseline | 8 carry-patches verbatim from microsoft/azurelinux@origin/3.0-dev:SPECS/containerd2 at commit 5a4864f9 (containerd2-2.2.4-2). |
-| Patch8    | dm-verity baseline | Upstream `add-signature-support` (aadagarwal). Split off by author so it can be dropped once it merges into azurelinux, leaving Patch9-29 unchanged. |
+| Patch8    | dm-verity baseline | Upstream `add-signature-support` (aadagarwal). Split off by author so it can be dropped once it merges into azurelinux, leaving Patch9-30 unchanged. |
 | Patch9    | ACL integration | Derives referrer discovery and snapshotter-side formatting from the erofs differ's capability, and adds the ACL entry points. Leaves Patch8's defaults untouched. |
 | Patch10   | precomputed artifacts | Consumes signed precomputed EROFS/Merkle bundles and selects the newest. |
 | Patch11   | EROFS SELinux sharing | Makes every consumer of an EROFS layer request one synthesised `context=`, so a layer can be mounted by more than one container. Independent of dm-verity; touches only upstream code. |
@@ -16,7 +16,7 @@ history, and triage notes live here so the `.spec` stays terse.
 | Patch13   | dm-verity mount lock  | Widens the dm-verity mutex from "guard the create" to "guard the mount lifecycle", closing a window in which a mapper could be removed between another container's verify and its `mount(2)`. |
 | Patch14   | test compatibility | Updates the existing dm-verity snapshot test for Patch12's mount-handler constructor argument so the RPM `%check` phase compiles. No runtime behavior changes. |
 | Patch15   | deferred signed unpack | Retains the selected signed EROFS referrer graph for fetch-only and non-capable unpack paths, including overlayfs, and reconstructs it during first-use EROFS unpack with fail-closed applier enforcement. |
-| Patch16   | signed tar-index replacement | Replaces full precomputed EROFS blobs with compact signed tar indexes and Merkle trees, then reconstructs and verifies the EROFS data device from the OCI tar stream. |
+| Patch16   | compact signed EROFS metadata | Replaces full precomputed EROFS blobs with compact metadata produced by tar-index mode and Merkle trees, then reconstructs and verifies the EROFS data device from the OCI tar stream. |
 | Patch17   | multi-snapshotter cache refresh | Refreshes the CRI image cache after a same-image unpack so its snapshotter set follows authoritative content labels and cached sandbox images are not pulled again. |
 | Patch18   | signed-metadata activation policy | Uses dm-verity only for layers carrying validated signature and root-hash metadata, persists that policy across ChainID reuse, validates concrete differ/snapshotter capability pairs, and preserves legacy unsigned upgrade compatibility. |
 | Patch19   | supplemental-group cache | Resolves image-defined supplemental groups from an immutable committed ChainID view and caches successful results in a bounded CRI LRU keyed by snapshotter, ChainID, user, and primary GID. |
@@ -30,6 +30,7 @@ history, and triage notes live here so the `.spec` stays terse.
 | Patch27   | bounded referrers pagination | Follows same-origin OCI referrers pages with page, descriptor, byte, loop, endpoint, and retry guards. |
 | Patch28   | signed import hardening | Bounds dm-verity candidates and artifacts, strips alternative URLs, minimizes retained candidate memory, and directly persists validated inline content. |
 | Patch29   | module-loading contract | Documents that the host must load `erofs` and `dm_verity` before containerd starts; the daemon does not invoke `modprobe`. |
+| Patch30   | public schema naming | Renames the referrer artifact type, auxiliary EROFS metadata media type, and propagated descriptor label so registry-facing names describe signed dm-verity materialization instead of the tar-index implementation. |
 
 ## Source of truth
 
@@ -70,6 +71,7 @@ v2.2.4  193637f7ee8ae5f5aa5248f49e7baa3e6164966e   ( == %define commit_hash )
                                                           └─ ee61c6c34  remotes: follow bounded referrers pagination
                                                               └─ e33165d6c  erofs: harden signed referrer imports
                                                                   └─ ccb7127f4  erofs: document dm-verity module loading
+                                                                      └─ 588e04f19  erofs: name signed metadata schema semantically
 ```
 
 Patch0-15 live on `dadelan/acl-erofs`. Patch16 is the exact child commit
@@ -80,8 +82,8 @@ is intentionally pinned by exact SHA while it remains an isolated replacement
 prototype. Patch17 is its exact child commit `38aa4465f` on
 `dadelan/erofs-latency-cache-fix`. Patches18-20 are exact consecutive commits
 `b11cdce43`, `5ca7d24b3`, and `2d654689a` on
-`dadelan/erofs-referrer-gated-performance`. Patches21-29 are the exact
-consecutive commits from `6b333038e` through `ccb7127f4` on
+`dadelan/erofs-referrer-gated-performance`. Patches21-30 are the exact
+consecutive commits from `6b333038e` through `588e04f19` on
 `dadelan/erofs-inline-signature-validation`.
 
 The platform tag does matter, and it has gone stale once: until 2026-08-04
@@ -120,6 +122,7 @@ reviewable commits while the spec keeps one cohesive patch.
 | *(isolated exact commit)* | `ee61c6c34` | Patch27 |
 | *(isolated exact commit)* | `e33165d6c` | Patch28 |
 | *(isolated exact commit)* | `ccb7127f4` | Patch29 |
+| *(isolated exact commit)* | `588e04f19` | Patch30 |
 
 containerd does **not** inspect IPE policy. Layer signatures are passed to the
 kernel whenever they are present and the feature is enabled; the kernel alone
@@ -155,7 +158,7 @@ Split **by author** along the clean commit boundary
 
 The split is deliberately along the author boundary (not by feature) so that
 when `add-signature-support` lands in azurelinux upstream, **Patch8 is simply
-dropped and Patch9-29 apply unchanged** on top of the upstream base. Feature
+dropped and Patch9-30 apply unchanged** on top of the upstream base. Feature
 grouping is applied *within* the ACL patches, where it does not fight this.
 
 Patch8 covers: dm-verity layer formatting, OCI referrer signing, per-layer
@@ -420,12 +423,12 @@ valid and IPE remains the enforcement authority. The generic diff service also
 requires the capable EROFS differ to be first for an annotated EROFS mount;
 ordinary overlay mounts continue to fall through to walking unchanged.
 
-## Patch16 — replace full EROFS blobs with signed tar indexes
+## Patch16 — replace full EROFS blobs with compact signed EROFS metadata
 
 Patch16 replaces Patch10's full precomputed EROFS payload with a compact
-replacement-only artifact containing one EROFS tar index, Merkle tree, and
-PKCS#7 root-hash signature per source layer. The differ reconstructs the exact
-data device as:
+replacement-only artifact containing EROFS metadata produced by tar-index
+mode, a Merkle tree, and a PKCS#7 root-hash signature per source layer. The
+differ reconstructs the exact data device as:
 
 ```
 [512-byte-aligned EROFS tar index][decompressed OCI tar][zero padding to 4096]
@@ -526,8 +529,8 @@ failure.
 Immediate EROFS unpack used to consume the selected bundle transiently and drop
 its graph. Patch22 retains that same selected graph after a successful unpack,
 so a later image update, cache refresh, or deferred materialization remains
-independent of registry availability. Retention still roots only the selected
-manifest and its reachable config/signature/tar-index/Merkle content.
+independent of registry availability. Retention still roots only the selected manifest and its reachable
+config/signature/EROFS-metadata/Merkle content.
 
 ## Patch23 — bind signed snapshots to recorded materialization
 
@@ -588,12 +591,12 @@ unbounded response.
 
 Patch28 bounds the dm-verity-specific work left after generic pagination:
 64 matching bundles, 16 MiB of aggregate candidate manifests, 4 MiB per
-manifest/config/signature, and 16 GiB per tar-index or Merkle artifact. The scan
+manifest/config/signature, and 16 GiB per EROFS metadata or Merkle artifact. The scan
 keeps only the newest valid candidate in memory while still parsing every
 matching older bundle so malformed signed metadata cannot be hidden behind a
 newer entry.
 
-All custom manifest, config, signature, tar-index, and Merkle descriptors have
+All custom manifest, config, signature, EROFS metadata, and Merkle descriptors have
 OCI alternative `URLs` removed before fetch. The privileged daemon therefore
 retrieves artifact content by digest through the selected repository rather
 than following registry-supplied URLs to unrelated HTTP origins. Validated
@@ -607,6 +610,20 @@ Patch29 makes the host contract explicit in code and user documentation:
 modular `erofs` and `dm_verity` support must be loaded before containerd starts.
 The ACL package already enforces this ordering through
 `90-acl-profile.conf` and its `modprobe@` dependencies.
+
+## Patch30 — name the public signed metadata schema semantically
+
+Patch30 changes the referrer artifact type to
+`application/vnd.containerd.erofs.dmverity.v1`, the auxiliary metadata media
+type to `application/vnd.containerd.erofs.metadata.v1`, and the propagated
+descriptor label to `containerd.io/dmverity/erofs-metadata-descriptor`.
+Containerd's public constants, descriptor model, diagnostics, tests, and EROFS
+documentation use metadata terminology, while internal tar-index generation
+and reconstruction names remain unchanged where they describe the actual
+`mkfs.erofs --tar=i` algorithm.
+
+This is a coordinated breaking schema rename with no legacy aliases or
+dual-read path. Producers must publish all three new identifiers together.
 
 ## Regeneration procedure
 
@@ -637,6 +654,7 @@ KERNELCAP=$(git rev-parse f02422d42492523c31c32bb7fda419bcaa0ff275)
 PAGINATION=$(git rev-parse ee61c6c3444e134baa66a1fb2ee4c70805b67b51)
 IMPORTHARDEN=$(git rev-parse e33165d6c90595e221ec5ea39413f1002040907c)
 MODULEDOC=$(git rev-parse ccb7127f41443353bae30d51a36b5810fcff5d9f)
+SCHEMA=$(git rev-parse 588e04f1977e028e776b6072cbd68d4dd1ffb350)
 
 git diff $BASE   $AADHAR  # -> Patch8   (prepend the From:/Subject: header)
 git diff $AADHAR $INT     # -> Patch9
@@ -660,14 +678,15 @@ git format-patch -1 --stdout --no-signature $KERNELCAP # -> Patch26
 git format-patch -1 --stdout --no-signature $PAGINATION # -> Patch27
 git format-patch -1 --stdout --no-signature $IMPORTHARDEN # -> Patch28
 git format-patch -1 --stdout --no-signature $MODULEDOC # -> Patch29
+git format-patch -1 --stdout --no-signature $SCHEMA # -> Patch30
 ```
 
 Grouped boundaries are the **last** commit carrying their group trailer, so the
 groups must stay contiguous and in patch order on the branch. Patch12,
 Patch15's original `e670c411f` commit, Patch16's `20fcf6669` commit, and
 Patch17's `38aa4465f` commit remain fixed points in the series; Patch15's
-grouped boundary must descend from its original commit, and Patches16-29 must
-remain consecutive exact commits through `ccb7127f4`.
+grouped boundary must descend from its original commit, and Patches16-30 must
+remain consecutive exact commits through `588e04f19`.
 
 Each exported file keeps a `From:`/`Subject:` header plus a body listing the
 commits it squashes, so a reviewer can always get back to the individual
@@ -679,9 +698,9 @@ commits. `patch -p1` ignores the header, exactly as it does for a
 Run all six after regenerating. The first is the one that matters most: it is
 what proves the patch files and the branch have not diverged.
 
-1. **Tree equality.** Apply Patch0-29 to the pristine `Source0` tarball with
+1. **Tree equality.** Apply Patch0-30 to the pristine `Source0` tarball with
    `patch -p1 --fuzz=0 --no-backup-if-mismatch` (what `%autosetup -p1` does)
-   and `diff -r` the result against a worktree at exact commit `ccb7127f4`
+   and `diff -r` the result against a worktree at exact commit `588e04f19`
    (`dadelan/erofs-inline-signature-validation`). Must be **identical**.
 2. **Cross-compile.** Compile the affected packages for Linux/ARM64,
    Windows/AMD64, Darwin/AMD64, and FreeBSD/AMD64. Exclude

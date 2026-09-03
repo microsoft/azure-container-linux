@@ -21,14 +21,14 @@ Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 # Tracks the AzureLinux 3.0-dev containerd2 baseline at Version 2.2.4.
 Version: 2.2.4
-# This test branch carries the complete signed tar-index and referrer-hardening
+# This test branch carries the complete signed EROFS metadata and referrer-hardening
 # stack but uses the isolated 9000.mirrortest release band so its forced MCR
 # mirror cannot collide with the PR-ready 6xxx package stream. No .commit_hash
 # tag is needed because the upstream release tag is immutable.
 # IMPORTANT: any future official AzureLinux containerd2-2.2.4-N release
 # will be considered OLDER than this; bump Epoch or pin to a higher Version
 # if you ever need to deprecate this stream.
-Release: 9008.mirrortest%{?dist}
+Release: 9009.mirrortest%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -90,9 +90,9 @@ Source10: mcr-mirror-hosts.toml
 #           non-capable unpack paths, including overlayfs, then reconstruct it
 #           during deferred first-use EROFS unpack. Capability and applier
 #           checks fail closed before signed EROFS layers reach a walking differ.
-# Patch16:  Replace full precomputed EROFS blobs with signed tar indexes and
-#           Merkle trees. Reconstruct the exact EROFS data device from the
-#           decompressed OCI tar stream and verify it before use.
+# Patch16:  Replace full precomputed EROFS blobs with compact metadata generated
+#           by tar-index mode plus Merkle trees. Reconstruct the exact EROFS
+#           data device from the decompressed OCI tar stream and verify it.
 # Patch17:  Refresh the CRI image cache's authoritative snapshotter set after
 #           same-image unpack so cached sandbox images are not pulled again.
 # Patch18:  Gate dm-verity materialization on validated signed metadata, carry
@@ -120,6 +120,8 @@ Source10: mcr-mirror-hosts.toml
 #           repository-scoped, and persist validated inline content directly.
 # Patch29:  Document that loading erofs and dm_verity before containerd starts
 #           remains the host's responsibility.
+# Patch30:  Rename the registry-facing schema to signed EROFS dm-verity
+#           materialization and EROFS metadata terminology.
 #           See PATCHES.md for the author/commit provenance.
 # ============================================================================
 
@@ -179,6 +181,9 @@ Patch27: 0023-remotes-follow-bounded-referrers-pagination.patch
 Patch28: 0024-erofs-harden-signed-referrer-imports.patch
 # Keep kernel-module loading as an explicit host contract.
 Patch29: 0025-erofs-document-dmverity-module-loading.patch
+# Use semantic registry-facing names without exposing the tar-index
+# implementation detail.
+Patch30: 0026-erofs-name-signed-metadata-schema-semantically.patch
 
 %{?systemd_requires}
 
@@ -331,6 +336,11 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Thu Sep 03 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9009.mirrortest
+- Patch30 renames the registry-facing referrer artifact type, EROFS metadata
+  media type, and propagated descriptor label to describe signed dm-verity
+  materialization without exposing the mkfs.erofs tar-index implementation.
+
 * Wed Sep 02 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-9008.mirrortest
 - Patch21-25 harden retained signed materialization, preserve inline signature
   content, isolate canceled group lookups, and reconcile stale mapper state.

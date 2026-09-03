@@ -1,0 +1,624 @@
+From 588e04f1977e028e776b6072cbd68d4dd1ffb350 Mon Sep 17 00:00:00 2001
+From: Dallas Delaney <dadelan@microsoft.com>
+Date: Thu, 3 Sep 2026 17:13:46 +0000
+Subject: [PATCH] erofs: name signed metadata schema semantically
+
+Rename the registry-facing dm-verity referrer, EROFS metadata media type,
+and propagated descriptor label without changing tar-index implementation
+terminology.
+
+Signed-off-by: Dallas Delaney <dadelan@microsoft.com>
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
+---
+ docs/snapshotters/erofs.md                   |  4 +-
+ pkg/snapshotters/dmverity_policy.go          |  6 +-
+ pkg/snapshotters/signatures.go               | 56 ++++++++--------
+ pkg/snapshotters/signatures_test.go          | 70 +++++++++++---------
+ plugins/diff/erofs/differ_policy_test.go     |  6 +-
+ plugins/diff/erofs/precomputed.go            | 34 +++++-----
+ plugins/diff/erofs/precomputed_linux_test.go | 38 +++++------
+ plugins/services/diff/local.go               |  2 +-
+ 8 files changed, 112 insertions(+), 104 deletions(-)
+
+diff --git a/docs/snapshotters/erofs.md b/docs/snapshotters/erofs.md
+index 7138a9219..c592a94dd 100644
+--- a/docs/snapshotters/erofs.md
++++ b/docs/snapshotters/erofs.md
+@@ -205,7 +205,7 @@ metadata:
+ 
+ When dm-verity is enabled, layers carrying a valid signature and root-hash
+ annotation are materialized with dm-verity metadata. A precomputed referrer
+-supplies the EROFS tar index and Merkle tree; a signed layer without
++supplies EROFS metadata and a Merkle tree; a signed layer without
+ precomputed artifacts is formatted locally and its computed root hash must
+ match the signed value. Unsigned layers remain ordinary EROFS unless
+ `require_signatures` rejects them.
+@@ -363,7 +363,7 @@ Instead of extracting the entire tar archive to create an EROFS filesystem, the
+ 2. Appends the original tar content to the index
+ 3. Creates a combined file: `[Tar index][Original tar content]`
+ 
+-The tar index can be stored in a registry alongside image layers, allowing nodes to fetch it directly when needed. Typically, the tar index is much smaller than a full EROFS blob, making it more efficient to store and transfer. If the tar index is not available in the registry, it can be generated on the node as a fallback. When integrating with dm-verity, the registry can also store the dm-verity Merkle tree and root hash signature together with the tar index, enabling nodes to retrieve all necessary artifacts without redundant computation.
++The EROFS metadata produced by tar-index mode can be stored in a registry alongside image layers, allowing nodes to fetch it directly when needed. Typically, this metadata is much smaller than a full EROFS blob, making it more efficient to store and transfer. If the metadata is not available in the registry, it can be generated on the node as a fallback. When integrating with dm-verity, the registry can also store the dm-verity Merkle tree and root hash signature together with the EROFS metadata, enabling nodes to retrieve all necessary artifacts without redundant computation.
+ 
+ In addition, we have a tar diffID for each layer according to the OCI image spec, so we don't need to reinvent a new way to verify the image layer content for confidential containers but just calculate the sha256 of the original tar data (because erofs could just reuse the tar data with 512-byte fs block size and build a minimal index for direct mounting of tar) out of the tar index mode in the guest and compare it with each diffID.
+ 
+diff --git a/pkg/snapshotters/dmverity_policy.go b/pkg/snapshotters/dmverity_policy.go
+index 0c078e169..e838ed722 100644
+--- a/pkg/snapshotters/dmverity_policy.go
++++ b/pkg/snapshotters/dmverity_policy.go
+@@ -42,7 +42,7 @@ const (
+ func DmveritySnapshotLabels(desc ocispec.Descriptor, requireSignature bool) (map[string]string, error) {
+ 	signature := desc.Annotations[TargetLayerSignatureLabel]
+ 	rootHash := desc.Annotations[TargetLayerRootHashLabel]
+-	tarIndex := desc.Annotations[TargetLayerTarIndexDescriptorLabel]
++	erofsMetadata := desc.Annotations[TargetLayerEROFSMetadataDescriptorLabel]
+ 	merkleTree := desc.Annotations[TargetLayerMerkleTreeDescriptorLabel]
+ 
+ 	labels := map[string]string{
+@@ -50,7 +50,7 @@ func DmveritySnapshotLabels(desc ocispec.Descriptor, requireSignature bool) (map
+ 		DmverityMaterializationStateLabel:   DmverityMaterializationStatePlain,
+ 	}
+ 	if signature == "" {
+-		if rootHash != "" || tarIndex != "" || merkleTree != "" {
++		if rootHash != "" || erofsMetadata != "" || merkleTree != "" {
+ 			return nil, fmt.Errorf("layer %s has dm-verity metadata without a signature", desc.Digest)
+ 		}
+ 		if requireSignature {
+@@ -65,7 +65,7 @@ func DmveritySnapshotLabels(desc ocispec.Descriptor, requireSignature bool) (map
+ 	if err != nil || len(rootHashBytes) != sha256.Size {
+ 		return nil, fmt.Errorf("layer %s has invalid SHA-256 dm-verity root hash %q", desc.Digest, rootHash)
+ 	}
+-	if (tarIndex == "") != (merkleTree == "") {
++	if (erofsMetadata == "") != (merkleTree == "") {
+ 		return nil, fmt.Errorf("layer %s has incomplete precomputed dm-verity artifacts", desc.Digest)
+ 	}
+ 	signatureBytes, err := base64.StdEncoding.DecodeString(signature)
+diff --git a/pkg/snapshotters/signatures.go b/pkg/snapshotters/signatures.go
+index c06cf9132..6d6ba19fa 100644
+--- a/pkg/snapshotters/signatures.go
++++ b/pkg/snapshotters/signatures.go
+@@ -52,8 +52,9 @@ const (
+ 	// Kept under the same "containerd.io/dmverity/" prefix as the signature for symmetry,
+ 	// so neither value is auto-promoted into snapshot labels.
+ 	TargetLayerRootHashLabel = "containerd.io/dmverity/layer-roothash"
+-	// TargetLayerTarIndexDescriptorLabel contains the JSON descriptor for a precomputed EROFS tar index.
+-	TargetLayerTarIndexDescriptorLabel = "containerd.io/dmverity/tar-index-descriptor"
++	// TargetLayerEROFSMetadataDescriptorLabel contains the JSON descriptor for
++	// precomputed EROFS metadata.
++	TargetLayerEROFSMetadataDescriptorLabel = "containerd.io/dmverity/erofs-metadata-descriptor"
+ 	// TargetLayerMerkleTreeDescriptorLabel contains the JSON descriptor for a precomputed Merkle-tree blob.
+ 	TargetLayerMerkleTreeDescriptorLabel = "containerd.io/dmverity/merkle-tree-descriptor"
+ 
+@@ -69,10 +70,10 @@ const (
+ 	precomputedSourceLayerAnnotation = "io.cncf.notary.dmverity.source-layer-digest"
+ 
+ 	// SignatureArtifactType is the artifact type for OCI referrers containing
+-	// dm-verity signatures, EROFS tar indexes, and Merkle trees.
+-	SignatureArtifactType = "application/vnd.cncf.notary.dmverity.tar-index.v1"
+-	// TarIndexArtifactMediaType identifies a precomputed EROFS tar index.
+-	TarIndexArtifactMediaType = "application/vnd.cncf.containerd.erofs.tar-index.v1"
++	// signed dm-verity materialization metadata for EROFS.
++	SignatureArtifactType = "application/vnd.containerd.erofs.dmverity.v1"
++	// EROFSMetadataArtifactMediaType identifies precomputed EROFS metadata.
++	EROFSMetadataArtifactMediaType = "application/vnd.containerd.erofs.metadata.v1"
+ 	// MerkleTreeArtifactMediaType identifies a separate dm-verity hash device.
+ 	MerkleTreeArtifactMediaType = "application/vnd.cncf.dmverity.merkle-tree.v1"
+ 	// LayerSignatureMediaType identifies a per-layer PKCS#7 root-hash signature.
+@@ -86,18 +87,19 @@ const (
+ 	// validated and discarded as the scan advances.
+ 	maxSignatureReferrers     = 64
+ 	maxSignatureManifestBytes = 4 * maxManifestSize
+-	// Tar indexes are normally small and Merkle trees are a fraction of their
+-	// data device. Keep a generous finite ceiling so a referrer cannot request
+-	// an effectively unbounded auxiliary blob.
++	// EROFS metadata blobs are normally small and Merkle trees are a fraction
++	// of their data device. Keep a generous finite ceiling so a referrer cannot
++	// request an effectively unbounded auxiliary blob.
+ 	maxPrecomputedArtifactSize = int64(16 << 30) // 16 GiB
+ )
+ 
+-// LayerSignatureInfo contains the signed tar-index artifacts for a layer.
++// LayerSignatureInfo contains signed dm-verity materialization metadata for an
++// EROFS layer.
+ type LayerSignatureInfo struct {
+-	RootHash   string
+-	Signature  string
+-	TarIndex   *ocispec.Descriptor
+-	MerkleTree *ocispec.Descriptor
++	RootHash      string
++	Signature     string
++	EROFSMetadata *ocispec.Descriptor
++	MerkleTree    *ocispec.Descriptor
+ }
+ 
+ type referrerWithManifest struct {
+@@ -237,7 +239,7 @@ func fetchSignatures(ctx context.Context, fetcher remotes.Fetcher, manifestDiges
+ 		"bundle":   selected.desc.Digest,
+ 		"manifest": manifestDigest,
+ 		"layers":   len(selectedInfos),
+-	}).Info("Using precomputed EROFS tar-index dm-verity bundle")
++	}).Info("Using signed EROFS dm-verity metadata bundle")
+ 	return selectedInfos, selectedArtifacts, selected, nil
+ }
+ 
+@@ -305,7 +307,7 @@ func parsePrecomputedBundle(manifest *ocispec.Manifest, imageLayers map[string]s
+ 			info.RootHash = rootHash
+ 			info.Signature = encodedSignature
+ 			artifactDescs = append(artifactDescs, *layer)
+-		case TarIndexArtifactMediaType, MerkleTreeArtifactMediaType:
++		case EROFSMetadataArtifactMediaType, MerkleTreeArtifactMediaType:
+ 			sourceDigest := layer.Annotations[precomputedSourceLayerAnnotation]
+ 			if sourceDigest == "" {
+ 				return nil, nil, fmt.Errorf("precomputed descriptor %s has invalid annotations", layer.Digest)
+@@ -315,11 +317,11 @@ func parsePrecomputedBundle(manifest *ocispec.Manifest, imageLayers map[string]s
+ 			}
+ 			info := getLayerInfo(infos, sourceDigest)
+ 			desc := *layer
+-			if layer.MediaType == TarIndexArtifactMediaType {
+-				if info.TarIndex != nil {
+-					return nil, nil, fmt.Errorf("duplicate EROFS tar-index descriptor for layer %s", sourceDigest)
++			if layer.MediaType == EROFSMetadataArtifactMediaType {
++				if info.EROFSMetadata != nil {
++					return nil, nil, fmt.Errorf("duplicate EROFS metadata descriptor for layer %s", sourceDigest)
+ 				}
+-				info.TarIndex = &desc
++				info.EROFSMetadata = &desc
+ 			} else {
+ 				if info.MerkleTree != nil {
+ 					return nil, nil, fmt.Errorf("duplicate Merkle-tree descriptor for layer %s", sourceDigest)
+@@ -335,7 +337,7 @@ func parsePrecomputedBundle(manifest *ocispec.Manifest, imageLayers map[string]s
+ 		if _, err := digest.Parse(sourceDigest); err != nil {
+ 			return nil, nil, fmt.Errorf("invalid source layer digest %q: %w", sourceDigest, err)
+ 		}
+-		if info.Signature == "" || info.RootHash == "" || info.TarIndex == nil || info.MerkleTree == nil {
++		if info.Signature == "" || info.RootHash == "" || info.EROFSMetadata == nil || info.MerkleTree == nil {
+ 			return nil, nil, fmt.Errorf("incomplete precomputed artifacts for layer %s", sourceDigest)
+ 		}
+ 	}
+@@ -359,9 +361,9 @@ func validatePrecomputedDescriptor(desc ocispec.Descriptor) error {
+ 	if err := validateBoundedDescriptor(desc, "precomputed descriptor", maxPrecomputedArtifactSize); err != nil {
+ 		return err
+ 	}
+-	if desc.MediaType == TarIndexArtifactMediaType && desc.Size%tarIndexAlignment != 0 {
++	if desc.MediaType == EROFSMetadataArtifactMediaType && desc.Size%tarIndexAlignment != 0 {
+ 		return fmt.Errorf(
+-			"EROFS tar-index descriptor %s has unaligned size %d",
++			"EROFS metadata descriptor %s has unaligned size %d",
+ 			desc.Digest,
+ 			desc.Size,
+ 		)
+@@ -452,7 +454,7 @@ func verifyDescriptorPayload(desc ocispec.Descriptor, payload []byte) error {
+ }
+ 
+ // AppendSignatureHandlerWrapper creates a handler that fetches signatures and
+-// precomputed EROFS tar-index artifacts when processing an image manifest.
++// precomputed EROFS metadata artifacts when processing an image manifest.
+ func AppendSignatureHandlerWrapper(fetcher remotes.Fetcher) func(f images.Handler) images.Handler {
+ 	return func(f images.Handler) images.Handler {
+ 		return signatureHandler(f, fetcher, nil, false)
+@@ -597,8 +599,8 @@ func signatureHandler(f images.Handler, fetcher remotes.Fetcher, store content.S
+ 			}
+ 			child.Annotations[TargetLayerSignatureLabel] = info.Signature
+ 			child.Annotations[TargetLayerRootHashLabel] = info.RootHash
+-			if info.TarIndex != nil && info.MerkleTree != nil {
+-				indexDesc, err := json.Marshal(info.TarIndex)
++			if info.EROFSMetadata != nil && info.MerkleTree != nil {
++				metadataDesc, err := json.Marshal(info.EROFSMetadata)
+ 				if err != nil {
+ 					return nil, err
+ 				}
+@@ -606,7 +608,7 @@ func signatureHandler(f images.Handler, fetcher remotes.Fetcher, store content.S
+ 				if err != nil {
+ 					return nil, err
+ 				}
+-				child.Annotations[TargetLayerTarIndexDescriptorLabel] = string(indexDesc)
++				child.Annotations[TargetLayerEROFSMetadataDescriptorLabel] = string(metadataDesc)
+ 				child.Annotations[TargetLayerMerkleTreeDescriptorLabel] = string(treeDesc)
+ 			}
+ 		}
+diff --git a/pkg/snapshotters/signatures_test.go b/pkg/snapshotters/signatures_test.go
+index 00c24eb7e..4b44075b3 100644
+--- a/pkg/snapshotters/signatures_test.go
++++ b/pkg/snapshotters/signatures_test.go
+@@ -49,6 +49,12 @@ var (
+ 	testRootHashB = digest.FromString("test root hash B").Encoded()
+ )
+ 
++func TestDmverityArtifactSchema(t *testing.T) {
++	assert.Equal(t, "application/vnd.containerd.erofs.dmverity.v1", SignatureArtifactType)
++	assert.Equal(t, "application/vnd.containerd.erofs.metadata.v1", EROFSMetadataArtifactMediaType)
++	assert.Equal(t, "containerd.io/dmverity/erofs-metadata-descriptor", TargetLayerEROFSMetadataDescriptorLabel)
++}
++
+ func (f *artifactFetcher) Fetch(_ context.Context, desc ocispec.Descriptor) (io.ReadCloser, error) {
+ 	if f.rejectExternalURLs && len(desc.URLs) > 0 {
+ 		return nil, errors.New("external descriptor URL was not removed")
+@@ -91,17 +97,17 @@ func TestSignatureHandlerPrecomputedBundle(t *testing.T) {
+ 		sigLayerRootHashAnnotation:  testRootHashA,
+ 		sigLayerSignatureAnnotation: base64.StdEncoding.EncodeToString(signatureBytes),
+ 	}
+-	indexBytes := make([]byte, tarIndexAlignment)
+-	copy(indexBytes, "precomputed tar index")
+-	indexDesc := descriptorFor(indexBytes, TarIndexArtifactMediaType)
+-	indexDesc.Annotations = precomputedAnnotations(sourceLayer.Digest.String())
++	metadataBytes := make([]byte, tarIndexAlignment)
++	copy(metadataBytes, "precomputed EROFS metadata")
++	metadataDesc := descriptorFor(metadataBytes, EROFSMetadataArtifactMediaType)
++	metadataDesc.Annotations = precomputedAnnotations(sourceLayer.Digest.String())
+ 	treeDesc := descriptorFor([]byte("precomputed tree"), MerkleTreeArtifactMediaType)
+ 	treeDesc.Annotations = precomputedAnnotations(sourceLayer.Digest.String())
+ 	bundle := ocispec.Manifest{
+ 		MediaType:    ocispec.MediaTypeImageManifest,
+ 		ArtifactType: SignatureArtifactType,
+ 		Subject:      &sourceManifest,
+-		Layers:       []ocispec.Descriptor{signatureDesc, indexDesc, treeDesc},
++		Layers:       []ocispec.Descriptor{signatureDesc, metadataDesc, treeDesc},
+ 	}
+ 	bundleBytes, err := json.Marshal(bundle)
+ 	require.NoError(t, err)
+@@ -110,9 +116,9 @@ func TestSignatureHandlerPrecomputedBundle(t *testing.T) {
+ 
+ 	fetcher := &artifactFetcher{
+ 		blobs: map[digest.Digest][]byte{
+-			bundleDesc.Digest: bundleBytes,
+-			indexDesc.Digest:  indexBytes,
+-			treeDesc.Digest:   []byte("precomputed tree"),
++			bundleDesc.Digest:   bundleBytes,
++			metadataDesc.Digest: metadataBytes,
++			treeDesc.Digest:     []byte("precomputed tree"),
+ 		},
+ 		refs: map[digest.Digest][]ocispec.Descriptor{
+ 			sourceManifest.Digest: {bundleDesc},
+@@ -140,14 +146,14 @@ func TestSignatureHandlerPrecomputedBundle(t *testing.T) {
+ 	assert.Equal(t, testRootHashA, layer.Annotations[TargetLayerRootHashLabel])
+ 	assert.Equal(t, base64.StdEncoding.EncodeToString(signatureBytes), layer.Annotations[TargetLayerSignatureLabel])
+ 
+-	gotIndex, err := ParseTargetDescriptor(layer.Annotations[TargetLayerTarIndexDescriptorLabel])
++	gotMetadata, err := ParseTargetDescriptor(layer.Annotations[TargetLayerEROFSMetadataDescriptorLabel])
+ 	require.NoError(t, err)
+-	assert.Equal(t, indexDesc.Digest, gotIndex.Digest)
++	assert.Equal(t, metadataDesc.Digest, gotMetadata.Digest)
+ 	gotTree, err := ParseTargetDescriptor(layer.Annotations[TargetLayerMerkleTreeDescriptorLabel])
+ 	require.NoError(t, err)
+ 	assert.Equal(t, treeDesc.Digest, gotTree.Digest)
+ 	assert.Equal(t, layer.Annotations, children[2].Annotations)
+-	assert.ElementsMatch(t, []digest.Digest{signatureDesc.Digest, indexDesc.Digest, treeDesc.Digest}, fetched)
++	assert.ElementsMatch(t, []digest.Digest{signatureDesc.Digest, metadataDesc.Digest, treeDesc.Digest}, fetched)
+ 	assert.Equal(t, signatureBytes, inlineSignature)
+ }
+ 
+@@ -269,7 +275,7 @@ func TestSignatureHandlerPersistsBundleForDeferredUnpack(t *testing.T) {
+ 	require.NoError(t, err)
+ 	require.Len(t, deferredChildren, 2)
+ 	assert.Equal(t, testRootHashA, deferredChildren[1].Annotations[TargetLayerRootHashLabel])
+-	assert.NotEmpty(t, deferredChildren[1].Annotations[TargetLayerTarIndexDescriptorLabel])
++	assert.NotEmpty(t, deferredChildren[1].Annotations[TargetLayerEROFSMetadataDescriptorLabel])
+ 
+ 	annotations, err := CachedSignatureAnnotations(ctx, cs, sourceManifest)
+ 	require.NoError(t, err)
+@@ -367,7 +373,7 @@ func TestPersistSignatureReferrerRejectsMissingArtifactContent(t *testing.T) {
+ 	ctx := context.Background()
+ 	subjectBytes := []byte("subject manifest")
+ 	subject := descriptorFor(subjectBytes, ocispec.MediaTypeImageManifest)
+-	layer := descriptorFor([]byte("missing artifact layer"), TarIndexArtifactMediaType)
++	layer := descriptorFor([]byte("missing artifact layer"), EROFSMetadataArtifactMediaType)
+ 	manifest := ocispec.Manifest{
+ 		MediaType:    ocispec.MediaTypeImageManifest,
+ 		ArtifactType: SignatureArtifactType,
+@@ -447,8 +453,8 @@ func TestSignatureHandlerRejectsInvalidPrecomputedBundle(t *testing.T) {
+ 		ArtifactType: SignatureArtifactType,
+ 		Subject:      &sourceManifest,
+ 		Layers: []ocispec.Descriptor{{
+-			MediaType:   TarIndexArtifactMediaType,
+-			Digest:      digest.FromString("orphan tar index"),
++			MediaType:   EROFSMetadataArtifactMediaType,
++			Digest:      digest.FromString("orphan EROFS metadata"),
+ 			Size:        tarIndexAlignment,
+ 			Annotations: precomputedAnnotations(digest.FromString("source layer").String()),
+ 		}},
+@@ -495,7 +501,7 @@ func TestFetchSignaturesSelectsNewestPrecomputedBundle(t *testing.T) {
+ 	assert.Equal(t, testRootHashB, signatures[sourceLayer.Digest.String()].RootHash)
+ 	expectedSignature := newer.signature
+ 	expectedSignature.Data = newer.blobs[newer.signature.Digest]
+-	assert.ElementsMatch(t, []ocispec.Descriptor{expectedSignature, newer.tarIndex, newer.tree}, artifacts)
++	assert.ElementsMatch(t, []ocispec.Descriptor{expectedSignature, newer.erofsMetadata, newer.tree}, artifacts)
+ 	require.NotNil(t, selected)
+ 	assert.Equal(t, newer.descriptor.Digest, selected.desc.Digest)
+ }
+@@ -677,7 +683,7 @@ func TestFetchSignaturesRejectsMalformedOlderPrecomputedBundle(t *testing.T) {
+ 	var olderManifest ocispec.Manifest
+ 	require.NoError(t, json.Unmarshal(older.blobs[older.descriptor.Digest], &olderManifest))
+ 	for i := range olderManifest.Layers {
+-		if olderManifest.Layers[i].MediaType == TarIndexArtifactMediaType {
++		if olderManifest.Layers[i].MediaType == EROFSMetadataArtifactMediaType {
+ 			olderManifest.Layers[i].Size++
+ 		}
+ 	}
+@@ -910,11 +916,11 @@ func TestFetchSignaturesRejectsOversizedArtifactConfig(t *testing.T) {
+ }
+ 
+ type precomputedBundleFixture struct {
+-	descriptor ocispec.Descriptor
+-	signature  ocispec.Descriptor
+-	tarIndex   ocispec.Descriptor
+-	tree       ocispec.Descriptor
+-	blobs      map[digest.Digest][]byte
++	descriptor    ocispec.Descriptor
++	signature     ocispec.Descriptor
++	erofsMetadata ocispec.Descriptor
++	tree          ocispec.Descriptor
++	blobs         map[digest.Digest][]byte
+ }
+ 
+ func newPrecomputedBundle(
+@@ -934,10 +940,10 @@ func newPrecomputedBundle(
+ 		sigLayerRootHashAnnotation:  rootHash,
+ 		sigLayerSignatureAnnotation: base64.StdEncoding.EncodeToString(signatureBytes),
+ 	}
+-	indexBytes := make([]byte, tarIndexAlignment)
+-	copy(indexBytes, "tar-index-"+name)
+-	indexDesc := descriptorFor(indexBytes, TarIndexArtifactMediaType)
+-	indexDesc.Annotations = precomputedAnnotations(sourceLayer.Digest.String())
++	metadataBytes := make([]byte, tarIndexAlignment)
++	copy(metadataBytes, "erofs-metadata-"+name)
++	metadataDesc := descriptorFor(metadataBytes, EROFSMetadataArtifactMediaType)
++	metadataDesc.Annotations = precomputedAnnotations(sourceLayer.Digest.String())
+ 	treeBytes := []byte("tree-" + name)
+ 	treeDesc := descriptorFor(treeBytes, MerkleTreeArtifactMediaType)
+ 	treeDesc.Annotations = precomputedAnnotations(sourceLayer.Digest.String())
+@@ -949,7 +955,7 @@ func newPrecomputedBundle(
+ 		ArtifactType: SignatureArtifactType,
+ 		Subject:      &subject,
+ 		Config:       configDesc,
+-		Layers:       []ocispec.Descriptor{signatureDesc, indexDesc, treeDesc},
++		Layers:       []ocispec.Descriptor{signatureDesc, metadataDesc, treeDesc},
+ 		Annotations: map[string]string{
+ 			ociAnnotationCreated: createdAt.Format(time.RFC3339),
+ 		},
+@@ -960,15 +966,15 @@ func newPrecomputedBundle(
+ 	manifestDesc.ArtifactType = SignatureArtifactType
+ 
+ 	return precomputedBundleFixture{
+-		descriptor: manifestDesc,
+-		signature:  signatureDesc,
+-		tarIndex:   indexDesc,
+-		tree:       treeDesc,
++		descriptor:    manifestDesc,
++		signature:     signatureDesc,
++		erofsMetadata: metadataDesc,
++		tree:          treeDesc,
+ 		blobs: map[digest.Digest][]byte{
+ 			manifestDesc.Digest:  manifestBytes,
+ 			configDesc.Digest:    configBytes,
+ 			signatureDesc.Digest: signatureBytes,
+-			indexDesc.Digest:     indexBytes,
++			metadataDesc.Digest:  metadataBytes,
+ 			treeDesc.Digest:      treeBytes,
+ 		},
+ 	}
+diff --git a/plugins/diff/erofs/differ_policy_test.go b/plugins/diff/erofs/differ_policy_test.go
+index c5e908e6d..36fa7eb02 100644
+--- a/plugins/diff/erofs/differ_policy_test.go
++++ b/plugins/diff/erofs/differ_policy_test.go
+@@ -83,9 +83,9 @@ func TestDmverityForLayer(t *testing.T) {
+ 
+ 	t.Run("precomputed artifacts must be paired", func(t *testing.T) {
+ 		_, err := (erofsDiff{enableDmverity: true}).dmverityForLayer(layer(map[string]string{
+-			snpkg.TargetLayerSignatureLabel:          base64.StdEncoding.EncodeToString([]byte("signature")),
+-			snpkg.TargetLayerRootHashLabel:           digest.FromString("root").Hex(),
+-			snpkg.TargetLayerTarIndexDescriptorLabel: "{}",
++			snpkg.TargetLayerSignatureLabel:               base64.StdEncoding.EncodeToString([]byte("signature")),
++			snpkg.TargetLayerRootHashLabel:                digest.FromString("root").Hex(),
++			snpkg.TargetLayerEROFSMetadataDescriptorLabel: "{}",
+ 		}))
+ 		require.ErrorContains(t, err, "incomplete precomputed dm-verity artifacts")
+ 	})
+diff --git a/plugins/diff/erofs/precomputed.go b/plugins/diff/erofs/precomputed.go
+index 9d04ad172..9fbdf07a3 100644
+--- a/plugins/diff/erofs/precomputed.go
++++ b/plugins/diff/erofs/precomputed.go
+@@ -44,9 +44,9 @@ const (
+ )
+ 
+ func (s erofsDiff) applyPrecomputedArtifacts(ctx context.Context, sourceDesc ocispec.Descriptor, layerBlobPath string, sourceTar io.Reader) (bool, error) {
+-	indexValue := sourceDesc.Annotations[snpkg.TargetLayerTarIndexDescriptorLabel]
++	metadataValue := sourceDesc.Annotations[snpkg.TargetLayerEROFSMetadataDescriptorLabel]
+ 	treeValue := sourceDesc.Annotations[snpkg.TargetLayerMerkleTreeDescriptorLabel]
+-	if indexValue == "" && treeValue == "" {
++	if metadataValue == "" && treeValue == "" {
+ 		return false, nil
+ 	}
+ 	if !s.enableDmverity {
+@@ -58,21 +58,21 @@ func (s erofsDiff) applyPrecomputedArtifacts(ctx context.Context, sourceDesc oci
+ 			Debug("ignoring precomputed dm-verity artifacts: dm-verity is disabled")
+ 		return false, nil
+ 	}
+-	if indexValue == "" || treeValue == "" {
++	if metadataValue == "" || treeValue == "" {
+ 		return false, fmt.Errorf("incomplete precomputed artifact annotations for layer %s", sourceDesc.Digest)
+ 	}
+-	indexDesc, err := snpkg.ParseTargetDescriptor(indexValue)
++	metadataDesc, err := snpkg.ParseTargetDescriptor(metadataValue)
+ 	if err != nil {
+ 		return false, err
+ 	}
+-	if indexDesc.MediaType != snpkg.TarIndexArtifactMediaType {
+-		return false, fmt.Errorf("unexpected precomputed EROFS tar-index media type %q", indexDesc.MediaType)
++	if metadataDesc.MediaType != snpkg.EROFSMetadataArtifactMediaType {
++		return false, fmt.Errorf("unexpected precomputed EROFS metadata media type %q", metadataDesc.MediaType)
+ 	}
+-	if indexDesc.Size%tarIndexAlignment != 0 {
++	if metadataDesc.Size%tarIndexAlignment != 0 {
+ 		return false, fmt.Errorf(
+-			"precomputed EROFS tar index for layer %s has unaligned size %d",
++			"precomputed EROFS metadata for layer %s has unaligned size %d",
+ 			sourceDesc.Digest,
+-			indexDesc.Size,
++			metadataDesc.Size,
+ 		)
+ 	}
+ 	treeDesc, err := snpkg.ParseTargetDescriptor(treeValue)
+@@ -99,14 +99,14 @@ func (s erofsDiff) applyPrecomputedArtifacts(ctx context.Context, sourceDesc oci
+ 		os.Remove(dmverity.SignaturePath(layerBlobPath))
+ 	}()
+ 
+-	if err := copyContentDescriptor(ctx, s.store, indexDesc, layerBlobPath); err != nil {
+-		return false, fmt.Errorf("materialize precomputed EROFS tar index for layer %s: %w", sourceDesc.Digest, err)
++	if err := copyContentDescriptor(ctx, s.store, metadataDesc, layerBlobPath); err != nil {
++		return false, fmt.Errorf("materialize precomputed EROFS metadata for layer %s: %w", sourceDesc.Digest, err)
+ 	}
+ 	if err := appendTarPayload(layerBlobPath, sourceTar); err != nil {
+ 		return false, fmt.Errorf("append source tar for layer %s: %w", sourceDesc.Digest, err)
+ 	}
+ 	if err := verifyEROFSUUID(layerBlobPath, sourceDesc.Digest.String()); err != nil {
+-		return false, fmt.Errorf("verify precomputed EROFS tar-index source binding for layer %s: %w", sourceDesc.Digest, err)
++		return false, fmt.Errorf("verify precomputed EROFS metadata source binding for layer %s: %w", sourceDesc.Digest, err)
+ 	}
+ 	if err := copyContentDescriptor(ctx, s.store, treeDesc, hashDevicePath); err != nil {
+ 		return false, fmt.Errorf("materialize precomputed Merkle tree for layer %s: %w", sourceDesc.Digest, err)
+@@ -133,11 +133,11 @@ func (s erofsDiff) applyPrecomputedArtifacts(ctx context.Context, sourceDesc oci
+ 
+ 	cleanup = false
+ 	log.G(ctx).WithFields(log.Fields{
+-		"layer":       sourceDesc.Digest,
+-		"tar_index":   indexDesc.Digest,
+-		"merkle_tree": treeDesc.Digest,
+-		"root_hash":   rootHash,
+-	}).Info("Materialized verified precomputed EROFS tar-index dm-verity artifacts")
++		"layer":          sourceDesc.Digest,
++		"erofs_metadata": metadataDesc.Digest,
++		"merkle_tree":    treeDesc.Digest,
++		"root_hash":      rootHash,
++	}).Info("Materialized verified precomputed EROFS dm-verity artifacts")
+ 	return true, nil
+ }
+ 
+diff --git a/plugins/diff/erofs/precomputed_linux_test.go b/plugins/diff/erofs/precomputed_linux_test.go
+index 0a3ca0aa6..35ac82907 100644
+--- a/plugins/diff/erofs/precomputed_linux_test.go
++++ b/plugins/diff/erofs/precomputed_linux_test.go
+@@ -60,9 +60,9 @@ func TestApplyPrecomputedArtifacts(t *testing.T) {
+ 
+ 	cs, err := local.NewStore(t.TempDir())
+ 	require.NoError(t, err)
+-	indexDesc := writeTestBlob(t, ctx, cs, index, snapshotters.TarIndexArtifactMediaType)
++	metadataDesc := writeTestBlob(t, ctx, cs, index, snapshotters.EROFSMetadataArtifactMediaType)
+ 	treeDesc := writeTestBlob(t, ctx, cs, tree, snapshotters.MerkleTreeArtifactMediaType)
+-	sourceDesc := descriptorWithPrecomputedArtifacts(t, sourceDigest, indexDesc, treeDesc, rootHash)
++	sourceDesc := descriptorWithPrecomputedArtifacts(t, sourceDigest, metadataDesc, treeDesc, rootHash)
+ 
+ 	layerBlobPath := filepath.Join(t.TempDir(), "layer.erofs")
+ 	differ := erofsDiff{store: cs, enableDmverity: true}
+@@ -112,9 +112,9 @@ func TestApplyPrecomputedArtifactsRejectsWrongRootHash(t *testing.T) {
+ 
+ 	cs, err := local.NewStore(t.TempDir())
+ 	require.NoError(t, err)
+-	indexDesc := writeTestBlob(t, ctx, cs, index, snapshotters.TarIndexArtifactMediaType)
++	metadataDesc := writeTestBlob(t, ctx, cs, index, snapshotters.EROFSMetadataArtifactMediaType)
+ 	treeDesc := writeTestBlob(t, ctx, cs, tree, snapshotters.MerkleTreeArtifactMediaType)
+-	sourceDesc := descriptorWithPrecomputedArtifacts(t, sourceDigest, indexDesc, treeDesc, digest.FromString("wrong root").Hex())
++	sourceDesc := descriptorWithPrecomputedArtifacts(t, sourceDigest, metadataDesc, treeDesc, digest.FromString("wrong root").Hex())
+ 
+ 	layerBlobPath := filepath.Join(t.TempDir(), "layer.erofs")
+ 	differ := erofsDiff{store: cs, enableDmverity: true}
+@@ -146,12 +146,12 @@ func TestApplyPrecomputedArtifactsRejectsOverlongRootHash(t *testing.T) {
+ 
+ 	cs, err := local.NewStore(t.TempDir())
+ 	require.NoError(t, err)
+-	indexDesc := writeTestBlob(t, ctx, cs, index, snapshotters.TarIndexArtifactMediaType)
++	metadataDesc := writeTestBlob(t, ctx, cs, index, snapshotters.EROFSMetadataArtifactMediaType)
+ 	treeDesc := writeTestBlob(t, ctx, cs, tree, snapshotters.MerkleTreeArtifactMediaType)
+ 	sourceDesc := descriptorWithPrecomputedArtifacts(
+ 		t,
+ 		sourceDigest,
+-		indexDesc,
++		metadataDesc,
+ 		treeDesc,
+ 		rootHash+"00",
+ 	)
+@@ -198,9 +198,9 @@ func TestApplyPrecomputedArtifactsRejectsUnexpectedVerityBlockSize(t *testing.T)
+ 
+ 	cs, err := local.NewStore(t.TempDir())
+ 	require.NoError(t, err)
+-	indexDesc := writeTestBlob(t, ctx, cs, index, snapshotters.TarIndexArtifactMediaType)
++	metadataDesc := writeTestBlob(t, ctx, cs, index, snapshotters.EROFSMetadataArtifactMediaType)
+ 	treeDesc := writeTestBlob(t, ctx, cs, tree, snapshotters.MerkleTreeArtifactMediaType)
+-	sourceDesc := descriptorWithPrecomputedArtifacts(t, sourceDigest, indexDesc, treeDesc, rootHash)
++	sourceDesc := descriptorWithPrecomputedArtifacts(t, sourceDigest, metadataDesc, treeDesc, rootHash)
+ 
+ 	differ := erofsDiff{store: cs, enableDmverity: true}
+ 	_, err = differ.applyPrecomputedArtifacts(
+@@ -232,9 +232,9 @@ func TestApplyPrecomputedArtifactsRejectsTreeCoveringOnlyPrefix(t *testing.T) {
+ 
+ 	cs, err := local.NewStore(t.TempDir())
+ 	require.NoError(t, err)
+-	indexDesc := writeTestBlob(t, ctx, cs, index, snapshotters.TarIndexArtifactMediaType)
++	metadataDesc := writeTestBlob(t, ctx, cs, index, snapshotters.EROFSMetadataArtifactMediaType)
+ 	treeDesc := writeTestBlob(t, ctx, cs, tree, snapshotters.MerkleTreeArtifactMediaType)
+-	sourceDesc := descriptorWithPrecomputedArtifacts(t, sourceDigest, indexDesc, treeDesc, rootHash)
++	sourceDesc := descriptorWithPrecomputedArtifacts(t, sourceDigest, metadataDesc, treeDesc, rootHash)
+ 
+ 	differ := erofsDiff{store: cs, enableDmverity: true}
+ 	_, err = differ.applyPrecomputedArtifacts(
+@@ -266,9 +266,9 @@ func TestApplyPrecomputedArtifactsRejectsSourceLayerSubstitution(t *testing.T) {
+ 
+ 	cs, err := local.NewStore(t.TempDir())
+ 	require.NoError(t, err)
+-	indexDesc := writeTestBlob(t, ctx, cs, index, snapshotters.TarIndexArtifactMediaType)
++	metadataDesc := writeTestBlob(t, ctx, cs, index, snapshotters.EROFSMetadataArtifactMediaType)
+ 	treeDesc := writeTestBlob(t, ctx, cs, tree, snapshotters.MerkleTreeArtifactMediaType)
+-	sourceDesc := descriptorWithPrecomputedArtifacts(t, requestedSourceDigest, indexDesc, treeDesc, rootHash)
++	sourceDesc := descriptorWithPrecomputedArtifacts(t, requestedSourceDigest, metadataDesc, treeDesc, rootHash)
+ 
+ 	differ := erofsDiff{store: cs, enableDmverity: true}
+ 	_, err = differ.applyPrecomputedArtifacts(
+@@ -299,9 +299,9 @@ func TestApplyPrecomputedArtifactsRejectsModifiedSourceTar(t *testing.T) {
+ 
+ 	cs, err := local.NewStore(t.TempDir())
+ 	require.NoError(t, err)
+-	indexDesc := writeTestBlob(t, ctx, cs, index, snapshotters.TarIndexArtifactMediaType)
++	metadataDesc := writeTestBlob(t, ctx, cs, index, snapshotters.EROFSMetadataArtifactMediaType)
+ 	treeDesc := writeTestBlob(t, ctx, cs, tree, snapshotters.MerkleTreeArtifactMediaType)
+-	sourceDesc := descriptorWithPrecomputedArtifacts(t, sourceDigest, indexDesc, treeDesc, rootHash)
++	sourceDesc := descriptorWithPrecomputedArtifacts(t, sourceDigest, metadataDesc, treeDesc, rootHash)
+ 
+ 	layerBlobPath := filepath.Join(t.TempDir(), "layer.erofs")
+ 	differ := erofsDiff{store: cs, enableDmverity: true}
+@@ -327,18 +327,18 @@ func writeTestBlob(t *testing.T, ctx context.Context, cs content.Store, data []b
+ 	return desc
+ }
+ 
+-func descriptorWithPrecomputedArtifacts(t *testing.T, sourceDigest digest.Digest, indexDesc, treeDesc ocispec.Descriptor, rootHash string) ocispec.Descriptor {
++func descriptorWithPrecomputedArtifacts(t *testing.T, sourceDigest digest.Digest, metadataDesc, treeDesc ocispec.Descriptor, rootHash string) ocispec.Descriptor {
+ 	t.Helper()
+-	encodedIndexBytes, err := json.Marshal(indexDesc)
++	encodedMetadataBytes, err := json.Marshal(metadataDesc)
+ 	require.NoError(t, err)
+ 	encodedTreeBytes, err := json.Marshal(treeDesc)
+ 	require.NoError(t, err)
+ 	return ocispec.Descriptor{
+ 		Digest: sourceDigest,
+ 		Annotations: map[string]string{
+-			snapshotters.TargetLayerTarIndexDescriptorLabel:   string(encodedIndexBytes),
+-			snapshotters.TargetLayerMerkleTreeDescriptorLabel: string(encodedTreeBytes),
+-			snapshotters.TargetLayerRootHashLabel:             rootHash,
++			snapshotters.TargetLayerEROFSMetadataDescriptorLabel: string(encodedMetadataBytes),
++			snapshotters.TargetLayerMerkleTreeDescriptorLabel:    string(encodedTreeBytes),
++			snapshotters.TargetLayerRootHashLabel:                rootHash,
+ 		},
+ 	}
+ }
+diff --git a/plugins/services/diff/local.go b/plugins/services/diff/local.go
+index 77c107eeb..3e896c18e 100644
+--- a/plugins/services/diff/local.go
++++ b/plugins/services/diff/local.go
+@@ -194,7 +194,7 @@ func (l *local) Apply(ctx context.Context, er *diffapi.ApplyRequest, _ ...grpc.C
+ func (l *local) validateDmverityApply(desc ocispec.Descriptor, mounts []mount.Mount) error {
+ 	if desc.Annotations[snapshotters.TargetLayerSignatureLabel] == "" &&
+ 		desc.Annotations[snapshotters.TargetLayerRootHashLabel] == "" &&
+-		desc.Annotations[snapshotters.TargetLayerTarIndexDescriptorLabel] == "" &&
++		desc.Annotations[snapshotters.TargetLayerEROFSMetadataDescriptorLabel] == "" &&
+ 		desc.Annotations[snapshotters.TargetLayerMerkleTreeDescriptorLabel] == "" {
+ 		return nil
+ 	}
