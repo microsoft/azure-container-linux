@@ -56,8 +56,13 @@ if [[ -f "${rootfs}/usr/lib/systemd/system/chronyd.service" ]]; then
         's|^ExecStart=/usr/sbin/chronyd $OPTIONS$|ExecStart=/usr/sbin/chronyd -f /usr/lib/chrony/chrony.conf $OPTIONS|' \
         "${rootfs}/usr/lib/systemd/system/chronyd.service"
 
-    # Azure Linux 3.0 adds remove-daemon-state, but its chrony-helper does not
-    # implement that command. Preserve update-daemon for DHCP-provided sources.
+    # Azure Linux adds this command, but its chrony-helper does not implement it,
+    # leaving chronyd failed after a clean stop.
+    if ! grep -qE '^ExecStopPost=.*/chrony-helper remove-daemon-state$' \
+        "${rootfs}/usr/lib/systemd/system/chronyd.service"; then
+        echo "ERROR: expected chrony-helper remove-daemon-state line not found" >&2
+        exit 1
+    fi
     sed -i \
         '\|^ExecStopPost=.*/chrony-helper remove-daemon-state$|d' \
         "${rootfs}/usr/lib/systemd/system/chronyd.service"
@@ -73,17 +78,21 @@ if [[ -f "${script_dir}/chrony.conf" ]]; then
 fi
 
 # Generate the optional Hyper-V PTP source before chronyd starts.
-if [[ -f "${script_dir}/chrony-azure-ptp" ]]; then
-    install -D -m 0755 "${script_dir}/chrony-azure-ptp" \
-        "${rootfs}/usr/libexec/chrony-azure-ptp"
+if [[ ! -f "${script_dir}/chrony-azure-ptp" ]]; then
+    echo "ERROR: missing ${script_dir}/chrony-azure-ptp" >&2
+    exit 1
 fi
+install -D -m 0755 "${script_dir}/chrony-azure-ptp" \
+    "${rootfs}/usr/libexec/chrony-azure-ptp"
 
 # chronyd.service drop-in for optional Hyper-V PTP configuration.
-if [[ -f "${script_dir}/chrony-hyperv.conf" ]]; then
-    mkdir -p "${rootfs}/usr/lib/systemd/system/chronyd.service.d"
-    cp "${script_dir}/chrony-hyperv.conf" \
-       "${rootfs}/usr/lib/systemd/system/chronyd.service.d/"
+if [[ ! -f "${script_dir}/chrony-hyperv.conf" ]]; then
+    echo "ERROR: missing ${script_dir}/chrony-hyperv.conf" >&2
+    exit 1
 fi
+mkdir -p "${rootfs}/usr/lib/systemd/system/chronyd.service.d"
+cp "${script_dir}/chrony-hyperv.conf" \
+   "${rootfs}/usr/lib/systemd/system/chronyd.service.d/"
 
 # Chrony tmpfiles: /var/lib/chrony dir + /etc/chrony.keys copy-on-boot
 if [[ -f "${script_dir}/var-chrony.conf" ]]; then
