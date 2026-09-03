@@ -223,7 +223,7 @@ This table summarizes SELinux policy intent, not every individual permission.
 | Read and map persistent systemd journals | ❌ No | ✅ Yes | ❌ No | ❌ No | ⚠️ Unconfined on stock ACL |
 | Read auditd-managed `auditd_log_t` files | ❌ No | ✅ Yes | ❌ No | ❌ No | ⚠️ Unconfined on stock ACL |
 | Manage container runtime `/var/lib`, log, and Kubernetes plugin files | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ⚠️ Unconfined on stock ACL |
-| Connect to privileged-container stream sockets | ❌ No | ❌ No | ⚠️ Any reachable `spc_t` listener | ❌ No | ✅ Yes |
+| Connect to privileged-container stream sockets | ⚠️ `container_runtime_t` sockets only | ❌ No | ⚠️ Any reachable `spc_t` listener | ⚠️ `container_runtime_t` sockets only | ✅ Yes |
 | KVM-specific policy | ❌ No | ❌ No | ❌ No | ✅ Yes | ❌ No — broad privileged access instead |
 | Privileged-container policy class | ❌ No | ❌ No | ❌ No | ❌ No | ✅ Yes |
 | SELinux-unconfined on stock ACL | ❌ No | ❌ No | ❌ No | ❌ No | ✅ Yes |
