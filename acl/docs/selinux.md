@@ -79,9 +79,12 @@ It additionally receives read-only mmap access to persistent files labeled
 Inotify watch access applies only to `container_log_t`, not to every host log
 type.
 
-The domain is intentionally not assigned the `kubernetes_container_domain`
-attribute. That attribute includes management access to container runtime,
-log, and plugin files that a read-only collector does not require.
+Unlike `container_t`, `container_csi_sidecar_t`, `container_kvm_t`, and
+`spc_t`, this domain is intentionally not assigned the
+`kubernetes_container_domain` attribute. It therefore does not receive that
+attribute's management access to container runtime files under `/var/lib`,
+container logs, and Kubernetes plugin files, which a read-only collector does
+not require.
 
 The domain intentionally does not grant:
 
@@ -119,8 +122,15 @@ containers, such as a node-driver registrar or liveness probe, that must
 connect to a privileged CSI driver through a Unix stream socket. It extends
 the common container policy with the peer-domain `connectto` permission for
 `spc_t` and read-only access to sysfs and cgroup files used by the helper
-runtimes. It does not inherit the capabilities, write access, or unconfined
-attributes of `spc_t`.
+runtimes. It does not inherit the capabilities, general host access, or
+unconfined attributes of `spc_t`.
+
+The domain is assigned the `kubernetes_container_domain` attribute. It
+therefore receives management access to container runtime files under
+`/var/lib`, container logs, and Kubernetes plugin files in addition to the
+permissions described above. This is broader than `container_logreader_t` and
+is another reason to reserve the domain for trusted platform-managed CSI
+helpers.
 
 `spc_t` is shared by privileged system containers; it is not specific to CSI
 drivers. The permission therefore reaches any `spc_t` Unix stream listener for
@@ -129,6 +139,17 @@ socket-file access, and discretionary access. SELinux cannot express pod
 membership in this rule, so select this domain only for trusted
 platform-managed CSI helpers with narrowly mounted socket directories. Do not
 use it for application workloads.
+
+`spc_t` is also a Kubernetes container domain. Members of that attribute
+already have a narrower connection path to `spc_t` for sockets labeled
+`container_runtime_t`, such as runtime sockets under `/run`. The explicit
+peer-domain rule is needed for the current CSI sockets labeled
+`container_file_t` under `/var/lib/kubelet`; common container policy supplies
+the required directory and socket-file access to that label. If a driver
+instead exposes its socket through a path labeled `container_var_lib_t` or
+`kubernetes_plugin_t`, socket-file access can fail before the peer-domain
+`connectto` permission is evaluated. Validate the directory, socket-file, and
+peer labels during rollout.
 
 Runtime-assigned MCS categories do not narrow this connection because `spc_t`
 is not MCS constrained and its sockets normally use `s0`. MCS still constrains
@@ -201,6 +222,7 @@ This table summarizes SELinux policy intent, not every individual permission.
 | Read types carrying `logfile` | ❌ No | ✅ Yes | ❌ No | ❌ No | ⚠️ Unconfined on stock ACL |
 | Read and map persistent systemd journals | ❌ No | ✅ Yes | ❌ No | ❌ No | ⚠️ Unconfined on stock ACL |
 | Read auditd-managed `auditd_log_t` files | ❌ No | ✅ Yes | ❌ No | ❌ No | ⚠️ Unconfined on stock ACL |
+| Manage container runtime `/var/lib`, log, and Kubernetes plugin files | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ⚠️ Unconfined on stock ACL |
 | Connect to privileged-container stream sockets | ❌ No | ❌ No | ⚠️ Any reachable `spc_t` listener | ❌ No | ✅ Yes |
 | KVM-specific policy | ❌ No | ❌ No | ❌ No | ✅ Yes | ❌ No — broad privileged access instead |
 | Privileged-container policy class | ❌ No | ❌ No | ❌ No | ❌ No | ✅ Yes |
