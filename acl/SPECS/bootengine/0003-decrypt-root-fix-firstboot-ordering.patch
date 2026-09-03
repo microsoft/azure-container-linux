@@ -1,24 +1,25 @@
 From b5153c74f62233438a72710673c0e53e3e1af7de Mon Sep 17 00:00:00 2001
 From: Mayank Singh <mayansingh@microsoft.com>
-Date: Mon, 17 Aug 2026 00:00:00 +0000
-Subject: [PATCH] decrypt-root: fix first-boot ordering race
+Date: Thu, 13 Aug 2026 00:00:00 +0000
+Subject: [PATCH] decrypt-root: order unlock before root-device wait
 
-Decrypt ROOT before initramfs waits for or mounts it. Remove the
-ignition-disks ordering that creates a first-boot cycle and can drop the
-decryption job.
+Keep Ignition's disks stage ahead of root decryption because it can provision
+LUKS volumes, then decrypt ROOT before initramfs waits for the root device.
 ---
- dracut/31decrypt-root/decrypt-root.service | 5 ++++-
- 1 file changed, 4 insertions(+), 1 deletion(-)
+ dracut/31decrypt-root/decrypt-root.service | 2 ++
+ 1 file changed, 2 insertions(+)
 
 diff --git a/dracut/31decrypt-root/decrypt-root.service b/dracut/31decrypt-root/decrypt-root.service
-index 54f941a..7702f00 100644
+index 54f941a..226d3d3 100644
 --- a/dracut/31decrypt-root/decrypt-root.service
 +++ b/dracut/31decrypt-root/decrypt-root.service
-@@ -7 +7 @@
--After=systemd-networkd.service dev-disk-by\x2dpartlabel-ROOT.device ignition-disks.service
-+After=systemd-networkd.service dev-disk-by\x2dpartlabel-ROOT.device
-@@ -8,0 +9,3 @@
-+# Decrypt ROOT before initramfs waits for or mounts it.
-+Before=cryptsetup.target initrd-root-device.target sysroot.mount
-+# Avoid ignition-disks.service here; it creates a first-boot ordering cycle.
-
+@@ -4,5 +4,7 @@ Description=Generate and execute a systemd-cryptsetup service to decrypt the ROOT partition
+ DefaultDependencies=no
++# Decrypt ROOT before initramfs waits for it.
++Before=initrd-root-device.target
+ # If systemd-networkd.service is used in the initramfs, then we should run after it, since the ROOT partition
+ # might use network-bound encryption.
+ After=systemd-networkd.service dev-disk-by\x2dpartlabel-ROOT.device ignition-disks.service
+ Wants=dev-disk-by\x2dpartlabel-ROOT.device
+--
+2.43.0
