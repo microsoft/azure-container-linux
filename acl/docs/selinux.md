@@ -19,6 +19,7 @@ a requirement described in this guide.
 | --- | --- |
 | General container workload | `container_t` |
 | Read host logs without broad host privileges | `container_logreader_t` |
+| Run a trusted CSI helper that connects to a privileged driver | `container_csi_sidecar_t` |
 | Run a containerized KVM workload | `container_kvm_t` |
 | Broadly privileged system container | `spc_t` |
 | Broadly privileged rootless or user container | `spc_user_t` |
@@ -29,13 +30,14 @@ a narrowly scoped policy extension.
 
 ## Supported workload domains
 
-The compiled ACL `selinux-policy-2.20250213-10` container policy contains five
+The compiled ACL `selinux-policy-2.20250213-11` container policy contains six
 workload process domains:
 
 | Domain | Policy engine scope | MCS constrained | Intended use |
 | --- | --- | --- | --- |
 | `container_t` | System and user engines | ✅ Yes | Default confined container |
 | `container_logreader_t` | System and user engines | ✅ Yes | Confined host-log collector |
+| `container_csi_sidecar_t` | System engines | ✅ Yes | Trusted CSI helper container |
 | `container_kvm_t` | System engines | ✅ Yes | Containerized KVM workload |
 | `spc_t` | System engines | ❌ No | Privileged system container |
 | `spc_user_t` | User engines | ❌ No | Privileged rootless or user container |
@@ -77,6 +79,13 @@ It additionally receives read-only mmap access to persistent files labeled
 Inotify watch access applies only to `container_log_t`, not to every host log
 type.
 
+Unlike `container_t`, `container_csi_sidecar_t`, `container_kvm_t`, and
+`spc_t`, this domain is intentionally not assigned the
+`kubernetes_container_domain` attribute. It therefore does not receive that
+attribute's management access to container runtime files under `/var/lib`,
+container logs, and Kubernetes plugin files, which a read-only collector does
+not require.
+
 The domain intentionally does not grant:
 
 - Write, append, create, delete, rename, or relabel access to host logs.
@@ -105,6 +114,53 @@ when a collector should not receive audit data.
 
 The host log path must still be mounted into the container. Make the mount
 read-only as defense in depth, and do not relabel the host log directory.
+
+### `container_csi_sidecar_t`
+
+`container_csi_sidecar_t` is the confined domain for trusted CSI helper
+containers, such as a node-driver registrar or liveness probe, that must
+connect to a privileged CSI driver through a Unix stream socket. It extends
+the common container policy with the peer-domain `connectto` permission for
+`spc_t` and read-only access to sysfs and cgroup files used by the helper
+runtimes. It does not inherit the capabilities, general host access, or
+unconfined attributes of `spc_t`.
+
+The domain is assigned the `kubernetes_container_domain` attribute. It
+therefore receives management access to container runtime files under
+`/var/lib`, container logs, and Kubernetes plugin files in addition to the
+permissions described above. This is broader than `container_logreader_t` and
+is another reason to reserve the domain for trusted platform-managed CSI
+helpers.
+
+`spc_t` is shared by privileged system containers; it is not specific to CSI
+drivers. The permission therefore reaches any `spc_t` Unix stream listener for
+which the helper also has mount-namespace visibility, directory traversal,
+socket-file access, and discretionary access. SELinux cannot express pod
+membership in this rule, so select this domain only for trusted
+platform-managed CSI helpers with narrowly mounted socket directories. Do not
+use it for application workloads.
+
+`spc_t` is also a Kubernetes container domain. Members of that attribute
+already have a narrower connection path to `spc_t` for sockets labeled
+`container_runtime_t`, such as runtime sockets under `/run`. The explicit
+peer-domain rule is needed for the current CSI sockets labeled
+`container_file_t` under `/var/lib/kubelet`; common container policy supplies
+the required directory and socket-file access to that label. If a driver
+instead exposes its socket through a path labeled `container_var_lib_t` or
+`kubernetes_plugin_t`, socket-file access can fail before the peer-domain
+`connectto` permission is evaluated. Validate the directory, socket-file, and
+peer labels during rollout.
+
+Runtime-assigned MCS categories do not narrow this connection because `spc_t`
+is not MCS constrained and its sockets normally use `s0`. MCS still constrains
+the helper's interactions with MCS-constrained domains and objects.
+
+Policy support must reach every applicable node before a workload selects this
+type. A type-only override in a multi-container pod may receive a different MCS
+level from the pod sandbox and shared artifacts. Before enabling the domain in
+a CSI manifest, validate coordinated MCS labeling for the driver, helpers,
+projected files, and both CSI socket directions. Do not work around category
+mismatches by using a static all-category level.
 
 ### `container_kvm_t`
 
@@ -159,16 +215,18 @@ purpose-built confined domain.
 
 This table summarizes SELinux policy intent, not every individual permission.
 
-| Capability | `container_t` | `container_logreader_t` | `container_kvm_t` | `spc_t` / `spc_user_t` |
-| --- | --- | --- | --- | --- |
-| Common container execution and storage | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
-| Runtime-assigned MCS isolation | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No |
-| Read types carrying `logfile` | ❌ No | ✅ Yes | ❌ No | ⚠️ Unconfined on stock ACL |
-| Read and map persistent systemd journals | ❌ No | ✅ Yes | ❌ No | ⚠️ Unconfined on stock ACL |
-| Read auditd-managed `auditd_log_t` files | ❌ No | ✅ Yes | ❌ No | ⚠️ Unconfined on stock ACL |
-| KVM-specific policy | ❌ No | ❌ No | ✅ Yes | ❌ No — broad privileged access instead |
-| Privileged-container policy class | ❌ No | ❌ No | ❌ No | ✅ Yes |
-| SELinux-unconfined on stock ACL | ❌ No | ❌ No | ❌ No | ✅ Yes |
+| Capability | `container_t` | `container_logreader_t` | `container_csi_sidecar_t` | `container_kvm_t` | `spc_t` / `spc_user_t` |
+| --- | --- | --- | --- | --- | --- |
+| Common container execution and storage | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| Runtime-assigned MCS isolation | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ❌ No |
+| Read types carrying `logfile` | ❌ No | ✅ Yes | ❌ No | ❌ No | ⚠️ Unconfined on stock ACL |
+| Read and map persistent systemd journals | ❌ No | ✅ Yes | ❌ No | ❌ No | ⚠️ Unconfined on stock ACL |
+| Read auditd-managed `auditd_log_t` files | ❌ No | ✅ Yes | ❌ No | ❌ No | ⚠️ Unconfined on stock ACL |
+| Manage container runtime `/var/lib`, log, and Kubernetes plugin files | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ⚠️ Unconfined on stock ACL |
+| Connect to privileged-container stream sockets | ⚠️ `container_runtime_t` sockets only | ❌ No | ⚠️ Any reachable `spc_t` listener | ⚠️ `container_runtime_t` sockets only | ✅ Yes |
+| KVM-specific policy | ❌ No | ❌ No | ❌ No | ✅ Yes | ❌ No — broad privileged access instead |
+| Privileged-container policy class | ❌ No | ❌ No | ❌ No | ❌ No | ✅ Yes |
+| SELinux-unconfined on stock ACL | ❌ No | ❌ No | ❌ No | ❌ No | ✅ Yes |
 
 ## Selecting a domain
 
@@ -239,10 +297,10 @@ doing so collapses MCS isolation between them.
 
 ## MCS isolation
 
-`container_t`, `container_logreader_t`, and `container_kvm_t` remain
-`mcs_constrained_type` members. The container runtime assigns categories such
-as `s0:c123,c456` so similarly typed containers cannot access each other's
-objects.
+`container_t`, `container_logreader_t`, `container_csi_sidecar_t`, and
+`container_kvm_t` remain `mcs_constrained_type` members. The container runtime
+assigns categories such as `s0:c123,c456` so similarly typed containers cannot
+access each other's objects.
 
 ACL builds the targeted policy in MCS mode. Standard host log file contexts
 resolve to level `s0`, which is dominated by a normally categorized container
@@ -279,7 +337,7 @@ compiled policy is not a product support statement.
 
 The shipped container runtime contexts file also contains an
 `init_process` entry naming `container_init_t`. The compiled
-`selinux-policy-2.20250213-10` ACL policy does not define that type, so it is
+`selinux-policy-2.20250213-11` ACL policy does not define that type, so it is
 not an available workload domain and must not be selected.
 
 ### File and object types

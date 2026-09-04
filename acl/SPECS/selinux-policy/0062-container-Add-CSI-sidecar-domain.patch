@@ -1,0 +1,50 @@
+From 2aeae85b1942d2bc12a7b827bdc896cdba3692eb Mon Sep 17 00:00:00 2001
+From: Sean Dougherty <sdougherty@microsoft.com>
+Date: Mon, 31 Aug 2026 16:30:00 +0000
+Subject: [PATCH] container: Add CSI sidecar domain
+
+Add an opt-in container_csi_sidecar_t domain for trusted CSI helper
+containers that must connect to a privileged CSI driver socket. Include the
+read-only sysfs and cgroup probes observed during helper startup.
+
+Signed-off-by: Sean Dougherty <sdougherty@microsoft.com>
+---
+ policy/modules/services/container.te | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/policy/modules/services/container.te b/policy/modules/services/container.te
+index 4559fb5..f2d339f 100644
+--- a/policy/modules/services/container.te
++++ b/policy/modules/services/container.te
+@@ -173,6 +173,12 @@ optional_policy(`
+ container_domain_template(container_logreader)
+ typeattribute container_logreader_t container_system_domain, container_user_domain, container_net_domain;
+ 
++container_domain_template(container_csi_sidecar)
++typeattribute container_csi_sidecar_t container_system_domain, container_net_domain;
++optional_policy(`
++	kubernetes_container(container_csi_sidecar_t)
++')
++
+ container_engine_domain_template(container_engine)
+ typeattribute container_engine_t container_engine_system_domain;
+ type container_engine_exec_t, container_engine_exec_type;
+@@ -599,6 +605,15 @@ optional_policy(`
+ 	rpm_read_db(container_t)
+ ')
+ 
++########################################
++#
++# CSI sidecar container local policy
++#
++
++allow container_csi_sidecar_t spc_t:unix_stream_socket connectto;
++dev_read_sysfs(container_csi_sidecar_t)
++fs_read_cgroup_files(container_csi_sidecar_t)
++
+ ########################################
+ #
+ # Log reader container local policy
+-- 
+2.45.4
+
