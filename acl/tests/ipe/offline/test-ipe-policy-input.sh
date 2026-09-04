@@ -79,7 +79,7 @@ test_audit_ephemeral_stages_candidate() {
 
     [[ -s "${BUILD_DIR}/acl-ipe-ephemeral/ca.key" ]]
     [[ -s "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred" ]]
-    [[ -s "${BUILD_DIR}/acl-ipe-policy/acl-ipe-boot-policy.pol" ]]
+    [[ ! -e "${BUILD_DIR}/acl-ipe-policy/acl-ipe-boot-policy.pol" ]]
     # Verify the CMS wraps the canonical policy
     openssl smime -verify -inform der -binary \
         -in "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred" \

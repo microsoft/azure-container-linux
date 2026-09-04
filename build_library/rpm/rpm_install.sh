@@ -973,11 +973,12 @@ rpm_install_ipe_policy() {
     rpm_verify_ipe_policy_artifact \
         "${policy_src}" "${policy_sig}" "${verified_policy}"
 
-    # Stage the raw policy for the Pipelines collector (esrp signing mode
-    # replaces the candidate CMS later; the raw policy is used for
-    # downstream signing).
-    cp "${policy_src}" "${staged_raw}" ||
-        die "RPM mode: failed to stage raw IPE policy"
+    # ESRP replaces the candidate CMS downstream and therefore needs the
+    # canonical source. Ephemeral builds consume only the verified CMS.
+    if [[ "${ipe_signing_mode}" == "esrp" ]]; then
+        cp "${policy_src}" "${staged_raw}" ||
+            die "RPM mode: failed to stage raw IPE policy"
+    fi
 
     rm -rf "${work_dir}"
     rpm_record_ipe_signing_mode "${ipe_signing_mode}"
