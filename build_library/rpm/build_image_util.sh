@@ -592,6 +592,18 @@ EOF
         sudo sed -i 's|/var/run/|/run/|g' "${root_fs_dir}/usr/lib/systemd/system/rpcbind.socket"
     fi
 
+    # Enable tridentd.socket - listens for trident API requests.
+    # trident is a required component of ACL images: a missing unit means the
+    # trident RPM was not installed, i.e. a broken image. Fail the build now
+    # rather than leave a dangling wants-symlink and ship an image whose
+    # provisioning socket never activates.
+    if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/tridentd.socket" ]]; then
+        die "tridentd.socket not found in image - trident RPM missing (trident is required for ACL)"
+    fi
+    info "RPM mode: Enabling tridentd.socket"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sockets.target.wants"
+    sudo ln -sf ../tridentd.socket "${root_fs_dir}/usr/lib/systemd/system/sockets.target.wants/tridentd.socket"
+
     # Create /var/lib/nfs directories needed by rpc-statd and NFS server via tmpfiles
     # The nfs-utils RPM only creates v4recovery; sm and sm.bak are missing from the package
     # /var is stateful so we use tmpfiles.d to create these at boot, not mkdir at build time
@@ -924,6 +936,38 @@ _configure_misc_rpm() {
     if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service" ]]; then
         info "RPM mode: Installing placeholder audit-rules.service"
         sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/audit-rules.service" "${root_fs_dir}/usr/lib/systemd/system/audit-rules.service"
+    fi
+
+    # Remove auditd (it is pulled in transitively by trident RPMs, and Azure Linux's
+    # 90-default.preset unconditionally enables auditd.service). Merely deleting the
+    # multi-user.target.wants symlink is not durable: any later `systemctl preset`/
+    # `preset-all` re-application (e.g. triggered by downstream image customization
+    # installing more packages) recreates it from that preset rule and the service
+    # starts on the next boot. Uninstalling the package removes the unit file itself,
+    # so there is nothing left for a future preset pass to enable.
+    # audit-libs is left in place: it provides libaudit.so.1, which other packages
+    # (e.g. systemd, sudo, polkit) link against directly.
+    #
+    # TEMPORARY: this whole block is a workaround for trident-selinux's transitive
+    # dependency on audit. Trident's fix (microsoft/trident#734) already removed
+    # that dependency, but it has not been published to PMC yet (PMC still serves
+    # trident 0.26.0, which predates the fix). Once a trident release containing
+    # the fix reaches PMC, delete this block.
+    local audit_pkgs
+    audit_pkgs=$(sudo rpm --dbpath="${root_fs_dir}/var/lib/rpm" -qa "audit" "python3-audit" 2>/dev/null | sort -u)
+    if [[ -n "${audit_pkgs}" ]]; then
+        info "RPM mode: Removing auditd packages: ${audit_pkgs//$'\n'/ }"
+        if ! sudo rpm --root="${root_fs_dir}" --dbpath="/var/lib/rpm" -e --nodeps --noscripts ${audit_pkgs}; then
+            error "RPM mode: Failed to remove auditd packages, aborting build"
+            exit 1
+        fi
+        # --noscripts skips %preun/%postun, so `systemctl disable` never runs, and
+        # the *.wants symlinks aren't part of the package payload (systemctl/preset
+        # creates them, not rpm), so removing the package doesn't remove them either.
+        # Without this, they're left as dangling symlinks (unit file gone from
+        # /usr/lib/systemd/system) which trips kola's dead-symlink content check.
+        sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/auditd.service"
+        sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/auditd.service"
     fi
 
     # Create tmpfiles.d entry for logrotate state directory.
