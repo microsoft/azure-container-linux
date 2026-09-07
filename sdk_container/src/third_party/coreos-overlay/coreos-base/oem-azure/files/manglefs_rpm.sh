@@ -22,7 +22,7 @@ if [[ -f "${rootfs}/usr/lib/systemd/system/waagent.service" ]]; then
 [Service]
 UMask=0027
 # Ignore missing paths and leave directory modes unchanged.
-ExecStartPre=-/usr/bin/find /var/log/waagent.log /var/log/azure -xdev -type f -exec /usr/bin/chmod g-wx,o-rwx {} +
+ExecStartPre=-/bin/sh -c 'for path in /var/log/waagent.log /var/log/azure; do [ -e "$$path" ] || continue; /usr/bin/find "$$path" -xdev -type f -exec /usr/bin/chmod g-wx,o-rwx {} +; done'
 EOF
     chmod 0644 "${rootfs}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf"
 fi
