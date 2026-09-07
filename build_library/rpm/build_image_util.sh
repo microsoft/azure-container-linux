@@ -437,18 +437,21 @@ SSHD_NOPASSWD
     info "RPM mode: Adding CIS SSH access and forwarding restrictions"
     sudo tee "${ssh_config_dir}/sshd_config.d/60-acl-cis-hardening.conf" > /dev/null <<'SSHD_CIS'
 # CIS 5.2.7 - Ensure SSH access is limited
-# The assessor requires 'allowusers' present in sshd -T (regex .+$), without it
-# the rule fails with "Option 'allowusers' not found". A static allow-list is not
-# possible because WALinuxAgent provisions the admin user in a dynamic group.
-# NOTE: AllowUsers/AllowGroups are additive in OpenSSH, a wildcard means
-# downstream consumers must replace this file to narrow access (adding another
-# AllowUsers in a drop-in unions with '*', i.e. still everyone).
+# Azure Policy requires AllowUsers, but Azure admin names are dynamic.
+# Replace this file to narrow access, AllowUsers entries are additive.
 AllowUsers *
-AllowGroups *
 DenyUsers root
 DenyGroups root
 # CIS 5.2.10 - Ensure SSH disableforwarding is enabled
+# OpenSSH keeps the first value, so a later drop-in cannot override this.
 DisableForwarding yes
+# CIS 5.2.23 - Ensure sshd granular forwarding is disabled
+# Keep the effective values explicit for CIS assessment.
+AllowTcpForwarding no
+AllowAgentForwarding no
+AllowStreamLocalForwarding no
+X11Forwarding no
+PermitTunnel no
 # CIS 5.2.16 - Ensure sshd MaxAuthTries is configured (<=4)
 # Note: counts keys offered, not accepted. Clients with >=4 loaded keys
 # should use IdentitiesOnly=yes to avoid "Too many authentication failures".
@@ -471,8 +474,17 @@ SSHD_CONFIG_EOF
     else
         info "RPM mode: sshd_config already has Include directive"
     fi
-    # CIS 5.2.1: sshd_config must be 600 root:root regardless of how it was created
-    sudo chmod 600 "${sshd_config}"
+    # CIS 5.2.1: Restrict SSH configuration to root.
+    sudo chown root:root \
+        "${sshd_config}" \
+        "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf" \
+        "${ssh_config_dir}/sshd_config.d/50-acl-no-password-auth.conf" \
+        "${ssh_config_dir}/sshd_config.d/60-acl-cis-hardening.conf"
+    sudo chmod 600 \
+        "${sshd_config}" \
+        "${ssh_config_dir}/sshd_config.d/10-authorized-keys.conf" \
+        "${ssh_config_dir}/sshd_config.d/50-acl-no-password-auth.conf" \
+        "${ssh_config_dir}/sshd_config.d/60-acl-cis-hardening.conf"
 
     # Switch sshd to socket activation (matching Flatcar behavior)
     # The Azure Linux openssh RPM only ships sshd.service (traditional daemon).

@@ -15,14 +15,17 @@ if [[ -f "${rootfs}/usr/lib/systemd/system/waagent.service" ]]; then
         "${rootfs}/usr/lib/systemd/system/waagent.service"
 fi
 
-# CIS 6.1.3.1: waagent creates logs with 644 (umask 022). Set UMask=0027 so
-# waagent.log and extension logs get 640 while directories stay traversable (0750).
-mkdir -p "${rootfs}/usr/lib/systemd/system/waagent.service.d"
-cat > "${rootfs}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf" <<'EOF'
+# CIS 6.1.3.1: Restrict existing logs and new files created by waagent.
+if [[ -f "${rootfs}/usr/lib/systemd/system/waagent.service" ]]; then
+    mkdir -p "${rootfs}/usr/lib/systemd/system/waagent.service.d"
+    cat > "${rootfs}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf" <<'EOF'
 [Service]
 UMask=0027
+# Ignore missing paths and leave directory modes unchanged.
+ExecStartPre=-/usr/bin/find /var/log/waagent.log /var/log/azure -xdev -type f -exec /usr/bin/chmod g-wx,o-rwx {} +
 EOF
-chmod 0644 "${rootfs}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf"
+    chmod 0644 "${rootfs}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf"
+fi
 
 # Patch waagent service file to create symlink back to /etc/waagent.conf at ExecStartPre
 if [[ -f "${rootfs}/usr/lib/systemd/system/waagent.service" ]]; then
