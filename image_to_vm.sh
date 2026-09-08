@@ -142,9 +142,16 @@ run_fs_hook
 # output directory so _write_qemu_uefi_secure_conf() can enroll it in the OVMF
 # Secure Boot db.
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]; then
+    ephemeral_cert_dir="${FLAGS_from}/acl-ipe-ephemeral"
+    # Test and production VHDs are converted separately. Keep one per-build
+    # certificate so both images match the single certificate exported for
+    # QEMU and Azure gallery enrollment, including when IPE assets are disabled.
+    "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${ephemeral_cert_dir}" ||
+        die_notrace "Failed to prepare the per-build Secure Boot certificate"
     "${BUILD_LIBRARY_DIR}/rpm/sign_uki_ephemeral.sh" \
         "${VM_TMP_ROOT}/boot" \
-        "$(_dst_dir)"
+        "$(_dst_dir)" \
+        "${ephemeral_cert_dir}"
 fi
 
 # Changes done, glue it together
