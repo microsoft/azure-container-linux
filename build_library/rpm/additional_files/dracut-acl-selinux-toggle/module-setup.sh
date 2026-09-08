@@ -3,6 +3,11 @@
 # ex: ts=8 sw=4 sts=4 et filetype=sh
 
 install() {
+    inst_multiple -o mkdir mv
+
+    inst_simple "${moddir}/acl-node-security-profile.sh" \
+                "/usr/lib/acl/acl-node-security-profile.sh"
+
     inst_script "${moddir}/acl-selinux-toggle.sh" \
                 "/usr/bin/acl-selinux-toggle"
 

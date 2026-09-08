@@ -35,6 +35,8 @@
 #   --download-rpms                      [no-op] Kept for pipeline compatibility
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
 #   --help                               Show this help message
+#   --ipe-asset-mode=MODE                IPE assets: disabled|ephemeral|external (default: disabled)
+#   --ipe-policy-path=PATH               Attached DER PKCS#7 policy artifact (required when building external mode)
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
@@ -91,8 +93,8 @@
 # Environment Variables:
 #   ACL_SDK_IMAGE           Override SDK container image (e.g., <your-registry>/sdk:<release>)
 #                           Bypasses auto-detection from version.txt when set
-#   ACL_EROFS_ENABLE        Set to 1 to include and statically select the EROFS
-#                           containerd profile (default: 0)
+#   ACL_EROFS_ENABLE        Static EROFS test override: 1 forces EROFS at boot
+#                           (default: 0; IPE-capable images select it dynamically)
 #   NO_TTY                  Set to "true" to disable TTY allocation (for CI pipelines)
 #   RPM_REPO_URL            Azure Linux repository URL
 #   RPM_ARCH                Target architecture (default: x86_64)
@@ -171,14 +173,39 @@ export BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
 export IMAGE_VERSION="${IMAGE_VERSION:-}"
 export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
+# Include the EROFS/dm-verity capability in IPE-capable images without forcing
+# the EROFS runtime profile before the boot-time IPE selector runs.
 export ACL_EROFS_ENABLE="${ACL_EROFS_ENABLE:-0}"
 ACL_FEATURES="${ACL_FEATURES:-}"
-if [[ "${ACL_EROFS_ENABLE}" == "1" ]]; then
-    ACL_FEATURES="${ACL_FEATURES:+${ACL_FEATURES},}erofs,erofs-static"
-fi
 export ACL_FEATURES
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
+# Build-time IPE asset mode. Runtime activation is selected only through the
+# Azure IMDS acl-node-security-profile tag.
+IPE_ASSET_MODE_OVERRIDE_SET=false
+if [[ -v ACL_IPE_ASSET_MODE ]]; then
+    IPE_ASSET_MODE_OVERRIDE_SET=true
+fi
+ACL_IPE_ASSET_MODE="${ACL_IPE_ASSET_MODE:-disabled}"
+ACL_IPE_POLICY_PATH="${ACL_IPE_POLICY_PATH:-}"
+
+append_acl_feature() {
+    local feature="$1"
+    case ",${ACL_FEATURES}," in
+        *",${feature},"*) ;;
+        *) ACL_FEATURES="${ACL_FEATURES:+${ACL_FEATURES},}${feature}" ;;
+    esac
+}
+
+configure_acl_features() {
+    if [[ "${ACL_EROFS_ENABLE}" == "1" ]]; then
+        append_acl_feature erofs
+        append_acl_feature erofs-static
+    elif [[ "${ACL_IPE_ASSET_MODE}" != "disabled" ]]; then
+        append_acl_feature erofs
+    fi
+    export ACL_FEATURES
+}
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
@@ -239,6 +266,118 @@ show_help() {
     exit 0
 }
 
+validate_ipe_boot_path() {
+    local vm_type="${1:-}"
+
+    [[ "${ACL_IPE_CAPABLE}" == "false" ]] && return 0
+    if [[ "${BOOTLOADER_MODE}" != "uki" ]]; then
+        error "IPE requires BOOTLOADER_MODE=uki"
+        return 1
+    fi
+    if [[ "${SECURE_BOOT_ENABLED:-true}" != "true" ]]; then
+        error "IPE requires Secure Boot"
+        return 1
+    fi
+    if [[ "${vm_type}" == "qemu" ]]; then
+        error "IPE is supported only by the Azure Secure Boot UKI path"
+        return 1
+    fi
+}
+
+configure_ipe_asset_mode() {
+    case "${ACL_IPE_ASSET_MODE}" in
+        disabled)
+            ACL_IPE_CAPABLE=false
+            if [[ -n "${ACL_IPE_POLICY_PATH}" ]]; then
+                error "ACL_IPE_POLICY_PATH is only valid with ACL_IPE_ASSET_MODE=external"
+                return 1
+            fi
+            ;;
+        ephemeral)
+            ACL_IPE_CAPABLE=true
+            if [[ -n "${ACL_IPE_POLICY_PATH}" ]]; then
+                error "ACL_IPE_POLICY_PATH is only valid with ACL_IPE_ASSET_MODE=external"
+                return 1
+            fi
+            ;;
+        external)
+            ACL_IPE_CAPABLE=true
+            if [[ "${BUILD_IMAGE}" == "true" && -z "${ACL_IPE_POLICY_PATH}" ]]; then
+                error "External IPE asset mode requires --ipe-policy-path when building an image"
+                return 1
+            fi
+            if [[ -n "${ACL_IPE_POLICY_PATH}" &&
+                (! -f "${ACL_IPE_POLICY_PATH}" || ! -s "${ACL_IPE_POLICY_PATH}") ]]; then
+                error "External IPE policy artifact does not exist or is empty: ${ACL_IPE_POLICY_PATH}"
+                return 1
+            fi
+            if [[ -n "${ACL_IPE_POLICY_PATH}" ]]; then
+                ACL_IPE_POLICY_PATH="$(readlink -f "${ACL_IPE_POLICY_PATH}")"
+            fi
+            ;;
+        *)
+            error "Invalid IPE asset mode: ${ACL_IPE_ASSET_MODE} (expected disabled, ephemeral, or external)"
+            return 1
+            ;;
+    esac
+    export ACL_IPE_ASSET_MODE ACL_IPE_CAPABLE ACL_IPE_POLICY_PATH
+}
+
+load_artifact_ipe_asset_mode() {
+    local artifact_dir="$1"
+    local mode_file="${artifact_dir}/ipe-asset-mode"
+    local artifact_mode
+
+    if [[ ! -r "${mode_file}" ]]; then
+        if [[ -d "${artifact_dir}/acl-ipe-ephemeral" ]]; then
+            error "IPE signing assets found without ${mode_file}"
+            return 1
+        fi
+        if [[ "${IPE_ASSET_MODE_OVERRIDE_SET}" == "true" &&
+            "${ACL_IPE_ASSET_MODE}" != "disabled" ]]; then
+            error "Source image has no IPE asset-mode metadata; rebuild it with IPE assets"
+            return 1
+        fi
+        ACL_IPE_ASSET_MODE=disabled
+        configure_ipe_asset_mode
+        return 0
+    fi
+
+    read -r artifact_mode < "${mode_file}"
+    case "${artifact_mode}" in
+        disabled|ephemeral|external) ;;
+        *)
+            error "Invalid IPE asset mode in ${mode_file}: ${artifact_mode}"
+            return 1
+            ;;
+    esac
+    if [[ "${IPE_ASSET_MODE_OVERRIDE_SET}" == "true" &&
+        "${ACL_IPE_ASSET_MODE}" != "${artifact_mode}" ]]; then
+        error "Requested IPE asset mode '${ACL_IPE_ASSET_MODE}' does not match source image mode '${artifact_mode}'"
+        return 1
+    fi
+
+    ACL_IPE_ASSET_MODE="${artifact_mode}"
+    configure_ipe_asset_mode
+}
+
+operation_uses_vm_image() {
+    [[ "$BUILD_VM_IMAGE" == "true" ]] ||
+        [[ "$BUILD_TEST_IMAGE" == "true" ]] ||
+        [[ "$START_VM" == "true" ]] ||
+        [[ "$RUN_KOLA_TESTS" == "true" ]]
+}
+
+operation_uses_gallery_image() {
+    [[ -n "$ACG_IMAGE_VERSION_ID" ]] || [[ "$REUSE_IMAGE" == "true" ]]
+}
+
+operation_uses_local_image_artifact() {
+    [[ "$BUILD_IMAGE" != "true" ]] &&
+        ! operation_uses_gallery_image &&
+        operation_uses_vm_image
+}
+
 # Parse command line arguments
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -257,6 +396,24 @@ parse_args() {
                 ;;
             --group)
                 GROUP="$2"
+                shift 2
+                ;;
+            --ipe-asset-mode=*)
+                ACL_IPE_ASSET_MODE="${1#*=}"
+                IPE_ASSET_MODE_OVERRIDE_SET=true
+                shift
+                ;;
+            --ipe-asset-mode)
+                ACL_IPE_ASSET_MODE="$2"
+                IPE_ASSET_MODE_OVERRIDE_SET=true
+                shift 2
+                ;;
+            --ipe-policy-path=*)
+                ACL_IPE_POLICY_PATH="${1#*=}"
+                shift
+                ;;
+            --ipe-policy-path)
+                ACL_IPE_POLICY_PATH="$2"
                 shift 2
                 ;;
             --img-name=*)
@@ -621,6 +778,19 @@ parse_args() {
         fi
     fi
 
+    if operation_uses_local_image_artifact; then
+        load_artifact_ipe_asset_mode \
+            "${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest" ||
+            exit 1
+    fi
+    if operation_uses_gallery_image &&
+        [[ "${START_VM}" == "true" || "${RUN_KOLA_TESTS}" == "true" ]] &&
+        [[ "${IPE_ASSET_MODE_OVERRIDE_SET}" == "false" ]]; then
+        warn "ACL_IPE_ASSET_MODE is not set for gallery image validation; defaulting to disabled"
+    fi
+
+    configure_ipe_asset_mode || exit 1
+
     # Normalize group name
     case "$GROUP" in
         prod|production)
@@ -644,10 +814,19 @@ parse_args() {
                 ;;
         esac
     fi
+    local ipe_vm_type=""
+    if operation_uses_vm_image; then
+        ipe_vm_type="${VM_TYPE}"
+    fi
+    validate_ipe_boot_path "${ipe_vm_type}" || exit 1
 
     # Add platform-specific host-side tests when --run-tests is used.
     if [[ "${RUN_TESTS:-false}" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
         RUN_HOST_SCRIPTS+=("./acl/tests/run-selinux-toggle-test.sh")
+        if [[ "${ACL_IPE_CAPABLE}" == "true" ]] &&
+            [[ "${SECURE_BOOT_ENABLED:-true}" == "true" ]]; then
+            RUN_HOST_SCRIPTS+=("./acl/tests/run-ipe-mode-toggle-test.sh")
+        fi
     fi
 
     if [[ "$REUSE_IMAGE" == "true" ]]; then
@@ -878,6 +1057,7 @@ build_image() {
     info "  Output:          ${OUTPUT_ROOT}"
     info "  Staging Dir:     ${STAGING_DIR}"
     info "  Force Rebuild:   ${FORCE_REBUILD}"
+    info "  IPE Asset Mode: ${ACL_IPE_ASSET_MODE}"
     echo
 
     # Count RPMs
@@ -1062,6 +1242,9 @@ build_vm_image() {
     # pulling a stale version.txt into local dev builds.
     local version_args=()
     local from_dir="${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest"
+    load_artifact_ipe_asset_mode "${from_dir}" || exit 1
+    validate_ipe_boot_path "${vm_type}" || exit 1
+
     if [[ "${NO_TTY:-false}" == "true" ]] && [[ -f "${from_dir}/version.txt" ]]; then
         info "Installing artifact version.txt into manifest location (CI mode)"
         cp "${from_dir}/version.txt" \
@@ -1266,9 +1449,11 @@ run_with_retry() {
 # Main entry point
 main() {
     parse_args "$@"
+    configure_acl_features
 
     section "Azure Container Linux Image Builder"
     info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"
+    info "IPE asset mode: ${ACL_IPE_ASSET_MODE}"
 
     check_prerequisites
     print_summary
