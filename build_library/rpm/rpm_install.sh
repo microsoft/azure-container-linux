@@ -392,7 +392,7 @@ rpm_install_package() {
     if [[ -n "${FASTTRACK_REPO_FILE:-}" ]] && [[ -f "${root_fs_dir}/etc/yum.repos.d/$(basename "${FASTTRACK_REPO_FILE}")" ]]; then
         info "=== FastTrack preview repo packages available ==="
         sudo /usr/bin/dnf5 repoquery --installroot="${root_fs_dir}" --releasever=3.0 \
-            ${forcearch_arg} --repo=fasttrack-preview --available 2>/dev/null | sort || true
+            ${forcearch_arg} --repo=fasttrack-preview --available "${packages[@]}" 2>/dev/null | sort || true
         info "=== End of fasttrack packages ==="
     fi
 
@@ -426,7 +426,7 @@ rpm_install_package() {
     # Log which installed packages came from the fasttrack repo
     if [[ -n "${FASTTRACK_REPO_FILE:-}" ]] && [[ -f "${root_fs_dir}/etc/yum.repos.d/$(basename "${FASTTRACK_REPO_FILE}")" ]]; then
         info "=== Packages installed from fasttrack-preview repo ==="
-        grep -i "fasttrack-preview" /tmp/rpm-install.log || info "  (none or repo name not shown in transaction log)"
+        grep -i "fasttrack-preview" /tmp/rpm-install.log 2>/dev/null || info "  (none or repo name not shown in transaction log)"
         info "=== Installed versions of fasttrack packages ==="
         local ft_name ft_evr
         while IFS=' ' read -r ft_name ft_evr; do
@@ -437,7 +437,8 @@ rpm_install_package() {
                 info "  ${installed_ver} (fasttrack available: ${ft_name}-${ft_evr})"
             fi
         done < <(sudo /usr/bin/dnf5 repoquery --installroot="${root_fs_dir}" --releasever=3.0 \
-            ${forcearch_arg} --repo=fasttrack-preview --available --queryformat="%{name} %{evr}\n" 2>/dev/null || true)
+            ${forcearch_arg} --repo=fasttrack-preview --available --queryformat="%{name} %{evr}\n" \
+            "${packages[@]}" 2>/dev/null || true)
         info "=== End of fasttrack verification ==="
     fi
 

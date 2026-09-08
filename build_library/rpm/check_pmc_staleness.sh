@@ -8,7 +8,7 @@
 # This script queries PMC for the latest version-release of each such
 # package and fails the build when PMC has moved ahead.
 #
-# Usage:  check_pmc_staleness.sh <installroot>
+# Usage:  check_pmc_staleness.sh <installroot> [staleness_exceptions]
 #
 set -euo pipefail
 
@@ -22,6 +22,10 @@ warn()  { echo "[WARN]  $*" >&2; }
 error() { echo "[ERROR] $*" >&2; }
 
 INSTALLROOT="${1:?Usage: check_pmc_staleness.sh <installroot>}"
+if [[ ! -d "${INSTALLROOT}" ]]; then
+    error "Install root does not exist: ${INSTALLROOT}"
+    exit 1
+fi
 
 # Second arg: space-separated list of packages exempt from staleness failure
 STALENESS_EXCEPTIONS="${2:-}"
@@ -88,8 +92,10 @@ info "=== PMC Staleness Check ==="
 # Detect architecture - use BOARD if set (handles cross-arch builds on x86_64 hosts)
 if [[ "${BOARD:-}" == "arm64-usr" ]]; then
     ARCH="aarch64"
+    forcearch_args=(--forcearch=aarch64)
 else
     ARCH="$(uname -m)"
+    forcearch_args=()
 fi
 declare -A UPSTREAM
 pkg_list="${!BASE_VER[*]}"
@@ -99,7 +105,11 @@ PMC_EXTENDED="https://packages.microsoft.com/azurelinux/3.0/prod/extended/${ARCH
 
 if [[ -n "${FASTTRACK_REPO_FILE:-}" ]] && [[ -f "${FASTTRACK_REPO_FILE}" ]]; then
     # Fasttrack build: query fasttrack + PMC (fasttrack has latest, PMC covers the rest)
-    FASTTRACK_URL="$(grep -m1 '^baseurl=' "${FASTTRACK_REPO_FILE}" | cut -d= -f2-)"
+    FASTTRACK_URL="$(awk '/^[[:space:]]*baseurl[[:space:]]*=/ {sub(/^[[:space:]]*baseurl[[:space:]]*=[[:space:]]*/, ""); print; exit}' "${FASTTRACK_REPO_FILE}")"
+    if [[ -z "${FASTTRACK_URL}" ]]; then
+        error "No baseurl found in ${FASTTRACK_REPO_FILE}"
+        exit 1
+    fi
     info "Checking against fasttrack repo: ${FASTTRACK_URL}"
     info "  + PMC base: ${PMC_BASE}"
     info "  + PMC extended: ${PMC_EXTENDED}"
@@ -113,6 +123,7 @@ if [[ -n "${FASTTRACK_REPO_FILE:-}" ]] && [[ -f "${FASTTRACK_REPO_FILE}" ]]; the
         --setopt=fasttrack-check.gpgcheck=0 \
         --setopt=pmc-base.gpgcheck=0 \
         --setopt=pmc-extended.gpgcheck=0 \
+        "${forcearch_args[@]}" \
         --available --latest-limit=1 \
         --queryformat="%{name} %{version}-%{release}\n" \
         ${pkg_list} 2>/dev/null)" || { warn "Failed to query repos - skipping staleness check"; exit 0; }
@@ -129,6 +140,7 @@ else
         --repo=pmc-base --repo=pmc-extended \
         --setopt=pmc-base.gpgcheck=0 \
         --setopt=pmc-extended.gpgcheck=0 \
+        "${forcearch_args[@]}" \
         --available --latest-limit=1 \
         --queryformat="%{name} %{version}-%{release}\n" \
         ${pkg_list} 2>/dev/null)" || { warn "Failed to query PMC repos - skipping staleness check"; exit 0; }
@@ -168,15 +180,12 @@ for pkg in "${!BASE_VER[@]}"; do
     pmc_ver="${pmc%%-*}"
     pmc_rel="${pmc#*-}"
 
-    # Compare versions first, then releases
-    if [[ "${pmc_ver}" != "${base_ver}" ]]; then
-        if is_older "${base_ver}" "${pmc_ver}"; then
-            mark_stale "${pkg}" "${base_ver}" "${base_rel}" "${pmc}"
-        else
-            info "  ${pkg}: OK (ACL version newer than upstream)"
-        fi
-    elif [[ "${pmc_rel}" -gt "${base_rel}" ]] 2>/dev/null; then
+    base_vr="${base_ver}-${base_rel}"
+    pmc_vr="${pmc_ver}-${pmc_rel}"
+    if is_older "${base_vr}" "${pmc_vr}"; then
         mark_stale "${pkg}" "${base_ver}" "${base_rel}" "${pmc}"
+    elif is_older "${pmc_vr}" "${base_vr}"; then
+        info "  ${pkg}: OK (ACL version newer than upstream)"
     else
         info "  ${pkg}: OK"
     fi

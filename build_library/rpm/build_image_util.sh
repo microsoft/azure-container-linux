@@ -101,8 +101,9 @@ start_image_rpm() {
     # Packages in the exception list are allowed to be stale (e.g. waiting for
     # ACL changes to land upstream).
     local staleness_exceptions="selinux-policy"
-    if [[ -x "${BUILD_LIBRARY_DIR}/rpm/check_pmc_staleness.sh" ]]; then
-        if ! "${BUILD_LIBRARY_DIR}/rpm/check_pmc_staleness.sh" "${root_fs_dir}" "${staleness_exceptions}"; then
+    local staleness_check="${BUILD_LIBRARY_DIR}/rpm/check_pmc_staleness.sh"
+    if [[ -f "${staleness_check}" ]]; then
+        if ! bash "${staleness_check}" "${root_fs_dir}" "${staleness_exceptions}"; then
             error "PMC staleness check failed - rebase stale ACL SPECs before building."
             return 1
         fi
