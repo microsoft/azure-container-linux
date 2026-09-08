@@ -91,6 +91,8 @@
 # Environment Variables:
 #   ACL_SDK_IMAGE           Override SDK container image (e.g., <your-registry>/sdk:<release>)
 #                           Bypasses auto-detection from version.txt when set
+#   ACL_EROFS_ENABLE        Set to 1 to include and statically select the EROFS
+#                           containerd profile (default: 0)
 #   NO_TTY                  Set to "true" to disable TTY allocation (for CI pipelines)
 #   RPM_REPO_URL            Azure Linux repository URL
 #   RPM_ARCH                Target architecture (default: x86_64)
@@ -169,6 +171,12 @@ export BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
 export IMAGE_VERSION="${IMAGE_VERSION:-}"
 export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
+export ACL_EROFS_ENABLE="${ACL_EROFS_ENABLE:-0}"
+ACL_FEATURES="${ACL_FEATURES:-}"
+if [[ "${ACL_EROFS_ENABLE}" == "1" ]]; then
+    ACL_FEATURES="${ACL_FEATURES:+${ACL_FEATURES},}erofs,erofs-static"
+fi
+export ACL_FEATURES
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
 
