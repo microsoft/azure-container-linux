@@ -64,9 +64,14 @@ function get_git_version() {
     tag="$(git for-each-ref --count=1 --sort='-v:refname' \
                --format='%(refname:short)' --points-at=HEAD 'refs/tags/*')"
     if [ -z "$tag" ] ; then
-        # 'git describe' always prints a single line; leave it unpiped so its
-        # exit status still propagates to the caller.
-        git describe --tags
+        local described
+        if described="$(git describe --tags 2>/dev/null)"; then
+            echo "$described"
+        elif git rev-parse --verify HEAD >/dev/null 2>&1; then
+            get_version_from_versionfile
+        else
+            return 128
+        fi
     else
         echo "$tag"
     fi

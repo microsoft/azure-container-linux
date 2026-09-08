@@ -112,6 +112,14 @@ echo "export INJECT_DOCKER_SYSEXT='${INJECT_DOCKER_SYSEXT:-false}'" >> /home/sdk
 
 ACL_IPE_ASSET_MODE="${ACL_IPE_ASSET_MODE:-disabled}"
 ACL_IPE_POLICY_PATH="${ACL_IPE_POLICY_PATH:-}"
+ACL_IPE_VERITY_SIGNATURE="${ACL_IPE_VERITY_SIGNATURE:-true}"
+case "${ACL_IPE_VERITY_SIGNATURE}" in
+    true|false) ;;
+    *)
+        echo "ERROR: ACL_IPE_VERITY_SIGNATURE must be true or false (got: ${ACL_IPE_VERITY_SIGNATURE})" >&2
+        exit 1
+        ;;
+esac
 case "${ACL_IPE_ASSET_MODE}" in
     disabled)
         ACL_IPE_CAPABLE=false
@@ -143,10 +151,12 @@ sed -i \
     -e '/export ACL_IPE_ASSET_MODE=/d' \
     -e '/export ACL_IPE_CAPABLE=/d' \
     -e '/export ACL_IPE_POLICY_PATH=/d' \
+    -e '/export ACL_IPE_VERITY_SIGNATURE=/d' \
     /home/sdk/.bashrc 2>/dev/null || true
 echo "export ACL_IPE_ASSET_MODE='${ACL_IPE_ASSET_MODE}'" >> /home/sdk/.bashrc
 echo "export ACL_IPE_CAPABLE='${ACL_IPE_CAPABLE}'" >> /home/sdk/.bashrc
 echo "export ACL_IPE_POLICY_PATH='${ACL_IPE_POLICY_PATH}'" >> /home/sdk/.bashrc
+echo "export ACL_IPE_VERITY_SIGNATURE='${ACL_IPE_VERITY_SIGNATURE}'" >> /home/sdk/.bashrc
 
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"
