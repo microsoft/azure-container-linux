@@ -101,11 +101,15 @@ start_image_rpm() {
     # Packages in the exception list are allowed to be stale (e.g. waiting for
     # ACL changes to land upstream).
     local staleness_exceptions="selinux-policy"
-    if [[ -x "${BUILD_LIBRARY_DIR}/rpm/check_pmc_staleness.sh" ]]; then
-        if ! "${BUILD_LIBRARY_DIR}/rpm/check_pmc_staleness.sh" "${root_fs_dir}" "${staleness_exceptions}"; then
-            error "PMC staleness check failed - rebase stale ACL SPECs before building."
-            return 1
-        fi
+    local staleness_check="${BUILD_LIBRARY_DIR}/rpm/check_pmc_staleness.sh"
+    if [[ ! -f "${staleness_check}" ]]; then
+        error "PMC staleness checker not found: ${staleness_check}"
+        return 1
+    fi
+    if ! BOARD="${BOARD:-}" PACKAGE_SNAPSHOT_TIME="${PACKAGE_SNAPSHOT_TIME:-}" \
+        bash "${staleness_check}" "${root_fs_dir}" "${staleness_exceptions}"; then
+        error "PMC staleness check failed - rebase stale ACL SPECs before building."
+        return 1
     fi
 
     # Create sysusers.d configs and run systemd-sysusers to create users/groups

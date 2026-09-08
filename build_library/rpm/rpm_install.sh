@@ -427,8 +427,8 @@ rpm_install_package() {
     # Log fasttrack repo packages that will be preferred during install
     if [[ -n "${FASTTRACK_REPO_FILE:-}" ]] && [[ -f "${root_fs_dir}/etc/yum.repos.d/$(basename "${FASTTRACK_REPO_FILE}")" ]]; then
         info "=== FastTrack preview repo packages available ==="
-        sudo /usr/bin/dnf5 repoquery --installroot="${root_fs_dir}" --releasever=3.0 \
-            ${forcearch_arg} --repo=fasttrack-preview --available 2>/dev/null | sort || true
+        sudo /usr/bin/dnf5 "${snapshot_args[@]}" repoquery --installroot="${root_fs_dir}" --releasever=3.0 \
+            ${forcearch_arg} --repo=fasttrack-preview --available "${packages[@]}" 2>/dev/null | sort || true
         info "=== End of fasttrack packages ==="
     fi
 
@@ -459,21 +459,22 @@ rpm_install_package() {
         return 1
     fi
 
-    # Log which installed packages came from the fasttrack repo
+    # Log FastTrack transaction references and installed packages with matching candidates.
     if [[ -n "${FASTTRACK_REPO_FILE:-}" ]] && [[ -f "${root_fs_dir}/etc/yum.repos.d/$(basename "${FASTTRACK_REPO_FILE}")" ]]; then
-        info "=== Packages installed from fasttrack-preview repo ==="
-        grep -i "fasttrack-preview" /tmp/rpm-install.log || info "  (none or repo name not shown in transaction log)"
-        info "=== Installed versions of fasttrack packages ==="
+        info "=== FastTrack references in install transaction ==="
+        grep -i "fasttrack-preview" /tmp/rpm-install.log 2>/dev/null || info "  (none or repo name not shown in transaction log)"
+        info "=== Installed packages with FastTrack candidates available ==="
         local ft_name ft_evr
         while IFS=' ' read -r ft_name ft_evr; do
             [[ -z "${ft_name}" || -z "${ft_evr}" ]] && continue
             local installed_ver
             installed_ver=$(sudo rpm --dbpath="${root_fs_dir}/var/lib/rpm" -q "${ft_name}" 2>/dev/null || true)
             if [[ -n "${installed_ver}" && "${installed_ver}" != *"not installed"* ]]; then
-                info "  ${installed_ver} (fasttrack available: ${ft_name}-${ft_evr})"
+                info "  ${installed_ver} (fasttrack candidate: ${ft_name}-${ft_evr})"
             fi
-        done < <(sudo /usr/bin/dnf5 repoquery --installroot="${root_fs_dir}" --releasever=3.0 \
-            ${forcearch_arg} --repo=fasttrack-preview --available --queryformat="%{name} %{evr}\n" 2>/dev/null || true)
+        done < <(sudo /usr/bin/dnf5 "${snapshot_args[@]}" repoquery --installroot="${root_fs_dir}" --releasever=3.0 \
+            ${forcearch_arg} --repo=fasttrack-preview --available --queryformat="%{name} %{evr}\n" \
+            "${packages[@]}" 2>/dev/null || true)
         info "=== End of fasttrack verification ==="
     fi
 
@@ -582,6 +583,9 @@ rpm_install_init() {
     rpm_snapshot_args snapshot_check_args
     # Initialize RPM database if needed
     rpm_init_database "${root_fs_dir}" || return 1
+
+    # Trust Microsoft-signed packages before the first bootstrap transaction.
+    rpm_import_gpg_key "${root_fs_dir}" || return 1
 
     # Setup repositories
     local rpm_staging
