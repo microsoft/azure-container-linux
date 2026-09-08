@@ -66,7 +66,7 @@ function get_git_version() {
     if [ -z "$tag" ] ; then
         # 'git describe' always prints a single line; leave it unpiped so its
         # exit status still propagates to the caller.
-        git describe --tags
+        git describe --tags 2>/dev/null || get_version_from_versionfile
     else
         echo "$tag"
     fi
