@@ -1,9 +1,10 @@
 # ACL EROFS/dm-verity capability profile.
 #
 # The ACL composition roots import this profile whether CRI currently uses
-# overlayfs or EROFS. Keeping the capability loaded lets VHD baking retain
-# signed EROFS referrers while unpacking small images into overlayfs. Runtime
-# snapshotter selection remains separate in acl-erofs-runtime.toml.
+# overlayfs or EROFS. Runtime snapshotter selection remains separate in
+# acl-erofs-runtime.toml. Explicit overlayfs pulls remain isolated from signed
+# EROFS discovery; fetch-only transfers may retain referrers for later EROFS
+# unpack.
 version = 2
 
 # Explicitly opt this profile into dm-verity referrer handling. The snapshotter
@@ -12,6 +13,7 @@ version = 2
 # mount behavior but deliberately does not advertise the referrer capability.
 [plugins."io.containerd.snapshotter.v1.erofs"]
   dmverity_mode = "auto"
+  enable_dmverity_referrers = true
 
 [plugins."io.containerd.transfer.v1.local"]
   # Defining unpack_config REPLACES containerd's built-in default of
@@ -38,11 +40,11 @@ version = 2
     differ = "erofs"
 
 [plugins."io.containerd.differ.v1.erofs"]
-  # The differ advertises that it can consume dm-verity artifacts. Referrer
-  # discovery is enabled only when this capability is paired with the explicit
-  # snapshotter capability above. Overlayfs remains the ordinary CRI path when
-  # IPE is inactive.
+  # Keep upstream local dm-verity formatting enabled for ordinary EROFS layers.
+  # Signed OCI-referrer handling is a separate capability and is negotiated
+  # only when the selected snapshotter advertises the same support.
   enable_dmverity = true
+  enable_dmverity_referrers = true
   enable_tar_index = true
   # Must remain byte-compatible with the signing tool's mkfs.erofs invocation.
   # The layer UUID is deliberately absent: the differ derives it from the layer

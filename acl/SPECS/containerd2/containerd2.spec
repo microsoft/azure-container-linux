@@ -1,11 +1,11 @@
 %global debug_package %{nil}
 %define upstream_name containerd
-%define commit_hash 193637f7ee8ae5f5aa5248f49e7baa3e6164966e
+%define commit_hash db8809540e1a7a9da5d518876894933ff55692ab
 
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
-Version: 2.2.4
-Release: 6024.verity%{?dist}
+Version: 2.3.4
+Release: 6025.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -25,29 +25,19 @@ Source9: containerd-acl-select-profile
 
 Patch0:	multi-snapshotters-support.patch
 Patch1:	tardev-support.patch
-Patch2:	CVE-2026-39882.patch
-Patch3:	CVE-2026-33814.patch
-Patch4:	fix-TestCgroupNamespace-cgroupv1.patch
-Patch5:	CVE-2026-39821.patch
-Patch6:	CVE-2026-42506.patch
-Patch7:	CVE-2026-27136.patch
-Patch8:	CVE-2026-53488.patch
-Patch9:	CVE-2026-53492.patch
-Patch10:	CVE-2026-50195.patch
-Patch11:	CVE-2026-53489.patch
-Patch12:	CVE-2026-47262.patch
-Patch13:	CVE-2026-25680.patch
-Patch14:	CVE-2026-25681.patch
-Patch15:	CVE-2026-42502.patch
-Patch16:	CVE-2026-56852.patch
-Patch17:	0017-erofs-add-signed-dm-verity-runtime-foundation.patch
-Patch18:	0018-erofs-consume-signed-metadata-with-fail-closed-lifec.patch
-Patch19:	0019-remotes-follow-bounded-referrers-pagination.patch
-Patch20:	0020-cri-refresh-cached-snapshotters-after-unpack.patch
+Patch2:	fix-TestCgroupNamespace-cgroupv1.patch
+Patch3:	CVE-2026-56852.patch
+Patch4:	0001-erofs-add-signed-dm-verity-mapper-foundation.patch
+Patch5:	0002-erofs-consume-signed-referrer-materializations.patch
+Patch6:	0003-remotes-bound-OCI-referrers-traversal.patch
+Patch7:	0004-cri-integrate-signed-runtime-snapshotters.patch
+Patch8:	0005-tests-cover-signed-EROFS-referrer-lifecycle.patch
 
 %{?systemd_requires}
 
-BuildRequires: golang
+# Temporarily stay on Go 1.26 until the Go 1.27 ML-KEM backend is fixed.
+BuildRequires: golang >= 1.26.7
+BuildRequires: golang < 1.27
 BuildRequires: go-md2man
 BuildRequires: make
 BuildRequires: systemd-rpm-macros
@@ -89,17 +79,13 @@ Container Linux. The main containerd2 package remains behavior-neutral.
 %autosetup -p1 -n %{upstream_name}-%{version}
 
 %build
+export GOEXPERIMENT=ms_nocgo_opensslcrypto
 export BUILDTAGS="-mod=vendor"
-case "$(go env GOVERSION)" in
-    go1.26.*) export GOEXPERIMENT=ms_nocgo_opensslcrypto ;;
-esac
 make VERSION="%{version}" REVISION="%{commit_hash}" binaries man
 
 %check
+export GOEXPERIMENT=ms_nocgo_opensslcrypto
 export BUILDTAGS="-mod=vendor"
-case "$(go env GOVERSION)" in
-    go1.26.*) export GOEXPERIMENT=ms_nocgo_opensslcrypto ;;
-esac
 make VERSION="%{version}" REVISION="%{commit_hash}" test
 
 %install
@@ -156,6 +142,11 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Wed Sep 09 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6025.verity
+- Rebase the signed EROFS/dm-verity carry onto containerd 2.3.4.
+- Keep signed OCI referrer handling separate from upstream local dm-verity.
+- Preserve the ordinary overlayfs lifecycle and add package-time regression tests.
+
 * Tue Sep 08 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6024.verity
 - Add four production-only patches for signed EROFS/dm-verity materialization,
   bounded referrer pagination, and CRI snapshotter-cache refresh.

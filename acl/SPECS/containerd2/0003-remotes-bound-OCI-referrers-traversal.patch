@@ -1,28 +1,19 @@
-From a88e21cacb32420b5853bc6bb2fd755763259067 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Dallas Delaney <dadelan@microsoft.com>
-Date: Tue, 8 Sep 2026 01:10:51 +0000
-Subject: [PATCH 19/20] remotes: follow bounded referrers pagination
+Date: Wed, 9 Sep 2026 02:54:30 +0000
+Subject: [PATCH 3/4] remotes: bound OCI referrers traversal
 
-Follow OCI referrers continuation links so signed EROFS bundle selection
-sees the complete referrer set instead of only the first registry page.
-
-Keep pagination on the selected registry and endpoint, preserve repository
-scope and caller filters, reject loops and conflicting next links, and
-bound decoded bytes, descriptors, and page count. Treat a missing or
-invalid continuation page as incomplete data rather than an empty
-referrer result so signed materialization cannot fail open.
-
-Tests remain on the companion validation branch rather than in the Azure
-Linux production patch carry.
+Follow bounded same-origin OCI Referrers API pagination, preserve query filters and repository scope, retain native registry failures across fallback-tag attempts, continue eligible fallback hosts, and keep descriptor, page, decoded-byte, and first-page resource-limit failures fatal rather than classifying them as absence.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
 Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
 ---
- core/remotes/docker/referrers.go | 456 ++++++++++++++++++++++++++++---
- 1 file changed, 417 insertions(+), 39 deletions(-)
+ core/remotes/docker/referrers.go | 462 ++++++++++++++++++++++++++++---
+ 1 file changed, 420 insertions(+), 42 deletions(-)
 
 diff --git a/core/remotes/docker/referrers.go b/core/remotes/docker/referrers.go
-index 503f06d72..c4a6b917d 100644
+index 503f06d72c3ee5bf4a8d6b752a21a7982e20589f..573f01186c41e4086795c84feb684f20956bb5fc 100644
 --- a/core/remotes/docker/referrers.go
 +++ b/core/remotes/docker/referrers.go
 @@ -23,6 +23,8 @@ import (
@@ -34,7 +25,7 @@ index 503f06d72..c4a6b917d 100644
  	"strings"
  
  	"github.com/containerd/containerd/v2/core/remotes"
-@@ -32,53 +34,422 @@ import (
+@@ -32,53 +34,421 @@ import (
  	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
  )
  
@@ -80,12 +71,8 @@ index 503f06d72..c4a6b917d 100644
 +	tFilter := map[string]struct{}{}
 +	for _, artifactType := range config.ArtifactTypes {
 +		tFilter[artifactType] = struct{}{}
- 	}
- 
--	var index ocispec.Index
--	dec := json.NewDecoder(io.LimitReader(rc, size))
--	if err := dec.Decode(&index); err != nil {
--		return nil, fmt.Errorf("failed to decode referrers index: %w", err)
++	}
++
 +	var (
 +		referrers       []ocispec.Descriptor
 +		descriptorCount int
@@ -177,13 +164,16 @@ index 503f06d72..c4a6b917d 100644
 +	}
 +	if contentLength > byteLimit {
 +		return nil, 0, fmt.Errorf(
-+			"referrers index size %d exceeds maximum allowed %d: %w",
++			"referrers index size %d exceeds maximum allowed %d",
 +			contentLength,
 +			byteLimit,
-+			errdefs.ErrNotFound,
 +		)
-+	}
-+
+ 	}
+ 
+-	var index ocispec.Index
+-	dec := json.NewDecoder(io.LimitReader(rc, size))
+-	if err := dec.Decode(&index); err != nil {
+-		return nil, fmt.Errorf("failed to decode referrers index: %w", err)
 +	counter := &countingReader{reader: io.LimitReader(body, byteLimit+1)}
 +	dec := json.NewDecoder(counter)
 +	token, err := dec.Token()
@@ -249,13 +239,15 @@ index 503f06d72..c4a6b917d 100644
  	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 -		return nil, fmt.Errorf("unexpected data after JSON object")
 +		return nil, counter.bytesRead, fmt.Errorf("unexpected data after JSON object")
-+	}
+ 	}
 +	if counter.bytesRead > byteLimit {
 +		return nil, counter.bytesRead, fmt.Errorf("referrers index exceeds maximum total size %d", MaxManifestSize)
 +	}
 +	return manifests, counter.bytesRead, nil
 +}
-+
+ 
+-	if len(config.ArtifactTypes) == 0 {
+-		return index.Manifests, nil
 +func nextReferrersRequest(current *request, fixedQuery url.Values, link string) (*request, string, error) {
 +	baseURL, err := url.Parse(current.String())
 +	if err != nil {
@@ -269,29 +261,31 @@ index 503f06d72..c4a6b917d 100644
 +		return nil, "", fmt.Errorf("referrers pagination link %q contains user information or a fragment", link)
  	}
  
--	if len(config.ArtifactTypes) == 0 {
--		return index.Manifests, nil
-+	nextURL := baseURL.ResolveReference(linkURL)
-+	if !sameOrigin(nextURL, baseURL) {
-+		return nil, "", fmt.Errorf("referrers pagination link %q changes registry origin", link)
-+	}
-+	if nextURL.Path != baseURL.Path {
-+		return nil, "", fmt.Errorf("referrers pagination link %q changes the referrers endpoint", link)
- 	}
- 
 -	var referrers []ocispec.Descriptor
 -	tFilter := map[string]struct{}{}
 -	for _, t := range config.ArtifactTypes {
 -		tFilter[t] = struct{}{}
++	nextURL := baseURL.ResolveReference(linkURL)
++	if !sameOrigin(nextURL, baseURL) {
++		return nil, "", fmt.Errorf("referrers pagination link %q changes registry origin", link)
+ 	}
+-	for _, desc := range index.Manifests {
+-		if _, ok := tFilter[desc.ArtifactType]; ok {
+-			referrers = append(referrers, desc)
++	if nextURL.Path != baseURL.Path {
++		return nil, "", fmt.Errorf("referrers pagination link %q changes the referrers endpoint", link)
++	}
++
 +	query := nextURL.Query()
 +	rewriteQuery := false
 +	for key, values := range fixedQuery {
 +		if slices.Equal(query[key], values) {
 +			continue
-+		}
+ 		}
 +		query[key] = append([]string(nil), values...)
 +		rewriteQuery = true
-+	}
+ 	}
+-	return referrers, nil
 +	if rewriteQuery {
 +		nextURL.RawQuery = query.Encode()
 +	}
@@ -321,10 +315,7 @@ index 503f06d72..c4a6b917d 100644
 +		return "443"
 +	default:
 +		return ""
- 	}
--	for _, desc := range index.Manifests {
--		if _, ok := tFilter[desc.ArtifactType]; ok {
--			referrers = append(referrers, desc)
++	}
 +}
 +
 +func nextLink(values []string) (string, error) {
@@ -385,12 +376,13 @@ index 503f06d72..c4a6b917d 100644
 +					next = target
 +				}
 +			}
- 		}
- 	}
--	return referrers, nil
++		}
++	}
 +	return next, nil
-+}
-+
+ }
+ 
+-func (r dockerFetcher) openReferrers(ctx context.Context, dgst digest.Digest, config remotes.FetchReferrersConfig) (io.ReadCloser, int64, error) {
+-	mediaType := ocispec.MediaTypeImageIndex
 +func splitLinkHeader(value string) ([]string, error) {
 +	return splitLinkValue(value, ',')
 +}
@@ -473,15 +465,13 @@ index 503f06d72..c4a6b917d 100644
 +		ReadCloser: response.Body,
 +	}
 +	return response, nil
- }
- 
--func (r dockerFetcher) openReferrers(ctx context.Context, dgst digest.Digest, config remotes.FetchReferrersConfig) (io.ReadCloser, int64, error) {
--	mediaType := ocispec.MediaTypeImageIndex
++}
++
 +func (r dockerFetcher) openReferrers(ctx context.Context, dgst digest.Digest, config remotes.FetchReferrersConfig) (*referrersPage, error) {
  	ctx = log.WithLogger(ctx, log.G(ctx).WithField("digest", dgst))
  
  	hosts := r.filterHosts(HostCapabilityReferrers)
-@@ -86,38 +457,37 @@ func (r dockerFetcher) openReferrers(ctx context.Context, dgst digest.Digest, co
+@@ -86,38 +456,37 @@ func (r dockerFetcher) openReferrers(ctx context.Context, dgst digest.Digest, co
  	if len(hosts) == 0 {
  		fallbackHosts = r.filterHosts(HostCapabilityResolve)
  		if len(fallbackHosts) == 0 {
@@ -529,7 +519,7 @@ index 503f06d72..c4a6b917d 100644
  		if err != nil {
  			if !errdefs.IsNotFound(err) {
  				log.G(ctx).WithError(err).WithField("host", host.Host).Debug("error fetching referrers")
-@@ -126,16 +496,21 @@ func (r dockerFetcher) openReferrers(ctx context.Context, dgst digest.Digest, co
+@@ -126,33 +495,42 @@ func (r dockerFetcher) openReferrers(ctx context.Context, dgst digest.Digest, co
  				}
  			}
  		} else {
@@ -553,8 +543,16 @@ index 503f06d72..c4a6b917d 100644
 +		response, err := r.openReferrersRequest(ctx, req, i == len(fallbackHosts)-1)
  		if err != nil {
  			if errdefs.IsNotFound(err) {
- 				// Equivalent to empty referrers list
-@@ -147,12 +522,15 @@ func (r dockerFetcher) openReferrers(ctx context.Context, dgst digest.Digest, co
+-				// Equivalent to empty referrers list
+-				firstErr = err
+-				break
++				// This host conclusively has no fallback tag. Continue because a
++				// later eligible host may still serve it, and never overwrite a
++				// more informative native referrers failure.
++				continue
+ 			}
+ 			log.G(ctx).WithError(err).WithField("host", host.Host).Debug("error fetching referrers via fallback")
+ 			if firstErr == nil {
  				firstErr = err
  			}
  		} else {
