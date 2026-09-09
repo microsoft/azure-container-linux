@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out scripts at ${{ github.ref }} for GHA scripts only
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           token: ${{ secrets.BOT_PR_TOKEN }}
           path: gha
@@ -22,7 +22,7 @@ jobs:
         run: gha/.github/workflows/figure-out-branch.sh '${{ matrix.channel }}'
       - name: Check out work scripts branch for updating
         if: steps.figure-out-branch.outputs.SKIP == 0
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           token: ${{ secrets.BOT_PR_TOKEN }}
           path: work
