@@ -5,7 +5,7 @@
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.4
-Release: 6025.verity%{?dist}
+Release: 9005.mirrortest%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -22,6 +22,7 @@ Source6: containerd-acl-tmpfiles.conf
 Source7: containerd-acl-erofs-runtime.toml
 Source8: containerd-acl-erofs-config.toml
 Source9: containerd-acl-select-profile
+Source10: mcr-mirror-hosts.toml
 
 Patch0:	multi-snapshotters-support.patch
 Patch1:	tardev-support.patch
@@ -103,6 +104,7 @@ install -D -p -m 0644 %{SOURCE6} %{buildroot}%{_prefix}/lib/tmpfiles.d/10-contai
 install -D -p -m 0644 %{SOURCE7} %{buildroot}%{_datadir}/containerd2/acl-erofs-runtime.toml
 install -D -p -m 0644 %{SOURCE8} %{buildroot}%{_datadir}/containerd2/acl-erofs-config.toml
 install -D -p -m 0755 %{SOURCE9} %{buildroot}%{_libexecdir}/containerd2/acl-select-profile
+install -D -p -m 0644 %{SOURCE10} %{buildroot}%{_datadir}/containerd2/certs.d/mcr.microsoft.com/hosts.toml
 
 %post
 %systemd_post containerd.service
@@ -135,13 +137,21 @@ fi
 %{_datadir}/containerd2/acl-erofs-runtime.toml
 %{_datadir}/containerd2/acl-erofs-config.toml
 %{_libexecdir}/containerd2/acl-select-profile
+%{_datadir}/containerd2/certs.d/mcr.microsoft.com/hosts.toml
 %{_prefix}/lib/systemd/system/containerd.service.d/90-acl-profile.conf
 %{_prefix}/lib/tmpfiles.d/10-containerd-acl.conf
 %dir %{_datadir}/containerd2
+%dir %{_datadir}/containerd2/certs.d
+%dir %{_datadir}/containerd2/certs.d/mcr.microsoft.com
 %dir %{_libexecdir}/containerd2
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Wed Sep 09 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-9005.mirrortest
+- Add the isolated fail-closed MCR tar-index mirror for AKS validation.
+- Restore the packaged hosts.toml before every containerd start.
+- Keep the PR-ready 2.3.4 signed EROFS carry unchanged on its separate branch.
+
 * Wed Sep 09 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6025.verity
 - Rebase the signed EROFS/dm-verity carry onto containerd 2.3.4.
 - Keep signed OCI referrer handling separate from upstream local dm-verity.
