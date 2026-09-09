@@ -58,16 +58,16 @@ jobs:
           sudo apt-get install -y ca-certificates curl git gnupg lsb-release python3 python3-packaging qemu-user-static zstd
 
       - name: Set up Docker
-        uses: docker/setup-docker-action@v4
+        uses: docker/setup-docker-action@e43656e248c0bd0647d3f5c195d116aacf6fcaf4 # v4.7.0
 
       - name: Checkout scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: scripts
           fetch-depth: 0
 
       - name: Checkout build scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: flatcar/flatcar-build-scripts
           path: flatcar-build-scripts
@@ -156,7 +156,7 @@ jobs:
 
       - name: Upload build logs
         if: always() && !cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           retention-days: 7
           name: ${{ matrix.arch }}-build-logs
@@ -246,7 +246,7 @@ jobs:
         run: .github/workflows/image_changes.sh ${{ matrix.arch }} nightly
 
       - name: Upload binpkgs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           retention-days: 7
           name: ${{ matrix.arch }}-binpkgs
@@ -254,7 +254,7 @@ jobs:
             scripts/binpkgs.tar
 
       - name: Upload update image (used with kola tests later)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           retention-days: 7
           name: ${{ matrix.arch }}-test-update
@@ -262,7 +262,7 @@ jobs:
             scripts/artifacts/images/flatcar_test_update.gz
 
       - name: Upload generic image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           retention-days: 7
           name: ${{ matrix.arch }}-generic-image
@@ -278,7 +278,7 @@ jobs:
             scripts/artifacts/images/flatcar_production_qemu.sh
 
       - name: Upload developer container
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           retention-days: 7
           name: ${{ matrix.arch }}-devcontainer
@@ -286,7 +286,7 @@ jobs:
             scripts/artifacts/images/flatcar_developer_container*
 
       - name: Upload reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           retention-days: 7
           name: ${{ matrix.arch }}-image-changes-reports
@@ -306,7 +306,7 @@ jobs:
                 artifacts/images/flatcar_production_update*
 
       - name: Upload vendor images
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           retention-days: 7
           name: ${{ matrix.arch }}-vm-images
