@@ -31,7 +31,7 @@ Patch4:	0001-erofs-add-signed-dm-verity-mapper-foundation.patch
 Patch5:	0002-erofs-consume-signed-referrer-materializations.patch
 Patch6:	0003-remotes-bound-OCI-referrers-traversal.patch
 Patch7:	0004-cri-integrate-signed-runtime-snapshotters.patch
-Patch8:	0005-tests-cover-signed-EROFS-referrer-lifecycle.patch
+Patch8:	0005-tests-cover-critical-signed-EROFS-regressions.patch
 
 %{?systemd_requires}
 
