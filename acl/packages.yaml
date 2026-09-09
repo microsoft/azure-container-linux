@@ -29,5 +29,7 @@ packages:
 
   # --- ACL-patched system packages ----------------------------------------
   - bootengine          # Flatcar bootengine (glob-based firstboot addon removal for UAPI UKI naming)
+  - containerd2         # Pre-merge validation of Azure Linux container runtime changes
   - microcode_ctl       # CPU microcode updater (Fedora import)
+  - runc                # Pre-merge validation of Azure Linux container runtime changes
   - selinux-policy      # SELinux reference policy (ACL-specific modules)
