@@ -208,8 +208,12 @@ EOF
   if [[ ${COREOS_OFFICIAL:-0} -eq 1 ]]; then
     rm -v \
         "${BUILD_DIR}/${image_kernel}" \
-        "${BUILD_DIR}/${image_pcr_policy}" \
         "${BUILD_DIR}/${image_grub}"
+    # UKI-mode builds skip GRUB PCR-policy generation, so the file may not
+    # exist; only remove it if it was actually produced.
+    if [[ -f "${BUILD_DIR}/${image_pcr_policy}" ]]; then
+      rm -v "${BUILD_DIR}/${image_pcr_policy}"
+    fi
   fi
 
   local files_to_evaluate=( "${BUILD_DIR}/${image_name}" )
