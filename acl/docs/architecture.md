@@ -39,7 +39,7 @@ The build system produces a base OS image (`acl_production_image.bin`) and then 
 
 ACL's primary boot path uses **systemd-boot** with **Unified Kernel Images (UKI)**:
 
-- `ukify` packs the kernel, initramfs, kernel command line (including verity parameters), and an EFI stub into a single signed PE binary installed on the EFI System Partition.
+- `ukify` packs the kernel, initramfs, a slot-independent kernel command line, and an EFI stub into a single signed PE binary installed on the EFI System Partition. Slot-specific verity parameters are not baked into this shared command line; they are delivered separately via a per-slot systemd-stub addon (see dm-verity section below).
 - **systemd-boot** is the UEFI bootloader that discovers and launches UKIs from the ESP.
 
 **Addons** extend UKI behavior without rebuilding the image:
