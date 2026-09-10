@@ -1012,19 +1012,15 @@ EOF
   fi
 
   if [[ -n "${pcr_policy}" ]]; then
-    if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE}" == "uki" ]]; then
-      info "UKI mode: Skipping GRUB PCR-policy generation (no GRUB boot chain to measure)"
-    else
-      mkdir -p "${BUILD_DIR}/pcrs"
-      ${BUILD_LIBRARY_DIR}/generate_grub_hashes.py \
-          "${disk_img}" /usr/lib/grub/ "${BUILD_DIR}/pcrs" ${FLATCAR_VERSION}
+    mkdir -p "${BUILD_DIR}/pcrs"
+    ${BUILD_LIBRARY_DIR}/generate_grub_hashes.py \
+        "${disk_img}" /usr/lib/grub/ "${BUILD_DIR}/pcrs" ${FLATCAR_VERSION}
 
-      info "Generating $pcr_policy"
-      pushd "${BUILD_DIR}" >/dev/null
-      zip --quiet -r -9 "${pcr_policy}" pcrs
-      popd >/dev/null
-      rm -rf "${BUILD_DIR}/pcrs"
-    fi
+    info "Generating $pcr_policy"
+    pushd "${BUILD_DIR}" >/dev/null
+    zip --quiet -r -9 "${pcr_policy}" pcrs
+    popd >/dev/null
+    rm -rf "${BUILD_DIR}/pcrs"
   fi
 
   # Mount the final image again, as readonly, to generate some reports.
@@ -1129,18 +1125,14 @@ sbsign_image() {
   trap - EXIT
 
   if [[ -n "${pcr_policy}" ]]; then
-    if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE}" == "uki" ]]; then
-      info "UKI mode: Skipping GRUB PCR-policy generation (no GRUB boot chain to measure)"
-    else
-      "${BUILD_LIBRARY_DIR}"/generate_grub_hashes.py \
-          "${disk_img}" /usr/lib/grub/ "${BUILD_DIR}/pcrs" "${FLATCAR_VERSION}"
+    "${BUILD_LIBRARY_DIR}"/generate_grub_hashes.py \
+        "${disk_img}" /usr/lib/grub/ "${BUILD_DIR}/pcrs" "${FLATCAR_VERSION}"
 
-      info "Generating $pcr_policy"
-      pushd "${BUILD_DIR}" >/dev/null
-      zip --quiet -r -9 "${BUILD_DIR}/${pcr_policy}" pcrs
-      popd >/dev/null
-      rm -rf "${BUILD_DIR}/pcrs"
-    fi
+    info "Generating $pcr_policy"
+    pushd "${BUILD_DIR}" >/dev/null
+    zip --quiet -r -9 "${BUILD_DIR}/${pcr_policy}" pcrs
+    popd >/dev/null
+    rm -rf "${BUILD_DIR}/pcrs"
   fi
 }
 
