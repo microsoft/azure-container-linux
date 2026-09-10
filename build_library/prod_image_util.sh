@@ -77,7 +77,14 @@ create_prod_image() {
   local image_licenses="${image_name%.bin}_licenses.json"
   local image_kconfig="${image_name%.bin}_kernel_config.txt"
   local image_kernel="${image_name%.bin}.vmlinuz"
-  local image_pcr_policy="${image_name%.bin}_pcr_policy.zip"
+  # PCR-policy generation is only meaningful for the legacy Portage/Flatcar
+  # GRUB boot chain; nothing consumes this artifact for RPM (ACL) builds, so
+  # skip producing it there entirely rather than generate an unused/unverified
+  # PCR policy.
+  local image_pcr_policy=""
+  if [[ "${PACKAGE_SOURCE_MODE}" != "RPM" ]]; then
+    image_pcr_policy="${image_name%.bin}_pcr_policy.zip"
+  fi
   local image_grub="${image_name%.bin}.grub"
   local image_shim="${image_name%.bin}.shim"
   local image_initrd_contents="${image_name%.bin}_initrd_contents.txt"
@@ -206,14 +213,14 @@ EOF
   # Official builds will sign and upload these files later, so remove them to
   # prevent them from being uploaded now.
   if [[ ${COREOS_OFFICIAL:-0} -eq 1 ]]; then
-    # UKI-mode builds skip the standalone kernel copy, GRUB install, and
-    # GRUB PCR-policy generation in finish_image, so none of these
-    # artifacts may exist; only remove what was actually produced.
-    local official_cleanup_files=(
-      "${BUILD_DIR}/${image_kernel}"
-      "${BUILD_DIR}/${image_grub}"
-      "${BUILD_DIR}/${image_pcr_policy}"
-    )
+    # UKI-mode builds skip the standalone kernel copy and GRUB install in
+    # finish_image, so those two artifacts may not exist; only remove what
+    # was actually produced. image_pcr_policy is empty for all RPM builds
+    # (see above), so it is only ever added below for Portage.
+    local official_cleanup_files=("${BUILD_DIR}/${image_kernel}" "${BUILD_DIR}/${image_grub}")
+    if [[ -n "${image_pcr_policy}" ]]; then
+      official_cleanup_files+=("${BUILD_DIR}/${image_pcr_policy}")
+    fi
     local f
     for f in "${official_cleanup_files[@]}"; do
       if [[ -f "${f}" ]]; then
@@ -322,7 +329,10 @@ sbsign_prod_image() {
   local root_fs_dir="${BUILD_DIR}/rootfs"
   local image_prefix="${image_name%.bin}"
   local image_kernel="${image_prefix}.vmlinuz"
-  local image_pcr_policy="${image_prefix}_pcr_policy.zip"
+  local image_pcr_policy=""
+  if [[ "${PACKAGE_SOURCE_MODE}" != "RPM" ]]; then
+    image_pcr_policy="${image_prefix}_pcr_policy.zip"
+  fi
   local image_grub="${image_prefix}.grub"
 
   sbsign_image \
