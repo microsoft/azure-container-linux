@@ -21,6 +21,11 @@ pr:
       - release/*
 
 parameters:
+  - name: buildMantle
+    displayName: '[Build] Build selected Mantle source for this run'
+    type: boolean
+    default: false
+
   # A digest pin requires an acl_pipelines resource version that supports it,
   # such as gsettles/sdk-ab-validation; leave the normal resource default alone.
   - name: sdkImageRef
@@ -54,6 +59,7 @@ extends:
   parameters:
     aclRef: $(Build.SourceBranch)
     mantleRef: 'aclmain'
+    buildMantle: ${{ parameters.buildMantle }}
     testGeneratePackageManifest: true
     # Omit the new parameter for default runs against older shared templates.
     ${{ if and(ne(parameters.sdkImageRef, ''), ne(parameters.sdkImageRef, 'none')) }}:
