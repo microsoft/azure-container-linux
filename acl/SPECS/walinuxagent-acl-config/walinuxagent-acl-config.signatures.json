@@ -1,0 +1,8 @@
+{
+ "Signatures": {
+  "10-waagent-sysext.conf": "4210ac2f6fe8b11bf011a0c855351423d69554bc84dc9d5609f6555d49c5c627",
+  "waagent.conf": "b2513218733467d0d7938514e245dfa83d99f16802d3cd97bb57916f0a071ce1",
+  "waagent.service": "218ab311af0af9ad8298510d4efd6cc793e4ad1318189010cf8453b408c2dc14",
+  "walinuxagent-acl-config-1.0.1.tar.gz": "7043a0faa53dca26a499a26623e665148c49e2aebc0d2335c3d13d45eb7e9ede"
+ }
+}
