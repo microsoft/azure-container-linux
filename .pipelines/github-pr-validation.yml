@@ -20,6 +20,14 @@ pr:
       - aclmain
       - release/*
 
+parameters:
+  # A digest pin requires an acl_pipelines resource version that supports it,
+  # such as gsettles/sdk-ab-validation; leave the normal resource default alone.
+  - name: sdkImageRef
+    displayName: '[Source] SDK digest override (none uses normal SDK)'
+    type: string
+    default: 'none'
+
 resources:
   repositories:
     - repository: acl_pipelines
@@ -47,3 +55,6 @@ extends:
     aclRef: $(Build.SourceBranch)
     mantleRef: 'aclmain'
     testGeneratePackageManifest: true
+    # Omit the new parameter for default runs against older shared templates.
+    ${{ if and(ne(parameters.sdkImageRef, ''), ne(parameters.sdkImageRef, 'none')) }}:
+      sdkImageRef: ${{ parameters.sdkImageRef }}
