@@ -11,6 +11,7 @@ filename = sys.argv[1]
 grubdir = sys.argv[2]
 outputdir = sys.argv[3]
 version = sys.argv[4]
+package_source_mode = sys.argv[5]
 bootoffset = int(subprocess.check_output(['cgpt', 'show', '-i', '2', '-b', filename])) * 512
 with open(filename, "rb") as f:
     boot = f.read(440)
@@ -39,8 +40,15 @@ for folder, subs, files in os.walk(grubdir):
 with open(os.path.join(outputdir, "grub_modules.config"), "w") as f:
     f.write(json.dumps({"9": {"binaryvalues": [{"prefix": "grub_module", "values": hashvalues}]}}))
 
+if package_source_mode == "RPM":
+    # RPM builds use systemd-native dm-verity parameters for /usr (see
+    # build_library/rpm/grub.cfg and systemd-veritysetup-generator).
+    kernel_cmdline_pattern = "rootflags=rw mount.usrflags=ro mount.usr=/dev/mapper/usr usrhash=\\S{64} systemd.verity_usr_data=UUID=\\S{36} systemd.verity_usr_hash=UUID=\\S{36} systemd.verity_usr_options=panic-on-corruption rootflags=rw mount.usrflags=ro consoleblank=0 root=LABEL=ROOT (console=\\S+)? (flatcar.autologin=\\S+)?"
+else:
+    kernel_cmdline_pattern = "rootflags=rw mount.usrflags=ro BOOT_IMAGE=/flatcar/vmlinuz-[ab] mount.usr=PARTUUID=\\S{36} rootflags=rw mount.usrflags=ro consoleblank=0 root=LABEL=ROOT (console=\\S+)? (flatcar.autologin=\\S+)? verity.usrhash=\\S{64}"
+
 with open(os.path.join(outputdir, "kernel_cmdline.config"), "w") as f:
-    f.write(json.dumps({"8": {"asciivalues": [{"prefix": "grub_kernel_cmdline", "values": [{"value": "rootflags=rw mount.usrflags=ro BOOT_IMAGE=/flatcar/vmlinuz-[ab] mount.usr=PARTUUID=\S{36} rootflags=rw mount.usrflags=ro consoleblank=0 root=LABEL=ROOT (console=\S+)? (flatcar.autologin=\S+)? verity.usrhash=\\S{64}", "description": "Flatcar kernel command line %s" % version}]}]}}))
+    f.write(json.dumps({"8": {"asciivalues": [{"prefix": "grub_kernel_cmdline", "values": [{"value": kernel_cmdline_pattern, "description": "Flatcar kernel command line %s" % version}]}]}}))
 
 commands = [{"value": '\[.*\]', "description": "Flatcar Grub configuration %s" % version},
             {"value": 'gptprio.next -d usr -u usr_uuid', "description": "Flatcar Grub configuration %s" % version},

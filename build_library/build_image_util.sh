@@ -1014,10 +1014,12 @@ EOF
   if [[ -n "${pcr_policy}" ]]; then
     if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE}" == "uki" ]]; then
       info "UKI mode: Skipping GRUB PCR-policy generation (no GRUB boot chain to measure)"
+    elif [[ ${disable_read_write} -ne ${FLAGS_TRUE} ]]; then
+      info "Non-verity image: Skipping GRUB PCR-policy generation (no verity cmdline to measure)"
     else
       mkdir -p "${BUILD_DIR}/pcrs"
       ${BUILD_LIBRARY_DIR}/generate_grub_hashes.py \
-          "${disk_img}" /usr/lib/grub/ "${BUILD_DIR}/pcrs" ${FLATCAR_VERSION}
+          "${disk_img}" /usr/lib/grub/ "${BUILD_DIR}/pcrs" ${FLATCAR_VERSION} "${PACKAGE_SOURCE_MODE}"
 
       info "Generating $pcr_policy"
       pushd "${BUILD_DIR}" >/dev/null
@@ -1133,7 +1135,7 @@ sbsign_image() {
       info "UKI mode: Skipping GRUB PCR-policy generation (no GRUB boot chain to measure)"
     else
       "${BUILD_LIBRARY_DIR}"/generate_grub_hashes.py \
-          "${disk_img}" /usr/lib/grub/ "${BUILD_DIR}/pcrs" "${FLATCAR_VERSION}"
+          "${disk_img}" /usr/lib/grub/ "${BUILD_DIR}/pcrs" "${FLATCAR_VERSION}" "${PACKAGE_SOURCE_MODE}"
 
       info "Generating $pcr_policy"
       pushd "${BUILD_DIR}" >/dev/null
