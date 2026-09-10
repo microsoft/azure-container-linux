@@ -206,14 +206,20 @@ EOF
   # Official builds will sign and upload these files later, so remove them to
   # prevent them from being uploaded now.
   if [[ ${COREOS_OFFICIAL:-0} -eq 1 ]]; then
-    rm -v \
-        "${BUILD_DIR}/${image_kernel}" \
-        "${BUILD_DIR}/${image_grub}"
-    # UKI-mode builds skip GRUB PCR-policy generation, so the file may not
-    # exist; only remove it if it was actually produced.
-    if [[ -f "${BUILD_DIR}/${image_pcr_policy}" ]]; then
-      rm -v "${BUILD_DIR}/${image_pcr_policy}"
-    fi
+    # UKI-mode builds skip the standalone kernel copy, GRUB install, and
+    # GRUB PCR-policy generation in finish_image, so none of these
+    # artifacts may exist; only remove what was actually produced.
+    local official_cleanup_files=(
+      "${BUILD_DIR}/${image_kernel}"
+      "${BUILD_DIR}/${image_grub}"
+      "${BUILD_DIR}/${image_pcr_policy}"
+    )
+    local f
+    for f in "${official_cleanup_files[@]}"; do
+      if [[ -f "${f}" ]]; then
+        rm -v "${f}"
+      fi
+    done
   fi
 
   local files_to_evaluate=( "${BUILD_DIR}/${image_name}" )
