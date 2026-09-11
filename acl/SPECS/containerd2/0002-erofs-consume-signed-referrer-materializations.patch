@@ -1,9 +1,11 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Dallas Delaney <dadelan@microsoft.com>
-Date: Wed, 9 Sep 2026 02:54:12 +0000
+Date: Fri, 11 Sep 2026 05:27:16 +0000
 Subject: [PATCH 2/4] erofs: consume signed referrer materializations
 
 Add the semantic signed-artifact schema, bounded validation and selection, retained content graphs, precomputed EROFS and Merkle materialization, snapshot binding and cleanup, cached deferred unpack, transfer capability negotiation, fail-closed reuse, and the distinct default-off enable_dmverity_referrers behavior while preserving upstream enable_dmverity and overlayfs isolation.
+
+Align the pre-release v1 wire format with Prism Sign: use neutral containerd EROFS annotations and carry PKCS#7 as a digest-verified descriptor payload.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 
@@ -20,18 +22,18 @@ Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
  core/unpack/unpacker.go                  |  25 +
  internal/erofsutils/mount.go             |   4 +
  pkg/rootfs/apply.go                      |  23 +-
- pkg/snapshotters/contentstore_fetcher.go | 229 ++++++++
+ pkg/snapshotters/contentstore_fetcher.go | 229 +++++++
  pkg/snapshotters/dmverity_policy.go      | 145 +++++
- pkg/snapshotters/signatures.go           | 697 +++++++++++++++++++++++
+ pkg/snapshotters/signatures.go           | 761 +++++++++++++++++++++++
  plugins/diff/erofs/differ.go             |  86 ++-
  plugins/diff/erofs/plugin/plugin.go      |  39 +-
  plugins/diff/erofs/precomputed.go        | 244 ++++++++
  plugins/services/diff/local.go           |  91 ++-
- plugins/snapshots/erofs/erofs.go         | 344 +++++++++--
+ plugins/snapshots/erofs/erofs.go         | 344 ++++++++--
  plugins/snapshots/erofs/plugin/plugin.go |  42 +-
  plugins/transfer/plugin.go               |  56 +-
  plugins/types.go                         |  14 +
- 22 files changed, 2174 insertions(+), 92 deletions(-)
+ 22 files changed, 2238 insertions(+), 92 deletions(-)
  create mode 100644 core/transfer/local/dmverity.go
  create mode 100644 pkg/snapshotters/contentstore_fetcher.go
  create mode 100644 pkg/snapshotters/dmverity_policy.go
@@ -39,7 +41,7 @@ Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
  create mode 100644 plugins/diff/erofs/precomputed.go
 
 diff --git a/client/client.go b/client/client.go
-index b7ca2056f8541ed4b3ac446d1946a36096d23d46..9b682a39643fe3ba7a491930b1fdf7ef96779769 100644
+index b7ca2056f..9b682a396 100644
 --- a/client/client.go
 +++ b/client/client.go
 @@ -22,6 +22,7 @@ import (
@@ -113,7 +115,7 @@ index b7ca2056f8541ed4b3ac446d1946a36096d23d46..9b682a39643fe3ba7a491930b1fdf7ef
  	Version  string
  	Revision string
 diff --git a/client/image.go b/client/image.go
-index 008e9b3e6ff624640b49bc3517bf5e6da3c1df02..2fb2c71ffd08a80352e268958c29b18270edaedd 100644
+index 008e9b3e6..2fb2c71ff 100644
 --- a/client/image.go
 +++ b/client/image.go
 @@ -21,6 +21,7 @@ import (
@@ -214,7 +216,7 @@ index 008e9b3e6ff624640b49bc3517bf5e6da3c1df02..2fb2c71ffd08a80352e268958c29b182
  		if err != nil {
  			return fmt.Errorf("apply layer error for %q: %w", i.Name(), err)
 diff --git a/client/pull.go b/client/pull.go
-index 7435394306d3ad2d4e7230d7e1a5bca1072896d7..abec72c4a55134af0f5e56c5c2a0e42e9954324b 100644
+index 743539430..abec72c4a 100644
 --- a/client/pull.go
 +++ b/client/pull.go
 @@ -98,9 +98,9 @@ func (c *Client) Pull(ctx context.Context, ref string, opts ...RemoteOpt) (_ Ima
@@ -230,7 +232,7 @@ index 7435394306d3ad2d4e7230d7e1a5bca1072896d7..abec72c4a55134af0f5e56c5c2a0e42e
  
  		var uconfig UnpackConfig
 diff --git a/core/images/image.go b/core/images/image.go
-index 9fcce9b4eb0d23b35f788027658ca44a3672bce1..0332b6283bd57c7d9f0e5f958b770d900390b005 100644
+index 9fcce9b4e..0332b6283 100644
 --- a/core/images/image.go
 +++ b/core/images/image.go
 @@ -133,6 +133,7 @@ func (image *Image) Size(ctx context.Context, provider content.Provider, platfor
@@ -286,7 +288,7 @@ index 9fcce9b4eb0d23b35f788027658ca44a3672bce1..0332b6283bd57c7d9f0e5f958b770d90
  // Config resolves the image configuration descriptor using a content provided
 diff --git a/core/transfer/local/dmverity.go b/core/transfer/local/dmverity.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..aa79146948eb4ef39a135eb0aa6ddb0f8294a7a8
+index 000000000..aa7914694
 --- /dev/null
 +++ b/core/transfer/local/dmverity.go
 @@ -0,0 +1,56 @@
@@ -347,7 +349,7 @@ index 0000000000000000000000000000000000000000..aa79146948eb4ef39a135eb0aa6ddb0f
 +	}
 +}
 diff --git a/core/transfer/local/import.go b/core/transfer/local/import.go
-index 232981b7646d2abe4c2f6de7110ead923fd38410..c6a4d800ce64f7cf215db9f69382f3ae16a9ece6 100644
+index 232981b76..c6a4d800c 100644
 --- a/core/transfer/local/import.go
 +++ b/core/transfer/local/import.go
 @@ -21,6 +21,7 @@ import (
@@ -415,7 +417,7 @@ index 232981b7646d2abe4c2f6de7110ead923fd38410..c6a4d800ce64f7cf215db9f69382f3ae
  	if err := images.WalkNotEmpty(ctx, handler, index); err != nil {
  		if unpacker != nil {
 diff --git a/core/transfer/local/pull.go b/core/transfer/local/pull.go
-index 712e81e20c17366c75685fa32084a7ef85843c93..b05ef30649545801261ea7edfa56d8a4c223066d 100644
+index 712e81e20..b05ef3064 100644
 --- a/core/transfer/local/pull.go
 +++ b/core/transfer/local/pull.go
 @@ -19,6 +19,7 @@ package local
@@ -476,7 +478,7 @@ index 712e81e20c17366c75685fa32084a7ef85843c93..b05ef30649545801261ea7edfa56d8a4
  	if err := images.Dispatch(ctx, handler, nil, desc); err != nil {
  		if unpacker != nil {
 diff --git a/core/transfer/local/transfer.go b/core/transfer/local/transfer.go
-index 568d993a03cadfcc29a5cbe87aef28980294309c..4792a45775ffa7513142bfca225ceabdb90482ec 100644
+index 568d993a0..4792a4577 100644
 --- a/core/transfer/local/transfer.go
 +++ b/core/transfer/local/transfer.go
 @@ -202,6 +202,10 @@ type TransferConfig struct {
@@ -491,7 +493,7 @@ index 568d993a03cadfcc29a5cbe87aef28980294309c..4792a45775ffa7513142bfca225ceabd
  	Verifiers map[string]imageverifier.ImageVerifier
  
 diff --git a/core/unpack/unpacker.go b/core/unpack/unpacker.go
-index 67f2dcb7c4587a6363aef15449ea7486ac10e198..f49ff8fcf5e0462c70d57844c4c36428a563a446 100644
+index 67f2dcb7c..f49ff8fcf 100644
 --- a/core/unpack/unpacker.go
 +++ b/core/unpack/unpacker.go
 @@ -45,7 +45,9 @@ import (
@@ -549,7 +551,7 @@ index 67f2dcb7c4587a6363aef15449ea7486ac10e198..f49ff8fcf5e0462c70d57844c4c36428
  						}
  						return fmt.Errorf("failed to commit snapshot %s: %w", key, err)
 diff --git a/internal/erofsutils/mount.go b/internal/erofsutils/mount.go
-index d50c5c2d8fedc5f72a765df53edeb73fe1f5fb15..3ca5c69ad63c175962ed0e72c05f4fb00428493c 100644
+index d50c5c2d8..3ca5c69ad 100644
 --- a/internal/erofsutils/mount.go
 +++ b/internal/erofsutils/mount.go
 @@ -139,6 +139,10 @@ func ConvertErofs(ctx context.Context, layerPath string, srcDir string, mkfsExtr
@@ -564,7 +566,7 @@ index d50c5c2d8fedc5f72a765df53edeb73fe1f5fb15..3ca5c69ad63c175962ed0e72c05f4fb0
  
  	// If mount[0].Type is prefixed with "mkfs/", it should be always the snapshot layer
 diff --git a/pkg/rootfs/apply.go b/pkg/rootfs/apply.go
-index 2955d549f47e93a61c452595733fbc7fb7ad0e89..d0ee8ebf0ecf9ec32081a99b9f3a0b2988f077c2 100644
+index 2955d549f..d0ee8ebf0 100644
 --- a/pkg/rootfs/apply.go
 +++ b/pkg/rootfs/apply.go
 @@ -26,6 +26,7 @@ import (
@@ -623,7 +625,7 @@ index 2955d549f47e93a61c452595733fbc7fb7ad0e89..d0ee8ebf0ecf9ec32081a99b9f3a0b29
  	var b [3]byte
 diff --git a/pkg/snapshotters/contentstore_fetcher.go b/pkg/snapshotters/contentstore_fetcher.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..9d2ba4f25e1e159be1e36006b6abf09bc8c78f2e
+index 000000000..9d2ba4f25
 --- /dev/null
 +++ b/pkg/snapshotters/contentstore_fetcher.go
 @@ -0,0 +1,229 @@
@@ -858,7 +860,7 @@ index 0000000000000000000000000000000000000000..9d2ba4f25e1e159be1e36006b6abf09b
 +)
 diff --git a/pkg/snapshotters/dmverity_policy.go b/pkg/snapshotters/dmverity_policy.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..e838ed722bea632582bc71f43e2b2dd0b774c2f9
+index 000000000..e838ed722
 --- /dev/null
 +++ b/pkg/snapshotters/dmverity_policy.go
 @@ -0,0 +1,145 @@
@@ -1009,10 +1011,10 @@ index 0000000000000000000000000000000000000000..e838ed722bea632582bc71f43e2b2dd0
 +}
 diff --git a/pkg/snapshotters/signatures.go b/pkg/snapshotters/signatures.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..4088b649559b5f53f2336589f8c6cf7123f561f4
+index 000000000..eada0b266
 --- /dev/null
 +++ b/pkg/snapshotters/signatures.go
-@@ -0,0 +1,697 @@
+@@ -0,0 +1,761 @@
 +/*
 +   Copyright The containerd Authors.
 +
@@ -1078,11 +1080,8 @@ index 0000000000000000000000000000000000000000..4088b649559b5f53f2336589f8c6cf71
 +	// The content GC recognizes the containerd.io/gc.ref.content prefix.
 +	DmverityReferrerLabel = "containerd.io/gc.ref.content.dmverity"
 +
-+	sigLayerDigestAnnotation    = "io.cncf.notary.dmverity.layer-digest"
-+	sigLayerRootHashAnnotation  = "io.cncf.notary.dmverity.layer-roothash"
-+	sigLayerSignatureAnnotation = "io.cncf.notary.dmverity.layer-signature"
-+
-+	precomputedSourceLayerAnnotation = "io.cncf.notary.dmverity.source-layer-digest"
++	sourceLayerDigestAnnotation = "io.containerd.erofs.dmverity.source-layer-digest"
++	layerRootHashAnnotation     = "io.containerd.erofs.dmverity.root-hash"
 +
 +	// SignatureArtifactType is the artifact type for OCI referrers containing
 +	// signed dm-verity materialization metadata for EROFS.
@@ -1092,7 +1091,7 @@ index 0000000000000000000000000000000000000000..4088b649559b5f53f2336589f8c6cf71
 +	// MerkleTreeArtifactMediaType identifies a separate dm-verity hash device.
 +	MerkleTreeArtifactMediaType = "application/vnd.cncf.dmverity.merkle-tree.v1"
 +	// LayerSignatureMediaType identifies a per-layer PKCS#7 root-hash signature.
-+	LayerSignatureMediaType = "application/vnd.cncf.notary.dmverity.layer-signature+pkcs7"
++	LayerSignatureMediaType = "application/vnd.containerd.erofs.dmverity.layer-signature.v1+pkcs7"
 +
 +	ociAnnotationCreated = "org.opencontainers.image.created"
 +	tarIndexAlignment    = int64(512)
@@ -1102,6 +1101,7 @@ index 0000000000000000000000000000000000000000..4088b649559b5f53f2336589f8c6cf71
 +	// validated and discarded as the scan advances.
 +	maxSignatureReferrers     = 64
 +	maxSignatureManifestBytes = 4 * maxManifestSize
++	maxSignaturePayloadBytes  = 4 * maxManifestSize
 +	// EROFS metadata blobs are normally small and Merkle trees are a fraction
 +	// of their data device. Keep a generous finite ceiling so a referrer cannot
 +	// request an effectively unbounded auxiliary blob.
@@ -1115,6 +1115,8 @@ index 0000000000000000000000000000000000000000..4088b649559b5f53f2336589f8c6cf71
 +	Signature     string
 +	EROFSMetadata *ocispec.Descriptor
 +	MerkleTree    *ocispec.Descriptor
++
++	signatureDescriptor ocispec.Descriptor
 +}
 +
 +type referrerWithManifest struct {
@@ -1253,6 +1255,13 @@ index 0000000000000000000000000000000000000000..4088b649559b5f53f2336589f8c6cf71
 +	if selected == nil || selectedInfos == nil {
 +		return nil, nil, nil, fmt.Errorf("no dm-verity bundle was selected for %s", manifestDigest)
 +	}
++	if err := hydrateSelectedSignatures(ctx, fetcher, selected, selectedInfos, selectedArtifacts); err != nil {
++		return nil, nil, nil, fmt.Errorf(
++			"load dm-verity signatures from bundle %s: %w",
++			selected.desc.Digest,
++			err,
++		)
++	}
 +	log.G(ctx).WithFields(log.Fields{
 +		"bundle":   selected.desc.Digest,
 +		"manifest": manifestDigest,
@@ -1270,6 +1279,7 @@ index 0000000000000000000000000000000000000000..4088b649559b5f53f2336589f8c6cf71
 +
 +	infos := make(map[string]*LayerSignatureInfo)
 +	var artifactDescs []ocispec.Descriptor
++	var signaturePayloadBytes int64
 +	for i := range manifest.Layers {
 +		layer := &manifest.Layers[i]
 +		if layer.Annotations == nil {
@@ -1277,12 +1287,21 @@ index 0000000000000000000000000000000000000000..4088b649559b5f53f2336589f8c6cf71
 +		}
 +		switch layer.MediaType {
 +		case LayerSignatureMediaType:
-+			sourceDigest := layer.Annotations[sigLayerDigestAnnotation]
-+			rootHash := layer.Annotations[sigLayerRootHashAnnotation]
-+			encodedSignature := layer.Annotations[sigLayerSignatureAnnotation]
-+			if sourceDigest == "" || rootHash == "" || encodedSignature == "" {
++			sourceDigest := layer.Annotations[sourceLayerDigestAnnotation]
++			rootHash := layer.Annotations[layerRootHashAnnotation]
++			if sourceDigest == "" || rootHash == "" {
 +				return nil, nil, fmt.Errorf("signature descriptor %s is missing required annotations", layer.Digest)
 +			}
++			if err := validateBoundedDescriptor(*layer, "signature descriptor", maxManifestSize); err != nil {
++				return nil, nil, err
++			}
++			if layer.Size > maxSignaturePayloadBytes-signaturePayloadBytes {
++				return nil, nil, fmt.Errorf(
++					"aggregate signature payload size exceeds maximum %d",
++					maxSignaturePayloadBytes,
++				)
++			}
++			signaturePayloadBytes += layer.Size
 +			rootDigest, err := hex.DecodeString(rootHash)
 +			if err != nil {
 +				return nil, nil, fmt.Errorf(
@@ -1299,34 +1318,20 @@ index 0000000000000000000000000000000000000000..4088b649559b5f53f2336589f8c6cf71
 +					sha256.Size,
 +				)
 +			}
-+			signatureBytes, err := base64.StdEncoding.DecodeString(encodedSignature)
-+			if err != nil {
-+				return nil, nil, fmt.Errorf("decode signature for layer %s: %w", sourceDigest, err)
-+			}
 +			if len(layer.Data) > 0 {
 +				if err := verifyDescriptorPayload(*layer, layer.Data); err != nil {
 +					return nil, nil, fmt.Errorf("validate embedded signature descriptor for layer %s: %w", sourceDigest, err)
 +				}
-+				if !bytes.Equal(layer.Data, signatureBytes) {
-+					return nil, nil, fmt.Errorf("embedded signature data does not match signed annotation for layer %s", sourceDigest)
-+				}
-+			} else {
-+				if err := verifyDescriptorPayload(*layer, signatureBytes); err != nil {
-+					return nil, nil, fmt.Errorf("validate signature descriptor for layer %s: %w", sourceDigest, err)
-+				}
-+				// Route the verified inline signature through the normal content
-+				// handler without another registry fetch.
-+				layer.Data = signatureBytes
 +			}
 +			info := getLayerInfo(infos, sourceDigest)
-+			if info.Signature != "" {
++			if info.signatureDescriptor.Digest != "" {
 +				return nil, nil, fmt.Errorf("duplicate signature descriptor for layer %s", sourceDigest)
 +			}
 +			info.RootHash = rootHash
-+			info.Signature = encodedSignature
++			info.signatureDescriptor = *layer
 +			artifactDescs = append(artifactDescs, *layer)
 +		case EROFSMetadataArtifactMediaType, MerkleTreeArtifactMediaType:
-+			sourceDigest := layer.Annotations[precomputedSourceLayerAnnotation]
++			sourceDigest := layer.Annotations[sourceLayerDigestAnnotation]
 +			if sourceDigest == "" {
 +				return nil, nil, fmt.Errorf("precomputed descriptor %s has invalid annotations", layer.Digest)
 +			}
@@ -1355,7 +1360,7 @@ index 0000000000000000000000000000000000000000..4088b649559b5f53f2336589f8c6cf71
 +		if _, err := digest.Parse(sourceDigest); err != nil {
 +			return nil, nil, fmt.Errorf("invalid source layer digest %q: %w", sourceDigest, err)
 +		}
-+		if info.Signature == "" || info.RootHash == "" || info.EROFSMetadata == nil || info.MerkleTree == nil {
++		if info.signatureDescriptor.Digest == "" || info.RootHash == "" || info.EROFSMetadata == nil || info.MerkleTree == nil {
 +			return nil, nil, fmt.Errorf("incomplete precomputed artifacts for layer %s", sourceDigest)
 +		}
 +	}
@@ -1373,6 +1378,67 @@ index 0000000000000000000000000000000000000000..4088b649559b5f53f2336589f8c6cf71
 +		}
 +	}
 +	return infos, artifactDescs, nil
++}
++
++func hydrateSelectedSignatures(
++	ctx context.Context,
++	fetcher remotes.Fetcher,
++	selected *referrerWithManifest,
++	infos map[string]*LayerSignatureInfo,
++	artifacts []ocispec.Descriptor,
++) error {
++	for sourceDigest, info := range infos {
++		desc := info.signatureDescriptor
++		signatureBytes := desc.Data
++		if len(signatureBytes) == 0 {
++			var err error
++			signatureBytes, err = fetchDescriptor(ctx, fetcher, desc)
++			if err != nil {
++				return fmt.Errorf(
++					"fetch signature descriptor %s for layer %s: %w",
++					desc.Digest,
++					sourceDigest,
++					err,
++				)
++			}
++		} else if err := verifyDescriptorPayload(desc, signatureBytes); err != nil {
++			return fmt.Errorf(
++				"validate signature descriptor %s for layer %s: %w",
++				desc.Digest,
++				sourceDigest,
++				err,
++			)
++		}
++		info.Signature = base64.StdEncoding.EncodeToString(signatureBytes)
++		info.signatureDescriptor.Data = signatureBytes
++
++		updatedManifest := false
++		for i := range selected.manifest.Layers {
++			layer := &selected.manifest.Layers[i]
++			if layer.MediaType == LayerSignatureMediaType &&
++				layer.Digest == desc.Digest &&
++				layer.Annotations[sourceLayerDigestAnnotation] == sourceDigest {
++				layer.Data = signatureBytes
++				updatedManifest = true
++			}
++		}
++		if !updatedManifest {
++			return fmt.Errorf(
++				"selected bundle no longer contains signature descriptor %s for layer %s",
++				desc.Digest,
++				sourceDigest,
++			)
++		}
++		for i := range artifacts {
++			artifact := &artifacts[i]
++			if artifact.MediaType == LayerSignatureMediaType &&
++				artifact.Digest == desc.Digest &&
++				artifact.Annotations[sourceLayerDigestAnnotation] == sourceDigest {
++				artifact.Data = signatureBytes
++			}
++		}
++	}
++	return nil
 +}
 +
 +func validatePrecomputedDescriptor(desc ocispec.Descriptor) error {
@@ -1711,7 +1777,7 @@ index 0000000000000000000000000000000000000000..4088b649559b5f53f2336589f8c6cf71
 +	return nil
 +}
 diff --git a/plugins/diff/erofs/differ.go b/plugins/diff/erofs/differ.go
-index 926f6e8f13a3e1fe521e257bf33348d897755acb..ed6e772d1457fafd9d964b8161b8cf8fb95604ef 100644
+index 926f6e8f1..ed6e772d1 100644
 --- a/plugins/diff/erofs/differ.go
 +++ b/plugins/diff/erofs/differ.go
 @@ -33,7 +33,9 @@ import (
@@ -1865,7 +1931,7 @@ index 926f6e8f13a3e1fe521e257bf33348d897755acb..ed6e772d1457fafd9d964b8161b8cf8f
  	r io.Reader
  	c int64
 diff --git a/plugins/diff/erofs/plugin/plugin.go b/plugins/diff/erofs/plugin/plugin.go
-index 955fa266552f939207beb791195302ad6f963cb1..6d6063a752d8de4bcf3b3bf4c2c6484d0dd6aafb 100644
+index 955fa2665..6d6063a75 100644
 --- a/plugins/diff/erofs/plugin/plugin.go
 +++ b/plugins/diff/erofs/plugin/plugin.go
 @@ -19,6 +19,7 @@ package plugin
@@ -1932,7 +1998,7 @@ index 955fa266552f939207beb791195302ad6f963cb1..6d6063a752d8de4bcf3b3bf4c2c6484d
 +}
 diff --git a/plugins/diff/erofs/precomputed.go b/plugins/diff/erofs/precomputed.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..79b2517cf74df7431e0f88c4940ed8bdc4c3ed32
+index 000000000..79b2517cf
 --- /dev/null
 +++ b/plugins/diff/erofs/precomputed.go
 @@ -0,0 +1,244 @@
@@ -2181,7 +2247,7 @@ index 0000000000000000000000000000000000000000..79b2517cf74df7431e0f88c4940ed8bd
 +	return nil
 +}
 diff --git a/plugins/services/diff/local.go b/plugins/services/diff/local.go
-index 6149f460f6a46dab09b3a0997cec029f2f120fad..8ad40dd93791549780325ce4d2308b6e9c3a248b 100644
+index 6149f460f..8ad40dd93 100644
 --- a/plugins/services/diff/local.go
 +++ b/plugins/services/diff/local.go
 @@ -19,6 +19,8 @@ package diff
@@ -2333,7 +2399,7 @@ index 6149f460f6a46dab09b3a0997cec029f2f120fad..8ad40dd93791549780325ce4d2308b6e
  	var (
  		ocidesc ocispec.Descriptor
 diff --git a/plugins/snapshots/erofs/erofs.go b/plugins/snapshots/erofs/erofs.go
-index 66ec66eae384c20850ecea66adb02b151289e416..a685f72fc63261d8cda7070252b511585388b553 100644
+index 66ec66eae..a685f72fc 100644
 --- a/plugins/snapshots/erofs/erofs.go
 +++ b/plugins/snapshots/erofs/erofs.go
 @@ -18,6 +18,7 @@ package erofs
@@ -2855,7 +2921,7 @@ index 66ec66eae384c20850ecea66adb02b151289e416..a685f72fc63261d8cda7070252b51158
  	err = s.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
  		_, info, _, err = storage.GetInfo(ctx, key)
 diff --git a/plugins/snapshots/erofs/plugin/plugin.go b/plugins/snapshots/erofs/plugin/plugin.go
-index 834767f7140fba9934e20e6ceb6f56a3067d2214..860558656db9cd50d3384ee625d1fd3eb6447fed 100644
+index 834767f71..860558656 100644
 --- a/plugins/snapshots/erofs/plugin/plugin.go
 +++ b/plugins/snapshots/erofs/plugin/plugin.go
 @@ -20,10 +20,12 @@ import (
@@ -2928,7 +2994,7 @@ index 834767f7140fba9934e20e6ceb6f56a3067d2214..860558656db9cd50d3384ee625d1fd3e
 +	return supportErr == nil, nil
 +}
 diff --git a/plugins/transfer/plugin.go b/plugins/transfer/plugin.go
-index 3fac37650ca122a6623b5d7b76dea6f1bcdc1abe..6fccec8a0bf51d3af2fe3a1e38f3ae9f4a0fba16 100644
+index 3fac37650..6fccec8a0 100644
 --- a/plugins/transfer/plugin.go
 +++ b/plugins/transfer/plugin.go
 @@ -19,6 +19,7 @@ package transfer
@@ -3042,7 +3108,7 @@ index 3fac37650ca122a6623b5d7b76dea6f1bcdc1abe..6fccec8a0bf51d3af2fe3a1e38f3ae9f
  
  type transferConfig struct {
 diff --git a/plugins/types.go b/plugins/types.go
-index 1f67d000743f0fac9495487f3afa007e844a90d5..8553faa70d3b90f61782eddb26f0593897e8f284 100644
+index 1f67d0007..8553faa70 100644
 --- a/plugins/types.go
 +++ b/plugins/types.go
 @@ -111,3 +111,17 @@ const (
