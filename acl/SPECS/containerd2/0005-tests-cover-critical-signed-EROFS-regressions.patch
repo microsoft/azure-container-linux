@@ -5,6 +5,9 @@ Subject: [PATCH 5/5] tests: cover critical signed EROFS regressions
 
 Keep only the mandatory compatibility updates and focused regression coverage for fatal oversized referrers, SELinux fsconfig unquoting with valid legacy mount data, and snapshot removal cleanup using the persisted snapshot ID.
 
+Construct the metadata-only cleanup checks in block mode so package tests do
+not depend on host EROFS kernel support.
+
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 
 Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
@@ -225,7 +228,7 @@ index e38e4e28ed80a7f47ea4bc2532c486db6c4727ca..07e6478d2b31e4d672dd7c043f82acd7
 +	}
 +}
 diff --git a/plugins/snapshots/erofs/erofs_linux_test.go b/plugins/snapshots/erofs/erofs_linux_test.go
-index 2f3b89ba276d45b91d54d7bc1716406c230d715d..cb48614cae879d2f0d2a3ad3470fe4826230f984 100644
+index 2f3b89ba276d45b91d54d7bc1716406c230d715d..71abfc8332d0f672b12d93a7e6096ea49beab7dd 100644
 --- a/plugins/snapshots/erofs/erofs_linux_test.go
 +++ b/plugins/snapshots/erofs/erofs_linux_test.go
 @@ -884,3 +884,47 @@ func TestMountsWithMergedFsMetaOnTopParent(t *testing.T) {
@@ -234,7 +237,7 @@ index 2f3b89ba276d45b91d54d7bc1716406c230d715d..cb48614cae879d2f0d2a3ad3470fe482
  }
 +
 +func TestRemoveUsesPersistedSnapshotIDForCleanup(t *testing.T) {
-+	sn, err := NewSnapshotter(t.TempDir())
++	sn, err := NewSnapshotter(t.TempDir(), WithDefaultSize(1))
 +	require.NoError(t, err)
 +	s := sn.(*snapshotter)
 +	t.Cleanup(func() { require.NoError(t, s.Close()) })
@@ -264,7 +267,7 @@ index 2f3b89ba276d45b91d54d7bc1716406c230d715d..cb48614cae879d2f0d2a3ad3470fe482
 +}
 +
 +func TestRemoveMissingSnapshotSkipsCleanup(t *testing.T) {
-+	sn, err := NewSnapshotter(t.TempDir())
++	sn, err := NewSnapshotter(t.TempDir(), WithDefaultSize(1))
 +	require.NoError(t, err)
 +	s := sn.(*snapshotter)
 +	t.Cleanup(func() { require.NoError(t, s.Close()) })
