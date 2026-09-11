@@ -20,6 +20,7 @@ Patch0:	multi-snapshotters-support.patch
 Patch1:	tardev-support.patch
 Patch2:	fix-TestCgroupNamespace-cgroupv1.patch
 Patch3:	CVE-2026-56852.patch
+Patch4:	CVE-2026-37236.patch
 
 %{?systemd_requires}
 
