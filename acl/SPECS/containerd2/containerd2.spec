@@ -5,7 +5,7 @@
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.4
-Release: 6025.verity%{?dist}
+Release: 6026.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -36,8 +36,7 @@ Patch8:	0005-tests-cover-critical-signed-EROFS-regressions.patch
 %{?systemd_requires}
 
 # Temporarily stay on Go 1.26 until the Go 1.27 ML-KEM backend is fixed.
-BuildRequires: golang >= 1.26.7
-BuildRequires: golang < 1.27
+BuildRequires: golang = 1.26.7
 BuildRequires: go-md2man
 BuildRequires: make
 BuildRequires: systemd-rpm-macros
@@ -142,6 +141,9 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Sat Sep 12 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6026.verity
+- Pin the build toolchain to Go 1.26.7 while the Go 1.27 ML-KEM backend remains disabled.
+
 * Wed Sep 09 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6025.verity
 - Rebase the signed EROFS/dm-verity carry onto containerd 2.3.4.
 - Keep signed OCI referrer handling separate from upstream local dm-verity.
