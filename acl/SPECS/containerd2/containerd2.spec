@@ -5,7 +5,7 @@
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.4
-Release: 6026.verity%{?dist}
+Release: 6027.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -141,6 +141,9 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Sun Sep 13 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6027.verity
+- Route dm-verity EROFS fsview requests through the verified kernel mount path.
+
 * Sat Sep 12 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6026.verity
 - Pin the build toolchain to Go 1.26.7 while the Go 1.27 ML-KEM backend remains disabled.
 

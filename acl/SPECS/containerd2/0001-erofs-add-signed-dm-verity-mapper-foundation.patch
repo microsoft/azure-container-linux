@@ -19,10 +19,11 @@ Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
  internal/fsmount/fsmount_linux.go             |  71 ++-
  plugins/diff/erofs/dmverity_linux.go          |   8 +
  plugins/diff/erofs/dmverity_other.go          |   4 +
+ plugins/mount/fsview/erofs/erofs.go            |  10 +
  plugins/mount/erofs/plugin_linux.go           | 280 ++++++++---
  .../snapshots/erofs/dmverity_cleanup_linux.go |  61 +++
  .../snapshots/erofs/dmverity_cleanup_other.go |  23 +
- 13 files changed, 1085 insertions(+), 92 deletions(-)
+ 14 files changed, 1095 insertions(+), 92 deletions(-)
  create mode 100644 internal/dmverity/atomic_write.go
  create mode 100644 internal/dmverity/device.go
  create mode 100644 internal/dmverity/sync_dir_unix.go
@@ -1558,3 +1559,31 @@ index 0000000000000000000000000000000000000000..80ac576b52d3aab2d0fd740d37c58b20
 +import "context"
 +
 +func releaseDmverityDevice(context.Context, string) {}
+diff --git a/plugins/mount/fsview/erofs/erofs.go b/plugins/mount/fsview/erofs/erofs.go
+index 8039b33500ebe8049b9ce230c32c78177abb4a03..b2d9300d0483ec775cfe36d8b46f5d95a7a45e83 100644
+--- a/plugins/mount/fsview/erofs/erofs.go
++++ b/plugins/mount/fsview/erofs/erofs.go
+@@ -25,6 +25,7 @@ import (
+ 	"strings"
+ 
+ 	"github.com/containerd/containerd/v2/core/mount"
++	"github.com/containerd/containerd/v2/internal/dmverity"
+ 	"github.com/containerd/containerd/v2/internal/fsview"
+ 	"github.com/containerd/errdefs"
+ 	"github.com/erofs/go-erofs"
+@@ -43,6 +44,15 @@ func handleMount(m mount.Mount) (fsview.View, error) {
+ 		return nil, errdefs.ErrNotImplemented
+ 	}
+ 
++	for _, opt := range m.Options {
++		if strings.HasPrefix(opt, dmverity.MountOptionModePrefix) ||
++			strings.HasPrefix(opt, dmverity.MountOptionRootHashPrefix) ||
++			strings.HasPrefix(opt, dmverity.MountOptionSignatureDigestPrefix) {
++			// Direct userspace access would bypass the dm-verity mount handler.
++			return nil, fmt.Errorf("dm-verity EROFS mount requires kernel mount handling: %w", errdefs.ErrNotImplemented)
++		}
++	}
++
+ 	f, err := os.Open(m.Source)
+ 	if err != nil {
+ 		return nil, err
