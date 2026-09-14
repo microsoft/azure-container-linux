@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="500" viewBox="0 0 1440 500" role="img" aria-labelledby="title desc">
+  <title id="title">Cached signed image startup after node reboot</title>
+  <desc id="desc">Mean cached signed eight-layer pod startup after a real node reboot for the base ACL image, overlayfs with IPE assets, and EROFS with IPE auditing.</desc>
+  <style>
+    text { font-family: "Segoe UI", Arial, Helvetica, sans-serif; fill: #172033; }
+    .title { font-size: 31px; font-weight: 700; }
+    .subtitle { font-size: 16px; fill: #475569; }
+    .label { font-size: 16px; font-weight: 600; }
+    .small { font-size: 14px; fill: #4b5563; }
+    .value { font-size: 14px; font-weight: 700; }
+    .axis { stroke: #64748b; stroke-width: 1.5; }
+    .grid { stroke: #d8dee9; stroke-width: 1; }
+    .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.25; }
+    .base { fill: #6b7280; }
+    .overlay { fill: #16a34a; }
+    .erofs { fill: #7c3aed; }
+  </style>
+
+  <rect width="1440" height="500" fill="#f8fafc"/>
+  <text x="60" y="56" class="title">Cached signed image startup after node reboot</text>
+  <text x="60" y="86" class="subtitle">Each mean represents n=20 accepted post-reboot cached pod starts.</text>
+
+  <rect x="50" y="120" width="1340" height="330" rx="10" class="panel"/>
+  <text x="75" y="156" class="small">The image remains cached. Percentages compare Overlayfs and EROFS with the Base ACL image.</text>
+
+  <line x1="435" y1="185" x2="435" y2="360" class="axis"/>
+  <line x1="620.2" y1="185" x2="620.2" y2="360" class="grid"/>
+  <line x1="805.5" y1="185" x2="805.5" y2="360" class="grid"/>
+  <line x1="990.7" y1="185" x2="990.7" y2="360" class="grid"/>
+  <line x1="1175.9" y1="185" x2="1175.9" y2="360" class="grid"/>
+  <line x1="1250" y1="185" x2="1250" y2="360" class="grid"/>
+
+  <text x="75" y="225" class="label">Base ACL image</text>
+  <rect x="435" y="205" width="498.6" height="24" rx="3" class="base"/>
+  <text x="942" y="223" class="value">baseline</text>
+
+  <text x="75" y="285" class="label">Overlayfs + IPE assets</text>
+  <rect x="435" y="265" width="525.3" height="24" rx="3" class="overlay"/>
+  <text x="969" y="283" class="value">+5.4%</text>
+
+  <text x="75" y="345" class="label">EROFS + IPE auditing</text>
+  <rect x="435" y="325" width="589.4" height="24" rx="3" class="erofs"/>
+  <text x="1033" y="343" class="value">+18.2%</text>
+
+  <text x="435" y="405" text-anchor="middle" class="small">0 s</text>
+  <text x="620.2" y="405" text-anchor="middle" class="small">0.5</text>
+  <text x="805.5" y="405" text-anchor="middle" class="small">1.0</text>
+  <text x="990.7" y="405" text-anchor="middle" class="small">1.5</text>
+  <text x="1175.9" y="405" text-anchor="middle" class="small">2.0</text>
+  <text x="1250" y="405" text-anchor="middle" class="small">2.2 s</text>
+</svg>

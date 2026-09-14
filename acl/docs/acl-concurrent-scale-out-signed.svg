@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="650" viewBox="0 0 1440 650" role="img" aria-labelledby="title desc">
+  <title id="title">Signed cached ten-pod scale-out</title>
+  <desc id="desc">Signed cached ten-pod all-Ready latency for the base ACL image, overlayfs with IPE assets, and EROFS with IPE auditing.</desc>
+  <style>
+    text { font-family: "Segoe UI", Arial, Helvetica, sans-serif; fill: #172033; }
+    .title { font-size: 31px; font-weight: 700; }
+    .subtitle { font-size: 16px; fill: #475569; }
+    .panel-title { font-size: 22px; font-weight: 700; }
+    .label { font-size: 16px; font-weight: 600; }
+    .small { font-size: 14px; fill: #4b5563; }
+    .value { font-size: 14px; font-weight: 700; }
+    .axis { stroke: #64748b; stroke-width: 1.5; }
+    .grid { stroke: #d8dee9; stroke-width: 1; }
+    .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.25; }
+    .base { fill: #6b7280; }
+    .overlay { fill: #16a34a; }
+    .erofs { fill: #7c3aed; }
+  </style>
+
+  <rect width="1440" height="650" fill="#f8fafc"/>
+  <text x="60" y="56" class="title">Signed cached ten-pod scale-out</text>
+  <text x="60" y="86" class="subtitle">n=24 signed ten-pod deployment bursts per configuration.</text>
+
+  <rect x="70" y="112" width="18" height="18" rx="3" class="base"/>
+  <text x="98" y="126" class="label">Base ACL image</text>
+  <rect x="485" y="112" width="18" height="18" rx="3" class="overlay"/>
+  <text x="513" y="126" class="label">Overlayfs + IPE assets</text>
+  <rect x="990" y="112" width="18" height="18" rx="3" class="erofs"/>
+  <text x="1018" y="126" class="label">EROFS + IPE auditing</text>
+
+  <rect x="50" y="160" width="1340" height="450" rx="10" class="panel"/>
+  <text x="75" y="197" class="panel-title">Deployment creation to all 10 cached pods Running and Ready</text>
+  <text x="75" y="223" class="small">Percentages compare Overlayfs and EROFS with the Base ACL image.</text>
+
+  <line x1="430" y1="250" x2="430" y2="535" class="axis"/>
+  <line x1="550" y1="250" x2="550" y2="535" class="grid"/>
+  <line x1="670" y1="250" x2="670" y2="535" class="grid"/>
+  <line x1="790" y1="250" x2="790" y2="535" class="grid"/>
+  <line x1="910" y1="250" x2="910" y2="535" class="grid"/>
+  <line x1="1030" y1="250" x2="1030" y2="535" class="grid"/>
+
+  <text x="75" y="292" class="label">Base ACL image</text>
+  <rect x="430" y="268" width="316.0" height="30" rx="4" class="base"/>
+  <text x="755" y="292" class="value">baseline</text>
+
+  <text x="75" y="402" class="label">Overlayfs + IPE assets</text>
+  <rect x="430" y="378" width="309.2" height="30" rx="4" class="overlay"/>
+  <text x="748" y="402" class="value">-2.1%</text>
+
+  <text x="75" y="512" class="label">EROFS + IPE auditing</text>
+  <rect x="430" y="488" width="331.4" height="30" rx="4" class="erofs"/>
+  <text x="770" y="512" class="value">+4.9%</text>
+
+  <text x="430" y="575" text-anchor="middle" class="small">0 s</text>
+  <text x="550" y="575" text-anchor="middle" class="small">1</text>
+  <text x="670" y="575" text-anchor="middle" class="small">2</text>
+  <text x="790" y="575" text-anchor="middle" class="small">3</text>
+  <text x="910" y="575" text-anchor="middle" class="small">4</text>
+  <text x="1030" y="575" text-anchor="middle" class="small">5 s</text>
+</svg>

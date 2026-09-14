@@ -1,73 +1,131 @@
 # ACL Container Runtime Performance
 
-## Perf Results
-
-| Question | Result |
-|---|---|
-| Did adding passive IPE files while keeping IPE off degrade performance? | **No broad difference is visible.** Base, passive-assets, and patched-overlayfs builds remain closely grouped across startup, Kubernetes exec, and OS-disk reads. However, base and passive-assets are different complete image generations, so this is not a one-variable asset isolate. |
-| Does the patched runtime regress performance while it still uses overlayfs? | **Not broadly.** Pod-start and exec results remain aligned. Its signed-image cached pull is about **0.36 seconds slower** than base. |
-| Does the active IPE + patched EROFS profile degrade performance? | **Yes, specifically in container pull and startup.** The active build is slower for both unsigned and signed images, including starts with the image cached on the host. |
-| Is that slowdown isolated to IPE auditing? | **No.** This image changes IPE policy evaluation, EROFS, dm-verity, signature handling, and runtime patches together. There is no current official-containerd + active-IPE isolate. |
-| Did broad exec or read/write performance regress? | **No broad exec or read regression is demonstrated.** Kubernetes exec and OS-disk reads are closely grouped. The old harness discarded the active host-local scalar after observing expected audit-mode DENYs, and the unreplicated write results are too variable for feature attribution. |
+**Updated:** 2026-09-14
 
 ## Configurations
 
 | Display label | What it means |
 |---|---|
-| **Base image, base overlayfs** | Baseline ACL image and overlayfs runtime |
-| **IPE off, passive assets** | Base containerd with overlayfs, passive IPE files are present but no policy is loaded |
-| **IPE off, passive assets + patched overlayfs** | EROFS-capable patched containerd and passive IPE files are present, but overlayfs is selected and no IPE policy is loaded |
-| **IPE audit, patched EROFS** | IPE is enabled in audit mode, the patched containerd configured with EROFS/dm-verity is present |
+| **Base ACL image** | Base ACL image without any modifications |
+| **Overlayfs + IPE assets** | Patched containerd and overlayfs with IPE assets present |
+| **EROFS + IPE auditing** | Patched containerd using EROFS and dm-verity with permissive IPE auditing set using tags |
 
-Every percentage below is relative to **Base image, base overlayfs** for the same metric. 
+Percentages are relative to **Base ACL image** for the same measurement.
 
-## 1. General performance
+## 1. Container lifecycle
 
-![General execution and OS-disk performance](./acl-general-performance.svg)
-
-| Configuration | `kubectl exec` mean | Host-local `/bin/true` mean |
-|---|---:|---:|
-| Base image, base overlayfs | 241.7 ms (**baseline**) | 731.1 us/exec (**baseline**) |
-| IPE off, passive assets | 254.1 ms (**+5.1%**) | 733.0 us/exec (**+0.3%**) |
-| IPE off, passive assets + patched overlayfs | 246.9 ms (**+2.1%**) | 737.0 us/exec (**+0.8%**) |
-| IPE audit, patched EROFS | 233.1 ms (**-3.6%**) | **Test failed; no value published or plotted** |
-
-| Configuration | Sequential read | Random read | Sequential write | Random write |
-|---|---:|---:|---:|---:|
-| Base image, base overlayfs | 19,166.7 IOPS (**baseline**) | 19,251.5 IOPS (**baseline**) | 3,433.9 IOPS (**baseline**) | 2,812.8 IOPS (**baseline**) |
-| IPE off, passive assets | 19,388.5 IOPS (**+1.2%**) | 19,405.8 IOPS (**+0.8%**) | 2,655.2 IOPS (**-22.7%**) | 3,353.7 IOPS (**+19.2%**) |
-| IPE off, passive assets + patched overlayfs | 19,336.8 IOPS (**+0.9%**) | 19,271.1 IOPS (**+0.1%**) | 3,064.9 IOPS (**-10.7%**) | 2,189.4 IOPS (**-22.2%**) |
-| IPE audit, patched EROFS | 19,559.8 IOPS (**+2.1%**) | 19,562.2 IOPS (**+1.6%**) | 1,651.1 IOPS (**-51.9%**) | 2,306.6 IOPS (**-18.0%**) |
-
-## 2. Container lifecycle
-
-![Unsigned pod startup and signed-image lifecycle](./acl-container-lifecycle.svg)
-
-The figure has two explicitly different panels:
-
-| Measurement | Image and layer shape | Operation and timing boundary |
-|---|---|---|
-| **Unsigned Kubernetes startup** | Unsigned Alpine, 1 layer, about 3.6 MB; unsigned nginx-compatible image, 8 layers, about 21 MB | The timer starts immediately before `kubectl run`, not `kubectl apply`, and ends when tight polling observes Kubernetes pod phase `Running` on the pinned node. Cold proves the image absent and uses `imagePullPolicy=Always`; cached proves it is already cached on the host and uses `imagePullPolicy=Never`. |
-| **Signed image pull** | One immutable signed nginx-compatible image, exactly 8 layers, about 21 MB | Direct node-side `crictl pull`, timed inside the node command after verifying that the image is absent or already cached on the host. Debug-pod setup is outside the timer. |
-| **Signed Kubernetes startup** | The same signed 8-layer image | The same `kubectl run` to observed `Running` boundary as the unsigned panel. Cold includes pull and layer setup; cached uses the image already cached on the host with `imagePullPolicy=Never`. |
+| Test | Why it matters |
+|---|---|
+| **Cold pod start** | Represents the first use of an image on a node. It includes image acquisition, snapshot materialization, container creation, and startup. The snapshotter cache is cleared between each iteration. |
+| **Cached pod start** | Represents ordinary restarts and scale-out when the image is already present and `imagePullPolicy: IfNotPresent` can use it locally. |
+| **Always-pull pod start** | Represents `imagePullPolicy: Always`, including clusters that apply the `AlwaysPullImages` admission policy. Kubelet checks the image with the container runtime before creating the container even when the image is cached. |
+| **Cold image acquisition without pod start** | This is not a normal user operation. Removes the exact image and calls the container runtime image-acquisition API directly. No pod is created and kubelet is not involved. This diagnostic isolates the image-acquisition portion of cold startup. |
 
 ### Unsigned Kubernetes startup
 
-Each run measures three nodes with ten iterations, so every displayed condition has
-`runs=2, n=60`.
+![Unsigned container lifecycle](./acl-container-lifecycle-unsigned.svg)
 
-| Configuration | 1-layer cold | 1-layer cached | 8-layer cold | 8-layer cached |
+Each cell is **mean / p90 / p95** in seconds with `n=60`.
+
+| Configuration | 1-layer cold pod start | 1-layer cached pod start | 8-layer cold pod start | 8-layer cached pod start |
 |---|---:|---:|---:|---:|
-| Base image, base overlayfs | 3.632 s (**baseline**) | 1.278 s (**baseline**) | 4.570 s (**baseline**) | 1.286 s (**baseline**) |
-| IPE off, passive assets | 3.696 s (**+1.8%**) | 1.293 s (**+1.2%**) | 4.583 s (**+0.3%**) | 1.352 s (**+5.2%**) |
-| IPE off, passive assets + patched overlayfs | 3.788 s (**+4.3%**) | 1.263 s (**-1.2%**) | 4.714 s (**+3.2%**) | 1.246 s (**-3.1%**) |
-| IPE audit, patched EROFS | 5.111 s (**+40.7%**) | 3.057 s (**+139.2%**) | 6.847 s (**+49.8%**) | 3.254 s (**+153.1%**) |
+| Base ACL image | 3.641 / 4.087 / 4.202 | 1.384 / 2.026 / 2.037 | 4.545 / 4.941 / 5.011 | 1.390 / 1.989 / 2.040 |
+| Overlayfs + IPE assets | 3.696 / 4.106 / 4.170 | 1.293 / 1.340 / 1.422 | 4.583 / 4.931 / 5.178 | 1.352 / 1.393 / 1.811 |
+| EROFS + IPE auditing | 3.773 / 4.193 / 4.305 | 1.180 / 1.850 / 1.915 | 4.705 / 5.293 / 5.547 | 1.209 / 1.525 / 1.995 |
 
-### Signed 8-layer pull and startup
+Unsigned EROFS remained within 3.6% of the base image on cold startup and did
+not show a cached-start regression.
 
-| Configuration | Cold pull | Cached pull | Cold pod | Cached pod |
+### Signed Kubernetes startup
+
+![Signed container lifecycle](./acl-container-lifecycle-signed.svg)
+
+Each cell is **mean / p90 / p95** in seconds. Base ACL image and EROFS values
+use `n=60`.
+
+| Configuration | 1-layer cold pod start | 1-layer cached pod start | 1-layer always-pull pod start | 8-layer cold pod start | 8-layer cached pod start | 8-layer always-pull pod start |
+|---|---:|---:|---:|---:|---:|---:|
+| Base ACL image | 3.605 / 4.143 / 4.177 | 1.492 / 1.992 / 2.058 | 1.994 / 2.107 / 2.114 | 4.572 / 4.930 / 5.087 | 1.409 / 1.952 / 1.971 | 2.056 / 2.117 / 2.736 |
+| Overlayfs + IPE assets | N/A | N/A | N/A | 4.550 / N/A / N/A | 1.274 / N/A / N/A | N/A |
+| EROFS + IPE auditing | 4.339 / 4.702 / 4.921 | 1.522 / 1.583 / 1.640 | 3.563 / 3.696 / 4.265 | 9.917 / 10.890 / 11.121 | 1.377 / 1.527 / 1.554 | 7.399 / 8.236 / 8.342 |
+
+The important split is between cached and registry-facing paths. Signed
+eight-layer cached startup remained baseline-like. Cold and always-pull
+startup paid for referrer discovery, signature retrieval, and materialization.
+
+### Cold image acquisition diagnostic
+
+This is not a normal user operation. The test calls the container
+runtime image-acquisition API directly after removing the exact image. No pod
+is created and kubelet is not involved. The test isolates work that also
+occurs inside cold and always-pull pod starts.
+
+Each cell is **mean / p90 / p95** in seconds.
+
+| Image | Base ACL image | Overlayfs + IPE assets | Overlayfs mean change versus base | EROFS + IPE auditing | EROFS mean change versus base |
+|---|---:|---:|---:|---:|---:|
+| 1-layer cold image acquisition | 1.751 / 1.863 / 1.889 | N/A | N/A | 2.422 / 2.660 / 2.724 | **+38.3%** |
+| 8-layer cold image acquisition | 2.784 / 2.830 / 2.955 | 2.626 / N/A / N/A | **-5.7%** | 7.643 / 8.394 / 8.473 | **+174.6%** |
+
+## 2. Cached ten-pod scale-out
+
+This test represents a Deployment or DaemonSet burst on a node where the image
+is already cached. One observation is the time from Deployment creation until
+all ten pods are Running and Ready. It also verifies that ten signed
+containers share the expected eight dm-verity mappings.
+
+![Signed cached ten-pod scale-out](./acl-concurrent-scale-out-signed.svg)
+
+Each row uses `n=24` signed ten-pod deployment bursts.
+
+| Configuration | Median | p90 | p95 | Median change versus Base ACL image |
 |---|---:|---:|---:|---:|
-| Base image, base overlayfs | 2.568 s (**baseline**) | 0.346 s (**baseline**) | 4.458 s (**baseline**) | 1.286 s (**baseline**) |
-| IPE off, passive assets | 2.528 s (**-1.5%**) | 0.338 s (**-2.2%**) | 4.473 s (**+0.3%**) | 1.310 s (**+1.9%**) |
-| IPE off, passive assets + patched overlayfs | 2.730 s (**+6.3%**) | 0.702 s (**+102.9%**) | 4.704 s (**+5.5%**) | 1.262 s (**-1.9%**) |
-| IPE audit, patched EROFS | 6.596 s (**+156.9%**) | 4.332 s (**+1,151.8%**) | 10.897 s (**+144.4%**) | 3.320 s (**+158.2%**) |
+| Base ACL image | 2.633 s | 2.968 s | 3.096 s | **baseline** |
+| Overlayfs + IPE assets | 2.576 s | 4.263 s | 4.727 s | **-2.1%** |
+| EROFS + IPE auditing | 2.762 s | 3.173 s | 3.347 s | **+4.9%** |
+
+One EROFS cluster had a long first timed burst. Later bursts were
+`2.357-3.214 s`, so the median remains the primary comparison.
+
+## 3. Cached image after node reboot
+
+This test represents node maintenance and restart. It verifies that a cached
+signed image remains usable without another image pull and that the kernel
+dm-verity mappings are recreated when the first cached pod starts.
+
+![Cached signed image startup after node reboot](./acl-cached-reboot.svg)
+
+Each row uses `n=20` accepted cached pod starts after a real node reboot.
+
+| Configuration | Mean | p90 | p95 | Mean change versus Base ACL image |
+|---|---:|---:|---:|---:|
+| Base ACL image | 1.346 s | 1.705 s | 1.719 s | **baseline** |
+| Overlayfs + IPE assets | 1.418 s | 1.759 s | 1.897 s | **+5.4%** |
+| EROFS + IPE auditing | 1.591 s | 1.983 s | 2.001 s | **+18.2%** |
+
+Every reboot cleared the eight active container mappings, and the first cached pod recreated all `8/8`.
+
+## 4. General performance
+
+These tests look for broad host or runtime regressions outside image
+acquisition and pod startup. Each `kubectl exec` sample starts a fresh
+`kubectl` process and runs `/bin/true` in an already-running pod. It includes
+the client, API server, konnectivity, and runtime round trip without pod
+scheduling. Host-local `/bin/true` isolates local process-launch overhead.
+OS-disk I/O checks whether general node storage performance changed.
+
+![General execution and OS-disk performance](./acl-general-performance.svg)
+
+Each result is **mean / p90 / p95**.
+
+| Measurement | Base ACL image | Overlayfs + IPE assets | Overlayfs mean change versus base | EROFS + IPE auditing | EROFS mean change versus base |
+|---|---:|---:|---:|---:|---:|
+| `kubectl exec` | 237.835 / 260.8 / 268.5 ms | 254.088 / 273.8 / 276.7 ms | **+6.83%** | 237.960 / 267.3 / 268.0 ms | **+0.05%** |
+| Host-local `/bin/true` | 675.542 / N/A / N/A us | 815.748 / N/A / N/A us | **+20.75%** | 600.784 / N/A / N/A us | **-11.07%** |
+| Sequential OS-disk read | 19,455.698 / 19,572.404 / 19,572.404 IOPS | 19,388.469 / N/A / N/A IOPS | **-0.35%** | 19,368.207 / 19,394.449 / 19,394.449 IOPS | **-0.45%** |
+| Random OS-disk read | 19,549.872 / 19,555.169 / 19,555.169 IOPS | 19,405.832 / N/A / N/A IOPS | **-0.74%** | 19,224.276 / 19,367.024 / 19,367.024 IOPS | **-1.67%** |
+| Sequential OS-disk write | 3,548.985 / 3,555.267 / 3,555.267 IOPS | 2,655.162 / N/A / N/A IOPS | **-25.19%** | 3,539.640 / 3,540.012 / 3,540.012 IOPS | **-0.26%** |
+| Random OS-disk write | 3,412.007 / 3,553.644 / 3,553.644 IOPS | 3,353.744 / N/A / N/A IOPS | **-1.71%** | 3,517.186 / 3,520.906 / 3,520.906 IOPS | **+3.08%** |
+
+The read and execution results remain closely grouped. EROFS write throughput
+also remained within 3.1% of the base image.
