@@ -4,8 +4,8 @@ set -euo pipefail
 
 ipe_active_file="${ACL_IPE_ACTIVE_FILE:-/sys/kernel/security/ipe/policies/acl_ipe_boot_policy/active}"
 config_path="${ACL_CONTAINERD_CONFIG_PATH:-/run/containerd/acl-config.toml}"
-overlayfs_config="/usr/share/containerd2/acl-config.toml"
-erofs_config="/usr/share/containerd2/acl-erofs-config.toml"
+overlayfs_config="/etc/containerd/config.toml"
+erofs_config="/usr/share/containerd2/acl-erofs.toml"
 
 selected_config="${overlayfs_config}"
 selected_snapshotter="overlayfs"

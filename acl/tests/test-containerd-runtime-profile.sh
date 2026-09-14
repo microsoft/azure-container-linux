@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PROFILE_DIR="${REPO_ROOT}/build_library/rpm/additional_files/containerd2-erofs"
+PROFILE_DIR="${REPO_ROOT}/build_library/rpm/additional_files/containerd2"
 SELECTOR="${PROFILE_DIR}/containerd-acl-select-profile"
 MANGLE="${REPO_ROOT}/build_library/rpm/sysext_mangle_containerd-flatcar.sh"
 SYSEXT_YAML="${REPO_ROOT}/acl/sysexts.yaml"
@@ -28,12 +28,6 @@ assert_profile_installed() {
     local root="$1"
     cmp "${PROFILE_DIR}/containerd-acl-erofs.toml" \
         "${root}/usr/share/containerd2/acl-erofs.toml"
-    cmp "${PROFILE_DIR}/containerd-acl-config.toml" \
-        "${root}/usr/share/containerd2/acl-config.toml"
-    cmp "${PROFILE_DIR}/containerd-acl-erofs-config.toml" \
-        "${root}/usr/share/containerd2/acl-erofs-config.toml"
-    cmp "${PROFILE_DIR}/containerd-acl-erofs-runtime.toml" \
-        "${root}/usr/share/containerd2/acl-erofs-runtime.toml"
     cmp "${PROFILE_DIR}/containerd-acl-select-profile" \
         "${root}/usr/libexec/containerd2/acl-select-profile"
     cmp "${PROFILE_DIR}/containerd-acl-profile.conf" \
@@ -68,18 +62,14 @@ prepare_mangle_root "${profile_root}"
 "${MANGLE}" "${profile_root}" >/dev/null
 assert_profile_installed "${profile_root}"
 
-test_selector inactive 0 /usr/share/containerd2/acl-config.toml
-test_selector active 1 /usr/share/containerd2/acl-erofs-config.toml
-test_selector no-policy-file "" /usr/share/containerd2/acl-config.toml
+test_selector inactive 0 /etc/containerd/config.toml
+test_selector active 1 /usr/share/containerd2/acl-erofs.toml
+test_selector no-policy-file "" /etc/containerd/config.toml
 
 grep -Fq -- '- erofs-utils' "${SYSEXT_YAML}"
 if grep -Fq 'feature: erofs' "${SYSEXT_YAML}"; then
     exit 1
 fi
-if grep -Fq 'containerd2-erofs' "${SYSEXT_YAML}"; then
-    exit 1
-fi
-grep -Fq 'Obsoletes: containerd2-erofs < %{version}-%{release}' "${SPEC}"
 if grep -Eq '^%package[[:space:]]+erofs$' "${SPEC}"; then
     exit 1
 fi

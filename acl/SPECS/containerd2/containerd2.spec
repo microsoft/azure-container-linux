@@ -5,7 +5,7 @@
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.4
-Release: 6030.verity%{?dist}
+Release: 2%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -20,11 +20,12 @@ Patch0:	multi-snapshotters-support.patch
 Patch1:	tardev-support.patch
 Patch2:	fix-TestCgroupNamespace-cgroupv1.patch
 Patch3:	CVE-2026-56852.patch
-Patch4:	0001-erofs-add-signed-dm-verity-mapper-foundation.patch
-Patch5:	0002-erofs-consume-signed-referrer-materializations.patch
-Patch6:	0003-remotes-bound-OCI-referrers-traversal.patch
-Patch7:	0004-cri-integrate-signed-runtime-snapshotters.patch
-Patch8:	0005-tests-cover-critical-signed-EROFS-regressions.patch
+Patch4:	CVE-2026-37236.patch
+Patch5:	0001-erofs-add-signed-dm-verity-mapper-foundation.patch
+Patch6:	0002-erofs-consume-signed-referrer-materializations.patch
+Patch7:	0003-remotes-bound-OCI-referrers-traversal.patch
+Patch8:	0004-cri-integrate-signed-runtime-snapshotters.patch
+Patch9:	0005-tests-cover-critical-signed-EROFS-regressions.patch
 
 %{?systemd_requires}
 
@@ -35,9 +36,6 @@ BuildRequires: make
 BuildRequires: systemd-rpm-macros
 
 Requires: runc >= 1.2.2
-
-# Retire the former ACL profile subpackage.
-Obsoletes: containerd2-erofs < %{version}-%{release}
 
 # This package replaces the old name of containerd
 Provides: containerd = %{version}-%{release}
@@ -108,33 +106,25 @@ fi
 %dir /opt/containerd/lib
 
 %changelog
-* Mon Sep 14 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6030.verity
-- Remove the redundant dm-verity referrer capability provide.
-- Install the ACL-owned profile directly during ACL image composition.
+* Mon Sep 14 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-2
+- Add default-off signed EROFS/dm-verity referrer support.
+- Add bounded OCI referrer traversal and CRI runtime snapshotter integration.
+- Keep ACL activation policy and configuration in ACL image composition.
+- Pin ACL package builds to Go 1.26.7 while the Go 1.27 ML-KEM backend is fixed.
 
-* Sun Sep 13 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6029.verity
-- Select the newest dm-verity referrer before parsing its inner bundle.
-- Keep the runtime default-off and expose a versioned profile capability.
-- Move the ACL EROFS profile and activation policy into the ACL image build.
-- Remove the retired profile subpackage during upgrades.
+* Wed Sep 09 2026 Nan Liu <liunan@microsoft.com> - 2.3.4-1
+- Upgrade to 2.3.4
+- Remove CVE patches fixed upstream
+- Rebase multi-snapshotter support and CVE-2026-56852 patches
 
-* Sun Sep 13 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6027.verity
-- Route dm-verity EROFS fsview requests through the verified kernel mount path.
+* Tue Sep 08 2026 Azure Linux Security Servicing Account <azurelinux-security@microsoft.com> - 2.2.4-9
+- Patch for CVE-2026-37236
 
-* Sat Sep 12 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6026.verity
-- Pin the build toolchain to Go 1.26.7 while the Go 1.27 ML-KEM backend remains disabled.
-
-* Wed Sep 09 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6025.verity
-- Rebase the signed EROFS/dm-verity carry onto containerd 2.3.4.
-- Keep signed OCI referrer handling separate from upstream local dm-verity.
-- Preserve the ordinary overlayfs lifecycle and add package-time regression tests.
-
-* Tue Sep 08 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6024.verity
-- Add four production-only patches for signed EROFS/dm-verity materialization,
-  bounded referrer pagination, and CRI snapshotter-cache refresh.
-- Add the opt-in ACL EROFS runtime profile; the base package remains unchanged.
-- Keep Go 1.26 ACL builds on the cgo-less system-crypto experiment while
-  preserving the Go 1.27 behavior inherited from Azure Linux 3.0-dev.
+* Thu Sep 03 2026 Aadhar Agarwal <aadagarwal@microsoft.com> - 2.2.4-8
+- Temporarily build with Microsoft Go 1.26 to avoid the Go 1.27 systemcrypto
+  ML-KEM panic on OpenSSL 3.3.
+- Restore GOEXPERIMENT=ms_nocgo_opensslcrypto for the Go 1.26 cgo-less OpenSSL
+  backend.
 
 * Wed Sep 02 2026 Muhammad Falak R Wani <mwani@microsoft.com> - 2.2.4-7
 - Drop 'GOEXPERIMENT=ms_nocgo_opensslcrypto', removed in Go 1.27. Systemcrypto is

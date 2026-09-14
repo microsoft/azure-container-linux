@@ -16,7 +16,7 @@ set -euo pipefail
 
 rootfs="${1}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-erofs_profile_dir="${script_dir}/additional_files/containerd2-erofs"
+erofs_profile_dir="${script_dir}/additional_files/containerd2"
 azl_config="${rootfs}/etc/containerd/config.toml"
 acl_config="${rootfs}/usr/share/containerd/config.toml"
 acl_cgroupfs_config="${rootfs}/usr/share/containerd/config-cgroupfs.toml"
@@ -60,12 +60,6 @@ chmod 0644 "${acl_cgroupfs_config}"
 echo ">>> NOTICE: $0: installing the ACL EROFS/dm-verity profile"
 install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-erofs.toml" \
   "${rootfs}/usr/share/containerd2/acl-erofs.toml"
-install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-config.toml" \
-  "${rootfs}/usr/share/containerd2/acl-config.toml"
-install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-erofs-config.toml" \
-  "${rootfs}/usr/share/containerd2/acl-erofs-config.toml"
-install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-erofs-runtime.toml" \
-  "${rootfs}/usr/share/containerd2/acl-erofs-runtime.toml"
 install -Dpm 0755 "${erofs_profile_dir}/containerd-acl-select-profile" \
   "${rootfs}/usr/libexec/containerd2/acl-select-profile"
 install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-profile.conf" \
