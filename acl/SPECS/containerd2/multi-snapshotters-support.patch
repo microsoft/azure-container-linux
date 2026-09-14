@@ -1,0 +1,97 @@
+From c4b55576b9f8d1415e119358ce7ade23503d97a4 Mon Sep 17 00:00:00 2001
+From: Mitch Zhu <mitchzhu@microsoft.com>
+Date: Wed, 2 Sep 2026 12:00:00 +0000
+Subject: [PATCH] Add multi-snapshotter support
+
+---
+ internal/cri/server/sandbox_run.go | 12 ++++++++++--
+ internal/cri/store/image/image.go  | 29 +++++++++++++++++++++++------
+ 2 files changed, 33 insertions(+), 8 deletions(-)
+
+diff --git a/internal/cri/server/sandbox_run.go b/internal/cri/server/sandbox_run.go
+index 8d3a12b..db9956f 100644
+--- a/internal/cri/server/sandbox_run.go
++++ b/internal/cri/server/sandbox_run.go
+@@ -415,9 +415,17 @@ func (c *criService) ensurePauseImageExists(ctx context.Context, config *runtime
+ 		ref = img
+ 	}
+ 
+-	_, err := c.ImageService.LocalResolve(ref)
++	ociRuntime, err := c.config.GetSandboxRuntime(config, runtimeHandler)
++	if err != nil {
++		return fmt.Errorf("failed to get sandbox runtime: %w", err)
++	}
++	snapshotter := c.ImageService.RuntimeSnapshotter(ctx, ociRuntime)
++
++	image, err := c.ImageService.LocalResolve(ref)
+ 	if err == nil {
+-		return nil
++		if _, ok := image.Snapshotters[snapshotter]; ok || len(image.Snapshotters) == 0 {
++			return nil
++		}
+ 	} else if !errdefs.IsNotFound(err) {
+ 		return fmt.Errorf("failed to get image %q: %w", ref, err)
+ 	}
+diff --git a/internal/cri/store/image/image.go b/internal/cri/store/image/image.go
+index 5d20c12..2773c92 100644
+--- a/internal/cri/store/image/image.go
++++ b/internal/cri/store/image/image.go
+@@ -20,6 +20,7 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"fmt"
++	"strings"
+ 	"sync"
+ 
+ 	"github.com/containerd/containerd/v2/core/content"
+@@ -53,6 +54,8 @@ type Image struct {
+ 	ImageSpec imagespec.Image
+ 	// Pinned image to prevent it from garbage collection
+ 	Pinned bool
++	// Snapshotters is a map whose keys are snapshotters for which this image has a snapshot.
++	Snapshotters map[string]struct{}
+ }
+ 
+ // Getter is used to get images but does not make changes
+@@ -170,6 +173,19 @@ func (s *Store) getImage(ctx context.Context, i images.Image) (*Image, error) {
+ 		return nil, fmt.Errorf("read image config from content store: %w", err)
+ 	}
+ 
++	info, err := s.provider.Info(ctx, desc.Digest)
++	if err != nil {
++		return nil, fmt.Errorf("get content store config info: %w", err)
++	}
++
++	snapshotters := make(map[string]struct{})
++	for label := range info.Labels {
++		const prefix = "containerd.io/gc.ref.snapshot."
++		if strings.HasPrefix(label, prefix) {
++			snapshotters[label[len(prefix):]] = struct{}{}
++		}
++	}
++
+ 	var spec imagespec.Image
+ 	if err := json.Unmarshal(blob, &spec); err != nil {
+ 		return nil, fmt.Errorf("unmarshal image config %s: %w", blob, err)
+@@ -178,12 +194,13 @@ func (s *Store) getImage(ctx context.Context, i images.Image) (*Image, error) {
+ 	pinned := i.Labels[labels.PinnedImageLabelKey] == labels.PinnedImageLabelValue
+ 
+ 	return &Image{
+-		ID:         id,
+-		References: []string{i.Name},
+-		ChainID:    chainID.String(),
+-		Size:       size,
+-		ImageSpec:  spec,
+-		Pinned:     pinned,
++		ID:           id,
++		References:   []string{i.Name},
++		ChainID:      chainID.String(),
++		Size:         size,
++		ImageSpec:    spec,
++		Pinned:       pinned,
++		Snapshotters: snapshotters,
+ 	}, nil
+ 
+ }
+-- 
+2.52.0
