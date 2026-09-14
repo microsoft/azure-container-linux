@@ -5,7 +5,7 @@
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.4
-Release: 6027.verity%{?dist}
+Release: 6029.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -15,13 +15,6 @@ Distribution: Azure Linux
 Source0: https://github.com/containerd/containerd/archive/v%{version}.tar.gz#/%{upstream_name}-%{version}.tar.gz
 Source1: containerd.service
 Source2: containerd.toml
-Source3: containerd-acl-erofs.toml
-Source4: containerd-acl-config.toml
-Source5: containerd-acl-profile.conf
-Source6: containerd-acl-tmpfiles.conf
-Source7: containerd-acl-erofs-runtime.toml
-Source8: containerd-acl-erofs-config.toml
-Source9: containerd-acl-select-profile
 
 Patch0:	multi-snapshotters-support.patch
 Patch1:	tardev-support.patch
@@ -42,6 +35,10 @@ BuildRequires: make
 BuildRequires: systemd-rpm-macros
 
 Requires: runc >= 1.2.2
+
+# Versioned contract for image-owned EROFS/dm-verity profiles.
+Provides: containerd2-dmverity-referrers-api = 1
+Obsoletes: containerd2-erofs < %{version}-%{release}
 
 # This package replaces the old name of containerd
 Provides: containerd = %{version}-%{release}
@@ -65,15 +62,6 @@ low-level storage and network attachments, etc.
 containerd is designed to be embedded into a larger system, rather than being
 used directly by developers or end-users.
 
-%package erofs
-Summary: EROFS/dm-verity profile for Azure Container Linux
-Requires: %{name} = %{version}-%{release}
-Requires: erofs-utils
-
-%description erofs
-Provides the opt-in EROFS and signed dm-verity runtime profile used by Azure
-Container Linux. The main containerd2 package remains behavior-neutral.
-
 %prep
 %autosetup -p1 -n %{upstream_name}-%{version}
 
@@ -94,14 +82,6 @@ mkdir -p %{buildroot}/%{_unitdir}
 install -D -p -m 0644 %{SOURCE1} %{buildroot}%{_unitdir}/containerd.service
 install -D -p -m 0644 %{SOURCE2} %{buildroot}%{_sysconfdir}/containerd/config.toml
 install -vdm 755 %{buildroot}/opt/containerd/{bin,lib}
-
-install -D -p -m 0644 %{SOURCE3} %{buildroot}%{_datadir}/containerd2/acl-erofs.toml
-install -D -p -m 0644 %{SOURCE4} %{buildroot}%{_datadir}/containerd2/acl-config.toml
-install -D -p -m 0644 %{SOURCE5} %{buildroot}%{_prefix}/lib/systemd/system/containerd.service.d/90-acl-profile.conf
-install -D -p -m 0644 %{SOURCE6} %{buildroot}%{_prefix}/lib/tmpfiles.d/10-containerd-acl.conf
-install -D -p -m 0644 %{SOURCE7} %{buildroot}%{_datadir}/containerd2/acl-erofs-runtime.toml
-install -D -p -m 0644 %{SOURCE8} %{buildroot}%{_datadir}/containerd2/acl-erofs-config.toml
-install -D -p -m 0755 %{SOURCE9} %{buildroot}%{_libexecdir}/containerd2/acl-select-profile
 
 %post
 %systemd_post containerd.service
@@ -128,19 +108,13 @@ fi
 %dir /opt/containerd/bin
 %dir /opt/containerd/lib
 
-%files erofs
-%{_datadir}/containerd2/acl-erofs.toml
-%{_datadir}/containerd2/acl-config.toml
-%{_datadir}/containerd2/acl-erofs-runtime.toml
-%{_datadir}/containerd2/acl-erofs-config.toml
-%{_libexecdir}/containerd2/acl-select-profile
-%{_prefix}/lib/systemd/system/containerd.service.d/90-acl-profile.conf
-%{_prefix}/lib/tmpfiles.d/10-containerd-acl.conf
-%dir %{_datadir}/containerd2
-%dir %{_libexecdir}/containerd2
-%dir %{_prefix}/lib/systemd/system/containerd.service.d
-
 %changelog
+* Sun Sep 13 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6029.verity
+- Select the newest dm-verity referrer before parsing its inner bundle.
+- Keep the runtime default-off and expose a versioned profile capability.
+- Move the ACL EROFS profile and activation policy into the ACL image build.
+- Remove the retired profile subpackage during upgrades.
+
 * Sun Sep 13 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6027.verity
 - Route dm-verity EROFS fsview requests through the verified kernel mount path.
 

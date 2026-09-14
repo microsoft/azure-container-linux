@@ -3,7 +3,7 @@ From: Dallas Delaney <dadelan@microsoft.com>
 Date: Wed, 9 Sep 2026 22:57:36 +0000
 Subject: [PATCH 5/5] tests: cover critical signed EROFS regressions
 
-Keep only the mandatory compatibility updates and focused regression coverage for fatal oversized referrers, SELinux fsconfig unquoting with valid legacy mount data, and snapshot removal cleanup using the persisted snapshot ID.
+Keep only the mandatory compatibility updates and focused regression coverage for fatal oversized referrers, SELinux fsconfig unquoting with valid legacy mount data, snapshot removal cleanup using the persisted snapshot ID, verified fsview fallback, and two-phase dm-verity referrer selection.
 
 Construct the metadata-only cleanup checks in block mode so package tests do
 not depend on host EROFS kernel support.
@@ -15,11 +15,13 @@ Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
  core/remotes/docker/referrers_test.go        | 62 ++++++++++++++++++-
  internal/cri/server/container_status_test.go |  2 +-
  internal/fsmount/fsmount_linux_test.go       | 64 ++++++++++++++++++++
+ pkg/snapshotters/signatures_selection_test.go | 249 ++++++++++++++++++++++++++
  plugins/mount/fsview/erofs/erofs_test.go     | 60 +++++++++++++++++++
  plugins/mount/erofs/plugin_linux_test.go     | 16 +++++
  plugins/snapshots/erofs/erofs_linux_test.go  | 44 ++++++++++++++
- 6 files changed, 245 insertions(+), 3 deletions(-)
+ 7 files changed, 494 insertions(+), 3 deletions(-)
  create mode 100644 internal/fsmount/fsmount_linux_test.go
+ create mode 100644 pkg/snapshotters/signatures_selection_test.go
  create mode 100644 plugins/mount/fsview/erofs/erofs_test.go
 
 diff --git a/core/remotes/docker/referrers_test.go b/core/remotes/docker/referrers_test.go
@@ -346,4 +348,259 @@ index 0000000000000000000000000000000000000000..e22cc2ea63f593e538cdba2a7aa0989c
 +	require.Error(t, err)
 +	assert.ErrorIs(t, err, os.ErrNotExist)
 +	assert.NotErrorIs(t, err, errdefs.ErrNotImplemented)
++}
+diff --git a/pkg/snapshotters/signatures_selection_test.go b/pkg/snapshotters/signatures_selection_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..85f81305a7a3b1dcd0831fbb5e954bc973f4e0c4
+--- /dev/null
++++ b/pkg/snapshotters/signatures_selection_test.go
+@@ -0,0 +1,249 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package snapshotters
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"io"
++	"testing"
++	"time"
++
++	"github.com/containerd/containerd/v2/core/remotes"
++	"github.com/opencontainers/go-digest"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++const obsoleteLayerSignatureMediaType = "application/vnd.cncf.notary.dmverity.layer-signature+pkcs7"
++
++type signatureSelectionFetcher struct {
++	blobs map[digest.Digest][]byte
++	refs  map[digest.Digest][]ocispec.Descriptor
++}
++
++func (f *signatureSelectionFetcher) Fetch(_ context.Context, desc ocispec.Descriptor) (io.ReadCloser, error) {
++	data, ok := f.blobs[desc.Digest]
++	if !ok {
++		return nil, errors.New("blob not found")
++	}
++	return io.NopCloser(bytes.NewReader(data)), nil
++}
++
++func (f *signatureSelectionFetcher) FetchReferrers(_ context.Context, dgst digest.Digest, _ ...remotes.FetchReferrersOpt) ([]ocispec.Descriptor, error) {
++	return append([]ocispec.Descriptor(nil), f.refs[dgst]...), nil
++}
++
++func TestFetchSignaturesSelectsBeforeParsingInnerSchema(t *testing.T) {
++	subject := selectionDescriptor([]byte("subject"), ocispec.MediaTypeImageManifest)
++	sourceLayer := selectionDescriptor([]byte("source layer"), ocispec.MediaTypeImageLayerGzip)
++	older := newSelectionBundle(t, subject, sourceLayer, "older", time.Date(2026, 9, 1, 1, 0, 0, 0, time.UTC))
++	newer := newSelectionBundle(t, subject, sourceLayer, "newer", time.Date(2026, 9, 1, 2, 0, 0, 0, time.UTC))
++	older = rewriteSelectionBundle(t, older, func(manifest *ocispec.Manifest) {
++		for i := range manifest.Layers {
++			if manifest.Layers[i].MediaType == LayerSignatureMediaType {
++				manifest.Layers[i].MediaType = obsoleteLayerSignatureMediaType
++			}
++		}
++	})
++
++	fetcher := &signatureSelectionFetcher{
++		blobs: mergeSelectionBlobs(older.blobs, newer.blobs),
++		refs: map[digest.Digest][]ocispec.Descriptor{
++			subject.Digest: {older.descriptor, newer.descriptor},
++		},
++	}
++
++	infos, _, selected, err := fetchSignatures(
++		context.Background(),
++		fetcher,
++		subject.Digest,
++		map[string]struct{}{sourceLayer.Digest.String(): {}},
++	)
++	require.NoError(t, err)
++	require.NotNil(t, selected)
++	assert.Equal(t, newer.descriptor.Digest, selected.desc.Digest)
++	require.Contains(t, infos, sourceLayer.Digest.String())
++	assert.Equal(t, newer.rootHash, infos[sourceLayer.Digest.String()].RootHash)
++}
++
++func TestFetchSignaturesFailsClosedOnMalformedSelectedBundle(t *testing.T) {
++	subject := selectionDescriptor([]byte("subject"), ocispec.MediaTypeImageManifest)
++	sourceLayer := selectionDescriptor([]byte("source layer"), ocispec.MediaTypeImageLayerGzip)
++	older := newSelectionBundle(t, subject, sourceLayer, "older", time.Date(2026, 9, 1, 1, 0, 0, 0, time.UTC))
++	newer := newSelectionBundle(t, subject, sourceLayer, "newer", time.Date(2026, 9, 1, 2, 0, 0, 0, time.UTC))
++	newer = rewriteSelectionBundle(t, newer, func(manifest *ocispec.Manifest) {
++		for i := range manifest.Layers {
++			if manifest.Layers[i].MediaType == LayerSignatureMediaType {
++				manifest.Layers[i].MediaType = obsoleteLayerSignatureMediaType
++			}
++		}
++	})
++
++	fetcher := &signatureSelectionFetcher{
++		blobs: mergeSelectionBlobs(older.blobs, newer.blobs),
++		refs: map[digest.Digest][]ocispec.Descriptor{
++			subject.Digest: {older.descriptor, newer.descriptor},
++		},
++	}
++
++	_, _, _, err := fetchSignatures(
++		context.Background(),
++		fetcher,
++		subject.Digest,
++		map[string]struct{}{sourceLayer.Digest.String(): {}},
++	)
++	require.Error(t, err)
++	assert.Contains(t, err.Error(), newer.descriptor.Digest.String())
++	assert.Contains(t, err.Error(), "unexpected bundle layer media type")
++}
++
++func TestFetchSignaturesBreaksCreationTimeTiesByDigest(t *testing.T) {
++	subject := selectionDescriptor([]byte("subject"), ocispec.MediaTypeImageManifest)
++	sourceLayer := selectionDescriptor([]byte("source layer"), ocispec.MediaTypeImageLayerGzip)
++	createdAt := time.Date(2026, 9, 1, 1, 0, 0, 0, time.UTC)
++	first := newSelectionBundle(t, subject, sourceLayer, "first", createdAt)
++	second := newSelectionBundle(t, subject, sourceLayer, "second", createdAt)
++
++	expected := first
++	other := second
++	if second.descriptor.Digest.String() < first.descriptor.Digest.String() {
++		expected = second
++		other = first
++	}
++	fetcher := &signatureSelectionFetcher{
++		blobs: mergeSelectionBlobs(first.blobs, second.blobs),
++		refs: map[digest.Digest][]ocispec.Descriptor{
++			subject.Digest: {other.descriptor, expected.descriptor},
++		},
++	}
++
++	infos, _, selected, err := fetchSignatures(
++		context.Background(),
++		fetcher,
++		subject.Digest,
++		map[string]struct{}{sourceLayer.Digest.String(): {}},
++	)
++	require.NoError(t, err)
++	require.NotNil(t, selected)
++	assert.Equal(t, expected.descriptor.Digest, selected.desc.Digest)
++	assert.Equal(t, expected.rootHash, infos[sourceLayer.Digest.String()].RootHash)
++}
++
++type signatureSelectionBundle struct {
++	descriptor ocispec.Descriptor
++	rootHash   string
++	blobs      map[digest.Digest][]byte
++}
++
++func newSelectionBundle(
++	t *testing.T,
++	subject ocispec.Descriptor,
++	sourceLayer ocispec.Descriptor,
++	name string,
++	createdAt time.Time,
++) signatureSelectionBundle {
++	t.Helper()
++
++	rootHash := digest.FromString("root hash " + name).Encoded()
++	signatureBytes := []byte("signature-" + name)
++	signature := selectionDescriptor(signatureBytes, LayerSignatureMediaType)
++	signature.Annotations = map[string]string{
++		sourceLayerDigestAnnotation: sourceLayer.Digest.String(),
++		layerRootHashAnnotation:     rootHash,
++	}
++	metadataBytes := make([]byte, tarIndexAlignment)
++	copy(metadataBytes, "metadata-"+name)
++	metadata := selectionDescriptor(metadataBytes, EROFSMetadataArtifactMediaType)
++	metadata.Annotations = map[string]string{
++		sourceLayerDigestAnnotation: sourceLayer.Digest.String(),
++	}
++	treeBytes := []byte("tree-" + name)
++	tree := selectionDescriptor(treeBytes, MerkleTreeArtifactMediaType)
++	tree.Annotations = map[string]string{
++		sourceLayerDigestAnnotation: sourceLayer.Digest.String(),
++	}
++	configBytes := []byte("{}")
++	config := selectionDescriptor(configBytes, ocispec.MediaTypeImageConfig)
++
++	manifest := ocispec.Manifest{
++		MediaType:    ocispec.MediaTypeImageManifest,
++		ArtifactType: SignatureArtifactType,
++		Subject:      &subject,
++		Config:       config,
++		Layers:       []ocispec.Descriptor{signature, metadata, tree},
++		Annotations: map[string]string{
++			ociAnnotationCreated: createdAt.Format(time.RFC3339),
++		},
++	}
++	manifestBytes, err := json.Marshal(manifest)
++	require.NoError(t, err)
++	descriptor := selectionDescriptor(manifestBytes, ocispec.MediaTypeImageManifest)
++	descriptor.ArtifactType = SignatureArtifactType
++
++	return signatureSelectionBundle{
++		descriptor: descriptor,
++		rootHash:   rootHash,
++		blobs: map[digest.Digest][]byte{
++			descriptor.Digest: manifestBytes,
++			config.Digest:     configBytes,
++			signature.Digest:  signatureBytes,
++			metadata.Digest:   metadataBytes,
++			tree.Digest:       treeBytes,
++		},
++	}
++}
++
++func rewriteSelectionBundle(
++	t *testing.T,
++	bundle signatureSelectionBundle,
++	mutate func(*ocispec.Manifest),
++) signatureSelectionBundle {
++	t.Helper()
++
++	var manifest ocispec.Manifest
++	require.NoError(t, json.Unmarshal(bundle.blobs[bundle.descriptor.Digest], &manifest))
++	mutate(&manifest)
++	manifestBytes, err := json.Marshal(manifest)
++	require.NoError(t, err)
++	delete(bundle.blobs, bundle.descriptor.Digest)
++	bundle.descriptor = selectionDescriptor(manifestBytes, ocispec.MediaTypeImageManifest)
++	bundle.descriptor.ArtifactType = SignatureArtifactType
++	bundle.blobs[bundle.descriptor.Digest] = manifestBytes
++	return bundle
++}
++
++func mergeSelectionBlobs(maps ...map[digest.Digest][]byte) map[digest.Digest][]byte {
++	merged := make(map[digest.Digest][]byte)
++	for _, blobs := range maps {
++		for dgst, data := range blobs {
++			merged[dgst] = data
++		}
++	}
++	return merged
++}
++
++func selectionDescriptor(data []byte, mediaType string) ocispec.Descriptor {
++	return ocispec.Descriptor{
++		MediaType: mediaType,
++		Digest:    digest.FromBytes(data),
++		Size:      int64(len(data)),
++	}
 +}

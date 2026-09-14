@@ -15,6 +15,9 @@
 set -euo pipefail
 
 rootfs="${1}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+erofs_profile_dir="${script_dir}/additional_files/containerd2-erofs"
+rpm_query="${ACL_RPM_QUERY:-rpm}"
 azl_config="${rootfs}/etc/containerd/config.toml"
 acl_config="${rootfs}/usr/share/containerd/config.toml"
 acl_cgroupfs_config="${rootfs}/usr/share/containerd/config-cgroupfs.toml"
@@ -55,6 +58,43 @@ echo ">>> NOTICE: $0: generating cgroupfs containerd config"
 sed -E 's/^([[:space:]]*)SystemdCgroup[[:space:]]*=.*/\1SystemdCgroup = false/' \
   "${acl_config}" > "${acl_cgroupfs_config}"
 chmod 0644 "${acl_cgroupfs_config}"
+
+case ",${ACL_FEATURES:-}," in
+  *,erofs,*)
+    if ! runtime_capabilities=$("${rpm_query}" --root="${rootfs}" --dbpath=/var/lib/rpm \
+      -q --whatprovides containerd2-dmverity-referrers-api \
+      --qf '[%{PROVIDENAME} %{PROVIDEVERSION}\n]' 2>/dev/null) ||
+      ! grep -Fxq 'containerd2-dmverity-referrers-api 1' <<< "${runtime_capabilities}"; then
+      echo ">>> ERROR: $0: the EROFS profile requires containerd2-dmverity-referrers-api = 1" >&2
+      exit 1
+    fi
+    echo ">>> NOTICE: $0: installing the ACL EROFS/dm-verity profile"
+    install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-erofs.toml" \
+      "${rootfs}/usr/share/containerd2/acl-erofs.toml"
+    install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-config.toml" \
+      "${rootfs}/usr/share/containerd2/acl-config.toml"
+    install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-erofs-config.toml" \
+      "${rootfs}/usr/share/containerd2/acl-erofs-config.toml"
+    install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-erofs-runtime.toml" \
+      "${rootfs}/usr/share/containerd2/acl-erofs-runtime.toml"
+    install -Dpm 0755 "${erofs_profile_dir}/containerd-acl-select-profile" \
+      "${rootfs}/usr/libexec/containerd2/acl-select-profile"
+    install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-profile.conf" \
+      "${rootfs}/usr/lib/systemd/system/containerd.service.d/90-acl-profile.conf"
+    install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-tmpfiles.conf" \
+      "${rootfs}/usr/lib/tmpfiles.d/10-containerd-acl.conf"
+    ;;
+  *)
+    rm -f \
+      "${rootfs}/usr/share/containerd2/acl-erofs.toml" \
+      "${rootfs}/usr/share/containerd2/acl-config.toml" \
+      "${rootfs}/usr/share/containerd2/acl-erofs-config.toml" \
+      "${rootfs}/usr/share/containerd2/acl-erofs-runtime.toml" \
+      "${rootfs}/usr/libexec/containerd2/acl-select-profile" \
+      "${rootfs}/usr/lib/systemd/system/containerd.service.d/90-acl-profile.conf" \
+      "${rootfs}/usr/lib/tmpfiles.d/10-containerd-acl.conf"
+    ;;
+esac
 
 case ",${ACL_FEATURES:-}," in
   *,erofs-static,*)
