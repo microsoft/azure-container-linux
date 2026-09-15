@@ -1,0 +1,1400 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Dallas Delaney <dadelan@microsoft.com>
+Date: Tue, 15 Sep 2026 17:23:56 +0000
+Subject: [PATCH 4/4] tests: cover critical signed EROFS v2 regressions
+
+Carry compact three-descriptor schema, retained-referrer, snapshot-identity, standalone-tree, zstd compatibility, deferred-unpack provenance, mount-safety, and cleanup regressions needed by the package build while leaving broader development coverage in the source worktree.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+
+Copilot-Session: 3ee5a7a9-81c1-4429-89fd-c54c9bcb1db6
+---
+ internal/cri/opts/container_test.go           |  46 +++
+ internal/cri/server/container_status_test.go  |   3 +-
+ internal/dmverity/dmverity_test.go            |  36 ++
+ internal/fsmount/fsmount_linux_test.go        |  64 ++++
+ pkg/snapshotters/dmverity_policy_test.go      |  94 +++++
+ pkg/snapshotters/retained_signatures_test.go  | 153 ++++++++
+ pkg/snapshotters/signatures_selection_test.go | 362 ++++++++++++++++++
+ plugins/diff/erofs/differ_policy_test.go      |  96 +++++
+ plugins/diff/erofs/precomputed_test.go        | 167 ++++++++
+ plugins/mount/erofs/plugin_linux_test.go      | 113 ++++++
+ plugins/mount/fsview/erofs/erofs_test.go      |  60 +++
+ plugins/snapshots/erofs/erofs_linux_test.go   |  59 +++
+ 12 files changed, 1252 insertions(+), 1 deletion(-)
+ create mode 100644 internal/cri/opts/container_test.go
+ create mode 100644 internal/fsmount/fsmount_linux_test.go
+ create mode 100644 pkg/snapshotters/dmverity_policy_test.go
+ create mode 100644 pkg/snapshotters/retained_signatures_test.go
+ create mode 100644 pkg/snapshotters/signatures_selection_test.go
+ create mode 100644 plugins/diff/erofs/differ_policy_test.go
+ create mode 100644 plugins/diff/erofs/precomputed_test.go
+ create mode 100644 plugins/mount/fsview/erofs/erofs_test.go
+
+diff --git a/internal/cri/opts/container_test.go b/internal/cri/opts/container_test.go
+new file mode 100644
+index 000000000..a3d47ba15
+--- /dev/null
++++ b/internal/cri/opts/container_test.go
+@@ -0,0 +1,46 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package opts
++
++import (
++	"context"
++	"testing"
++
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++	"github.com/stretchr/testify/require"
++
++	"github.com/containerd/containerd/v2/core/images"
++	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
++	containerdplugins "github.com/containerd/containerd/v2/plugins"
++)
++
++func TestAppendUnpackHandlerWrappersPreservesDmverityProvenance(t *testing.T) {
++	base := images.HandlerFunc(func(
++		_ context.Context,
++		_ ocispec.Descriptor,
++	) ([]ocispec.Descriptor, error) {
++		return nil, nil
++	})
++	handler := appendUnpackHandlerWrappers(
++		base,
++		nil,
++		"example/image:latest",
++		[]string{containerdplugins.CapabilityDmverityReferrers},
++		true,
++	)
++	require.True(t, snpkg.HasValidatedDmverityReferrers(handler))
++}
+diff --git a/internal/cri/server/container_status_test.go b/internal/cri/server/container_status_test.go
+index a35dda2ce..b374886a5 100644
+--- a/internal/cri/server/container_status_test.go
++++ b/internal/cri/server/container_status_test.go
+@@ -392,7 +392,8 @@ func (s *fakeImageService) PullImage(context.Context, string, func(string) (stri
+ 	return "", errors.New("not implemented")
+ }
+ 
+-func (s *fakeImageService) UpdateRuntimeSnapshotter(runtimeName string, imagePlatform images.ImagePlatform) {
++func (s *fakeImageService) UpdateRuntimeSnapshotter(runtimeName string, imagePlatform images.ImagePlatform) error {
++	return nil
+ }
+ 
+ func patchExceptedWithState(expected *runtime.ContainerStatus, state runtime.ContainerState) {
+diff --git a/internal/dmverity/dmverity_test.go b/internal/dmverity/dmverity_test.go
+index c5a7b5104..9e71cd69f 100644
+--- a/internal/dmverity/dmverity_test.go
++++ b/internal/dmverity/dmverity_test.go
+@@ -256,6 +256,42 @@ func TestMetadataPath(t *testing.T) {
+ 	assert.Equal(t, "/path/to/layer.erofs.dmverity", MetadataPath("/path/to/layer.erofs.dmverity"))
+ }
+ 
++func TestResolveHashDevice(t *testing.T) {
++	layer := "/path/to/layer.erofs"
++	assert.Equal(t, layer+".hashtree", HashDevicePath(layer))
++	assert.Equal(t, layer, ResolveHashDevice(layer, &DmverityMetadata{}))
++	assert.Equal(
++		t,
++		layer+".hashtree",
++		ResolveHashDevice(layer, &DmverityMetadata{HashDevice: "layer.erofs.hashtree"}),
++	)
++}
++
++func TestVerifyArtifactsWithStandaloneTree(t *testing.T) {
++	dataDevice := createTempFile(t, make([]byte, 4096))
++	hashDevice := createTempFile(t, nil)
++	options := DefaultDmverityOptions()
++	options.DataBlockSize = 512
++	options.HashBlockSize = 512
++	options.HashOffset = 4096
++	options.UUID = "12345678-1234-1234-1234-123456789012"
++
++	rootHash, err := Format(dataDevice, dataDevice, options)
++	assert.NoError(t, err)
++	combined, err := os.ReadFile(dataDevice)
++	assert.NoError(t, err)
++	assert.NoError(t, os.WriteFile(hashDevice, combined[4096:], 0600))
++	assert.NoError(t, os.Truncate(dataDevice, 4096))
++	assert.NoError(t, VerifyArtifacts(dataDevice, hashDevice, rootHash, 512))
++
++	file, err := os.OpenFile(dataDevice, os.O_WRONLY, 0)
++	assert.NoError(t, err)
++	_, err = file.WriteAt([]byte{1}, 0)
++	assert.NoError(t, err)
++	assert.NoError(t, file.Close())
++	assert.Error(t, VerifyArtifacts(dataDevice, hashDevice, rootHash, 512))
++}
++
+ func TestDevicePath(t *testing.T) {
+ 	assert.Equal(t, "/dev/mapper/test-device", DevicePath("test-device"))
+ 	assert.Equal(t, "/dev/mapper/containerd-erofs-abc123", DevicePath("containerd-erofs-abc123"))
+diff --git a/internal/fsmount/fsmount_linux_test.go b/internal/fsmount/fsmount_linux_test.go
+new file mode 100644
+index 000000000..76460a530
+--- /dev/null
++++ b/internal/fsmount/fsmount_linux_test.go
+@@ -0,0 +1,64 @@
++//go:build linux
++
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package fsmount
++
++import (
++	"fmt"
++	"testing"
++)
++
++func TestApplyFilesystemOptionsUnquotesLSMValues(t *testing.T) {
++	const label = "system_u:object_r:container_file_t:s0:c1,c2"
++	for _, key := range []string{"context", "fscontext", "defcontext", "rootcontext"} {
++		t.Run(key, func(t *testing.T) {
++			option := fmt.Sprintf(`%s=%q`, key, label)
++			var got string
++			_, err := applyFilesystemOptions(
++				[]string{option},
++				func(_, value string) error { got = value; return nil },
++				func(string) error { return nil },
++			)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if got != label {
++				t.Fatalf("fsconfig value = %q, want %q", got, label)
++			}
++			if option != fmt.Sprintf(`%s=%q`, key, label) {
++				t.Fatalf("legacy mount option was modified: %q", option)
++			}
++		})
++	}
++}
++
++func TestApplyFilesystemOptionsPreservesOtherStringValues(t *testing.T) {
++	const quoted = `"value,with,commas"`
++	var got string
++	_, err := applyFilesystemOptions(
++		[]string{"custom=" + quoted},
++		func(_, value string) error { got = value; return nil },
++		func(string) error { return nil },
++	)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if got != quoted {
++		t.Fatalf("non-LSM fsconfig value = %q, want %q", got, quoted)
++	}
++}
+diff --git a/pkg/snapshotters/dmverity_policy_test.go b/pkg/snapshotters/dmverity_policy_test.go
+new file mode 100644
+index 000000000..cf4949334
+--- /dev/null
++++ b/pkg/snapshotters/dmverity_policy_test.go
+@@ -0,0 +1,94 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package snapshotters
++
++import (
++	"encoding/json"
++	"testing"
++
++	"github.com/opencontainers/go-digest"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++func TestDmveritySnapshotLabelsRequireCompleteArtifact(t *testing.T) {
++	layer := func(annotations map[string]string) ocispec.Descriptor {
++		return ocispec.Descriptor{
++			Digest:      digest.FromString("layer"),
++			Annotations: annotations,
++		}
++	}
++	rootHash := digest.FromString("root").Hex()
++	target := DmverityTarget{
++		RootHash: rootHash,
++		Metadata: ocispec.Descriptor{
++			MediaType: EROFSMetadataArtifactMediaType,
++			Digest:    digest.FromString("metadata"),
++			Size:      tarIndexAlignment,
++		},
++		Tree: ocispec.Descriptor{
++			MediaType: MerkleTreeArtifactMediaType,
++			Digest:    digest.FromString("tree"),
++			Size:      1,
++		},
++		Signature: ocispec.Descriptor{
++			MediaType: LayerSignatureMediaType,
++			Digest:    digest.FromString("signature"),
++			Size:      1,
++		},
++	}
++	targetJSON, err := json.Marshal(target)
++	require.NoError(t, err)
++
++	plain, err := DmveritySnapshotLabels(layer(nil), false)
++	require.NoError(t, err)
++	assert.Equal(t, DmverityMaterializationStatePlain, plain[DmverityMaterializationStateLabel])
++
++	_, err = DmveritySnapshotLabels(layer(nil), true)
++	require.ErrorContains(t, err, "signature required")
++
++	_, err = DmveritySnapshotLabels(layer(map[string]string{
++		TargetLayerDmverityLabel: `{"referrer":"invalid"}`,
++	}), false)
++	require.ErrorContains(t, err, "invalid dm-verity target")
++
++	labels, err := DmveritySnapshotLabels(layer(map[string]string{
++		TargetLayerDmverityLabel: string(targetJSON),
++	}), true)
++	require.NoError(t, err)
++	assert.Equal(t, DmverityMaterializationStateSigned, labels[DmverityMaterializationStateLabel])
++	assert.Equal(t, rootHash, labels[DmverityMaterializationRootHashLabel])
++	assert.Equal(t, target.Signature.Digest.String(), labels[DmverityMaterializationSignatureDigestLabel])
++}
++
++func TestValidateDmveritySnapshotRejectsRotation(t *testing.T) {
++	expected := map[string]string{
++		DmverityMaterializationVersionLabel:         DmverityMaterializationVersion,
++		DmverityMaterializationStateLabel:           DmverityMaterializationStateSigned,
++		DmverityMaterializationRootHashLabel:        digest.FromString("new-root").Hex(),
++		DmverityMaterializationSignatureDigestLabel: digest.FromString("new-signature").String(),
++	}
++	existing := map[string]string{
++		DmverityMaterializationVersionLabel:         DmverityMaterializationVersion,
++		DmverityMaterializationStateLabel:           DmverityMaterializationStateSigned,
++		DmverityMaterializationRootHashLabel:        digest.FromString("old-root").Hex(),
++		DmverityMaterializationSignatureDigestLabel: digest.FromString("old-signature").String(),
++	}
++
++	require.ErrorContains(t, ValidateDmveritySnapshot(existing, expected), "does not match required root hash")
++}
+diff --git a/pkg/snapshotters/retained_signatures_test.go b/pkg/snapshotters/retained_signatures_test.go
+new file mode 100644
+index 000000000..3c07fc760
+--- /dev/null
++++ b/pkg/snapshotters/retained_signatures_test.go
+@@ -0,0 +1,153 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package snapshotters
++
++import (
++	"encoding/json"
++	"strings"
++	"sync"
++	"testing"
++
++	"github.com/containerd/containerd/v2/core/content"
++	"github.com/containerd/containerd/v2/core/images"
++	"github.com/containerd/containerd/v2/core/remotes"
++	contentlocal "github.com/containerd/containerd/v2/plugins/content/local"
++	"github.com/opencontainers/go-digest"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++type retainedTestLabelStore struct {
++	mu     sync.Mutex
++	labels map[digest.Digest]map[string]string
++}
++
++func newRetainedTestLabelStore() *retainedTestLabelStore {
++	return &retainedTestLabelStore{labels: make(map[digest.Digest]map[string]string)}
++}
++
++func (s *retainedTestLabelStore) Get(dgst digest.Digest) (map[string]string, error) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	return s.labels[dgst], nil
++}
++
++func (s *retainedTestLabelStore) Set(dgst digest.Digest, labels map[string]string) error {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	s.labels[dgst] = labels
++	return nil
++}
++
++func (s *retainedTestLabelStore) Update(dgst digest.Digest, update map[string]string) (map[string]string, error) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	labels := s.labels[dgst]
++	if labels == nil {
++		labels = make(map[string]string)
++	}
++	for key, value := range update {
++		if value == "" {
++			delete(labels, key)
++		} else {
++			labels[key] = value
++		}
++	}
++	s.labels[dgst] = labels
++	return labels, nil
++}
++
++func TestRetainedSignatureHandlerSupportsFetchOnlyDeferredUnpack(t *testing.T) {
++	ctx := t.Context()
++	configData := []byte(`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
++	config := selectionDescriptor(configData, ocispec.MediaTypeImageConfig)
++	layerData := []byte("source layer")
++	layer := selectionDescriptor(layerData, ocispec.MediaTypeImageLayerGzip)
++	manifestData, err := json.Marshal(ocispec.Manifest{
++		MediaType: ocispec.MediaTypeImageManifest,
++		Config:    config,
++		Layers:    []ocispec.Descriptor{layer},
++	})
++	require.NoError(t, err)
++	manifest := selectionDescriptor(manifestData, ocispec.MediaTypeImageManifest)
++	bundle := newSelectionBundle(
++		t,
++		manifest,
++		layer,
++		"retained",
++	)
++
++	fetcher := &signatureSelectionFetcher{
++		blobs: mergeSelectionBlobs(bundle.blobs, map[digest.Digest][]byte{
++			manifest.Digest: manifestData,
++			config.Digest:   configData,
++			layer.Digest:    layerData,
++		}),
++		refs: map[digest.Digest][]ocispec.Descriptor{
++			manifest.Digest: {bundle.descriptor},
++		},
++	}
++	store, err := contentlocal.NewLabeledStore(t.TempDir(), newRetainedTestLabelStore())
++	require.NoError(t, err)
++	base := images.Handlers(
++		remotes.FetchHandler(store, fetcher),
++		images.SetChildrenLabels(store, images.ChildrenHandler(store)),
++	)
++
++	children, err := AppendRetainedSignatureHandlerWrapper(fetcher, store)(base).Handle(ctx, manifest)
++	require.NoError(t, err)
++	require.Len(t, children, 2)
++	target, err := ParseDmverityTarget(children[1].Annotations[TargetLayerDmverityLabel])
++	require.NoError(t, err)
++	assert.Equal(t, bundle.rootHash, target.RootHash)
++
++	subjectInfo, err := store.Info(ctx, manifest.Digest)
++	require.NoError(t, err)
++	var retainedLabel string
++	for key, value := range subjectInfo.Labels {
++		if strings.HasPrefix(key, retainedReferrerLabelPrefix) &&
++			value == bundle.descriptor.Digest.String() {
++			retainedLabel = key
++			break
++		}
++	}
++	require.NotEmpty(t, retainedLabel)
++	for dgst := range bundle.blobs {
++		_, err := store.Info(ctx, dgst)
++		require.NoError(t, err, "retained bundle content %s is missing", dgst)
++	}
++
++	annotations, err := CachedSignatureAnnotations(ctx, store, manifest)
++	require.NoError(t, err)
++	require.Contains(t, annotations, layer.Digest)
++	target, err = ParseDmverityTarget(annotations[layer.Digest][TargetLayerDmverityLabel])
++	require.NoError(t, err)
++	assert.Equal(t, bundle.rootHash, target.RootHash)
++	assert.Equal(t, bundle.metadata.Digest, target.Metadata.Digest)
++	assert.Equal(t, bundle.tree.Digest, target.Tree.Digest)
++	assert.Len(t, annotations[layer.Digest], 1)
++
++	_, err = store.Update(ctx, content.Info{
++		Digest: manifest.Digest,
++		Labels: map[string]string{retainedLabel: ""},
++	}, "labels."+retainedLabel)
++	require.NoError(t, err)
++	annotations, err = CachedSignatureAnnotations(ctx, store, manifest)
++	require.NoError(t, err)
++	assert.Empty(t, annotations, "unmarked local referrers must not be discovered")
++}
+diff --git a/pkg/snapshotters/signatures_selection_test.go b/pkg/snapshotters/signatures_selection_test.go
+new file mode 100644
+index 000000000..cd2695637
+--- /dev/null
++++ b/pkg/snapshotters/signatures_selection_test.go
+@@ -0,0 +1,362 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package snapshotters
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"io"
++	"testing"
++
++	"github.com/containerd/containerd/v2/core/images"
++	"github.com/containerd/containerd/v2/core/remotes"
++	"github.com/opencontainers/go-digest"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++type signatureSelectionFetcher struct {
++	blobs map[digest.Digest][]byte
++	refs  map[digest.Digest][]ocispec.Descriptor
++}
++
++func (f *signatureSelectionFetcher) Fetch(
++	_ context.Context,
++	desc ocispec.Descriptor,
++) (io.ReadCloser, error) {
++	data, ok := f.blobs[desc.Digest]
++	if !ok {
++		return nil, errors.New("blob not found")
++	}
++	return io.NopCloser(bytes.NewReader(data)), nil
++}
++
++func (f *signatureSelectionFetcher) FetchReferrers(
++	_ context.Context,
++	dgst digest.Digest,
++	_ ...remotes.FetchReferrersOpt,
++) ([]ocispec.Descriptor, error) {
++	return append([]ocispec.Descriptor(nil), f.refs[dgst]...), nil
++}
++
++func TestDmverityReferrerHandlerProvenance(t *testing.T) {
++	base := images.HandlerFunc(func(context.Context, ocispec.Descriptor) ([]ocispec.Descriptor, error) {
++		return nil, nil
++	})
++
++	assert.False(t, HasValidatedDmverityReferrers(base))
++	assert.True(t, HasValidatedDmverityReferrers(AppendSignatureHandlerWrapper(nil)(base)))
++}
++
++func TestWithoutDmverityAnnotations(t *testing.T) {
++	annotations := map[string]string{
++		"keep":                   "value",
++		TargetLayerDmverityLabel: "target",
++	}
++
++	assert.Equal(t, map[string]string{"keep": "value"}, WithoutDmverityAnnotations(annotations))
++	assert.Len(t, annotations, 2)
++}
++
++func TestFetchSignaturesAcceptsSoleV2Referrer(t *testing.T) {
++	subject := selectionDescriptor([]byte("subject"), ocispec.MediaTypeImageManifest)
++	sourceLayer := selectionDescriptor([]byte("source layer"), ocispec.MediaTypeImageLayerGzip)
++	bundle := newSelectionBundle(t, subject, sourceLayer, "selected")
++	fetcher := &signatureSelectionFetcher{
++		blobs: bundle.blobs,
++		refs: map[digest.Digest][]ocispec.Descriptor{
++			subject.Digest: {bundle.descriptor},
++		},
++	}
++
++	selected, err := fetchSignatures(
++		t.Context(),
++		fetcher,
++		subject.Digest,
++		map[string]struct{}{sourceLayer.Digest.String(): {}},
++	)
++	require.NoError(t, err)
++	require.NotNil(t, selected)
++	assert.Equal(t, bundle.descriptor.Digest, selected.desc.Digest)
++	require.Len(t, selected.manifest.Layers, 3)
++	info := selected.layers[sourceLayer.Digest.String()]
++	require.NotNil(t, info)
++	assert.Equal(t, bundle.rootHash, info.RootHash)
++	assert.Equal(t, EROFSMetadataArtifactMediaType, info.Metadata.MediaType)
++	assert.Equal(t, MerkleTreeArtifactMediaType, info.Tree.MediaType)
++	assert.Equal(t, LayerSignatureMediaType, info.Signature.MediaType)
++}
++
++func TestFetchSignaturesRejectsMultipleV2Referrers(t *testing.T) {
++	subject := selectionDescriptor([]byte("subject"), ocispec.MediaTypeImageManifest)
++	sourceLayer := selectionDescriptor([]byte("source layer"), ocispec.MediaTypeImageLayerGzip)
++	first := newSelectionBundle(t, subject, sourceLayer, "first")
++	second := newSelectionBundle(t, subject, sourceLayer, "second")
++	fetcher := &signatureSelectionFetcher{
++		blobs: mergeSelectionBlobs(first.blobs, second.blobs),
++		refs: map[digest.Digest][]ocispec.Descriptor{
++			subject.Digest: {first.descriptor, second.descriptor},
++		},
++	}
++
++	_, err := fetchSignatures(
++		t.Context(),
++		fetcher,
++		subject.Digest,
++		map[string]struct{}{sourceLayer.Digest.String(): {}},
++	)
++	require.ErrorContains(t, err, "multiple "+SignatureArtifactType+" referrers")
++}
++
++func TestSignatureHandlerStripsUntrustedTarget(t *testing.T) {
++	subject := selectionDescriptor([]byte("subject"), ocispec.MediaTypeImageManifest)
++	layer := selectionDescriptor([]byte("layer"), ocispec.MediaTypeImageLayerGzip)
++	layer.Annotations = map[string]string{
++		TargetLayerDmverityLabel: "untrusted",
++		"example.com/keep":       "value",
++	}
++	base := images.HandlerFunc(func(
++		_ context.Context,
++		desc ocispec.Descriptor,
++	) ([]ocispec.Descriptor, error) {
++		if desc.Digest == subject.Digest {
++			return []ocispec.Descriptor{layer}, nil
++		}
++		return nil, nil
++	})
++	fetcher := &signatureSelectionFetcher{
++		blobs: map[digest.Digest][]byte{},
++		refs:  map[digest.Digest][]ocispec.Descriptor{},
++	}
++
++	children, err := AppendSignatureHandlerWrapper(fetcher)(base).Handle(t.Context(), subject)
++	require.NoError(t, err)
++	require.Len(t, children, 1)
++	assert.Equal(t, "value", children[0].Annotations["example.com/keep"])
++	assert.Empty(t, children[0].Annotations[TargetLayerDmverityLabel])
++}
++
++func TestSignatureHandlerAddsCompactTarget(t *testing.T) {
++	subject := selectionDescriptor([]byte("subject"), ocispec.MediaTypeImageManifest)
++	layer := selectionDescriptor([]byte("layer"), ocispec.MediaTypeImageLayerGzip)
++	layer.Annotations = map[string]string{
++		TargetLayerDmverityLabel: "untrusted",
++		"example.com/keep":       "value",
++	}
++	bundle := newSelectionBundle(t, subject, layer, "selected")
++	base := images.HandlerFunc(func(
++		_ context.Context,
++		desc ocispec.Descriptor,
++	) ([]ocispec.Descriptor, error) {
++		if desc.Digest == subject.Digest {
++			return []ocispec.Descriptor{layer}, nil
++		}
++		return nil, nil
++	})
++	fetcher := &signatureSelectionFetcher{
++		blobs: bundle.blobs,
++		refs: map[digest.Digest][]ocispec.Descriptor{
++			subject.Digest: {bundle.descriptor},
++		},
++	}
++
++	children, err := AppendSignatureHandlerWrapper(fetcher)(base).Handle(t.Context(), subject)
++	require.NoError(t, err)
++	require.Len(t, children, 1)
++	assert.Equal(t, "value", children[0].Annotations["example.com/keep"])
++	target, err := ParseDmverityTarget(children[0].Annotations[TargetLayerDmverityLabel])
++	require.NoError(t, err)
++	assert.Equal(t, bundle.rootHash, target.RootHash)
++	assert.Equal(t, bundle.metadata.Digest, target.Metadata.Digest)
++	assert.Equal(t, bundle.tree.Digest, target.Tree.Digest)
++	assert.Equal(t, bundle.signature.Digest, target.Signature.Digest)
++	assert.Nil(t, target.Metadata.Annotations)
++	assert.Nil(t, target.Tree.Annotations)
++	assert.Nil(t, target.Signature.Annotations)
++	assert.Empty(t, target.Metadata.URLs)
++	assert.Empty(t, target.Tree.URLs)
++	assert.Empty(t, target.Signature.URLs)
++	assert.Empty(t, target.Metadata.Data)
++	assert.Empty(t, target.Tree.Data)
++	assert.Empty(t, target.Signature.Data)
++	assert.Len(t, children[0].Annotations, 2)
++}
++
++func TestFetchSignaturesRequiresCompleteArtifact(t *testing.T) {
++	subject := selectionDescriptor([]byte("subject"), ocispec.MediaTypeImageManifest)
++	layer := selectionDescriptor([]byte("layer"), ocispec.MediaTypeImageLayerGzip)
++	bundle := newSelectionBundle(t, subject, layer, "incomplete")
++	bundle = rewriteSelectionBundle(t, bundle, func(manifest *ocispec.Manifest) {
++		manifest.Layers = manifest.Layers[1:]
++	})
++	fetcher := &signatureSelectionFetcher{
++		blobs: bundle.blobs,
++		refs: map[digest.Digest][]ocispec.Descriptor{
++			subject.Digest: {bundle.descriptor},
++		},
++	}
++
++	_, err := fetchSignatures(
++		t.Context(),
++		fetcher,
++		subject.Digest,
++		map[string]struct{}{layer.Digest.String(): {}},
++	)
++	require.ErrorContains(t, err, "incomplete precomputed artifacts")
++}
++
++func TestFetchSignaturesRejectsConflictingRootHashes(t *testing.T) {
++	subject := selectionDescriptor([]byte("subject"), ocispec.MediaTypeImageManifest)
++	layer := selectionDescriptor([]byte("layer"), ocispec.MediaTypeImageLayerGzip)
++	bundle := newSelectionBundle(t, subject, layer, "conflicting-root")
++	bundle = rewriteSelectionBundle(t, bundle, func(manifest *ocispec.Manifest) {
++		manifest.Layers[1].Annotations[layerRootHashAnnotation] = digest.FromString("different-root").Hex()
++	})
++	fetcher := &signatureSelectionFetcher{
++		blobs: bundle.blobs,
++		refs: map[digest.Digest][]ocispec.Descriptor{
++			subject.Digest: {bundle.descriptor},
++		},
++	}
++
++	_, err := fetchSignatures(
++		t.Context(),
++		fetcher,
++		subject.Digest,
++		map[string]struct{}{layer.Digest.String(): {}},
++	)
++	require.ErrorContains(t, err, "conflicting root hashes")
++}
++
++func TestParseDmverityTargetRejectsUnknownFields(t *testing.T) {
++	target, err := targetAnnotation(&DmverityTarget{
++		RootHash:  digest.FromString("root").Hex(),
++		Metadata:  selectionDescriptor(make([]byte, tarIndexAlignment), EROFSMetadataArtifactMediaType),
++		Tree:      selectionDescriptor([]byte("tree"), MerkleTreeArtifactMediaType),
++		Signature: selectionDescriptor([]byte("signature"), LayerSignatureMediaType),
++	})
++	require.NoError(t, err)
++	target = target[:len(target)-1] + `,"unexpected":true}`
++	_, err = ParseDmverityTarget(target)
++	require.ErrorContains(t, err, "unknown field")
++}
++
++type signatureSelectionBundle struct {
++	descriptor ocispec.Descriptor
++	metadata   ocispec.Descriptor
++	tree       ocispec.Descriptor
++	signature  ocispec.Descriptor
++	rootHash   string
++	blobs      map[digest.Digest][]byte
++}
++
++func newSelectionBundle(
++	t *testing.T,
++	subject ocispec.Descriptor,
++	sourceLayer ocispec.Descriptor,
++	name string,
++) signatureSelectionBundle {
++	t.Helper()
++
++	rootHash := digest.FromString("root hash " + name).Encoded()
++	metadataBytes := make([]byte, tarIndexAlignment)
++	metadata := selectionDescriptor(metadataBytes, EROFSMetadataArtifactMediaType)
++	metadata.Annotations = map[string]string{
++		sourceLayerDigestAnnotation: sourceLayer.Digest.String(),
++	}
++	treeBytes := []byte("tree-" + name)
++	tree := selectionDescriptor(treeBytes, MerkleTreeArtifactMediaType)
++	tree.Annotations = map[string]string{
++		sourceLayerDigestAnnotation: sourceLayer.Digest.String(),
++		layerRootHashAnnotation:     rootHash,
++	}
++	signatureBytes := []byte("signature-" + name)
++	signature := selectionDescriptor(signatureBytes, LayerSignatureMediaType)
++	signature.Annotations = map[string]string{
++		sourceLayerDigestAnnotation: sourceLayer.Digest.String(),
++		layerRootHashAnnotation:     rootHash,
++	}
++	configBytes := []byte("{}")
++	config := selectionDescriptor(configBytes, ocispec.MediaTypeImageConfig)
++
++	manifest := ocispec.Manifest{
++		MediaType:    ocispec.MediaTypeImageManifest,
++		ArtifactType: SignatureArtifactType,
++		Subject:      &subject,
++		Config:       config,
++		Layers:       []ocispec.Descriptor{metadata, tree, signature},
++	}
++	manifestBytes, err := json.Marshal(manifest)
++	require.NoError(t, err)
++	descriptor := selectionDescriptor(manifestBytes, ocispec.MediaTypeImageManifest)
++	descriptor.ArtifactType = SignatureArtifactType
++
++	return signatureSelectionBundle{
++		descriptor: descriptor,
++		metadata:   metadata,
++		tree:       tree,
++		signature:  signature,
++		rootHash:   rootHash,
++		blobs: map[digest.Digest][]byte{
++			descriptor.Digest: manifestBytes,
++			config.Digest:     configBytes,
++			metadata.Digest:   metadataBytes,
++			tree.Digest:       treeBytes,
++			signature.Digest:  signatureBytes,
++		},
++	}
++}
++
++func rewriteSelectionBundle(
++	t *testing.T,
++	bundle signatureSelectionBundle,
++	mutate func(*ocispec.Manifest),
++) signatureSelectionBundle {
++	t.Helper()
++
++	var manifest ocispec.Manifest
++	require.NoError(t, json.Unmarshal(bundle.blobs[bundle.descriptor.Digest], &manifest))
++	mutate(&manifest)
++	manifestBytes, err := json.Marshal(manifest)
++	require.NoError(t, err)
++	delete(bundle.blobs, bundle.descriptor.Digest)
++	bundle.descriptor = selectionDescriptor(manifestBytes, ocispec.MediaTypeImageManifest)
++	bundle.descriptor.ArtifactType = SignatureArtifactType
++	bundle.blobs[bundle.descriptor.Digest] = manifestBytes
++	return bundle
++}
++
++func mergeSelectionBlobs(maps ...map[digest.Digest][]byte) map[digest.Digest][]byte {
++	merged := make(map[digest.Digest][]byte)
++	for _, blobs := range maps {
++		for dgst, data := range blobs {
++			merged[dgst] = data
++		}
++	}
++	return merged
++}
++
++func selectionDescriptor(data []byte, mediaType string) ocispec.Descriptor {
++	return ocispec.Descriptor{
++		MediaType: mediaType,
++		Digest:    digest.FromBytes(data),
++		Size:      int64(len(data)),
++	}
++}
+diff --git a/plugins/diff/erofs/differ_policy_test.go b/plugins/diff/erofs/differ_policy_test.go
+new file mode 100644
+index 000000000..f226a50ff
+--- /dev/null
++++ b/plugins/diff/erofs/differ_policy_test.go
+@@ -0,0 +1,96 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package erofs
++
++import (
++	"encoding/json"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/containerd/errdefs"
++	"github.com/opencontainers/go-digest"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++	"github.com/stretchr/testify/require"
++
++	"github.com/containerd/containerd/v2/core/images"
++	"github.com/containerd/containerd/v2/core/mount"
++	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
++)
++
++func TestApplyRejectsSignedNativeErofsBeforeReadingContent(t *testing.T) {
++	target, err := json.Marshal(snpkg.DmverityTarget{
++		RootHash: digest.FromString("root").Hex(),
++		Metadata: ocispec.Descriptor{
++			MediaType: snpkg.EROFSMetadataArtifactMediaType,
++			Digest:    digest.FromString("metadata"),
++			Size:      512,
++		},
++		Tree: ocispec.Descriptor{
++			MediaType: snpkg.MerkleTreeArtifactMediaType,
++			Digest:    digest.FromString("tree"),
++			Size:      1,
++		},
++		Signature: ocispec.Descriptor{
++			MediaType: snpkg.LayerSignatureMediaType,
++			Digest:    digest.FromString("signature"),
++			Size:      1,
++		},
++	})
++	require.NoError(t, err)
++
++	desc := ocispec.Descriptor{
++		MediaType: images.MediaTypeErofsLayer,
++		Digest:    digest.FromString("native erofs"),
++		Annotations: map[string]string{
++			snpkg.TargetLayerDmverityLabel: string(target),
++		},
++	}
++
++	layer := t.TempDir()
++	require.NoError(t, os.WriteFile(filepath.Join(layer, ".erofslayer"), nil, 0o600))
++	mounts := []mount.Mount{{
++		Type:   "bind",
++		Source: filepath.Join(layer, "layer.erofs"),
++	}}
++
++	_, err = (erofsDiff{enableDmverityReferrers: true}).Apply(t.Context(), desc, mounts)
++	require.ErrorContains(t, err, "signed native EROFS layers are unsupported")
++}
++
++func TestApplyChecksErofsApplicabilityBeforeSignaturePolicy(t *testing.T) {
++	desc := ocispec.Descriptor{
++		MediaType: ocispec.MediaTypeImageLayer,
++		Digest:    digest.FromString("unsigned layer"),
++	}
++
++	_, err := (erofsDiff{
++		enableDmverityReferrers: true,
++		requireSignatures:       true,
++	}).Apply(t.Context(), desc, nil)
++	require.ErrorIs(t, err, errdefs.ErrNotImplemented)
++}
++
++func TestSupportedSignedLayerMediaTypesIncludesZstd(t *testing.T) {
++	for _, mediaType := range []string{
++		ocispec.MediaTypeImageLayerZstd,
++		ocispec.MediaTypeImageLayerNonDistributableZstd, //nolint:staticcheck // Existing images may still use this deprecated media type.
++		images.MediaTypeDockerSchema2LayerZstd,
++	} {
++		require.True(t, supportedSignedLayerMediaType(mediaType), mediaType)
++	}
++}
+diff --git a/plugins/diff/erofs/precomputed_test.go b/plugins/diff/erofs/precomputed_test.go
+new file mode 100644
+index 000000000..fb95f52c4
+--- /dev/null
++++ b/plugins/diff/erofs/precomputed_test.go
+@@ -0,0 +1,167 @@
++//go:build linux
++
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package erofs
++
++import (
++	"bytes"
++	"encoding/binary"
++	"encoding/json"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/containerd/containerd/v2/core/content"
++	"github.com/containerd/containerd/v2/core/mount"
++	"github.com/containerd/containerd/v2/internal/dmverity"
++	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
++	contentlocal "github.com/containerd/containerd/v2/plugins/content/local"
++	"github.com/google/uuid"
++	"github.com/opencontainers/go-digest"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++	"github.com/stretchr/testify/require"
++)
++
++func TestApplyUsesCompactMetadataAndStandaloneTree(t *testing.T) {
++	ctx := t.Context()
++	sourceTar := []byte("uncompressed source layer")
++	sourceDesc := ocispec.Descriptor{
++		MediaType: ocispec.MediaTypeImageLayer,
++		Digest:    digest.FromBytes(sourceTar),
++		Size:      int64(len(sourceTar)),
++	}
++
++	metadata := make([]byte, 2048)
++	binary.LittleEndian.PutUint32(
++		metadata[erofsSuperOffset:erofsSuperOffset+4],
++		erofsMagic,
++	)
++	erofsUUID := uuid.NewSHA1(
++		uuid.NameSpaceURL,
++		[]byte("erofs:blobs/"+sourceDesc.Digest.String()),
++	)
++	copy(
++		metadata[erofsSuperOffset+erofsUUIDOffset:erofsSuperOffset+erofsUUIDEnd],
++		erofsUUID[:],
++	)
++	dataDevice := append(bytes.Clone(metadata), sourceTar...)
++	if remainder := len(dataDevice) % int(deviceAlignment); remainder != 0 {
++		dataDevice = append(dataDevice, make([]byte, int(deviceAlignment)-remainder)...)
++	}
++	dataDevicePath := filepath.Join(t.TempDir(), "data")
++	treePath := filepath.Join(t.TempDir(), "tree")
++	require.NoError(t, os.WriteFile(dataDevicePath, dataDevice, 0o600))
++
++	options := dmverity.DefaultDmverityOptions()
++	options.DataBlockSize = verityBlockSize
++	options.HashBlockSize = verityBlockSize
++	options.HashOffset = uint64(len(dataDevice))
++	options.UUID = "12345678-1234-1234-1234-123456789012"
++	rootHash, err := dmverity.Format(dataDevicePath, dataDevicePath, options)
++	require.NoError(t, err)
++	combined, err := os.ReadFile(dataDevicePath)
++	require.NoError(t, err)
++	tree := bytes.Clone(combined[len(dataDevice):])
++	require.NoError(t, os.WriteFile(treePath, tree, 0o600))
++	require.NoError(t, os.Truncate(dataDevicePath, int64(len(dataDevice))))
++
++	store, err := contentlocal.NewStore(t.TempDir())
++	require.NoError(t, err)
++	metadataDesc := ocispec.Descriptor{
++		MediaType: snpkg.EROFSMetadataArtifactMediaType,
++		Digest:    digest.FromBytes(metadata),
++		Size:      int64(len(metadata)),
++	}
++	treeDesc := ocispec.Descriptor{
++		MediaType: snpkg.MerkleTreeArtifactMediaType,
++		Digest:    digest.FromBytes(tree),
++		Size:      int64(len(tree)),
++	}
++	signature := []byte("pkcs7 signature")
++	signatureDesc := ocispec.Descriptor{
++		MediaType: snpkg.LayerSignatureMediaType,
++		Digest:    digest.FromBytes(signature),
++		Size:      int64(len(signature)),
++		Annotations: map[string]string{
++			"io.containerd.erofs.dmverity.source-layer-digest": sourceDesc.Digest.String(),
++			"io.containerd.erofs.dmverity.root-hash":           rootHash,
++		},
++	}
++	writeTestContent(t, store, sourceDesc, sourceTar)
++	writeTestContent(t, store, metadataDesc, metadata)
++	writeTestContent(t, store, treeDesc, tree)
++	writeTestContent(t, store, signatureDesc, signature)
++
++	targetBytes, err := json.Marshal(snpkg.DmverityTarget{
++		RootHash:  rootHash,
++		Metadata:  metadataDesc,
++		Tree:      treeDesc,
++		Signature: signatureDesc,
++	})
++	require.NoError(t, err)
++	sourceDesc.Annotations = map[string]string{
++		snpkg.TargetLayerDmverityLabel: string(targetBytes),
++	}
++
++	layerDir := t.TempDir()
++	require.NoError(t, os.WriteFile(filepath.Join(layerDir, ".erofslayer"), nil, 0o600))
++	layerPath := filepath.Join(layerDir, "layer.erofs")
++	applied, err := (erofsDiff{
++		store:                   store,
++		enableDmverityReferrers: true,
++		requireSignatures:       true,
++	}).Apply(
++		ctx,
++		sourceDesc,
++		[]mount.Mount{{Type: "bind", Source: layerPath}},
++	)
++	require.NoError(t, err)
++	require.Equal(t, digest.FromBytes(sourceTar), applied.Digest)
++	require.Equal(t, int64(len(sourceTar)), applied.Size)
++
++	actualDataDevice, err := os.ReadFile(layerPath)
++	require.NoError(t, err)
++	require.Equal(t, dataDevice, actualDataDevice)
++	actualTree, err := os.ReadFile(dmverity.HashDevicePath(layerPath))
++	require.NoError(t, err)
++	require.Equal(t, tree, actualTree)
++	actualSignature, err := os.ReadFile(dmverity.SignaturePath(layerPath))
++	require.NoError(t, err)
++	require.Equal(t, signature, actualSignature)
++	storedMetadata, err := dmverity.ReadMetadata(layerPath)
++	require.NoError(t, err)
++	require.Equal(t, rootHash, storedMetadata.RootHash)
++	require.Zero(t, storedMetadata.HashOffset)
++	require.Equal(t, filepath.Base(dmverity.HashDevicePath(layerPath)), storedMetadata.HashDevice)
++}
++
++func writeTestContent(
++	t *testing.T,
++	store content.Store,
++	desc ocispec.Descriptor,
++	data []byte,
++) {
++	t.Helper()
++	require.NoError(t, content.WriteBlob(
++		t.Context(),
++		store,
++		"test-"+desc.Digest.Encoded(),
++		bytes.NewReader(data),
++		desc,
++	))
++}
+diff --git a/plugins/mount/erofs/plugin_linux_test.go b/plugins/mount/erofs/plugin_linux_test.go
+index e38e4e28e..c876870e9 100644
+--- a/plugins/mount/erofs/plugin_linux_test.go
++++ b/plugins/mount/erofs/plugin_linux_test.go
+@@ -21,13 +21,16 @@ import (
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
++	"slices"
+ 	"strings"
+ 	"testing"
+ 
+ 	"github.com/containerd/containerd/v2/core/mount"
++	"github.com/containerd/containerd/v2/internal/dmverity"
+ 	"github.com/containerd/containerd/v2/internal/fsmount"
+ 	"github.com/containerd/containerd/v2/pkg/testutil"
+ 	snapshotserofs "github.com/containerd/containerd/v2/plugins/snapshots/erofs"
++	"github.com/opencontainers/go-digest"
+ 	"golang.org/x/sys/unix"
+ )
+ 
+@@ -247,3 +250,113 @@ func TestMountOptionsPageSizeLimit(t *testing.T) {
+ 		mount.Unmount(mountPoint, 0)
+ 	})
+ }
++
++func TestSharedLayerMountOptionsConverge(t *testing.T) {
++	taskPath := sharedLayerMountOptions(
++		[]string{"ro", "loop", `context="system_u:object_r:container_file_t:s0:c646,c927"`}, true)
++	containerPath := sharedLayerMountOptions([]string{"ro", "loop"}, true)
++	otherPod := sharedLayerMountOptions(
++		[]string{"ro", "loop", `context="system_u:object_r:container_file_t:s0:c154,c335"`}, true)
++
++	if !slices.Equal(taskPath, containerPath) || !slices.Equal(taskPath, otherPod) {
++		t.Fatalf("shared layer options diverged: task=%q container=%q other=%q", taskPath, containerPath, otherPod)
++	}
++	if got := strings.Join(taskPath, ","); got != `ro,context="`+defaultSharedLayerContext+`"` {
++		t.Fatalf("legacy mount data = %q, want quoted SELinux context", got)
++	}
++}
++
++func TestRequiredDmveritySignature(t *testing.T) {
++	layer := filepath.Join(t.TempDir(), "layer.erofs")
++
++	_, err := requiredDmveritySignature(layer, "")
++	if err == nil {
++		t.Fatal("expected a missing signature to fail")
++	}
++
++	signaturePath := dmverity.SignaturePath(layer)
++	if err := os.WriteFile(signaturePath, nil, 0o600); err != nil {
++		t.Fatal(err)
++	}
++	_, err = requiredDmveritySignature(layer, "")
++	if err == nil {
++		t.Fatal("expected an empty signature to fail")
++	}
++
++	if err := os.WriteFile(signaturePath, []byte("signature"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	expectedDigest := digest.FromBytes([]byte("signature")).String()
++	if _, err := requiredDmveritySignature(layer, expectedDigest); err != nil {
++		t.Fatalf("expected matching digest to pass: %v", err)
++	}
++	if _, err := requiredDmveritySignature(layer, digest.FromString("different").String()); err == nil {
++		t.Fatal("expected mismatched signature digest to fail")
++	}
++}
++
++func TestSharedLayerMountOptions(t *testing.T) {
++	const shared = `context="` + defaultSharedLayerContext + `"`
++
++	for _, tc := range []struct {
++		name           string
++		opts           []string
++		selinuxEnabled bool
++		expected       []string
++	}{
++		{
++			name:           "per-container label is replaced",
++			opts:           []string{"ro", "loop", `context="system_u:object_r:container_file_t:s0:c262,c637"`},
++			selinuxEnabled: true,
++			expected:       []string{"ro", shared},
++		},
++		{
++			name:           "unlabelled mount receives shared label",
++			opts:           []string{"ro", "loop"},
++			selinuxEnabled: true,
++			expected:       []string{"ro", shared},
++		},
++		{
++			name:           "SELinux disabled strips context",
++			opts:           []string{"ro", "loop", `context="system_u:object_r:container_file_t:s0:c1,c2"`},
++			selinuxEnabled: false,
++			expected:       []string{"ro"},
++		},
++		{
++			name: "internal options are stripped",
++			opts: []string{
++				"ro",
++				"loop",
++				dmverity.MountOptionModePrefix + "metadata",
++				dmverity.MountOptionRootHashPrefix + strings.Repeat("ab", 32),
++				dmverity.MountOptionSignatureDigestPrefix + digest.FromString("signature").String(),
++			},
++			expected: []string{"ro"},
++		},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			if got := sharedLayerMountOptions(tc.opts, tc.selinuxEnabled); !slices.Equal(got, tc.expected) {
++				t.Fatalf("sharedLayerMountOptions(%q, %v) = %q, want %q", tc.opts, tc.selinuxEnabled, got, tc.expected)
++			}
++		})
++	}
++}
++
++func TestFinishDmverityMountRollsBackBeforeUnlock(t *testing.T) {
++	var events []string
++	finishDmverityMount(
++		errors.New("mount failed"),
++		"device",
++		func(string) error {
++			events = append(events, "close")
++			return nil
++		},
++		func() {
++			events = append(events, "unlock")
++		},
++	)
++
++	if !slices.Equal(events, []string{"close", "unlock"}) {
++		t.Fatalf("unexpected lifecycle order: %v", events)
++	}
++}
+diff --git a/plugins/mount/fsview/erofs/erofs_test.go b/plugins/mount/fsview/erofs/erofs_test.go
+new file mode 100644
+index 000000000..e22cc2ea6
+--- /dev/null
++++ b/plugins/mount/fsview/erofs/erofs_test.go
+@@ -0,0 +1,60 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package erofs
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/containerd/containerd/v2/core/mount"
++	"github.com/containerd/containerd/v2/internal/dmverity"
++	"github.com/containerd/errdefs"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++func TestHandleMountDefersDmverityToKernelMount(t *testing.T) {
++	for _, option := range []string{
++		dmverity.MountOptionModePrefix + "/tmp/layer.erofs.dmverity",
++		dmverity.MountOptionRootHashPrefix + "root-hash",
++		dmverity.MountOptionSignatureDigestPrefix + "sha256:signature",
++	} {
++		t.Run(option, func(t *testing.T) {
++			view, err := handleMount(mount.Mount{
++				Type:    "erofs",
++				Source:  filepath.Join(t.TempDir(), "missing.erofs"),
++				Options: []string{option},
++			})
++			require.Nil(t, view)
++			require.Error(t, err)
++			assert.ErrorIs(t, err, errdefs.ErrNotImplemented)
++			assert.ErrorContains(t, err, "requires kernel mount handling")
++		})
++	}
++}
++
++func TestHandleMountWithoutDmverityPreservesSourceError(t *testing.T) {
++	view, err := handleMount(mount.Mount{
++		Type:   "erofs",
++		Source: filepath.Join(t.TempDir(), "missing.erofs"),
++	})
++	require.Nil(t, view)
++	require.Error(t, err)
++	assert.ErrorIs(t, err, os.ErrNotExist)
++	assert.NotErrorIs(t, err, errdefs.ErrNotImplemented)
++}
+diff --git a/plugins/snapshots/erofs/erofs_linux_test.go b/plugins/snapshots/erofs/erofs_linux_test.go
+index 2f3b89ba2..87b7d16ac 100644
+--- a/plugins/snapshots/erofs/erofs_linux_test.go
++++ b/plugins/snapshots/erofs/erofs_linux_test.go
+@@ -41,6 +41,7 @@ import (
+ 	"github.com/containerd/containerd/v2/internal/fsverity"
+ 	"github.com/containerd/containerd/v2/pkg/archive/tartest"
+ 	"github.com/containerd/containerd/v2/pkg/namespaces"
++	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
+ 	"github.com/containerd/containerd/v2/pkg/testutil"
+ 	"github.com/containerd/containerd/v2/plugins/content/local"
+ 	erofsdiffer "github.com/containerd/containerd/v2/plugins/diff/erofs"
+@@ -461,6 +462,50 @@ func TestCreateErofsMount(t *testing.T) {
+ 	})
+ }
+ 
++func TestSignedDmverityPolicyUsesLabelsAndSignature(t *testing.T) {
++	layerBlob := createTestLayerBlob(t, t.TempDir())
++	rootHash := digest.FromString("root").Hex()
++	signature := []byte("signature")
++	require.NoError(t, dmverity.WriteMetadata(layerBlob, dmverity.DmverityMetadata{
++		RootHash:   rootHash,
++		HashOffset: 0,
++		HashDevice: filepath.Base(dmverity.HashDevicePath(layerBlob)),
++	}))
++	require.NoError(t, os.WriteFile(dmverity.HashDevicePath(layerBlob), []byte("tree"), 0644))
++	require.NoError(t, os.WriteFile(dmverity.SignaturePath(layerBlob), signature, 0644))
++
++	s := &snapshotter{enableDmverityReferrers: true}
++	option, err := s.applyDmverityPolicy(layerBlob, map[string]string{
++		snpkg.DmverityMaterializationVersionLabel:         snpkg.DmverityMaterializationVersion,
++		snpkg.DmverityMaterializationStateLabel:           snpkg.DmverityMaterializationStateSigned,
++		snpkg.DmverityMaterializationRootHashLabel:        rootHash,
++		snpkg.DmverityMaterializationSignatureDigestLabel: digest.FromBytes(signature).String(),
++	})
++	require.NoError(t, err)
++	assert.Equal(t, dmverity.MountOptionModePrefix+dmverity.MetadataPath(layerBlob), option)
++
++	require.NoError(t, os.Remove(dmverity.HashDevicePath(layerBlob)))
++	_, err = s.applyDmverityPolicy(layerBlob, map[string]string{
++		snpkg.DmverityMaterializationVersionLabel:         snpkg.DmverityMaterializationVersion,
++		snpkg.DmverityMaterializationStateLabel:           snpkg.DmverityMaterializationStateSigned,
++		snpkg.DmverityMaterializationRootHashLabel:        rootHash,
++		snpkg.DmverityMaterializationSignatureDigestLabel: digest.FromBytes(signature).String(),
++	})
++	require.ErrorContains(t, err, "hash device")
++}
++
++func TestRequiresIndividualMountDetectsStandaloneHashDevice(t *testing.T) {
++	s := &snapshotter{root: t.TempDir()}
++	id := "1"
++	layerBlob := s.layerBlobPath(id)
++	require.NoError(t, os.MkdirAll(filepath.Dir(layerBlob), 0700))
++	require.NoError(t, os.WriteFile(dmverity.HashDevicePath(layerBlob), []byte("tree"), 0600))
++
++	required, err := s.requiresIndividualMount(id, nil)
++	require.NoError(t, err)
++	require.True(t, required)
++}
++
+ // TestDmverityEndToEnd tests the full workflow: differ creates dm-verity layer,
+ // snapshotter mounts it via mount manager, and cleanup on removal
+ func TestDmverityEndToEnd(t *testing.T) {
+@@ -884,3 +929,17 @@ func TestMountsWithMergedFsMetaOnTopParent(t *testing.T) {
+ 	assert.Equal(t, "format/bind", mounts[1].Type)
+ 	assert.Equal(t, "{{ mount 0 }}", mounts[1].Source)
+ }
++
++func TestSnapshotCleanupUsesPersistedSnapshotID(t *testing.T) {
++	s := &snapshotter{root: "/snapshot-root"}
++
++	committed := s.snapshotCleanup("42", snapshots.KindCommitted)
++	assert.Equal(t, s.layerBlobPath("42"), committed.layerPath)
++	assert.Equal(t, s.upperPath("42"), committed.upperPath)
++	assert.True(t, committed.releaseDmverity)
++
++	active := s.snapshotCleanup("43", snapshots.KindActive)
++	assert.Equal(t, s.layerBlobPath("43"), active.layerPath)
++	assert.Equal(t, s.upperPath("43"), active.upperPath)
++	assert.False(t, active.releaseDmverity)
++}

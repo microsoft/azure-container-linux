@@ -4,15 +4,15 @@ set -euo pipefail
 
 ipe_active_file="${ACL_IPE_ACTIVE_FILE:-/sys/kernel/security/ipe/policies/acl_ipe_boot_policy/active}"
 config_path="${ACL_CONTAINERD_CONFIG_PATH:-/run/containerd/acl-config.toml}"
-overlayfs_config="/etc/containerd/config.toml"
-erofs_config="/usr/share/containerd2/acl-erofs.toml"
+base_config="/etc/containerd/config.toml"
+erofs_config="/usr/share/containerd2/acl-erofs-config.toml"
 
-selected_config="${overlayfs_config}"
-selected_snapshotter="overlayfs"
+selected_config="${base_config}"
+selected_profile="base"
 
 if [[ -r "${ipe_active_file}" ]] && [[ "$(<"${ipe_active_file}")" == "1" ]]; then
     selected_config="${erofs_config}"
-    selected_snapshotter="erofs"
+    selected_profile="IPE EROFS"
 fi
 
 mkdir -p "$(dirname "${config_path}")"
@@ -22,4 +22,4 @@ ln -s "${selected_config}" "${temporary_link}"
 mv -Tf "${temporary_link}" "${config_path}"
 trap - EXIT
 
-echo "Selected ${selected_snapshotter} containerd runtime profile (${selected_config})"
+echo "Selected ${selected_profile} containerd runtime profile (${selected_config})"

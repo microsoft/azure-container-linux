@@ -60,12 +60,12 @@ chmod 0644 "${acl_cgroupfs_config}"
 echo ">>> NOTICE: $0: installing the ACL EROFS/dm-verity profile"
 install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-erofs.toml" \
   "${rootfs}/usr/share/containerd2/acl-erofs.toml"
+install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-erofs-config.toml" \
+  "${rootfs}/usr/share/containerd2/acl-erofs-config.toml"
 install -Dpm 0755 "${erofs_profile_dir}/containerd-acl-select-profile" \
   "${rootfs}/usr/libexec/containerd2/acl-select-profile"
 install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-profile.conf" \
   "${rootfs}/usr/lib/systemd/system/containerd.service.d/90-acl-profile.conf"
-install -Dpm 0644 "${erofs_profile_dir}/containerd-acl-tmpfiles.conf" \
-  "${rootfs}/usr/lib/tmpfiles.d/10-containerd-acl.conf"
 
 # The RPM enables the unit from %post, which does not run when the payload is
 # unpacked into a sysext, so create the enablement symlink here.

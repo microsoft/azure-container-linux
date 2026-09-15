@@ -1,29 +1,27 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Dallas Delaney <dadelan@microsoft.com>
-Date: Wed, 9 Sep 2026 02:54:03 +0000
+Date: Tue, 15 Sep 2026 17:23:56 +0000
 Subject: [PATCH 1/4] erofs: add signed dm-verity mapper foundation
 
-Add signed root-hash activation, deterministic root-scoped mapper naming, keyed device lifecycle and validation, separate hash-device support, atomic sidecars, SELinux-safe fsconfig handling, shared-layer mount behavior, loop fallback protection, and mapper cleanup primitives on the Azure Linux v2.3.4 package baseline.
+Add fail-closed signed mapper activation, stable mapper lifecycle handling, atomic sidecars, standalone hash-device support, and verified EROFS mount cleanup.
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 
-Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
+Copilot-Session: 3ee5a7a9-81c1-4429-89fd-c54c9bcb1db6
 ---
- internal/dmverity/atomic_write.go             |  65 +++
- internal/dmverity/device.go                   |  53 +++
- internal/dmverity/dmverity.go                 |  75 +++
- internal/dmverity/dmverity_linux.go           | 445 +++++++++++++++++-
- internal/dmverity/dmverity_other.go           |  39 +-
+ internal/dmverity/atomic_write.go             |  65 ++++
+ internal/dmverity/device.go                   |  53 ++++
+ internal/dmverity/dmverity.go                 |  51 ++++
+ internal/dmverity/dmverity_linux.go           | 273 ++++++++++++++++-
+ internal/dmverity/dmverity_other.go           |  27 +-
  internal/dmverity/sync_dir_unix.go            |  30 ++
- internal/dmverity/sync_dir_windows.go         |  23 +
- internal/fsmount/fsmount_linux.go             |  71 ++-
- plugins/diff/erofs/dmverity_linux.go          |   8 +
- plugins/diff/erofs/dmverity_other.go          |   4 +
- plugins/mount/fsview/erofs/erofs.go            |  10 +
- plugins/mount/erofs/plugin_linux.go           | 280 ++++++++---
- .../snapshots/erofs/dmverity_cleanup_linux.go |  61 +++
- .../snapshots/erofs/dmverity_cleanup_other.go |  23 +
- 14 files changed, 1095 insertions(+), 92 deletions(-)
+ internal/dmverity/sync_dir_windows.go         |  23 ++
+ internal/fsmount/fsmount_linux.go             |  71 ++++-
+ plugins/mount/erofs/plugin_linux.go           | 287 +++++++++++++-----
+ plugins/mount/fsview/erofs/erofs.go           |  10 +
+ .../snapshots/erofs/dmverity_cleanup_linux.go |  61 ++++
+ .../snapshots/erofs/dmverity_cleanup_other.go |  23 ++
+ 12 files changed, 873 insertions(+), 101 deletions(-)
  create mode 100644 internal/dmverity/atomic_write.go
  create mode 100644 internal/dmverity/device.go
  create mode 100644 internal/dmverity/sync_dir_unix.go
@@ -33,7 +31,7 @@ Copilot-Session: 925784b1-44a7-4d56-b04f-e527d2e0879f
 
 diff --git a/internal/dmverity/atomic_write.go b/internal/dmverity/atomic_write.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..896a49f3231ba2d7139bdc58235faa2ad74440af
+index 000000000..896a49f32
 --- /dev/null
 +++ b/internal/dmverity/atomic_write.go
 @@ -0,0 +1,65 @@
@@ -104,7 +102,7 @@ index 0000000000000000000000000000000000000000..896a49f3231ba2d7139bdc58235faa2a
 +}
 diff --git a/internal/dmverity/device.go b/internal/dmverity/device.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..e5124989be99dbf71f7b4886d751a773de217924
+index 000000000..e5124989b
 --- /dev/null
 +++ b/internal/dmverity/device.go
 @@ -0,0 +1,53 @@
@@ -162,14 +160,10 @@ index 0000000000000000000000000000000000000000..e5124989be99dbf71f7b4886d751a773
 +	}, nil
 +}
 diff --git a/internal/dmverity/dmverity.go b/internal/dmverity/dmverity.go
-index 29121adfd378f6fa822e42d5d3b960a75920a4e0..3d23b6647933c2023b6b160623373aeaf3375d6b 100644
+index 29121adfd..946f6a518 100644
 --- a/internal/dmverity/dmverity.go
 +++ b/internal/dmverity/dmverity.go
-@@ -19,12 +19,20 @@
- package dmverity
- 
- import (
-+	"encoding/base64"
+@@ -22,9 +22,16 @@ import (
  	"encoding/json"
  	"fmt"
  	"os"
@@ -186,7 +180,7 @@ index 29121adfd378f6fa822e42d5d3b960a75920a4e0..3d23b6647933c2023b6b160623373aea
  type DmverityOptions struct {
  	// Salt for hashing, represented as a hex string
  	Salt string
-@@ -64,13 +72,80 @@ func MetadataPath(layerBlobPath string) string {
+@@ -64,13 +71,57 @@ func MetadataPath(layerBlobPath string) string {
  	return layerBlobPath + ".dmverity"
  }
  
@@ -196,32 +190,9 @@ index 29121adfd378f6fa822e42d5d3b960a75920a4e0..3d23b6647933c2023b6b160623373aea
 +	return layerBlobPath + ".sig"
 +}
 +
-+// SignatureRequiredPath returns the marker path used to distinguish protected
-+// materializations from legacy unsigned layers that were formatted with
-+// dm-verity metadata before signatures became the activation gate.
-+func SignatureRequiredPath(layerBlobPath string) string {
-+	return layerBlobPath + ".sig-required"
-+}
-+
 +// HashDevicePath returns the path used for a separate precomputed Merkle tree.
 +func HashDevicePath(layerBlobPath string) string {
 +	return layerBlobPath + ".hashtree"
-+}
-+
-+// WriteSignature decodes and writes a base64-encoded signature for a layer.
-+func WriteSignature(layerBlobPath string, base64Sig string) error {
-+	sigPath := SignaturePath(layerBlobPath)
-+	sigBytes, err := base64.StdEncoding.DecodeString(base64Sig)
-+	if err != nil {
-+		return fmt.Errorf("failed to decode signature: %w", err)
-+	}
-+	if err := writeFileAtomic(sigPath, sigBytes, 0644); err != nil {
-+		return fmt.Errorf("failed to write signature file: %w", err)
-+	}
-+	if err := writeFileAtomic(SignatureRequiredPath(layerBlobPath), []byte("1\n"), 0644); err != nil {
-+		return fmt.Errorf("failed to write signature-required marker: %w", err)
-+	}
-+	return nil
 +}
 +
  func DevicePath(name string) string {
@@ -268,15 +239,13 @@ index 29121adfd378f6fa822e42d5d3b960a75920a4e0..3d23b6647933c2023b6b160623373aea
  
  func ReadMetadata(layerBlobPath string) (*DmverityMetadata, error) {
 diff --git a/internal/dmverity/dmverity_linux.go b/internal/dmverity/dmverity_linux.go
-index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081deeec77fb 100644
+index ccaf98829..b9edfd3ab 100644
 --- a/internal/dmverity/dmverity_linux.go
 +++ b/internal/dmverity/dmverity_linux.go
-@@ -17,23 +17,132 @@
+@@ -17,23 +17,112 @@
  package dmverity
  
  import (
-+	"bytes"
-+	"context"
 +	"encoding/hex"
  	"fmt"
  	"os"
@@ -285,14 +254,12 @@ index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081d
 +	"strconv"
 +	"strings"
 +	"sync"
-+	"time"
  
  	"github.com/containerd/containerd/v2/core/mount"
 +	dm "github.com/containerd/go-dmverity/pkg/dm"
 +	"github.com/containerd/go-dmverity/pkg/keyring"
  	"github.com/containerd/go-dmverity/pkg/utils"
  	"github.com/containerd/go-dmverity/pkg/verity"
-+	"github.com/containerd/log"
  )
  
 +var signatureSupportCache struct {
@@ -311,30 +278,14 @@ index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081d
 -	if _, err := os.Stat("/sys/module/dm_verity"); err != nil {
 -		if os.IsNotExist(err) {
 -			return false, fmt.Errorf("dm_verity module not loaded or built-in")
-+	// dm-verity may be a loadable module or built into the kernel. Checking
-+	// only /proc/modules reports unsupported on a CONFIG_DM_VERITY=y kernel and
-+	// silently disables verification, so consult the built-in target list too.
-+	if moduleData, err := os.ReadFile("/proc/modules"); err == nil {
-+		if bytes.Contains(moduleData, []byte("dm_verity")) {
-+			return true, nil
- 		}
+-		}
 -		return false, fmt.Errorf("failed to check /sys/module/dm_verity: %w", err)
-+	} else if !os.IsNotExist(err) {
-+		return false, fmt.Errorf("failed to read /proc/modules: %w", err)
-+	}
-+
-+	// /sys/module/dm_verity is present for a built-in target as well as a
-+	// loaded module, so it covers CONFIG_DM_VERITY=y kernels that never
-+	// appear in /proc/modules.
 +	if _, err := os.Stat("/sys/module/dm_verity"); err == nil {
 +		return true, nil
 +	} else if !os.IsNotExist(err) {
 +		return false, fmt.Errorf("failed to stat /sys/module/dm_verity: %w", err)
- 	}
- 
--	return true, nil
-+	// Both probes succeeded and neither found dm-verity, so this is a
-+	// determinate "not available" rather than a failed check.
++	}
++
 +	return false, nil
 +}
 +
@@ -389,10 +340,11 @@ index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081d
 +	}
 +	if err := keyring.UnlinkKeyFromThreadKeyring(keyID); err != nil {
 +		return err
-+	}
+ 	}
 +	return nil
 +}
-+
+ 
+-	return true, nil
 +func checkVeritySignatureSupport() error {
 +	if err := dm.CheckVeritySignatureSupport(); err != nil {
 +		return err
@@ -409,7 +361,7 @@ index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081d
  }
  
  func convertToVerityParams(opts *DmverityOptions) (verity.Params, error) {
-@@ -124,6 +233,13 @@ func Format(dataDevice, hashDevice string, opts *DmverityOptions) (string, error
+@@ -124,6 +213,13 @@ func Format(dataDevice, hashDevice string, opts *DmverityOptions) (string, error
  //     Uses explicitly provided parameters from opts. All dm-verity parameters must be
  //     supplied programmatically since there's no superblock to read from.
  func Open(dataDevice string, name string, hashDevice string, rootHash string, hashOffset uint64, opts *DmverityOptions) (string, error) {
@@ -423,7 +375,7 @@ index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081d
  	if rootHash == "" {
  		return "", fmt.Errorf("rootHash cannot be empty")
  	}
-@@ -146,7 +262,9 @@ func Open(dataDevice string, name string, hashDevice string, rootHash string, ha
+@@ -146,7 +242,9 @@ func Open(dataDevice string, name string, hashDevice string, rootHash string, ha
  	}
  
  	loopParams := mount.LoopParams{
@@ -434,15 +386,7 @@ index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081d
  		Autoclear: true,
  	}
  
-@@ -162,6 +280,7 @@ func Open(dataDevice string, name string, hashDevice string, rootHash string, ha
- 		hashLoop, err = mount.SetupLoop(hashDevice, loopParams)
- 		if err != nil {
- 			dataLoop.Close()
-+			mount.DetachLoopDevice(dataLoopDevice)
- 			return "", fmt.Errorf("failed to setup loop device for hash: %w", err)
- 		}
- 		hashLoopDevice = hashLoop.Name()
-@@ -169,16 +288,28 @@ func Open(dataDevice string, name string, hashDevice string, rootHash string, ha
+@@ -169,7 +267,19 @@ func Open(dataDevice string, name string, hashDevice string, rootHash string, ha
  		hashLoopDevice = dataLoopDevice
  	}
  
@@ -462,10 +406,8 @@ index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081d
 +	devicePath, err := verity.Open(&params, name, dataLoopDevice, hashLoopDevice, rootDigest, signatureFile, nil)
  	if err != nil {
  		dataLoop.Close()
-+		mount.DetachLoopDevice(dataLoopDevice)
  		if hashLoop != nil {
- 			hashLoop.Close()
-+			mount.DetachLoopDevice(hashLoopDevice)
+@@ -177,8 +287,6 @@ func Open(dataDevice string, name string, hashDevice string, rootHash string, ha
  		}
  		return "", fmt.Errorf("failed to open dm-verity device: %w", err)
  	}
@@ -474,7 +416,7 @@ index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081d
  	dataLoop.Close()
  	if hashLoop != nil {
  		hashLoop.Close()
-@@ -187,6 +318,79 @@ func Open(dataDevice string, name string, hashDevice string, rootHash string, ha
+@@ -187,6 +295,79 @@ func Open(dataDevice string, name string, hashDevice string, rootHash string, ha
  	return devicePath, nil
  }
  
@@ -515,8 +457,8 @@ index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081d
 +	return OpenWithSignature(dataDevice, name, hashDevice, rootHash, hashOffset, opts, fdPath)
 +}
 +
-+// VerifyArtifacts verifies a precomputed EROFS data device and separate
-+// dm-verity hash device against the expected root hash.
++// VerifyArtifacts verifies an EROFS data image and standalone Merkle tree
++// against the expected root hash.
 +func VerifyArtifacts(dataDevice, hashDevice, rootHash string, blockSize uint32) error {
 +	rootDigest, err := utils.ParseRootHash(rootHash)
 +	if err != nil {
@@ -554,7 +496,7 @@ index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081d
  func Close(name string) error {
  	if err := verity.Close(name); err != nil {
  		return fmt.Errorf("failed to close dm-verity device: %w", err)
-@@ -194,17 +398,232 @@ func Close(name string) error {
+@@ -194,17 +375,81 @@ func Close(name string) error {
  	return nil
  }
  
@@ -574,157 +516,6 @@ index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081d
 -
  	return nil
  }
-+
-+// FormatLayerBlob formats an existing EROFS layer blob with a dm-verity hash tree
-+// in-place (appended after the data) and writes the .dmverity sidecar.
-+// Returns the computed root hash.
-+//
-+// Idempotent: if a .dmverity sidecar already exists at MetadataPath(layerBlobPath)
-+// the cached root hash is returned and no re-formatting is done.
-+//
-+// On error after the in-place truncate, the helper restores the original blob
-+// size and removes any stale .dmverity sidecar — leaving the layer in the
-+// pre-call state so the caller can clean up the bare blob via its normal
-+// orphan-handling path.
-+//
-+// blockSize must match the EROFS image's logical block size:
-+//   - tar-index mode requires 512 (mkfs.erofs --tar=i uses 512-byte metadata blocks)
-+//   - all other modes use 4096 (standard page size)
-+//
-+// layerUUID must be stable for the source layer so the appended dm-verity
-+// superblock is reproducible and remains readable by go-dmverity.
-+func FormatLayerBlob(ctx context.Context, layerBlobPath string, blockSize uint32, layerUUID string) (string, error) {
-+	startedAt := time.Now()
-+	metadataPath := MetadataPath(layerBlobPath)
-+	if _, err := os.Stat(metadataPath); err == nil {
-+		metadata, err := ReadMetadata(layerBlobPath)
-+		if err != nil {
-+			log.G(ctx).WithError(err).WithFields(log.Fields{
-+				"tag":          "dmverity_format",
-+				"event":        "idempotent_read_failed",
-+				"path":         layerBlobPath,
-+				"metadataPath": metadataPath,
-+			}).Warn("dmverity_format: failed to read existing .dmverity sidecar during idempotency check")
-+			return "", fmt.Errorf("failed to read existing dm-verity metadata: %w", err)
-+		}
-+		log.G(ctx).WithFields(log.Fields{
-+			"tag":      "dmverity_format",
-+			"event":    "idempotent_hit",
-+			"path":     layerBlobPath,
-+			"rootHash": metadata.RootHash,
-+		}).Info("dmverity_format: layer already formatted (.dmverity sidecar present), returning cached root hash")
-+		return metadata.RootHash, nil
-+	}
-+
-+	fileInfo, err := os.Stat(layerBlobPath)
-+	if err != nil {
-+		return "", fmt.Errorf("failed to stat layer blob: %w", err)
-+	}
-+	originalSize := fileInfo.Size()
-+
-+	log.G(ctx).WithFields(log.Fields{
-+		"tag":          "dmverity_format",
-+		"event":        "enter",
-+		"path":         layerBlobPath,
-+		"originalSize": originalSize,
-+		"blockSize":    blockSize,
-+	}).Info("dmverity_format: ENTER FormatLayerBlob")
-+
-+	opts := DefaultDmverityOptions()
-+	if layerUUID == "" {
-+		return "", fmt.Errorf("dm-verity UUID must not be empty")
-+	}
-+	opts.UUID = layerUUID
-+	if blockSize > 0 {
-+		opts.DataBlockSize = blockSize
-+		opts.HashBlockSize = blockSize
-+	}
-+
-+	dataBlocks := (originalSize + int64(opts.DataBlockSize) - 1) / int64(opts.DataBlockSize)
-+	hashOffset := uint64(dataBlocks * int64(opts.DataBlockSize))
-+
-+	opts.HashOffset = hashOffset
-+	opts.DataBlocks = uint64(dataBlocks)
-+
-+	hashTreeSize, err := verity.GetHashTreeSize(&verity.Params{
-+		HashName:      opts.HashAlgorithm,
-+		DataBlockSize: opts.DataBlockSize,
-+		HashBlockSize: opts.HashBlockSize,
-+		DataBlocks:    opts.DataBlocks,
-+		HashType:      opts.HashType,
-+	})
-+	if err != nil {
-+		return "", fmt.Errorf("failed to calculate hash tree size: %w", err)
-+	}
-+
-+	superblockSize := uint64(0)
-+	if !opts.NoSuperblock {
-+		superblockSize = utils.AlignUp(uint64(verity.SuperblockSize), uint64(opts.HashBlockSize))
-+	}
-+	requiredSize := hashOffset + superblockSize + hashTreeSize
-+	if err := os.Truncate(layerBlobPath, int64(requiredSize)); err != nil {
-+		return "", fmt.Errorf("failed to pre-allocate space for hash tree: %w", err)
-+	}
-+
-+	// Rollback: if we fail after the truncate, restore the original blob size
-+	// and remove any partial .dmverity sidecar so the caller sees the same
-+	// pre-call state (bare layer.erofs, no .dmverity). This lets the caller's
-+	// orphan-handling path treat the layer uniformly.
-+	formatted := false
-+	defer func() {
-+		if formatted {
-+			return
-+		}
-+		log.G(ctx).WithFields(log.Fields{
-+			"tag":          "dmverity_format",
-+			"event":        "rollback",
-+			"path":         layerBlobPath,
-+			"originalSize": originalSize,
-+			"elapsedMs":    time.Since(startedAt).Milliseconds(),
-+		}).Warn("dmverity_format: ROLLBACK — format failed after pre-allocation; restoring blob and removing partial sidecar")
-+		if terr := os.Truncate(layerBlobPath, originalSize); terr != nil {
-+			log.G(ctx).WithError(terr).WithField("path", layerBlobPath).Warn("FormatLayerBlob rollback: failed to restore original blob size")
-+		}
-+		if rerr := os.Remove(metadataPath); rerr != nil && !os.IsNotExist(rerr) {
-+			log.G(ctx).WithError(rerr).WithField("path", metadataPath).Warn("FormatLayerBlob rollback: failed to remove stale .dmverity sidecar")
-+		}
-+	}()
-+
-+	rootHash, err := Format(layerBlobPath, layerBlobPath, opts)
-+	if err != nil {
-+		return "", fmt.Errorf("failed to format dm-verity: %w", err)
-+	}
-+
-+	metadata := DmverityMetadata{
-+		RootHash:   rootHash,
-+		HashOffset: hashOffset,
-+	}
-+	if err := WriteMetadata(layerBlobPath, metadata); err != nil {
-+		return "", err
-+	}
-+
-+	formatted = true
-+
-+	finalInfo, statErr := os.Stat(layerBlobPath)
-+	finalSize := int64(-1)
-+	if statErr == nil {
-+		finalSize = finalInfo.Size()
-+	}
-+
-+	log.G(ctx).WithFields(log.Fields{
-+		"tag":          "dmverity_format",
-+		"event":        "success",
-+		"path":         layerBlobPath,
-+		"originalSize": originalSize,
-+		"finalSize":    finalSize,
-+		"blockSize":    opts.DataBlockSize,
-+		"hashOffset":   hashOffset,
-+		"rootHash":     rootHash,
-+		"elapsedMs":    time.Since(startedAt).Milliseconds(),
-+	}).Info("dmverity_format: SUCCESS — layer formatted, .dmverity sidecar written")
-+
-+	return rootHash, nil
-+}
 +
 +// VerifySignedDevice ensures an existing dm-verity device matches the expected
 +// signed metadata and is healthy.
@@ -792,18 +583,10 @@ index ccaf9882950285497b8d18e07deda610edf54378..d60c1f4d0b4a53906134e4c2f205081d
 +	return fmt.Errorf("verity table does not require a root-hash signature")
 +}
 diff --git a/internal/dmverity/dmverity_other.go b/internal/dmverity/dmverity_other.go
-index 515edfff53aedeba0bec53f0623857bba7ccaff8..e2add94b38518b0fa6f1823facce0f6b81275e24 100644
+index 515edfff5..1603749f7 100644
 --- a/internal/dmverity/dmverity_other.go
 +++ b/internal/dmverity/dmverity_other.go
-@@ -18,12 +18,24 @@
- 
- package dmverity
- 
--import "fmt"
-+import (
-+	"context"
-+	"fmt"
-+)
+@@ -22,8 +22,17 @@ import "fmt"
  
  var errUnsupported = fmt.Errorf("dmverity is only supported on Linux systems")
  
@@ -822,7 +605,7 @@ index 515edfff53aedeba0bec53f0623857bba7ccaff8..e2add94b38518b0fa6f1823facce0f6b
  }
  
  func Format(_ string, _ string, _ *DmverityOptions) (string, error) {
-@@ -34,6 +46,18 @@ func Open(_ string, _ string, _ string, _ string, _ uint64, _ *DmverityOptions)
+@@ -34,6 +43,18 @@ func Open(_ string, _ string, _ string, _ string, _ uint64, _ *DmverityOptions)
  	return "", errUnsupported
  }
  
@@ -841,7 +624,7 @@ index 515edfff53aedeba0bec53f0623857bba7ccaff8..e2add94b38518b0fa6f1823facce0f6b
  func Close(_ string) error {
  	return errUnsupported
  }
-@@ -41,3 +65,14 @@ func Close(_ string) error {
+@@ -41,3 +62,7 @@ func Close(_ string) error {
  func VerifyDevice(_ string, _ string) error {
  	return errUnsupported
  }
@@ -849,16 +632,9 @@ index 515edfff53aedeba0bec53f0623857bba7ccaff8..e2add94b38518b0fa6f1823facce0f6b
 +func VerifySignedDevice(_ string, _ string) (DeviceInfo, error) {
 +	return DeviceInfo{}, errUnsupported
 +}
-+
-+// FormatLayerBlob appends a dm-verity hash tree to an EROFS layer blob. It is
-+// only implemented on Linux; the stub keeps the package's exported surface
-+// identical on every platform, matching the other entry points here.
-+func FormatLayerBlob(_ context.Context, _ string, _ uint32, _ string) (string, error) {
-+	return "", errUnsupported
-+}
 diff --git a/internal/dmverity/sync_dir_unix.go b/internal/dmverity/sync_dir_unix.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..61f8fd1b821ea5bf7eb77646dfdda717bbbd7816
+index 000000000..61f8fd1b8
 --- /dev/null
 +++ b/internal/dmverity/sync_dir_unix.go
 @@ -0,0 +1,30 @@
@@ -894,7 +670,7 @@ index 0000000000000000000000000000000000000000..61f8fd1b821ea5bf7eb77646dfdda717
 +}
 diff --git a/internal/dmverity/sync_dir_windows.go b/internal/dmverity/sync_dir_windows.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..612ae1aa5874b5cf390a00aaca09fb87925e6ada
+index 000000000..612ae1aa5
 --- /dev/null
 +++ b/internal/dmverity/sync_dir_windows.go
 @@ -0,0 +1,23 @@
@@ -922,7 +698,7 @@ index 0000000000000000000000000000000000000000..612ae1aa5874b5cf390a00aaca09fb87
 +	return nil
 +}
 diff --git a/internal/fsmount/fsmount_linux.go b/internal/fsmount/fsmount_linux.go
-index 3acbf1908cbbd7da58b1190de12202982de91b2b..e607fb9837d6aaaec30e42bfc81279b31d8a21c3 100644
+index 3acbf1908..e607fb983 100644
 --- a/internal/fsmount/fsmount_linux.go
 +++ b/internal/fsmount/fsmount_linux.go
 @@ -20,6 +20,7 @@ import (
@@ -1034,36 +810,8 @@ index 3acbf1908cbbd7da58b1190de12202982de91b2b..e607fb9837d6aaaec30e42bfc81279b3
 -	return nil
 +	return decoded, nil
  }
-diff --git a/plugins/diff/erofs/dmverity_linux.go b/plugins/diff/erofs/dmverity_linux.go
-index f59c3093d279455af2dc86a5cd4200d115eb199b..31564d85939943fc6a6893b82cac03bbda229638 100644
---- a/plugins/diff/erofs/dmverity_linux.go
-+++ b/plugins/diff/erofs/dmverity_linux.go
-@@ -134,3 +134,11 @@ func (s *erofsDiff) formatDmverityLayer(ctx context.Context, layerBlobPath strin
- 
- 	return nil
- }
-+
-+func (s *erofsDiff) formatSignedDmverityLayer(ctx context.Context, layerBlobPath, layerUUID string) (string, error) {
-+	blockSize := uint32(4096)
-+	if s.enableTarIndex {
-+		blockSize = 512
-+	}
-+	return dmverity.FormatLayerBlob(ctx, layerBlobPath, blockSize, layerUUID)
-+}
-diff --git a/plugins/diff/erofs/dmverity_other.go b/plugins/diff/erofs/dmverity_other.go
-index 909e13d2c528e0ab19fb1c52a220a394cfca660d..574990545a065bd4845b939c5ea70dbbe58501a6 100644
---- a/plugins/diff/erofs/dmverity_other.go
-+++ b/plugins/diff/erofs/dmverity_other.go
-@@ -26,3 +26,7 @@ import (
- func (s *erofsDiff) formatDmverityLayer(_ context.Context, _ string) error {
- 	return fmt.Errorf("dm-verity formatting is only supported on Linux systems")
- }
-+
-+func (s *erofsDiff) formatSignedDmverityLayer(_ context.Context, _, _ string) (string, error) {
-+	return "", fmt.Errorf("dm-verity formatting is only supported on Linux systems")
-+}
 diff --git a/plugins/mount/erofs/plugin_linux.go b/plugins/mount/erofs/plugin_linux.go
-index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758fbd6c7d5 100644
+index ad9608966..4f2b18043 100644
 --- a/plugins/mount/erofs/plugin_linux.go
 +++ b/plugins/mount/erofs/plugin_linux.go
 @@ -20,8 +20,9 @@ import (
@@ -1086,33 +834,24 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
  
  	"github.com/containerd/containerd/v2/core/mount"
  	"github.com/containerd/containerd/v2/internal/dmverity"
-@@ -42,11 +45,41 @@ import (
+@@ -42,6 +45,12 @@ import (
  
  var forceloop bool
  
--type erofsMountHandler struct{}
 +const (
 +	maxDmveritySignatureSize  = 4 * 1024 * 1024
 +	defaultSharedLayerContext = "system_u:object_r:container_file_t:s0"
 +	selinuxContextOpt         = "context="
 +)
 +
-+type erofsMountHandler struct {
-+	sharedLayerContext string
-+}
+ type erofsMountHandler struct{}
  
  // NewErofsMountHandler creates a new EROFS mount handler that supports dm-verity
--func NewErofsMountHandler() mount.Handler {
--	return &erofsMountHandler{}
-+func NewErofsMountHandler(sharedLayerContext ...string) mount.Handler {
-+	context := defaultSharedLayerContext
-+	if len(sharedLayerContext) > 0 && sharedLayerContext[0] != "" {
-+		context = sharedLayerContext[0]
-+	}
-+	return &erofsMountHandler{sharedLayerContext: context}
-+}
-+
-+func sharedLayerMountOptions(opts []string, selinuxEnabled bool, sharedLayerContext string) []string {
+@@ -49,27 +58,51 @@ func NewErofsMountHandler() mount.Handler {
+ 	return &erofsMountHandler{}
+ }
+ 
++func sharedLayerMountOptions(opts []string, selinuxEnabled bool) []string {
 +	filtered := make([]string, 0, len(opts)+1)
 +	for _, value := range opts {
 +		if value == "loop" ||
@@ -1125,16 +864,24 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
 +		filtered = append(filtered, value)
 +	}
 +	if selinuxEnabled {
-+		filtered = append(filtered, selinuxContextOpt+`"`+sharedLayerContext+`"`)
++		filtered = append(filtered, selinuxContextOpt+`"`+defaultSharedLayerContext+`"`)
 +	}
 +	return filtered
- }
- 
++}
++
  func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string, _ []mount.ActiveMount) (_ mount.ActiveMount, retErr error) {
-@@ -62,14 +95,28 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
- 		dmverity.Close(dmverityDevice)
- 	}()
+ 	if m.Type != "erofs" {
+ 		return mount.ActiveMount{}, errdefs.ErrNotImplemented
+ 	}
  
+-	var dmverityDevice string
+-	defer func() {
+-		if retErr == nil || dmverityDevice == "" {
+-			return
+-		}
+-		dmverity.Close(dmverityDevice)
+-	}()
+-
 -	// Parse dm-verity metadata path from mount options
 -	metadataPath := ""
 +	var (
@@ -1164,7 +911,7 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
  
  	// Set up dm-verity device if metadata path is provided
  	if metadataPath != "" {
-@@ -82,8 +129,23 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+@@ -82,38 +115,51 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
  		if err != nil {
  			return mount.ActiveMount{}, fmt.Errorf("failed to read dm-verity metadata from %s: %w", metadataPath, err)
  		}
@@ -1178,18 +925,20 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
 +		}
  
 -		devicePath, cleanupName, err := setupDmVerityDevice(ctx, m.Source, metadata)
+-		dmverityDevice = cleanupName
 +		deviceName := dmverity.ErofsDeviceName(m.Source)
 +		unlock, err := dmverity.LockDevice(ctx, deviceName)
 +		if err != nil {
 +			return mount.ActiveMount{}, fmt.Errorf("lock dm-verity device %q: %w", deviceName, err)
 +		}
-+		defer unlock()
 +
 +		devicePath, cleanupName, err := setupDmVerityDevice(ctx, m.Source, deviceName, metadata, expectedSignatureDigest)
- 		dmverityDevice = cleanupName
++		defer func() {
++			finishDmverityMount(retErr, cleanupName, dmverity.Close, unlock)
++		}()
  		if err != nil {
  			return mount.ActiveMount{}, err
-@@ -91,29 +153,26 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ 		}
  		m.Source = devicePath
  	}
  
@@ -1202,7 +951,7 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
 -		filteredOptions = append(filteredOptions, v)
 -	}
 -	m.Options = filteredOptions
-+	m.Options = sharedLayerMountOptions(m.Options, selinux.GetEnabled(), h.sharedLayerContext)
++	m.Options = sharedLayerMountOptions(m.Options, selinux.GetEnabled())
  
  	if err := os.MkdirAll(mp, 0700); err != nil {
  		return mount.ActiveMount{}, err
@@ -1210,7 +959,7 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
  
 -	err := error(unix.ENOTBLK)
 -	if !forceloop {
-+	sourceNeedsLoop, err := needsLoopDevice(m.Source, dmverityDevice != "")
++	sourceNeedsLoop, err := needsLoopDevice(m.Source, metadataPath != "")
 +	if err != nil {
 +		return mount.ActiveMount{}, err
 +	}
@@ -1229,7 +978,7 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
  		forceloop = true
  		params := mount.LoopParams{
  			Readonly:  true,
-@@ -135,6 +194,13 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+@@ -135,6 +181,13 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
  		for i, v := range m.Options {
  			// Convert raw files in `device=` into loop devices too
  			if after, ok := strings.CutPrefix(v, "device="); ok {
@@ -1243,10 +992,17 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
  				loop, err := mount.SetupLoop(after, params)
  				if err != nil {
  					return mount.ActiveMount{}, err
-@@ -159,19 +225,40 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+@@ -159,50 +212,148 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
  	}, nil
  }
  
++func finishDmverityMount(mountErr error, cleanupName string, closeDevice func(string) error, unlock func()) {
++	if mountErr != nil && cleanupName != "" {
++		closeDevice(cleanupName)
++	}
++	unlock()
++}
++
 +func needsLoopDevice(source string, dmverityMapper bool) (bool, error) {
 +	if dmverityMapper {
 +		return false, nil
@@ -1291,9 +1047,12 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
 -	snapshotID := filepath.Base(filepath.Dir(source))
 -	deviceName := fmt.Sprintf("containerd-erofs-%s", snapshotID)
  	devicePath = dmverity.DevicePath(deviceName)
++	hashDevice := dmverity.ResolveHashDevice(source, metadata)
  
  	log.G(ctx).WithFields(log.Fields{
-@@ -180,29 +267,98 @@ func setupDmVerityDevice(ctx context.Context, source string, metadata *dmverity.
+ 		"source":      source,
++		"hash-device": hashDevice,
+ 		"device-name": deviceName,
  		"hash-offset": metadata.HashOffset,
  	}).Debug("opening dm-verity device")
  
@@ -1302,7 +1061,6 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
 -	if err == nil {
 -		// New device created — wait for it to appear and return cleanupName
 -		// so the caller can close it on error.
-+	hashDevice := dmverity.ResolveHashDevice(source, metadata)
 +	if expectedSignatureDigest != "" {
 +		if err := dmverity.CheckSignatureSupport(); err != nil {
 +			return "", "", fmt.Errorf("layer %q requires signed dm-verity mappings: %w", source, err)
@@ -1357,10 +1115,10 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
 -		return "", "", fmt.Errorf("existing dm-verity device %q verification failed: %w", deviceName, verifyErr)
 +	if _, err := dmverity.Open(source, deviceName, hashDevice, metadata.RootHash, metadata.HashOffset, nil); err != nil {
 +		return "", "", fmt.Errorf("failed to open dm-verity device: %w", err)
- 	}
++	}
 +	if waitErr := waitForDevice(devicePath); waitErr != nil {
 +		return "", deviceName, waitErr
-+	}
+ 	}
 +	log.G(ctx).WithField("device", devicePath).Debug("dm-verity device created successfully")
 +	return devicePath, deviceName, nil
 +}
@@ -1405,7 +1163,7 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
  }
  
  // waitForDevice polls for the device node to appear, returning an error if it
-@@ -238,30 +394,31 @@ func (h *erofsMountHandler) Unmount(ctx context.Context, path string) error {
+@@ -238,36 +389,32 @@ func (h *erofsMountHandler) Unmount(ctx context.Context, path string) error {
  	mountInfo, err := mount.Lookup(path)
  	if err == nil {
  		source := mountInfo.Source
@@ -1447,25 +1205,48 @@ index ad96089660f2ef34effdf263011b71671b071563..5842be4ccd377b384faa6e6825b47758
  }
  
 -type Config struct{}
-+type Config struct {
-+	SharedLayerContext string `toml:"shared_layer_context"`
-+}
- 
+-
  func init() {
  	registry.Register(&plugin.Registration{
-@@ -273,7 +430,8 @@ func init() {
+-		Type:   plugins.MountHandlerPlugin,
+-		ID:     "erofs",
+-		Config: &Config{},
++		Type: plugins.MountHandlerPlugin,
++		ID:   "erofs",
+ 		InitFn: func(ic *plugin.InitContext) (any, error) {
+ 			p := platforms.DefaultSpec()
  			p.OS = runtime.GOOS
- 			ic.Meta.Platforms = append(ic.Meta.Platforms, p)
+diff --git a/plugins/mount/fsview/erofs/erofs.go b/plugins/mount/fsview/erofs/erofs.go
+index 8039b3350..b2d9300d0 100644
+--- a/plugins/mount/fsview/erofs/erofs.go
++++ b/plugins/mount/fsview/erofs/erofs.go
+@@ -25,6 +25,7 @@ import (
+ 	"strings"
  
--			return NewErofsMountHandler(), nil
-+			config := ic.Config.(*Config)
-+			return NewErofsMountHandler(config.SharedLayerContext), nil
- 		},
- 	})
- }
+ 	"github.com/containerd/containerd/v2/core/mount"
++	"github.com/containerd/containerd/v2/internal/dmverity"
+ 	"github.com/containerd/containerd/v2/internal/fsview"
+ 	"github.com/containerd/errdefs"
+ 	"github.com/erofs/go-erofs"
+@@ -43,6 +44,15 @@ func handleMount(m mount.Mount) (fsview.View, error) {
+ 		return nil, errdefs.ErrNotImplemented
+ 	}
+ 
++	for _, opt := range m.Options {
++		if strings.HasPrefix(opt, dmverity.MountOptionModePrefix) ||
++			strings.HasPrefix(opt, dmverity.MountOptionRootHashPrefix) ||
++			strings.HasPrefix(opt, dmverity.MountOptionSignatureDigestPrefix) {
++			// Direct userspace access would bypass the dm-verity mount handler.
++			return nil, fmt.Errorf("dm-verity EROFS mount requires kernel mount handling: %w", errdefs.ErrNotImplemented)
++		}
++	}
++
+ 	f, err := os.Open(m.Source)
+ 	if err != nil {
+ 		return nil, err
 diff --git a/plugins/snapshots/erofs/dmverity_cleanup_linux.go b/plugins/snapshots/erofs/dmverity_cleanup_linux.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..79442bcc15cfd4c918cdf5750938a8c15bbedd89
+index 000000000..79442bcc1
 --- /dev/null
 +++ b/plugins/snapshots/erofs/dmverity_cleanup_linux.go
 @@ -0,0 +1,61 @@
@@ -1532,7 +1313,7 @@ index 0000000000000000000000000000000000000000..79442bcc15cfd4c918cdf5750938a8c1
 +}
 diff --git a/plugins/snapshots/erofs/dmverity_cleanup_other.go b/plugins/snapshots/erofs/dmverity_cleanup_other.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..80ac576b52d3aab2d0fd740d37c58b20706f4c29
+index 000000000..80ac576b5
 --- /dev/null
 +++ b/plugins/snapshots/erofs/dmverity_cleanup_other.go
 @@ -0,0 +1,23 @@
@@ -1559,31 +1340,3 @@ index 0000000000000000000000000000000000000000..80ac576b52d3aab2d0fd740d37c58b20
 +import "context"
 +
 +func releaseDmverityDevice(context.Context, string) {}
-diff --git a/plugins/mount/fsview/erofs/erofs.go b/plugins/mount/fsview/erofs/erofs.go
-index 8039b33500ebe8049b9ce230c32c78177abb4a03..b2d9300d0483ec775cfe36d8b46f5d95a7a45e83 100644
---- a/plugins/mount/fsview/erofs/erofs.go
-+++ b/plugins/mount/fsview/erofs/erofs.go
-@@ -25,6 +25,7 @@ import (
- 	"strings"
- 
- 	"github.com/containerd/containerd/v2/core/mount"
-+	"github.com/containerd/containerd/v2/internal/dmverity"
- 	"github.com/containerd/containerd/v2/internal/fsview"
- 	"github.com/containerd/errdefs"
- 	"github.com/erofs/go-erofs"
-@@ -43,6 +44,15 @@ func handleMount(m mount.Mount) (fsview.View, error) {
- 		return nil, errdefs.ErrNotImplemented
- 	}
- 
-+	for _, opt := range m.Options {
-+		if strings.HasPrefix(opt, dmverity.MountOptionModePrefix) ||
-+			strings.HasPrefix(opt, dmverity.MountOptionRootHashPrefix) ||
-+			strings.HasPrefix(opt, dmverity.MountOptionSignatureDigestPrefix) {
-+			// Direct userspace access would bypass the dm-verity mount handler.
-+			return nil, fmt.Errorf("dm-verity EROFS mount requires kernel mount handling: %w", errdefs.ErrNotImplemented)
-+		}
-+	}
-+
- 	f, err := os.Open(m.Source)
- 	if err != nil {
- 		return nil, err
