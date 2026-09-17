@@ -5,7 +5,7 @@
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.4
-Release: 6027.verity%{?dist}
+Release: 6028.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -27,11 +27,9 @@ Patch0:	multi-snapshotters-support.patch
 Patch1:	tardev-support.patch
 Patch2:	fix-TestCgroupNamespace-cgroupv1.patch
 Patch3:	CVE-2026-56852.patch
-Patch4:	0001-erofs-add-signed-dm-verity-mapper-foundation.patch
-Patch5:	0002-erofs-consume-signed-referrer-materializations.patch
-Patch6:	0003-remotes-bound-OCI-referrers-traversal.patch
-Patch7:	0004-cri-integrate-signed-runtime-snapshotters.patch
-Patch8:	0005-tests-cover-critical-signed-EROFS-regressions.patch
+Patch4:	CVE-2026-37236.patch
+Patch5:	0001-erofs-add-signed-dm-verity-mapper-foundation.patch
+Patch6:	0002-erofs-consume-compact-v1-signed-artifacts.patch
 
 %{?systemd_requires}
 
@@ -141,6 +139,13 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Thu Sep 17 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6028.verity
+- Replace the previous signed EROFS carry with the reviewed two-commit compact
+  v1 referrer implementation while preserving the IPE-aware runtime profile.
+- Keep signatures optional so unsigned images retain the ordinary containerd
+  path and IPE remains the execution-policy owner.
+- Patch for CVE-2026-37236.
+
 * Sun Sep 13 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6027.verity
 - Route dm-verity EROFS fsview requests through the verified kernel mount path.
 
