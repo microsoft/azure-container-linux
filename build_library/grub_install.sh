@@ -28,6 +28,10 @@ DEFINE_string copy_efi_grub "" \
   "Copy the EFI GRUB image to the specified path."
 DEFINE_string copy_shim "" \
   "Copy the shim image to the specified path."
+DEFINE_string fs_uuid "" \
+  "Path to the file containing the btrfs filesystem UUID for /usr."
+DEFINE_string verity_uuid "" \
+  "Path to the file containing the dm-verity superblock UUID for /usr."
 
 # Parse flags
 FLAGS "$@" || exit 1

@@ -51,7 +51,7 @@ commands = [{"value": '\[.*\]', "description": "Flatcar Grub configuration %s" %
             {"value": 'search --no-floppy --set oem --part-label OEM --hint hd0,gpt1', "description": "Flatcar Grub configuration %s" % version},
             {"value": 'set .+', "description": "Flatcar Grub configuration %s" % version},
             {"value": 'setparams Flatcar default', "description": "Flatcar Grub configuration %s" % version},
-            {"value": 'source (hd0,gpt6)/grub.cfg', "description": "Flatcar Grub configuration %s" % version}]
+            {"value": 'source (hd0,gpt8)/grub.cfg', "description": "Flatcar Grub configuration %s" % version}]
 
 with open(os.path.join(outputdir, "grub_commands.config"), "w") as f:
     f.write(json.dumps({"8": {"asciivalues": [{"prefix": "grub_cmd", "values": commands}]}}))
