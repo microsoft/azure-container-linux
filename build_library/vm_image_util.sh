@@ -763,7 +763,7 @@ install_uki_oem_addon() {
 }
 
 # Build and install a UKI addon that raises the systemd device-init timeout,
-# scoped to the arm64 kola *test* image only (INJECT_DOCKER_SYSEXT=true).
+# scoped to the arm64 kola *test* image on QEMU-TCG only (INJECT_DOCKER_SYSEXT=true).
 #
 # Under kola's parallel QEMU-TCG emulation on aarch64, heavy CPU contention can
 # prevent udev from initialising the ESP/OEM/usr-verity devices within the
@@ -771,16 +771,16 @@ install_uki_oem_addon() {
 # systemd.default_device_timeout_sec=120 into a UKI addon on the test image's
 # ESP fixes this without changing production or amd64 boot behaviour.
 #
-# Deliberately NOT applied to the production VM image (INJECT_DOCKER_SYSEXT=false)
-# or to amd64: the failure is a CI-only TCG-emulation artefact that never occurs
-# on real hardware.
+# Deliberately NOT applied to the production VM image (INJECT_DOCKER_SYSEXT=false),
+# to amd64, or to Azure test images: the failure is a CI-only QEMU-TCG-emulation
+# artefact that never occurs on real hardware (including Azure VMs).
 install_uki_timeout_addon() {
     if [[ "${BOOTLOADER_MODE}" != "uki" ]]; then
         return 0
     fi
 
-    # Scope: arm64 test image only.
-    if [[ "${ARCH}" != "arm64" ]] || [[ "${INJECT_DOCKER_SYSEXT:-false}" != "true" ]]; then
+    # Scope: arm64 QEMU-TCG test image only.
+    if [[ "${ARCH}" != "arm64" ]] || [[ "${VM_IMG_TYPE}" != "qemu_uefi" ]] || [[ "${INJECT_DOCKER_SYSEXT:-false}" != "true" ]]; then
         return 0
     fi
 
@@ -856,23 +856,23 @@ install_uki_timeout_addon() {
 }
 
 # Append systemd.default_device_timeout_sec=120 to grub.cfg's shared cmdline,
-# scoped to the arm64 kola *test* image only (INJECT_DOCKER_SYSEXT=true).
+# scoped to the arm64 kola *test* image on QEMU-TCG only (INJECT_DOCKER_SYSEXT=true).
 #
 # GRUB has no addon mechanism like UKI's .extra.d, so unlike
 # install_uki_timeout_addon this patches the already-written grub.cfg copies
 # on the ESP directly (both are plain text, no rebuild/re-signing needed) -
 # same CI-only QEMU-TCG device-init timeout this exists to work around.
 #
-# Deliberately NOT applied to the production VM image (INJECT_DOCKER_SYSEXT=false)
-# or to amd64: the failure is a CI-only TCG-emulation artefact that never occurs
-# on real hardware.
+# Deliberately NOT applied to the production VM image (INJECT_DOCKER_SYSEXT=false),
+# to amd64, or to Azure test images: the failure is a CI-only QEMU-TCG-emulation
+# artefact that never occurs on real hardware (including Azure VMs).
 install_grub_timeout_override() {
     if [[ "${BOOTLOADER_MODE}" != "grub" ]]; then
         return 0
     fi
 
-    # Scope: arm64 test image only.
-    if [[ "${ARCH}" != "arm64" ]] || [[ "${INJECT_DOCKER_SYSEXT:-false}" != "true" ]]; then
+    # Scope: arm64 QEMU-TCG test image only.
+    if [[ "${ARCH}" != "arm64" ]] || [[ "${VM_IMG_TYPE}" != "qemu_uefi" ]] || [[ "${INJECT_DOCKER_SYSEXT:-false}" != "true" ]]; then
         return 0
     fi
 
