@@ -14,6 +14,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 
 Copilot-Session: 3ee5a7a9-81c1-4429-89fd-c54c9bcb1db6
 ---
+ client/client.go                            |  31 ++
  client/image.go                             | 117 ++----
  core/transfer/local/pull.go                 |  17 +-
  core/transfer/local/transfer.go             |   3 +
@@ -24,19 +25,76 @@ Copilot-Session: 3ee5a7a9-81c1-4429-89fd-c54c9bcb1db6
  plugins/diff/erofs/differ.go                |  26 ++
  plugins/diff/erofs/plugin/plugin.go         |   9 +
  plugins/diff/erofs/signed_tar_index.go      | 157 +++++++
+ plugins/services/diff/local.go              |   7 +
  plugins/snapshots/erofs/erofs.go            | 147 +++++--
  plugins/snapshots/erofs/erofs_linux_test.go |  10 +-
  plugins/snapshots/erofs/plugin/plugin.go    |  10 +
  plugins/transfer/plugin.go                  |  33 +-
  plugins/types.go                            |   7 +
- 15 files changed, 1086 insertions(+), 134 deletions(-)
+ 17 files changed, 1124 insertions(+), 134 deletions(-)
  create mode 100644 pkg/snapshotters/dmverity_policy.go
  create mode 100644 pkg/snapshotters/retained_signatures.go
  create mode 100644 pkg/snapshotters/signatures.go
  create mode 100644 plugins/diff/erofs/signed_tar_index.go
 
+diff --git a/client/client.go b/client/client.go
+index b7ca2056f..9c994b06b 100644
+--- a/client/client.go
++++ b/client/client.go
+@@ -22,6 +22,7 @@ import (
+ 	"encoding/json"
+ 	"fmt"
+ 	"runtime"
++	"slices"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -78,6 +79,7 @@ import (
+ 	ptypes "github.com/containerd/containerd/v2/pkg/protobuf/types"
+ 	"github.com/containerd/containerd/v2/pkg/tracing"
+ 	"github.com/containerd/containerd/v2/plugins"
++	pluginservices "github.com/containerd/containerd/v2/plugins/services"
+ )
+ 
+ func init() {
+@@ -975,6 +977,35 @@ func (c *Client) GetSnapshotterCapabilities(ctx context.Context, snapshotterName
+ 	return sn.Capabilities, nil
+ }
+ 
++// GetUnpackSnapshotterCapabilities removes dm-verity support when the selected
++// diff-service applier cannot materialize signed layers.
++func (c *Client) GetUnpackSnapshotterCapabilities(ctx context.Context, snapshotterName string) ([]string, error) {
++	capabilities, err := c.GetSnapshotterCapabilities(ctx, snapshotterName)
++	if err != nil || !slices.Contains(capabilities, plugins.CapabilityDmverityReferrers) {
++		return capabilities, err
++	}
++
++	filters := []string{fmt.Sprintf("type==%s, id==%s", plugins.ServicePlugin, pluginservices.DiffService)}
++	resp, err := c.IntrospectionService().Plugins(ctx, filters...)
++	if err != nil {
++		return nil, err
++	}
++	if len(resp.Plugins) == 0 {
++		return nil, fmt.Errorf("inspection service could not find diff service plugin")
++	}
++	if slices.Contains(resp.Plugins[0].Capabilities, plugins.CapabilityDmverityReferrers) {
++		return capabilities, nil
++	}
++
++	filtered := make([]string, 0, len(capabilities)-1)
++	for _, capability := range capabilities {
++		if capability != plugins.CapabilityDmverityReferrers {
++			filtered = append(filtered, capability)
++		}
++	}
++	return filtered, nil
++}
++
+ type RuntimeVersion struct {
+ 	Version  string
+ 	Revision string
 diff --git a/client/image.go b/client/image.go
-index 008e9b3e6..13bb5a449 100644
+index 008e9b3e6..7cdd3e64e 100644
 --- a/client/image.go
 +++ b/client/image.go
 @@ -19,8 +19,8 @@ package client
@@ -114,7 +172,7 @@ index 008e9b3e6..13bb5a449 100644
 -	}
 -
 -	desc, err := i.i.Config(ctx, cs, i.platform)
-+	snCapabilities, err := i.client.GetSnapshotterCapabilities(ctx, snapshotterName)
++	snCapabilities, err := i.client.GetUnpackSnapshotterCapabilities(ctx, snapshotterName)
  	if err != nil {
  		return err
  	}
@@ -1319,6 +1377,31 @@ index 000000000..dfc03e524
 +	_, err = io.Copy(file, content.NewReader(ra))
 +	return err
 +}
+diff --git a/plugins/services/diff/local.go b/plugins/services/diff/local.go
+index 6149f460f..f61fac237 100644
+--- a/plugins/services/diff/local.go
++++ b/plugins/services/diff/local.go
+@@ -19,6 +19,7 @@ package diff
+ import (
+ 	"context"
+ 	"fmt"
++	"slices"
+ 
+ 	diffapi "github.com/containerd/containerd/api/services/diff/v1"
+ 	"github.com/containerd/errdefs"
+@@ -81,6 +82,12 @@ func init() {
+ 				if !ok {
+ 					return nil, fmt.Errorf("differ does not implement Comparer and Applier interface: %s", n)
+ 				}
++				if i == 0 {
++					if p := ic.Plugins().Get(plugins.DiffPlugin, n); p != nil &&
++						slices.Contains(p.Meta.Capabilities, plugins.CapabilityDmverityReferrers) {
++						ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
++					}
++				}
+ 			}
+ 
+ 			return &local{
 diff --git a/plugins/snapshots/erofs/erofs.go b/plugins/snapshots/erofs/erofs.go
 index 66ec66eae..53fe4c52f 100644
 --- a/plugins/snapshots/erofs/erofs.go
