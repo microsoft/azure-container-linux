@@ -22,9 +22,7 @@ Patch2:	fix-TestCgroupNamespace-cgroupv1.patch
 Patch3:	CVE-2026-56852.patch
 Patch4:	CVE-2026-37236.patch
 Patch5:	0001-erofs-add-signed-dm-verity-mapper-foundation.patch
-Patch6:	0002-erofs-consume-compact-v2-signed-artifacts.patch
-Patch7:	0003-cri-integrate-signed-runtime-snapshotters.patch
-Patch8:	0004-tests-cover-critical-signed-EROFS-v2-regressions.patch
+Patch6:	0002-erofs-consume-compact-v1-signed-artifacts.patch
 
 %{?systemd_requires}
 
@@ -106,10 +104,10 @@ fi
 
 %changelog
 * Mon Sep 14 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-2
-- Add default-off signed EROFS/dm-verity v2 referrer support with compact
+- Add default-off signed EROFS/dm-verity v1 referrer support with compact
   tar-index metadata, standalone Merkle-tree, and PKCS#7 descriptors per layer.
-- Add CRI runtime snapshotter integration, deferred-unpack provenance,
-  standard OCI referrer retention, and OCI/Docker zstd layer support.
+- Retain the selected OCI artifact and support signed deferred unpack while
+  preserving existing unsigned behavior.
 - Keep ACL activation policy and configuration in ACL image composition.
 - Pin ACL package builds to Go 1.26.7 while the Go 1.27 ML-KEM backend is fixed.
 
