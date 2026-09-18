@@ -46,6 +46,8 @@ main() {
         error "Cannot reach VM via SSH"
         exit 1
     fi
+    capture_security_profile_state || exit 1
+    trap restore_security_profile_on_exit EXIT
 
     local exit_code=0
 
@@ -60,19 +62,14 @@ main() {
         warn "The test will still toggle and verify, but the baseline is unexpected."
     fi
 
-    # Step 2: Toggle to permissive (with extra k/v to exercise comma-separated parsing).
+    # Step 2: Toggle to permissive while preserving unrelated profile keys.
     section "Step 2: Toggle SELinux to permissive via IMDS tag"
-    set_security_profile_and_reboot "selinux=permissive,foo=bar"
+    set_security_profile_key_and_reboot "selinux" "permissive"
     assert_selinux_mode "permissive" || exit_code=1
 
     # Step 3: Toggle back to enforcing.
     section "Step 3: Toggle SELinux back to enforcing via IMDS tag"
-    set_security_profile_and_reboot "selinux=enforcing"
-    assert_selinux_mode "enforcing" || exit_code=1
-
-    # Step 4: Clean up — remove the tag, reboot, verify mode stays enforcing.
-    section "Step 4: Cleanup — remove tag and reboot"
-    set_security_profile_and_reboot ""
+    set_security_profile_key_and_reboot "selinux" "enforcing"
     assert_selinux_mode "enforcing" || exit_code=1
 
     # Summary

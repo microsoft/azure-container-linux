@@ -160,6 +160,8 @@ main() {
         error "Cannot reach VM via SSH"
         exit 1
     fi
+    capture_security_profile_state || exit 1
+    trap restore_security_profile_on_exit EXIT
 
     section "Step 0: Accept the VM's initial acl-node-security-profile state"
     # Read whatever tag the VM was already created/booted with (e.g. a smoke
@@ -174,14 +176,10 @@ main() {
             exit 1
             ;;
     esac
-    if [[ -n "${expected_tag}" ]]; then
-        initial_profile="$(imds_security_profile 2>/dev/null)" || {
-            error "Could not read initial acl-node-security-profile from IMDS"
-            exit 1
-        }
-    else
-        initial_profile="$(imds_security_profile 2>/dev/null || true)"
-    fi
+    initial_profile="$(imds_security_profile 2>/dev/null)" || {
+        error "Could not read initial acl-node-security-profile from IMDS"
+        exit 1
+    }
     initial_ipe_value="$(acl_security_profile_value "${initial_profile}" "ipe")"
     if [[ -n "${expected_tag}" && "${initial_ipe_value}" != "${expected_tag}" ]]; then
         error "Initial IPE tag is '${initial_ipe_value:-<absent>}' but expected '${expected_tag}'"
@@ -198,33 +196,33 @@ main() {
     fi
 
     section "Step 1: Disable IPE through the canonical 'disabled' value"
-    set_security_profile_and_reboot "ipe=disabled"
+    set_security_profile_key_and_reboot "ipe" "disabled"
     assert_ipe_mode "off"
     assert_ipe_assets_present
 
     section "Step 2: Verify the reserved 'enforcing' value is rejected and never activates"
-    set_security_profile_and_reboot "ipe=enforcing"
+    set_security_profile_key_and_reboot "ipe" "enforcing"
     assert_ipe_not_enforcing
     assert_ipe_mode "off"
     assert_ipe_assets_present
 
     section "Step 3: Enable IPE through the canonical 'audit' value"
-    set_security_profile_and_reboot "ipe=audit,foo=bar"
+    set_security_profile_key_and_reboot "ipe" "audit"
     assert_ipe_mode "permissive"
     assert_ipe_assets_present 1
     run_permissive_validation
 
     section "Step 4: Disable IPE through the canonical 'disabled' value"
-    set_security_profile_and_reboot "ipe=disabled"
+    set_security_profile_key_and_reboot "ipe" "disabled"
     assert_ipe_mode "off"
     assert_ipe_assets_present
 
     section "Step 5: Legacy alias coverage (off/permissive remain supported)"
-    set_security_profile_and_reboot "ipe=permissive,foo=bar"
+    set_security_profile_key_and_reboot "ipe" "permissive"
     assert_ipe_mode "permissive"
     assert_ipe_assets_present 1
     run_permissive_validation
-    set_security_profile_and_reboot "ipe=off"
+    set_security_profile_key_and_reboot "ipe" "off"
     assert_ipe_mode "off"
     assert_ipe_assets_present
 

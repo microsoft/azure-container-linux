@@ -9,9 +9,45 @@ acl_usrbin() {
     LD_LIBRARY_PATH=/sysusr/usr/lib64 /sysusr/usr/bin/"${cmd}" "$@"
 }
 
+acl_security_profile_cache_failure() {
+    local cache_dir temporary_failure_cache
+
+    cache_dir="${ACL_SECURITY_PROFILE_FAILURE_CACHE%/*}"
+    mkdir -p "${cache_dir}"
+    temporary_failure_cache="${ACL_SECURITY_PROFILE_FAILURE_CACHE}.$$"
+    : > "${temporary_failure_cache}"
+    mv -f "${temporary_failure_cache}" "${ACL_SECURITY_PROFILE_FAILURE_CACHE}"
+}
+
+acl_security_profile_parse() {
+    acl_usrbin jq -ser '
+        if length != 1 then
+            error("IMDS response must contain exactly one JSON document")
+        elif (.[0] | type) != "array" then
+            error("IMDS tagsList response is not an array")
+        else
+            .[0] as $document
+            |
+            [
+                $document[]
+                | select(type == "object" and .name? == "acl-node-security-profile")
+            ] as $matches
+            | if ($matches | length) == 0 then
+                ""
+              elif ($matches | length) > 1 then
+                error("duplicate acl-node-security-profile tags")
+              elif ($matches[0].value | type) != "string" then
+                error("acl-node-security-profile value is not a string")
+              else
+                $matches[0].value
+              end
+        end
+    '
+}
+
 acl_security_profile() {
-    local cache_dir imds_tags security_profile temporary_cache temporary_failure_cache
-    local i
+    local cache_dir imds_tags security_profile temporary_cache
+    local i transport_succeeded=false
 
     if [[ -r "${ACL_SECURITY_PROFILE_CACHE}" ]]; then
         printf '%s\n' "$(<"${ACL_SECURITY_PROFILE_CACHE}")"
@@ -32,25 +68,27 @@ acl_security_profile() {
                 "http://169.254.169.254/metadata/instance/compute/tagsList?api-version=2021-02-01" \
                 2>/dev/null
         )"; then
+            transport_succeeded=true
             break
         fi
         echo "ACL: IMDS not ready, retry ${i}/30" >&2
         sleep 1
     done
-    if [[ -z "${imds_tags}" ]]; then
+    if [[ "${transport_succeeded}" != "true" ]]; then
         echo "ACL: IMDS unreachable after 30 retries" >&2
-        cache_dir="${ACL_SECURITY_PROFILE_FAILURE_CACHE%/*}"
-        mkdir -p "${cache_dir}"
-        temporary_failure_cache="${ACL_SECURITY_PROFILE_FAILURE_CACHE}.$$"
-        : > "${temporary_failure_cache}"
-        mv -f "${temporary_failure_cache}" "${ACL_SECURITY_PROFILE_FAILURE_CACHE}"
+        acl_security_profile_cache_failure
         return 1
     fi
 
-    security_profile="$(
-        echo "${imds_tags}" |
-            acl_usrbin jq -r '.[] | select(.name=="acl-node-security-profile") | .value'
-    )"
+    if ! security_profile="$(
+        printf '%s' "${imds_tags}" |
+            acl_security_profile_parse 2>/dev/null
+    )"; then
+        echo "ACL: IMDS security profile response failed validation" >&2
+        acl_security_profile_cache_failure
+        return 1
+    fi
+
     cache_dir="${ACL_SECURITY_PROFILE_CACHE%/*}"
     mkdir -p "${cache_dir}"
     temporary_cache="${ACL_SECURITY_PROFILE_CACHE}.$$"

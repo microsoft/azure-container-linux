@@ -353,9 +353,41 @@ operation_uses_gallery_image() {
 }
 
 operation_uses_local_image_artifact() {
+    if [[ "$REUSE_VM" == "true" ]] &&
+        [[ "$BUILD_VM_IMAGE" != "true" ]] &&
+        [[ "$BUILD_TEST_IMAGE" != "true" ]]; then
+        return 1
+    fi
+
     [[ "$BUILD_IMAGE" != "true" ]] &&
         ! operation_uses_gallery_image &&
         operation_uses_vm_image
+}
+
+load_reused_vm_type() {
+    local state_file="${1:-${SCRIPT_DIR}/.vm-state.env}"
+    local key value state_vm_type=""
+
+    [[ "${REUSE_VM}" == "true" ]] || return 0
+    if [[ ! -r "${state_file}" ]]; then
+        error "--reuse-vm requires VM state at ${state_file}"
+        return 1
+    fi
+
+    while IFS='=' read -r key value; do
+        if [[ "${key}" == "VM_TYPE" ]]; then
+            state_vm_type="${value}"
+            break
+        fi
+    done < "${state_file}"
+
+    case "${state_vm_type}" in
+        azure|qemu) VM_TYPE="${state_vm_type}" ;;
+        *)
+            error "Invalid or missing VM_TYPE in ${state_file}"
+            return 1
+            ;;
+    esac
 }
 
 # Parse command line arguments
@@ -764,6 +796,8 @@ parse_args() {
         fi
     fi
 
+    load_reused_vm_type || exit 1
+
     if operation_uses_local_image_artifact; then
         load_artifact_ipe_signing_mode \
             "${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest" ||
@@ -808,11 +842,11 @@ parse_args() {
 
     # Add platform-specific host-side tests when --run-tests is used.
     if [[ "${RUN_TESTS:-false}" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
-        RUN_HOST_SCRIPTS+=("./acl/tests/run-selinux-toggle-test.sh")
         if [[ "${ACL_IPE_CAPABLE}" == "true" ]] &&
             [[ "${SECURE_BOOT_ENABLED:-true}" == "true" ]]; then
             RUN_HOST_SCRIPTS+=("./acl/tests/ipe/run-ipe-mode-toggle-test.sh")
         fi
+        RUN_HOST_SCRIPTS+=("./acl/tests/run-selinux-toggle-test.sh")
     fi
 
     if [[ "$REUSE_IMAGE" == "true" ]]; then

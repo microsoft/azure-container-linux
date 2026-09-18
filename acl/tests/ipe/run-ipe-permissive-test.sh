@@ -85,6 +85,23 @@ if [[ "${usr_verity_mounted}" != "true" ]]; then
     fail "/usr mount stack does not include the expected dm-verity device"
 fi
 
+verity_name="$(
+    dmsetup info --columns --noheadings --options name "${verity_device}" 2>/dev/null |
+        xargs
+)"
+if [[ -z "${verity_name}" ]]; then
+    fail "could not resolve the active /usr dm-verity mapping"
+fi
+verity_table="$(dmsetup table --showkeys "${verity_name}" 2>/dev/null)" ||
+    fail "could not read the active /usr dm-verity table"
+if ! grep -Eq "(^|[[:space:]])${usr_hash}([[:space:]]|$)" <<< "${verity_table}"; then
+    fail "active /usr dm-verity table does not contain the UKI root hash"
+fi
+if ! grep -Eq '(^|[[:space:]])root_hash_sig_key_desc[[:space:]]+[^[:space:]]+' \
+    <<< "${verity_table}"; then
+    fail "active /usr dm-verity mapping was not activated with a root-hash signature"
+fi
+
 # An executable copied to writable storage matches the policy's deny default.
 # It must still run in permissive mode while generating audit data.
 probe="/var/tmp/acl-ipe-permissive-probe"
@@ -108,6 +125,15 @@ if [[ -n "${loader_errors}" ]]; then
     echo "${loader_errors}" >&2
     fail "IPE or dm-verity boot errors were detected"
 fi
+unsigned_fallback="$(
+    grep -Ei \
+        'succeeded without root hash signature|retrying without( the)? root hash signature' \
+        <<< "${boot_logs}" || true
+)"
+if [[ -n "${unsigned_fallback}" ]]; then
+    echo "${unsigned_fallback}" >&2
+    fail "/usr dm-verity activation fell back to unsigned mode"
+fi
 
 audit_event="$(
     grep -F "${probe}" <<< "${boot_logs}" |
@@ -126,4 +152,5 @@ echo "IPE policy: ${POLICY_NAME}"
 echo "IPE enforce state: 0 (permissive)"
 echo "/usr dm-verity root hash: ${usr_hash}"
 echo "/usr dm-verity root-hash signature: ${verity_sig_path} (per-UKI ESP companion)"
+echo "/usr dm-verity mapping: ${verity_name} (signed root hash enforced)"
 echo "SUCCESS: IPE is active in permissive mode with no detected boot errors"
