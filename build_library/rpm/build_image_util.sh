@@ -1337,7 +1337,13 @@ UMASK_CIS
     # 6.1.1.1.3/5/6: Journald configuration
     # The CIS assessor runs "systemd-analyze cat-config systemd/journald.conf"
     # and searches for uncommented parameters. Use a drop-in to override defaults.
-    # 6.1.1.1.3: ForwardToSyslog — ACL has no rsyslog, so set to "no".
+    # 6.1.1.1.3: ForwardToSyslog is set to "no" on purpose. Azure Linux's
+    # /etc/rsyslog.conf loads imjournal, which reads the journal directly,
+    # so forwarding as well would give two independent paths and write
+    # every message to /var/log/messages twice. The rsyslog RPM ships its
+    # own drop-in, 50-rsyslog-journald.conf, setting this to "yes". Drop-ins
+    # are applied in lexicographic filename order and the last one wins, so
+    # "cis.conf" sorts after "50-..." and this is the setting that applies.
     sudo install -d -m 0755 "${root_fs_dir}/etc/systemd/journald.conf.d"
     cat <<'JOURNALD_CIS' | sudo tee "${root_fs_dir}/etc/systemd/journald.conf.d/cis.conf" > /dev/null
 [Journal]
