@@ -35,6 +35,21 @@ else
     rm "${AZURE_IMAGE_NAME}.bz2"
 fi
 
+validate_trusted_launch_generation() {
+    local hyperv_gen="$1"
+
+    if [[ "${AZURE_TRUSTED_LAUNCH:-}" == "true" ]] &&
+        [[ "${hyperv_gen}" != "V2" ]]; then
+        echo "Azure Trusted Launch requires Hyper-V generation V2, got ${hyperv_gen}" >&2
+        return 1
+    fi
+}
+
+should_schedule_v1() {
+    [[ -z "${AZURE_DISK_URI:-}" ]] &&
+        [[ "${AZURE_TRUSTED_LAUNCH:-}" != "true" ]]
+}
+
 run_kola_tests() {
     local instance_type="${1}"; shift
     local instance_tapfile="${1}"; shift
@@ -56,6 +71,7 @@ run_kola_tests() {
             set -- --azure-use-gallery "${@}"
         fi
     fi
+    validate_trusted_launch_generation "${hyperv_gen}" || return 1
 
     # Align timeout with ore azure gc --duration parameter
     debug_flag=""
@@ -69,6 +85,33 @@ run_kola_tests() {
         image_arg="--azure-disk-uri=${AZURE_DISK_URI}"
     else
         image_arg="--azure-image-file=${AZURE_IMAGE_NAME}"
+    fi
+
+    local trusted_launch_args=()
+    if [[ "${AZURE_TRUSTED_LAUNCH:-}" == "true" ]]; then
+        trusted_launch_args+=(--azure-trusted-launch --enable-secureboot)
+    fi
+
+    local secure_boot_certificate_args=()
+    if [[ -n "${AZURE_SECURE_BOOT_CERTIFICATES:-}" ]]; then
+        if [[ "${AZURE_TRUSTED_LAUNCH:-}" != "true" ]]; then
+            echo "AZURE_SECURE_BOOT_CERTIFICATES requires AZURE_TRUSTED_LAUNCH=true" >&2
+            return 1
+        fi
+        if [[ -n "${AZURE_DISK_URI:-}" ]]; then
+            echo "AZURE_SECURE_BOOT_CERTIFICATES cannot modify an existing gallery image version" >&2
+            return 1
+        fi
+        local certificate
+        local certificates=()
+        IFS=':' read -r -a certificates <<< "${AZURE_SECURE_BOOT_CERTIFICATES}"
+        for certificate in "${certificates[@]}"; do
+            if [[ -z "${certificate}" ]]; then
+                echo "AZURE_SECURE_BOOT_CERTIFICATES contains an empty path" >&2
+                return 1
+            fi
+            secure_boot_certificate_args+=(--azure-secureboot-certificate="${certificate}")
+        done
     fi
 
     timeout --signal=SIGQUIT 6h \
@@ -86,6 +129,8 @@ run_kola_tests() {
       --azure-size="${instance_type}" \
       --azure-sku="${sku}" \
       --azure-hyper-v-generation="${hyperv_gen}" \
+      "${trusted_launch_args[@]}" \
+      "${secure_boot_certificate_args[@]}" \
       ${AZURE_USE_GALLERY} \
       ${AZURE_KOLA_VNET:+--azure-kola-vnet=${AZURE_KOLA_VNET}} \
       ${azure_vnet_subnet_name:+--azure-vnet-subnet-name=${azure_vnet_subnet_name}} \
@@ -107,7 +152,7 @@ if [[ "${CIA_ARCH}" = 'amd64' ]] && [[ "${PACKAGE_SOURCE_MODE:-PORTAGE}" != 'RPM
     # Gen1 (V1) is incompatible with --azure-disk-uri: a gallery image-definition
     # is locked to a single Hyper-V generation, and our *-test image-defs are
     # Gen2-only. Skip the V1 run when running in disk-URI (gallery) mode.
-    if [[ -z "${AZURE_DISK_URI:-}" ]]; then
+    if should_schedule_v1; then
         other_instance_types+=('V1')
     fi
     other_instance_types+=('Standard_NC6s_v3')
