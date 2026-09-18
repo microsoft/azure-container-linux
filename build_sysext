@@ -370,7 +370,7 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
     # only date-granular in the pipeline. The manifest is not bound by that
     # contract and needs the build id to keep its documentNamespace unique.
     #
-    # Fed the container-manifest-2 diff rather than ${SYSEXTNAME}_packages.txt:
+    # Feed the container-manifest-2 diff rather than ${SYSEXTNAME}_packages.txt:
     # both describe the same package set, but only this one carries the vendor
     # that package's SPDX supplier is set to. write_sysext_sbom reads it too,
     # so it is not removed here.
