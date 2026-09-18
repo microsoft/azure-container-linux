@@ -1,0 +1,22 @@
+azurelinux-release	3.0-49.azl3	1735689600	1735603200	Microsoft Corporation	(none)	2048	noarch	0	azurelinux-release-3.0-49.azl3.src.rpm
+bash	5.2.15-3.azl3	1735689600	1735603200	Microsoft Corporation	(none)	7340032	x86_64	0	bash-5.2.15-3.azl3.src.rpm
+ca-certificates-shared	3.0.0-15.azl3	1735689600	1735603200	Microsoft Corporation	(none)	12288	noarch	0	ca-certificates-3.0.0-15.azl3.src.rpm
+coreutils	9.4-7.azl3	1735689600	1735603200	Microsoft Corporation	(none)	19922944	x86_64	0	coreutils-9.4-7.azl3.src.rpm
+device-mapper-event-libs	2.03.23-1.azl3	1735689600	1735603200	Microsoft Corporation	(none)	40960	x86_64	0	lvm2-2.03.23-1.azl3.src.rpm
+e2fsprogs-libs	1.47.0-2.azl3	1735689600	1735603200	Microsoft Corporation	(none)	540672	x86_64	0	e2fsprogs-1.47.0-2.azl3.src.rpm
+elfutils-default-yama-scope	0.189-6.azl3	1735689600	1735603200	Microsoft Corporation	(none)	2048	noarch	0	elfutils-0.189-6.azl3.src.rpm
+filesystem	1.1-21.azl3	1735689600	1735603200	Microsoft Corporation	(none)	4096	x86_64	0	filesystem-1.1-21.azl3.src.rpm
+glibc	2.38-20.azl3	1735689600	1735603200	Microsoft Corporation	(none)	7602176	x86_64	0	glibc-2.38-20.azl3.src.rpm
+iscsi-initiator-utils-iscsiuio	2.1.9-1.azl3	1735689600	1735603200	Microsoft Corporation	(none)	217088	x86_64	0	iscsi-initiator-utils-2.1.9-1.azl3.src.rpm
+kernel	6.6.145.2-1.azl3	1735689600	1735603200	Microsoft Corporation	(none)	134217728	x86_64	0	kernel-6.6.145.2-1.azl3.src.rpm
+libstdc++	13.2.0-7.azl3	1735689600	1735603200	Microsoft Corporation	(none)	2506752	x86_64	0	gcc-13.2.0-7.azl3.src.rpm
+lshw	B.02.20-1.azl3	1735689600	1735603200	Microsoft Corporation	(none)	970752	x86_64	0	lshw-B.02.20-1.azl3.src.rpm
+openssl-libs	3.3.7-4.azl3	1735689600	1735603200	Microsoft Corporation	(none)	5636096	x86_64	0	openssl-3.3.7-4.azl3.src.rpm
+python3-libs	3.12.9-6.azl3	1735689600	1735603200	Microsoft Corporation	(none)	38797312	x86_64	0	python3-3.12.9-6.azl3.src.rpm
+sed	4.9-2.azl3	1735689600	1735603200	(none)	(none)	831488	x86_64	0	sed-4.9-2.azl3.src.rpm
+shadow-utils-subid	4.14.3-2.azl3	1735689600	1735603200	Microsoft Corporation	(none)	73728	x86_64	0	shadow-utils-4.14.3-2.azl3.src.rpm
+systemd	255-33.azl3	1735689600	1735603200	Microsoft Corporation	(none)	18874368	x86_64	0	systemd-255-33.azl3.src.rpm
+systemd-rpm-macros	255-33.azl3	1735689600	1735603200	Microsoft Corporation	(none)	8192	noarch	0	systemd-255-33.azl3.src.rpm
+tzdata	2025c-2.azl3	1735689600	1735603200	Microsoft Corporation	(none)	1789952	noarch	0	tzdata-2025c-2.azl3.src.rpm
+zlib	1.3.1-1.azl3	1735689600	1735603200	Microsoft Corporation	(none)	122880	aarch64	0	zlib-1.3.1-1.azl3.src.rpm
+zlib	1.3.1-1.azl3	1735689600	1735603200	Microsoft Corporation	1	122880	x86_64	1	zlib-1.3.1-1.azl3.src.rpm
