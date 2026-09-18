@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="810" viewBox="0 0 1440 810" role="img" aria-labelledby="title desc">
   <title id="title">Unsigned container lifecycle</title>
-  <desc id="desc">Cold and cached unsigned one-layer and eight-layer pod-start means for the base ACL image, overlayfs with IPE assets, and EROFS with IPE auditing.</desc>
+  <desc id="desc">Cold and cached unsigned one-layer and eight-layer pod-start means for the base ACL image, overlayfs with IPE assets, prebuilt EROFS referrers, and tar-index EROFS referrers.</desc>
   <style>
     text { font-family: "Segoe UI", Arial, Helvetica, sans-serif; fill: #172033; }
     .title { font-size: 30px; font-weight: 700; }
@@ -9,73 +9,83 @@
     .label { font-size: 15px; font-weight: 600; }
     .small { font-size: 14px; fill: #4b5563; }
     .passive-delta { font-size: 13px; font-weight: 700; fill: #166534; }
+    .prebuilt-delta { font-size: 13px; font-weight: 700; fill: #9a3412; }
     .erofs-delta { font-size: 13px; font-weight: 700; fill: #581c87; }
     .axis { stroke: #64748b; stroke-width: 1.5; }
     .grid { stroke: #d8dee9; stroke-width: 1; }
     .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.25; }
     .base { fill: #6b7280; }
     .overlay { fill: #16a34a; }
+    .prebuilt { fill: #d97706; }
     .erofs { fill: #7c3aed; }
   </style>
 
   <rect width="1440" height="810" fill="#f8fafc"/>
   <text x="60" y="55" class="title">Unsigned container lifecycle</text>
-  <text x="60" y="84" class="subtitle">Each mean represents n=60 timed pod starts.</text>
+  <text x="60" y="84" class="subtitle">Base, Overlayfs, and tar-index use n=60. Prebuilt EROFS uses n=30.</text>
 
   <rect x="70" y="110" width="18" height="18" rx="3" class="base"/>
   <text x="98" y="124" class="label">Base ACL image</text>
-  <rect x="500" y="110" width="18" height="18" rx="3" class="overlay"/>
-  <text x="528" y="124" class="label">Overlayfs + IPE assets</text>
-  <rect x="990" y="110" width="18" height="18" rx="3" class="erofs"/>
-  <text x="1018" y="124" class="label">EROFS + IPE auditing</text>
+  <rect x="350" y="110" width="18" height="18" rx="3" class="overlay"/>
+  <text x="378" y="124" class="label">Overlayfs + IPE assets</text>
+  <rect x="710" y="110" width="18" height="18" rx="3" class="prebuilt"/>
+  <text x="738" y="124" class="label">Prebuilt EROFS referrers</text>
+  <rect x="1070" y="110" width="18" height="18" rx="3" class="erofs"/>
+  <text x="1098" y="124" class="label">Tar-index EROFS referrers</text>
 
   <rect x="50" y="160" width="1340" height="610" rx="10" class="panel"/>
   <text x="75" y="197" class="panel-title">Cold and cached pod startup</text>
-  <text x="75" y="223" class="small">Values are gray / green / purple means. Percentages compare green and purple with the base ACL image.</text>
+  <text x="75" y="223" class="small">Values are gray / green / orange / purple means. Percentages compare each with the Base ACL image.</text>
 
   <line x1="435" y1="255" x2="435" y2="665" class="axis"/>
-  <line x1="598" y1="255" x2="598" y2="665" class="grid"/>
-  <line x1="761" y1="255" x2="761" y2="665" class="grid"/>
-  <line x1="924" y1="255" x2="924" y2="665" class="grid"/>
-  <line x1="1087" y1="255" x2="1087" y2="665" class="grid"/>
+  <line x1="638.8" y1="255" x2="638.8" y2="665" class="grid"/>
+  <line x1="842.5" y1="255" x2="842.5" y2="665" class="grid"/>
+  <line x1="1046.3" y1="255" x2="1046.3" y2="665" class="grid"/>
   <line x1="1250" y1="255" x2="1250" y2="665" class="grid"/>
 
   <text x="75" y="285" class="label">One-layer cold pod start</text>
-  <text x="75" y="306" class="small">3.641 / 3.696 / 3.773 s</text>
-  <rect x="435" y="267" width="593.5" height="16" rx="3" class="base"/>
-  <rect x="435" y="289" width="602.4" height="16" rx="3" class="overlay"/>
-  <text x="1045" y="302" class="passive-delta">+1.51%</text>
-  <rect x="435" y="311" width="615.0" height="16" rx="3" class="erofs"/>
-  <text x="1058" y="324" class="erofs-delta">+3.63%</text>
+  <text x="75" y="306" class="small">3.641 / 3.781 / 5.181 / 3.773 s</text>
+  <rect x="435" y="267" width="371.0" height="16" rx="3" class="base"/>
+  <rect x="435" y="289" width="385.2" height="16" rx="3" class="overlay"/>
+  <text x="829" y="302" class="passive-delta">+3.85%</text>
+  <rect x="435" y="311" width="527.8" height="16" rx="3" class="prebuilt"/>
+  <text x="971" y="324" class="prebuilt-delta">+42.29%</text>
+  <rect x="435" y="333" width="384.4" height="16" rx="3" class="erofs"/>
+  <text x="828" y="346" class="erofs-delta">+3.63%</text>
 
   <text x="75" y="385" class="label">One-layer cached pod start</text>
-  <text x="75" y="406" class="small">1.384 / 1.293 / 1.180 s</text>
-  <rect x="435" y="367" width="225.6" height="16" rx="3" class="base"/>
-  <rect x="435" y="389" width="210.8" height="16" rx="3" class="overlay"/>
-  <text x="654" y="402" class="passive-delta">-6.58%</text>
-  <rect x="435" y="411" width="192.3" height="16" rx="3" class="erofs"/>
-  <text x="635" y="424" class="erofs-delta">-14.74%</text>
+  <text x="75" y="406" class="small">1.384 / 1.160 / 3.137 / 1.180 s</text>
+  <rect x="435" y="367" width="141.0" height="16" rx="3" class="base"/>
+  <rect x="435" y="389" width="118.2" height="16" rx="3" class="overlay"/>
+  <text x="562" y="402" class="passive-delta">-16.17%</text>
+  <rect x="435" y="411" width="319.6" height="16" rx="3" class="prebuilt"/>
+  <text x="763" y="424" class="prebuilt-delta">+126.67%</text>
+  <rect x="435" y="433" width="120.2" height="16" rx="3" class="erofs"/>
+  <text x="564" y="446" class="erofs-delta">-14.74%</text>
 
   <text x="75" y="485" class="label">Eight-layer cold pod start</text>
-  <text x="75" y="506" class="small">4.545 / 4.583 / 4.705 s</text>
-  <rect x="435" y="467" width="740.8" height="16" rx="3" class="base"/>
-  <rect x="435" y="489" width="747.0" height="16" rx="3" class="overlay"/>
-  <text x="1190" y="502" class="passive-delta">+0.84%</text>
-  <rect x="435" y="511" width="766.9" height="16" rx="3" class="erofs"/>
-  <text x="1210" y="524" class="erofs-delta">+3.52%</text>
+  <text x="75" y="506" class="small">4.545 / 4.527 / 6.939 / 4.705 s</text>
+  <rect x="435" y="467" width="463.1" height="16" rx="3" class="base"/>
+  <rect x="435" y="489" width="461.2" height="16" rx="3" class="overlay"/>
+  <text x="905" y="502" class="passive-delta">-0.40%</text>
+  <rect x="435" y="511" width="707.0" height="16" rx="3" class="prebuilt"/>
+  <text x="1150" y="524" class="prebuilt-delta">+52.68%</text>
+  <rect x="435" y="533" width="479.4" height="16" rx="3" class="erofs"/>
+  <text x="923" y="546" class="erofs-delta">+3.52%</text>
 
   <text x="75" y="585" class="label">Eight-layer cached pod start</text>
-  <text x="75" y="606" class="small">1.390 / 1.352 / 1.209 s</text>
-  <rect x="435" y="567" width="226.6" height="16" rx="3" class="base"/>
-  <rect x="435" y="589" width="220.4" height="16" rx="3" class="overlay"/>
-  <text x="663" y="602" class="passive-delta">-2.73%</text>
-  <rect x="435" y="611" width="197.1" height="16" rx="3" class="erofs"/>
-  <text x="640" y="624" class="erofs-delta">-13.02%</text>
+  <text x="75" y="606" class="small">1.390 / 1.194 / 3.497 / 1.209 s</text>
+  <rect x="435" y="567" width="141.6" height="16" rx="3" class="base"/>
+  <rect x="435" y="589" width="121.6" height="16" rx="3" class="overlay"/>
+  <text x="565" y="602" class="passive-delta">-14.11%</text>
+  <rect x="435" y="611" width="356.3" height="16" rx="3" class="prebuilt"/>
+  <text x="800" y="624" class="prebuilt-delta">+151.60%</text>
+  <rect x="435" y="633" width="123.2" height="16" rx="3" class="erofs"/>
+  <text x="566" y="646" class="erofs-delta">-13.02%</text>
 
   <text x="435" y="710" text-anchor="middle" class="small">0 s</text>
-  <text x="598" y="710" text-anchor="middle" class="small">1</text>
-  <text x="761" y="710" text-anchor="middle" class="small">2</text>
-  <text x="924" y="710" text-anchor="middle" class="small">3</text>
-  <text x="1087" y="710" text-anchor="middle" class="small">4</text>
-  <text x="1250" y="710" text-anchor="middle" class="small">5 s</text>
+  <text x="638.8" y="710" text-anchor="middle" class="small">2</text>
+  <text x="842.5" y="710" text-anchor="middle" class="small">4</text>
+  <text x="1046.3" y="710" text-anchor="middle" class="small">6</text>
+  <text x="1250" y="710" text-anchor="middle" class="small">8 s</text>
 </svg>

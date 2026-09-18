@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="500" viewBox="0 0 1440 500" role="img" aria-labelledby="title desc">
   <title id="title">Cached signed image startup after node reboot</title>
-  <desc id="desc">Mean cached signed eight-layer pod startup after a real node reboot for the base ACL image, overlayfs with IPE assets, and EROFS with IPE auditing.</desc>
+  <desc id="desc">Mean cached signed eight-layer pod startup after a real node reboot for the base ACL image, overlayfs with IPE assets, and tar-index EROFS referrers.</desc>
   <style>
     text { font-family: "Segoe UI", Arial, Helvetica, sans-serif; fill: #172033; }
     .title { font-size: 31px; font-weight: 700; }
@@ -21,7 +21,7 @@
   <text x="60" y="86" class="subtitle">Each mean represents n=20 accepted post-reboot cached pod starts.</text>
 
   <rect x="50" y="120" width="1340" height="330" rx="10" class="panel"/>
-  <text x="75" y="156" class="small">The image remains cached. Percentages compare Overlayfs and EROFS with the Base ACL image.</text>
+  <text x="75" y="156" class="small">The image remains cached. Percentages compare Overlayfs and tar-index EROFS with the Base ACL image.</text>
 
   <line x1="435" y1="185" x2="435" y2="360" class="axis"/>
   <line x1="620.2" y1="185" x2="620.2" y2="360" class="grid"/>
@@ -38,7 +38,7 @@
   <rect x="435" y="265" width="525.3" height="24" rx="3" class="overlay"/>
   <text x="969" y="283" class="value">+5.4%</text>
 
-  <text x="75" y="345" class="label">EROFS + IPE auditing</text>
+  <text x="75" y="345" class="label">Tar-index EROFS referrers</text>
   <rect x="435" y="325" width="589.4" height="24" rx="3" class="erofs"/>
   <text x="1033" y="343" class="value">+18.2%</text>
 
