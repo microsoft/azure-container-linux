@@ -158,6 +158,7 @@ def package_supplier(name: str, vendor: str) -> str:
 
     return f"{SUPPLIER_ORGANIZATION_PREFIX}{vendor}"
 
+
 def package_epoch(epoch: str) -> int | None:
     """Normalize the RPM epoch.
 
