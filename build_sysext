@@ -365,7 +365,7 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
   # Empty means either nothing was installed or the base image already had every
   # package this sysext asks for. Both are valid sysexts with nothing of their
   # own to describe.
-  if [[ -s "${BUILD_DIR}/${SYSEXTNAME}_packages.txt" ]]; then
+  if [[ -s "${BUILD_DIR}/.rpm-sysext-manifest.tmp" ]]; then
     # _sysext_version_id is pinned to the host os-release VERSION_ID and so is
     # only date-granular in the pipeline. The manifest is not bound by that
     # contract and needs the build id to keep its documentNamespace unique.

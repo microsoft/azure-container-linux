@@ -126,9 +126,6 @@ write_disk_space_usage() {
 # per merged sysext.
 OS_MANIFESTS_DIR="/usr/share/os-manifests"
 
-# The image manifest's SPDX document name.
-PACKAGE_MANIFEST_NAME="azurecontainerlinux"
-
 # Usage:
 #
 #  write_package_manifest image  "${root}" "${name}" "${version}" "${packages_file}" "${created_epoch}"
@@ -169,7 +166,6 @@ write_package_manifest() {
     # --force because BUILD_DIR is caller-supplied.
     sudo "${BUILD_LIBRARY_DIR}/rpm/generate_package_manifest.py" \
         --packages-file="${packages_file}" \
-        --packages-format=container-manifest-2 \
         --manifest-file="${output}" \
         --manifest-name="${name}" \
         --manifest-version="${version}" \
