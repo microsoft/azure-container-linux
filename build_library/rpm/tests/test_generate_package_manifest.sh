@@ -12,15 +12,16 @@ GENERATOR="${TESTS_DIR}/../generate_package_manifest.py"
 # Conformance is a property of the generator, not of any one rootfs, so this is
 # run against a fixture instead of inside the image build. This file is a real
 # capture from an ACL production image, trimmed, plus one epoch-bearing entry,
-# one non-native arch, and one entry carrying no vendor.
+# one non-native arch, one entry carrying no vendor, and one duplicate NEVRA
+# the generator is expected to drop.
 #
 # container-manifest-2 is the layout both image and sysext builds feed the
 # generator because it includes the RPM vendor.
 CONTAINER_MANIFEST_2_PACKAGES_FILE="${TESTS_DIR}/testdata/container-manifest-2-packages.txt"
 
 # When a change to the emitted document is intentional, pass <workdir> to the
-# script, copy the output to the golden file, then re-validate it:
-#     cp "${WORK_DIR}/package-manifest.spdx.json" testdata/expected-manifest.spdx.json
+# script, copy the normalized output to the golden file, then re-validate it:
+#     cp "${WORK_DIR}/package-manifest.spdx.json.normalized" testdata/expected-manifest.spdx.json
 #     ./validate_golden_manifest.sh
 GOLDEN_FILE="${TESTS_DIR}/testdata/expected-manifest.spdx.json"
 
@@ -42,7 +43,7 @@ MANIFEST_NAME="azurecontainerlinux"
 MANIFEST_VERSION="0.0.0-spec-conformance"
 CREATED_EPOCH=1735689600
 
-echo "=== Generating manifest from ${CONTAINER_MANIFEST_2_PACKAGES_FILE##*/} using the default format ==="
+echo "=== Generating manifest from ${CONTAINER_MANIFEST_2_PACKAGES_FILE##*/} ==="
 "${GENERATOR}" \
     --packages-file="${CONTAINER_MANIFEST_2_PACKAGES_FILE}" \
     --manifest-file="${MANIFEST}" \
@@ -54,7 +55,6 @@ echo "=== Generating manifest from ${CONTAINER_MANIFEST_2_PACKAGES_FILE##*/} usi
 echo "=== Checking the generator is byte-identical on a second run ==="
 "${GENERATOR}" \
     --packages-file="${CONTAINER_MANIFEST_2_PACKAGES_FILE}" \
-    --packages-format=container-manifest-2 \
     --manifest-file="${MANIFEST_AGAIN}" \
     --manifest-name="${MANIFEST_NAME}" \
     --manifest-version="${MANIFEST_VERSION}" \

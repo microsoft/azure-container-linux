@@ -1,5 +1,6 @@
 azurelinux-release	3.0-49.azl3	1735689600	1735603200	Microsoft Corporation	(none)	2048	noarch	0	azurelinux-release-3.0-49.azl3.src.rpm
 bash	5.2.15-3.azl3	1735689600	1735603200	Microsoft Corporation	(none)	7340032	x86_64	0	bash-5.2.15-3.azl3.src.rpm
+bash	5.2.15-3.azl3	1735689601	1735603200	Microsoft Corporation	(none)	7340033	x86_64	0	bash-5.2.15-3.azl3.src.rpm
 ca-certificates-shared	3.0.0-15.azl3	1735689600	1735603200	Microsoft Corporation	(none)	12288	noarch	0	ca-certificates-3.0.0-15.azl3.src.rpm
 coreutils	9.4-7.azl3	1735689600	1735603200	Microsoft Corporation	(none)	19922944	x86_64	0	coreutils-9.4-7.azl3.src.rpm
 device-mapper-event-libs	2.03.23-1.azl3	1735689600	1735603200	Microsoft Corporation	(none)	40960	x86_64	0	lvm2-2.03.23-1.azl3.src.rpm

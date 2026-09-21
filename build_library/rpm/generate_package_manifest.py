@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import copy
 import dataclasses
 import datetime
 import hashlib
@@ -11,7 +10,6 @@ import re
 import sys
 import urllib.parse
 import uuid
-from collections.abc import Callable
 from typing import Any
 
 # spdxVersion field value.
@@ -84,28 +82,19 @@ CONTAINS_RELATIONSHIP_TYPE = "CONTAINS"
 # -- https://github.com/spdx/spdx-spec/blob/development/v2.2.2/chapters/package-information.md#75-package-supplier-field-
 SUPPLIER_ORGANIZATION_PREFIX = "Organization: "
 
+# A vendor that already names an SPDX entity type cannot be given another one,
+# so it is rejected rather than emitted as "Organization: Organization: ...".
+SUPPLIER_TYPED_VENDOR_RE = re.compile(r"\s*(?:Person|Organization)\s*:", re.IGNORECASE)
+
+# A supplier is a single-line field, so a vendor carrying a control character
+# would emit one no reader can parse back.
+CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
 # Stands in for a field the document creator has not determined.
 NOASSERTION = "NOASSERTION"
 
 # What rpm's query format prints for a tag the package does not carry.
 RPM_TAG_NONE = "(none)"
-
-# rpmdb pseudo-entries for imported signing keys, which have no architecture.
-# This cannot match real package NEVRAs, which always end in ".<arch>".
-GPG_PUBKEY_RE = re.compile(r"^gpg-pubkey-[0-9a-f-]+\Z")
-
-# --packages-format values, named for the expected per-line input layout.
-PACKAGES_FORMAT_NEVRA = "nevra"
-PACKAGES_FORMAT_TDNF = "tdnf"
-PACKAGES_FORMAT_CONTAINER_MANIFEST_2 = "container-manifest-2"
-PACKAGES_FORMATS = [
-    PACKAGES_FORMAT_NEVRA,
-    PACKAGES_FORMAT_TDNF,
-    PACKAGES_FORMAT_CONTAINER_MANIFEST_2,
-]
-
-# Column count of a `tdnf list installed` line.
-TDNF_COLUMNS = 3
 
 # Column count of a container-manifest-2 line.
 RPM_MANIFEST_COLUMN_NUM = 10
@@ -128,7 +117,7 @@ class Package:
     version: str
     release: str
     arch: str
-    vendor: str | None
+    supplier: str
 
     @property
     def evr(self) -> str:
@@ -143,20 +132,40 @@ class Package:
     def nevra(self) -> str:
         return f"{self.name}-{self.evra}"
 
-    @property
-    def supplier(self) -> str:
-        if self.vendor == NOASSERTION:
-            print(
-                f"WARNING: Clearing vendor ({self.vendor}) for package ({self.name}): "
-                "Reserved SPDX keyword and cannot be used",
-                file=sys.stderr,
-            )
-            return NOASSERTION
 
-        if not self.vendor:
-            return NOASSERTION
+def package_supplier(name: str, vendor: str) -> str:
+    """Build a package's supplier from the RPM vendor."""
+    vendor = CONTROL_CHARACTER_RE.sub("", vendor).strip()
 
-        return f"{SUPPLIER_ORGANIZATION_PREFIX}{self.vendor}"
+    if vendor == NOASSERTION:
+        print(
+            f"WARNING: Clearing vendor ({vendor}) for package ({name}): "
+            "Reserved SPDX keyword and cannot be used",
+            file=sys.stderr,
+        )
+        return NOASSERTION
+
+    if SUPPLIER_TYPED_VENDOR_RE.match(vendor):
+        print(
+            f"WARNING: Clearing vendor ({vendor}) for package ({name}): "
+            "Already names an SPDX entity type and cannot be used",
+            file=sys.stderr,
+        )
+        return NOASSERTION
+
+    if not vendor:
+        return NOASSERTION
+
+    return f"{SUPPLIER_ORGANIZATION_PREFIX}{vendor}"
+
+def package_epoch(epoch: str) -> int | None:
+    """Normalize the RPM epoch.
+
+    rpm tag 1003: an absent epoch and an explicit 0 name the same package.
+    syft and Image Customizer both key off the tag being present rather
+    than its value, so an explicit 0 is kept to stay identical to them.
+    """
+    return int(epoch) if epoch else None
 
 
 def create_package(name: str, epoch: str, version: str, release: str, arch: str, vendor: str = "") -> Package:
@@ -182,64 +191,11 @@ def create_package(name: str, epoch: str, version: str, release: str, arch: str,
 
     return Package(
         name=name,
-        epoch=int(epoch) if epoch else None,
+        epoch=package_epoch(epoch),
         version=version,
         release=release,
         arch=arch,
-        vendor=vendor or None,
-    )
-
-
-def parse_nevra_package(nevra: str) -> Package | None:
-    """`rpm -qa --qf '%{NEVRA}\\n'` line -> Package.
-
-    The lines are <name>-[<epoch>:]<version>-<release>.<arch>, which is the
-    NEVRA format.
-    """
-    nevra = nevra.strip()
-    if GPG_PUBKEY_RE.fullmatch(nevra):
-        return None
-
-    nevr, _, arch = nevra.rpartition(".")
-    nev, _, release = nevr.rpartition("-")
-    name, _, ev = nev.rpartition("-")
-    epoch, _, version = ev.rpartition(":")
-
-    return create_package(
-        name=name,
-        epoch=epoch,
-        version=version,
-        release=release,
-        arch=arch,
-    )
-
-
-def parse_tdnf_package(line: str) -> Package:
-    """`tdnf list installed` line -> Package.
-
-    The columns are <name>.<arch>, <[epoch:]version-release> and @<repo>,
-    space-padded to align. An image carrying tdnf but no rpm binary can still
-    produce this.
-    """
-    columns = line.split()
-    if len(columns) != TDNF_COLUMNS:
-        raise ValueError(
-            f"expected '<name>.<arch> <[epoch:]version-release> @<repo>' "
-            f"[columns={len(columns)}, expected {TDNF_COLUMNS}]"
-        )
-
-    name_arch, evr, _ = columns
-
-    name, _, arch = name_arch.rpartition(".")
-    ev, _, release = evr.rpartition("-")
-    epoch, _, version = ev.rpartition(":")
-
-    return create_package(
-        name=name,
-        epoch=epoch,
-        version=version,
-        release=release,
-        arch=arch,
+        supplier=package_supplier(name, vendor),
     )
 
 
@@ -281,13 +237,13 @@ def read_entries(packages_file: str) -> list[tuple[int, str]]:
     return entries
 
 
-def read_packages(packages_file: str, parse: Callable[[str], Package | None]) -> list[Package]:
+def read_packages(packages_file: str) -> list[Package]:
     seen: set[str] = set()
     packages: list[Package] = []
 
     for number, entry in read_entries(packages_file):
         try:
-            package = parse(entry)
+            package = parse_container_manifest_2_package(entry)
         except ValueError as error:
             raise ValueError(f"{packages_file}:{number}: {error} [line={entry!r}]") from error
 
@@ -299,6 +255,7 @@ def read_packages(packages_file: str, parse: Callable[[str], Package | None]) ->
                 f"WARNING: {packages_file}:{number}: Duplicate installed package NEVRA [id={package.nevra}] [line={entry!r}]",
                 file=sys.stderr,
             )
+            continue
 
         seen.add(package.nevra)
         packages.append(package)
@@ -364,8 +321,9 @@ def document_namespace(document: dict[str, Any]) -> str:
     """Build the documentNamespace URI.
 
     Follows the recommended [CreatorWebsite]/[pathToSpdx]/[DocumentName]-[UUID]
-    shape, building a version 5 UUID over entire document, so the same document
-    will always produce the same documentNamespace.
+    shape, building a version 5 UUID over the entire document with
+    documentNamespace blanked. The same document always produces the same
+    documentNamespace, and blanking the field again re-derives it.
     -- https://github.com/spdx/spdx-spec/blob/development/v2.2.2/chapters/document-creation-information.md#65-spdx-document-namespace-field-
     """
     seed = json_dumps(document)
@@ -507,21 +465,9 @@ def parse_args() -> argparse.Namespace:
         "--packages-file",
         required=True,
         type=validate_input_file,
-        help="The path to the package list to convert, one package per line. (required)",
-    )
-
-    parser.add_argument(
-        "--packages-format",
-        default=PACKAGES_FORMAT_CONTAINER_MANIFEST_2,
-        choices=PACKAGES_FORMATS,
         help=(
-            f"The format of --packages-file. "
-            f"'{PACKAGES_FORMAT_NEVRA}' is one NEVRA per line. "
-            f"'{PACKAGES_FORMAT_TDNF}' is `tdnf list installed` output, for an image "
-            f"carrying no rpm binary. "
-            f"'{PACKAGES_FORMAT_CONTAINER_MANIFEST_2}' is a tab-separated RPM listing. "
-            f"The latter is recommended since only it includes RPM vendor information. "
-            f"(optional, default: {PACKAGES_FORMAT_CONTAINER_MANIFEST_2})"
+            "The path to the container-manifest-2 listing to convert, one "
+            "tab-separated package per line. (required)"
         ),
     )
 
@@ -577,21 +523,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     packages_file: str = args.packages_file
-    packages_format: str = args.packages_format
     manifest_file: str = args.manifest_file
     manifest_name: str = args.manifest_name
     manifest_version: str = args.manifest_version
     created_epoch: int = args.created_epoch
 
-    if packages_format == PACKAGES_FORMAT_TDNF:
-        parse = parse_tdnf_package
-    elif packages_format == PACKAGES_FORMAT_CONTAINER_MANIFEST_2:
-        parse = parse_container_manifest_2_package
-    else:
-        parse = parse_nevra_package
-
     try:
-        packages = read_packages(packages_file, parse)
+        packages = read_packages(packages_file)
     except ValueError as error:
         print(
             f"{os.path.basename(__file__)}: failed to read packages: {error}",

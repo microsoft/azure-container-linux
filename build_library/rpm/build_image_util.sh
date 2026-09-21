@@ -1472,8 +1472,12 @@ finish_image_package_manifest_rpm() {
     # layout. packages_file is a published artifact with a NEVRA on each line
     # but no vendor, which is needed to determine package supplier.
     # This second listing is kept out of the published set by the leading dot.
+    #
+    # Sorted in place rather than through a pipe, so an rpm failure isn't masked
+    # by sort's exit status. build_image does not set pipefail.
     local manifest_packages_file="${BUILD_DIR}/.${image_base_name}_manifest_packages.tmp"
-    rpm_query_manifest "${root_fs_dir}" | sort > "${manifest_packages_file}"
+    rpm_query_manifest "${root_fs_dir}" > "${manifest_packages_file}"
+    sort -o "${manifest_packages_file}" "${manifest_packages_file}"
     if [[ ! -s "${manifest_packages_file}" ]]; then
         die "RPM mode: No packages in the container-manifest-2 listing of ${root_fs_dir}"
     fi
@@ -1484,7 +1488,7 @@ finish_image_package_manifest_rpm() {
     write_package_manifest \
         image \
         "${root_fs_dir}" \
-        "${PACKAGE_MANIFEST_NAME}" \
+        "azurecontainerlinux" \
         "${IMAGE_VERSION_ID}${IMAGE_BUILD_ID:++${IMAGE_BUILD_ID}}" \
         "${manifest_packages_file}" \
         "${created_epoch}"
