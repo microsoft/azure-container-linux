@@ -226,8 +226,14 @@ packages:
   app-crypt/ca-certificates-tools: ca-certificates-tools
   sys-apps/hwdata: hwdata
   sys-apps/kbd: kbd
-  app-misc/gettext: gettext
-  sys-devel/gettext: gettext
+  # Request libgomp by package name so DNF cannot satisfy gettext's runtime
+  # dependency with an unrelated package that bundles the same SONAME.
+  app-misc/gettext:
+    - gettext
+    - libgomp
+  sys-devel/gettext:
+    - gettext
+    - libgomp
   sys-apps/busybox: busybox
   sys-apps/groff: groff
   sys-apps/nvme-cli: nvme-cli
@@ -710,4 +716,3 @@ packages:
   sys-libs/nss-usrfiles: SKIP
   sys-libs/tevent: SKIP
   sys-power/acpid: SKIP
-
