@@ -82,14 +82,6 @@ CONTAINS_RELATIONSHIP_TYPE = "CONTAINS"
 # -- https://github.com/spdx/spdx-spec/blob/development/v2.2.2/chapters/package-information.md#75-package-supplier-field-
 SUPPLIER_ORGANIZATION_PREFIX = "Organization: "
 
-# A vendor that already names an SPDX entity type cannot be given another one,
-# so it is rejected rather than emitted as "Organization: Organization: ...".
-SUPPLIER_TYPED_VENDOR_RE = re.compile(r"\s*(?:Person|Organization)\s*:", re.IGNORECASE)
-
-# A supplier is a single-line field, so a vendor carrying a control character
-# would emit one no reader can parse back.
-CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-
 # Stands in for a field the document creator has not determined.
 NOASSERTION = "NOASSERTION"
 
@@ -135,20 +127,10 @@ class Package:
 
 def package_supplier(name: str, vendor: str) -> str:
     """Build a package's supplier from the RPM vendor."""
-    vendor = CONTROL_CHARACTER_RE.sub("", vendor).strip()
-
     if vendor == NOASSERTION:
         print(
             f"WARNING: Clearing vendor ({vendor}) for package ({name}): "
             "Reserved SPDX keyword and cannot be used",
-            file=sys.stderr,
-        )
-        return NOASSERTION
-
-    if SUPPLIER_TYPED_VENDOR_RE.match(vendor):
-        print(
-            f"WARNING: Clearing vendor ({vendor}) for package ({name}): "
-            "Already names an SPDX entity type and cannot be used",
             file=sys.stderr,
         )
         return NOASSERTION
