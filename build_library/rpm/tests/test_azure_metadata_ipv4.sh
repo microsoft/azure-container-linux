@@ -16,27 +16,40 @@ HELPER="${OEM_FILES}/azure-metadata-ipv4"
 DROPIN="${OEM_FILES}/20-azure-ipv4.conf"
 CASE_NAME=setup
 CASE_COUNT=0
+WORK_DIR=""
+FIXTURE_DIR=""
+METADATA=""
 
 fail() {
     printf 'FAIL: %s: %s\n' "$CASE_NAME" "$*" >&2
     exit 1
 }
 
-for dependency in bash jq curl ip; do
-    command -v "$dependency" > /dev/null || fail "missing SDK dependency: $dependency"
-done
-for asset in "$HELPER" "$DROPIN" "${OEM_FILES}/manglefs.sh" "${OEM_FILES}/manglefs_rpm.sh"; do
-    [[ -f "$asset" ]] || fail "missing source asset: $asset"
-done
+pass() {
+    CASE_COUNT=$((CASE_COUNT + 1))
+    printf 'PASS %02d: %s\n' "$CASE_COUNT" "$CASE_NAME"
+}
 
-WORK_DIR="$(mktemp -d)"
-trap 'rm -rf -- "$WORK_DIR"' EXIT
-mkdir -p "${WORK_DIR}/bin"
-printf 'route\naddresses\ncurl\n' > "${WORK_DIR}/expected-calls"
+check_prerequisites() {
+    local dependency asset
 
-# These stubs never fall back to host commands. A protocol error is recorded
-# separately so an expected helper failure cannot conceal wrong arguments.
-cat > "${WORK_DIR}/bin/ip" <<'MOCK_IP'
+    for dependency in bash jq curl ip; do
+        command -v "$dependency" > /dev/null || fail "missing SDK dependency: $dependency"
+    done
+    for asset in "$HELPER" "$DROPIN" "${OEM_FILES}/manglefs.sh" "${OEM_FILES}/manglefs_rpm.sh"; do
+        [[ -f "$asset" ]] || fail "missing source asset: $asset"
+    done
+}
+
+setup_workspace() {
+    WORK_DIR="$(mktemp -d)"
+    trap 'rm -rf -- "$WORK_DIR"' EXIT
+    mkdir -p "${WORK_DIR}/bin"
+    printf 'route\naddresses\ncurl\n' > "${WORK_DIR}/expected-calls"
+
+    # These stubs never fall back to host commands. A protocol error is recorded
+    # separately so an expected helper failure cannot conceal wrong arguments.
+    cat > "${WORK_DIR}/bin/ip" <<'MOCK_IP'
 #!/bin/bash
 set -euo pipefail
 case "$#:$*" in
@@ -59,7 +72,7 @@ case "$#:$*" in
 esac
 MOCK_IP
 
-cat > "${WORK_DIR}/bin/curl" <<'MOCK_CURL'
+    cat > "${WORK_DIR}/bin/curl" <<'MOCK_CURL'
 #!/bin/bash
 set -euo pipefail
 # Exact argv enforces bounded HTTP, Metadata:true, proxy bypass, interface
@@ -87,15 +100,16 @@ if [[ -e "${FIXTURE_DIR}/curl-fails" ]]; then
     exit 22
 fi
 MOCK_CURL
-chmod 0755 "${WORK_DIR}/bin/ip" "${WORK_DIR}/bin/curl"
-export PATH="${WORK_DIR}/bin:${PATH}"
+    chmod 0755 "${WORK_DIR}/bin/ip" "${WORK_DIR}/bin/curl"
+    export PATH="${WORK_DIR}/bin:${PATH}"
+}
 
 new_fixture() {
     CASE_NAME="$1"
     local selected_ipv4="${2:-10.188.33.69}"
     export FIXTURE_DIR="${WORK_DIR}/${CASE_NAME}"
     mkdir -p "$FIXTURE_DIR"
-    metadata="${FIXTURE_DIR}/flatcar"
+    METADATA="${FIXTURE_DIR}/flatcar"
     cat > "${FIXTURE_DIR}/route.json" <<JSON
 [{"dst":"168.63.129.16","dev":"eth1","prefsrc":"${selected_ipv4}"}]
 JSON
@@ -109,7 +123,7 @@ JSON
     {"privateIpAddress":"${selected_ipv4}"}
 ]}}]}
 JSON
-    cat > "$metadata" <<'METADATA'
+    cat > "$METADATA" <<'METADATA'
 # Preserve comments, order, blank lines, and unrelated fields.
 COREOS_AZURE_HOSTNAME=fixture-vm
 COREOS_AZURE_IPV4_DYNAMIC=10.10.10.10
@@ -120,19 +134,19 @@ OTHER_COREOS_AZURE_IPV4_DYNAMIC=leave-this-alone
 
 METADATA
     sed "s/^COREOS_AZURE_IPV4_DYNAMIC=.*/COREOS_AZURE_IPV4_DYNAMIC=${selected_ipv4}/" \
-        "$metadata" > "${FIXTURE_DIR}/expected"
+        "$METADATA" > "${FIXTURE_DIR}/expected"
 }
 
 run_helper() {
     local expected_result="$1" status
-    if [[ -f "$metadata" ]]; then
-        cp -- "$metadata" "${FIXTURE_DIR}/before"
+    if [[ -f "$METADATA" ]]; then
+        cp -- "$METADATA" "${FIXTURE_DIR}/before"
     fi
     : > "${FIXTURE_DIR}/calls"
     # Always call this function as a standalone command, never in if/!/||.
     # A separate Bash process retains the helper's own errexit semantics.
     set +e
-    bash "$HELPER" "$metadata" > "${FIXTURE_DIR}/output" 2>&1
+    bash "$HELPER" "$METADATA" > "${FIXTURE_DIR}/output" 2>&1
     status=$?
     set -e
     if [[ -e "${FIXTURE_DIR}/mock-error" ]]; then
@@ -148,51 +162,51 @@ run_helper() {
     else
         [[ $status -ne 0 ]] || fail "helper accepted invalid input"
         if [[ -f "${FIXTURE_DIR}/before" ]]; then
-            cmp "${FIXTURE_DIR}/before" "$metadata" || fail "metadata changed on rejection"
+            cmp "${FIXTURE_DIR}/before" "$METADATA" || fail "metadata changed on rejection"
         else
-            [[ ! -e "$metadata" && ! -L "$metadata" ]] || fail "missing metadata was created"
+            [[ ! -e "$METADATA" && ! -L "$METADATA" ]] || fail "missing metadata was created"
         fi
-        [[ ! -e "${metadata}.wireserver" && ! -L "${metadata}.wireserver" ]] || fail "backup created on rejection"
+        [[ ! -e "${METADATA}.wireserver" && ! -L "${METADATA}.wireserver" ]] || fail "backup created on rejection"
     fi
 }
 
-pass() {
-    CASE_COUNT=$((CASE_COUNT + 1))
-    printf 'PASS %02d: %s\n' "$CASE_COUNT" "$CASE_NAME"
+test_correction_and_regeneration_preserve_first_backup() {
+    new_fixture correction-and-regeneration-preserve-first-backup
+    run_helper success
+    cmp "${FIXTURE_DIR}/expected" "$METADATA" || fail "correction changed more than the target field"
+    cmp "${FIXTURE_DIR}/before" "${METADATA}.wireserver" || fail "backup differs from original metadata"
+    cp "${FIXTURE_DIR}/before" "${FIXTURE_DIR}/first-backup"
+    # A new Afterburn result can be wrong without containing 10.10.10.10.
+    sed 's/^COREOS_AZURE_IPV4_DYNAMIC=.*/COREOS_AZURE_IPV4_DYNAMIC=192.0.2.17/' \
+        "$METADATA" > "${FIXTURE_DIR}/regenerated"
+    printf 'COREOS_AZURE_REGENERATED=preserve-me\n' >> "${FIXTURE_DIR}/regenerated"
+    mv "${FIXTURE_DIR}/regenerated" "$METADATA"
+    printf 'COREOS_AZURE_REGENERATED=preserve-me\n' >> "${FIXTURE_DIR}/expected"
+    run_helper success
+    cmp "${FIXTURE_DIR}/expected" "$METADATA" || fail "regenerated metadata was not corrected in place"
+    cmp "${FIXTURE_DIR}/first-backup" "${METADATA}.wireserver" || fail "first backup was overwritten"
+    pass
 }
 
-new_fixture correction-and-regeneration-preserve-first-backup
-run_helper success
-cmp "${FIXTURE_DIR}/expected" "$metadata" || fail "correction changed more than the target field"
-cmp "${FIXTURE_DIR}/before" "${metadata}.wireserver" || fail "backup differs from original metadata"
-cp "${FIXTURE_DIR}/before" "${FIXTURE_DIR}/first-backup"
-# A new Afterburn result can be wrong without containing 10.10.10.10.
-sed 's/^COREOS_AZURE_IPV4_DYNAMIC=.*/COREOS_AZURE_IPV4_DYNAMIC=192.0.2.17/' \
-    "$metadata" > "${FIXTURE_DIR}/regenerated"
-printf 'COREOS_AZURE_REGENERATED=preserve-me\n' >> "${FIXTURE_DIR}/regenerated"
-mv "${FIXTURE_DIR}/regenerated" "$metadata"
-printf 'COREOS_AZURE_REGENERATED=preserve-me\n' >> "${FIXTURE_DIR}/expected"
-run_helper success
-cmp "${FIXTURE_DIR}/expected" "$metadata" || fail "regenerated metadata was not corrected in place"
-cmp "${FIXTURE_DIR}/first-backup" "${metadata}.wireserver" || fail "first backup was overwritten"
-pass
+test_already_correct_byte_identical_without_backup() {
+    new_fixture already-correct-byte-identical-without-backup
+    cp "${FIXTURE_DIR}/expected" "$METADATA"
+    run_helper success
+    cmp "${FIXTURE_DIR}/before" "$METADATA" || fail "already-correct metadata changed"
+    [[ ! -e "${METADATA}.wireserver" && ! -L "${METADATA}.wireserver" ]] || fail "unnecessary backup"
+    pass
+}
 
-new_fixture already-correct-byte-identical-without-backup
-cp "${FIXTURE_DIR}/expected" "$metadata"
-run_helper success
-cmp "${FIXTURE_DIR}/before" "$metadata" || fail "already-correct metadata changed"
-[[ ! -e "${metadata}.wireserver" && ! -L "${metadata}.wireserver" ]] || fail "unnecessary backup"
-pass
-
-new_fixture nonfirst-nic-and-ip-with-lowercase-colon-mac
-cat > "${FIXTURE_DIR}/addresses.json" <<'JSON'
+test_nonfirst_nic_and_ip_with_lowercase_colon_mac() {
+    new_fixture nonfirst-nic-and-ip-with-lowercase-colon-mac
+    cat > "${FIXTURE_DIR}/addresses.json" <<'JSON'
 [{"ifname":"eth1","address":"00:0D:3A:18:83:69","addr_info":[
     {"family":"inet","local":"10.188.33.70","scope":"global"},
     {"family":"inet","local":"10.188.33.69","scope":"global"},
     {"family":"inet6","local":"fe80::20d:3aff:fe18:8369","scope":"link"}
 ]}]
 JSON
-cat > "${FIXTURE_DIR}/imds.json" <<'JSON'
+    cat > "${FIXTURE_DIR}/imds.json" <<'JSON'
 {"interface":[
     {"macAddress":"00155D188330","ipv4":{"ipAddress":[
         {"privateIpAddress":"10.188.34.10"}
@@ -203,23 +217,31 @@ cat > "${FIXTURE_DIR}/imds.json" <<'JSON'
     ]}}
 ]}
 JSON
-run_helper success
-cmp "${FIXTURE_DIR}/expected" "$metadata" || fail "wrong interface or address selected"
-cmp "${FIXTURE_DIR}/before" "${metadata}.wireserver" || fail "backup differs from original metadata"
-pass
+    run_helper success
+    cmp "${FIXTURE_DIR}/expected" "$METADATA" || fail "wrong interface or address selected"
+    cmp "${FIXTURE_DIR}/before" "${METADATA}.wireserver" || fail "backup differs from original metadata"
+    pass
+}
 
-new_fixture genuinely-assigned-10.10.10.10-is-allowed 10.10.10.10
-sed -i 's/^COREOS_AZURE_IPV4_DYNAMIC=.*/COREOS_AZURE_IPV4_DYNAMIC=192.0.2.17/' "$metadata"
-run_helper success
-cmp "${FIXTURE_DIR}/expected" "$metadata" || fail "genuinely assigned 10.10.10.10 was not accepted"
-cmp "${FIXTURE_DIR}/before" "${metadata}.wireserver" || fail "backup differs from original metadata"
-pass
+test_genuinely_assigned_10_10_10_10_is_allowed() {
+    new_fixture genuinely-assigned-10.10.10.10-is-allowed 10.10.10.10
+    sed -i 's/^COREOS_AZURE_IPV4_DYNAMIC=.*/COREOS_AZURE_IPV4_DYNAMIC=192.0.2.17/' "$METADATA"
+    run_helper success
+    cmp "${FIXTURE_DIR}/expected" "$METADATA" || fail "genuinely assigned 10.10.10.10 was not accepted"
+    cmp "${FIXTURE_DIR}/before" "${METADATA}.wireserver" || fail "backup differs from original metadata"
+    pass
+}
 
-for rejection in \
-    route-command-fails route-empty route-malformed route-ambiguous route-missing-prefsrc \
-    source-ip-not-assigned invalid-ipv4 link-scope-only \
-    imds-curl-error imds-invalid-json imds-empty-interface imds-ip-mismatch \
-    imds-mac-mismatch imds-duplicate-candidate missing-metadata missing-key duplicate-key; do
+transform_json() {
+    local file="${FIXTURE_DIR}/$1"
+
+    jq "$2" "$file" > "${FIXTURE_DIR}/next.json"
+    mv "${FIXTURE_DIR}/next.json" "$file"
+}
+
+new_rejection_fixture() {
+    local rejection="$1"
+
     new_fixture "$rejection"
     case "$rejection" in
         route-command-fails)
@@ -232,24 +254,20 @@ for rejection in \
             printf '{\n' > "${FIXTURE_DIR}/route.json"
             ;;
         route-ambiguous)
-            jq '. + .' "${FIXTURE_DIR}/route.json" > "${FIXTURE_DIR}/next.json"
-            mv "${FIXTURE_DIR}/next.json" "${FIXTURE_DIR}/route.json"
+            transform_json route.json '. + .'
             ;;
         route-missing-prefsrc)
-            jq 'del(.[0].prefsrc)' "${FIXTURE_DIR}/route.json" > "${FIXTURE_DIR}/next.json"
-            mv "${FIXTURE_DIR}/next.json" "${FIXTURE_DIR}/route.json"
+            transform_json route.json 'del(.[0].prefsrc)'
             ;;
         source-ip-not-assigned)
-            jq '.[0].addr_info[0].local = "10.188.33.70"' "${FIXTURE_DIR}/addresses.json" > "${FIXTURE_DIR}/next.json"
-            mv "${FIXTURE_DIR}/next.json" "${FIXTURE_DIR}/addresses.json"
+            transform_json addresses.json '.[0].addr_info[0].local = "10.188.33.70"'
             ;;
         invalid-ipv4)
             # Assignment and IMDS deliberately agree: IPv4 validation must reject it.
             new_fixture "$rejection" 10.188.33.999
             ;;
         link-scope-only)
-            jq '.[0].addr_info[0].scope = "link"' "${FIXTURE_DIR}/addresses.json" > "${FIXTURE_DIR}/next.json"
-            mv "${FIXTURE_DIR}/next.json" "${FIXTURE_DIR}/addresses.json"
+            transform_json addresses.json '.[0].addr_info[0].scope = "link"'
             ;;
         imds-curl-error)
             touch "${FIXTURE_DIR}/curl-fails"
@@ -261,61 +279,89 @@ for rejection in \
             printf '{"interface":[]}\n' > "${FIXTURE_DIR}/imds.json"
             ;;
         imds-ip-mismatch)
-            jq '.interface[0].ipv4.ipAddress[0].privateIpAddress = "10.188.33.70"' \
-                "${FIXTURE_DIR}/imds.json" > "${FIXTURE_DIR}/next.json"
-            mv "${FIXTURE_DIR}/next.json" "${FIXTURE_DIR}/imds.json"
+            transform_json imds.json '.interface[0].ipv4.ipAddress[0].privateIpAddress = "10.188.33.70"'
             ;;
         imds-mac-mismatch)
-            jq '.interface[0].macAddress = "00155D188330"' "${FIXTURE_DIR}/imds.json" > "${FIXTURE_DIR}/next.json"
-            mv "${FIXTURE_DIR}/next.json" "${FIXTURE_DIR}/imds.json"
+            transform_json imds.json '.interface[0].macAddress = "00155D188330"'
             ;;
         imds-duplicate-candidate)
-            jq '.interface[0].ipv4.ipAddress |= . + .' "${FIXTURE_DIR}/imds.json" > "${FIXTURE_DIR}/next.json"
-            mv "${FIXTURE_DIR}/next.json" "${FIXTURE_DIR}/imds.json"
+            transform_json imds.json '.interface[0].ipv4.ipAddress |= . + .'
             ;;
         missing-metadata)
-            rm -- "$metadata"
+            rm -- "$METADATA"
             ;;
         missing-key)
-            sed -i '/^COREOS_AZURE_IPV4_DYNAMIC=/d' "$metadata"
+            sed -i '/^COREOS_AZURE_IPV4_DYNAMIC=/d' "$METADATA"
             ;;
         duplicate-key)
-            printf 'COREOS_AZURE_IPV4_DYNAMIC=192.0.2.17\n' >> "$metadata"
+            printf 'COREOS_AZURE_IPV4_DYNAMIC=192.0.2.17\n' >> "$METADATA"
             ;;
     esac
-    run_helper failure
-    pass
-done
+}
 
-CASE_NAME=rpm-only-packaging-and-appended-drop-in
-for mode in RPM PORTAGE; do
-    rootfs="${WORK_DIR}/rootfs-${mode}"
-    mkdir -p "${rootfs}/etc/systemd/system" "${rootfs}/usr/bin"
-    # Source the real entry point; it must decide whether to load the RPM hook.
-    (
-        export PACKAGE_SOURCE_MODE="$mode"
-        source "${OEM_FILES}/manglefs.sh" "$rootfs"
+test_rejections() {
+    local rejection
+    local rejections=(
+        route-command-fails route-empty route-malformed route-ambiguous route-missing-prefsrc
+        source-ip-not-assigned invalid-ipv4 link-scope-only
+        imds-curl-error imds-invalid-json imds-empty-interface imds-ip-mismatch
+        imds-mac-mismatch imds-duplicate-candidate missing-metadata missing-key duplicate-key
     )
-    installed_helper="${rootfs}/usr/libexec/azure-metadata-ipv4"
-    installed_dropin="${rootfs}/usr/lib/systemd/system/coreos-metadata.service.d/20-azure-ipv4.conf"
-    if [[ "$mode" == RPM ]]; then
-        cmp "$HELPER" "$installed_helper" || fail "installed helper differs from source"
-        cmp "$DROPIN" "$installed_dropin" || fail "installed drop-in differs from source"
-        [[ "$(stat -c '%a' "$installed_helper")" == 755 ]] || fail "helper mode is not 0755"
-        [[ "$(stat -c '%a' "$installed_dropin")" == 644 ]] || fail "drop-in mode is not 0644"
-    else
-        [[ ! -e "$installed_helper" && ! -L "$installed_helper" ]] || fail "helper leaked into PORTAGE"
-        [[ ! -e "$installed_dropin" && ! -L "$installed_dropin" ]] || fail "drop-in leaked into PORTAGE"
-    fi
-done
-grep -Fxq 'ExecStartPost=/usr/libexec/azure-metadata-ipv4' "$DROPIN" || fail "missing appended helper command"
-[[ "$(grep -Ec '^[[:space:]]*ExecStartPost[[:space:]]*=' "$DROPIN")" == 1 ]] || fail "expected exactly one appended command"
-if grep -Eq '^[[:space:]]*ExecStartPost[[:space:]]*=[[:space:]]*$' "$DROPIN"; then
-    fail "drop-in resets existing ExecStartPost commands"
-fi
-if grep -Eq '^[[:space:]]*After[[:space:]]*=.*coreos-metadata\.service' "$DROPIN"; then
-    fail "metadata service orders after itself"
-fi
-pass
 
-printf '=== PASS: %d offline Azure metadata IPv4 regression cases ===\n' "$CASE_COUNT"
+    for rejection in "${rejections[@]}"; do
+        new_rejection_fixture "$rejection"
+        run_helper failure
+        pass
+    done
+}
+
+test_rpm_only_packaging_and_appended_dropin() {
+    local mode rootfs installed_helper installed_dropin
+
+    CASE_NAME=rpm-only-packaging-and-appended-drop-in
+    for mode in RPM PORTAGE; do
+        rootfs="${WORK_DIR}/rootfs-${mode}"
+        mkdir -p "${rootfs}/etc/systemd/system" "${rootfs}/usr/bin"
+        # Source the real entry point; it must decide whether to load the RPM hook.
+        (
+            export PACKAGE_SOURCE_MODE="$mode"
+            source "${OEM_FILES}/manglefs.sh" "$rootfs"
+        )
+        installed_helper="${rootfs}/usr/libexec/azure-metadata-ipv4"
+        installed_dropin="${rootfs}/usr/lib/systemd/system/coreos-metadata.service.d/20-azure-ipv4.conf"
+        if [[ "$mode" == RPM ]]; then
+            cmp "$HELPER" "$installed_helper" || fail "installed helper differs from source"
+            cmp "$DROPIN" "$installed_dropin" || fail "installed drop-in differs from source"
+            [[ "$(stat -c '%a' "$installed_helper")" == 755 ]] || fail "helper mode is not 0755"
+            [[ "$(stat -c '%a' "$installed_dropin")" == 644 ]] || fail "drop-in mode is not 0644"
+        else
+            [[ ! -e "$installed_helper" && ! -L "$installed_helper" ]] || fail "helper leaked into PORTAGE"
+            [[ ! -e "$installed_dropin" && ! -L "$installed_dropin" ]] || fail "drop-in leaked into PORTAGE"
+        fi
+    done
+    grep -Fxq 'ExecStartPost=/usr/libexec/azure-metadata-ipv4' "$DROPIN" || fail "missing appended helper command"
+    [[ "$(grep -Ec '^[[:space:]]*ExecStartPost[[:space:]]*=' "$DROPIN")" == 1 ]] || fail "expected exactly one appended command"
+    if grep -Eq '^[[:space:]]*ExecStartPost[[:space:]]*=[[:space:]]*$' "$DROPIN"; then
+        fail "drop-in resets existing ExecStartPost commands"
+    fi
+    if grep -Eq '^[[:space:]]*After[[:space:]]*=.*coreos-metadata\.service' "$DROPIN"; then
+        fail "metadata service orders after itself"
+    fi
+    pass
+}
+
+main() {
+    check_prerequisites
+    setup_workspace
+
+    test_correction_and_regeneration_preserve_first_backup
+    test_already_correct_byte_identical_without_backup
+    test_nonfirst_nic_and_ip_with_lowercase_colon_mac
+    test_genuinely_assigned_10_10_10_10_is_allowed
+    test_rejections
+    test_rpm_only_packaging_and_appended_dropin
+
+    printf '=== PASS: %d offline Azure metadata IPv4 regression cases ===\n' "$CASE_COUNT"
+}
+
+main "$@"
