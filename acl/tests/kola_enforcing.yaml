@@ -29,20 +29,6 @@ tests:
       - platforms: [azure]
         reason: Azure version depends on discovery.etcd.io, which is unmaintained.
 
-  - name: acl.flannel.udp
-    exceptions:
-      - architectures: [aarch64]
-        reason: Flannel UDP coverage is registered only for amd64
-      - platforms: [azure]
-        reason: Azure version depends on discovery.etcd.io, which is unmaintained.
-  - name: acl.flannel.vxlan
-    exceptions:
-      - platforms: [qemu]
-        architectures: [aarch64]
-        reason: Flakiness on TCG-emulated arm64 in aclmain, failures due to slow device enumeration.
-      - platforms: [azure]
-        reason: Azure version depends on discovery.etcd.io, which is unmaintained.
-
   - name: acl.internet
     exceptions:
       - platforms: [qemu]
