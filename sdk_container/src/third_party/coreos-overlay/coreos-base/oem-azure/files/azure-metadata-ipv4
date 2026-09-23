@@ -24,16 +24,12 @@ check_metadata_file() {
 }
 
 read_route_source() {
-    local route octets octet
+    local route
 
     route=$(ip -j -4 route get 168.63.129.16) || fail "cannot determine the Azure route"
     interface=$(jq -er 'select(length == 1) | .[0].dev | strings' <<< "$route") || fail "missing route interface"
     ipv4=$(jq -er 'select(length == 1) | .[0].prefsrc | strings' <<< "$route") || fail "missing route source IPv4"
     [[ "$ipv4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fail "invalid route source IPv4"
-    IFS=. read -r -a octets <<< "$ipv4"
-    for octet in "${octets[@]}"; do
-        (( 10#$octet <= 255 )) || fail "invalid route source IPv4"
-    done
 }
 
 check_interface_address() {
