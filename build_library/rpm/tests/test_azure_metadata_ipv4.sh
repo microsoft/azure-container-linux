@@ -264,7 +264,7 @@ new_rejection_fixture() {
             ;;
         invalid-ipv4)
             # Assignment and IMDS deliberately agree: IPv4 validation must reject it.
-            new_fixture "$rejection" 10.188.33.999
+            new_fixture "$rejection" 10.188.33.1024
             ;;
         link-scope-only)
             transform_json addresses.json '.[0].addr_info[0].scope = "link"'
