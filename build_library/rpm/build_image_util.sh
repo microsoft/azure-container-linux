@@ -601,8 +601,7 @@ EOF
         die "tridentd.socket not found in image - trident RPM missing (trident is required for ACL)"
     fi
     info "RPM mode: Enabling tridentd.socket"
-    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sockets.target.wants"
-    sudo ln -sf ../tridentd.socket "${root_fs_dir}/usr/lib/systemd/system/sockets.target.wants/tridentd.socket"
+    sudo systemctl enable --root="${root_fs_dir}" tridentd.socket
 
     # Create /var/lib/nfs directories needed by rpc-statd and NFS server via tmpfiles
     # The nfs-utils RPM only creates v4recovery; sm and sm.bak are missing from the package

@@ -84,7 +84,7 @@ def LoadPartitionConfig(options):
       '_comment', 'type', 'num', 'label', 'blocks', 'block_size', 'fs_blocks',
       'fs_block_size', 'fs_type', 'features', 'uuid', 'part_alignment', 'mount',
       'binds', 'fs_subvolume', 'fs_bytes_per_inode', 'fs_inode_size', 'fs_label',
-      'fs_compression', 'verity_hash', 'legacy_verity_offset'))
+      'fs_compression', 'verity_hash', 'legacy_inline_verity'))
   integer_layout_keys = set((
       'blocks', 'block_size', 'fs_blocks', 'fs_block_size', 'part_alignment',
       'fs_bytes_per_inode', 'fs_inode_size'))
@@ -825,7 +825,7 @@ def Verity(options):
   inactive slot is skipped naturally.
 
   A partition with both a verity_hash cross-reference and
-  legacy_verity_offset set to true gets the hash tree written to *both*
+  legacy_inline_verity set to true gets the hash tree written to *both*
   locations (dedicated partition + inline within the data partition), so
   boot paths that only know the legacy inline offset keep working
   unmodified alongside consumers that expect a dedicated hash partition.
@@ -903,7 +903,7 @@ def Verity(options):
       verityout = SudoOutput(verity_cmd).decode('utf8')
       print(verityout.strip())
 
-      if hash_part and part.get('legacy_verity_offset'):
+      if hash_part and part.get('legacy_inline_verity'):
         # Also write an identical copy of the hash tree inline, appended
         # after the filesystem within the data partition itself, for boot
         # paths (e.g. Portage/bootengine) that don't yet know how to
