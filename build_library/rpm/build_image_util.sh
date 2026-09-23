@@ -593,15 +593,21 @@ EOF
     fi
 
     # Enable tridentd.socket - listens for trident API requests.
-    # trident is a required component of ACL images: a missing unit means the
-    # trident RPM was not installed, i.e. a broken image. Fail the build now
+    # trident-acl (and thus tridentd.socket) is only installed on UKI-ACL
+    # images (package_catalog.sh scopes it to BOOTLOADER_MODE=uki, since
+    # GRUB-ACL has no Trident A/B-update support and never installs it).
+    # A missing unit on UKI is still a broken image - fail the build now
     # rather than leave a dangling wants-symlink and ship an image whose
     # provisioning socket never activates.
-    if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/tridentd.socket" ]]; then
-        die "tridentd.socket not found in image - trident RPM missing (trident is required for ACL)"
+    if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
+        if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/tridentd.socket" ]]; then
+            die "tridentd.socket not found in image - trident RPM missing (trident is required for UKI-ACL)"
+        fi
+        info "RPM mode: Enabling tridentd.socket"
+        sudo systemctl enable --root="${root_fs_dir}" tridentd.socket
+    else
+        info "RPM mode: Skipping tridentd.socket (trident is UKI-only)"
     fi
-    info "RPM mode: Enabling tridentd.socket"
-    sudo systemctl enable --root="${root_fs_dir}" tridentd.socket
 
     # Create /var/lib/nfs directories needed by rpc-statd and NFS server via tmpfiles
     # The nfs-utils RPM only creates v4recovery; sm and sm.bak are missing from the package
