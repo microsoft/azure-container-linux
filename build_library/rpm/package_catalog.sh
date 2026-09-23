@@ -50,11 +50,16 @@ _catalog_tsv_cmd() {
     python3 "${_CATALOG_DIR}/parse_catalog.py" "$yaml_file"
 }
 
-while IFS=$'\t' read -r key value arch; do
+while IFS=$'\t' read -r key value arch bootloader; do
     [[ -z "$key" ]] && continue
     # Apply architecture filter: if the entry has an arch restriction and
     # it doesn't match the current board, mark it SKIP.
+    # Apply bootloader filter: if the entry has a bootloader restriction and
+    # it doesn't match BOOTLOADER_MODE, mark it SKIP (e.g. trident-acl is
+    # only useful/installed on the UKI boot path).
     if [[ -n "$arch" && "$arch" != "null" && "$arch" != "$_board_arch" ]]; then
+        PACKAGE_CATALOG["$key"]="SKIP"
+    elif [[ -n "$bootloader" && "$bootloader" != "null" && "$bootloader" != "${BOOTLOADER_MODE:-}" ]]; then
         PACKAGE_CATALOG["$key"]="SKIP"
     else
         PACKAGE_CATALOG["$key"]="$value"
@@ -78,7 +83,7 @@ catalog_filter_by_arch() {
 
     # Re-read arch constraints from YAML and apply
     local _key _arch
-    while IFS=$'\t' read -r _key _ _arch; do
+    while IFS=$'\t' read -r _key _ _arch _; do
         [[ -z "$_key" ]] && continue
         if [[ -n "$_arch" && "$_arch" != "null" && "$_arch" != "$target_arch" ]]; then
             PACKAGE_CATALOG["$_key"]="SKIP"
