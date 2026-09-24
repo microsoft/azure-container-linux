@@ -963,14 +963,18 @@ EOF
         if [[ -f "${verity_hash_file}" ]]; then
           bootloader_args+=(--verity_hash="${verity_hash_file}")
         fi
-        # Pass UUID files for UUID-based cmdline construction
-        local verity_uuid_file="${BUILD_DIR}/${image_name%.bin}_verity_uuid.txt"
-        if [[ -f "${verity_uuid_file}" ]]; then
-          bootloader_args+=(--verity_uuid="${verity_uuid_file}")
-        fi
-        local fs_uuid_file="${BUILD_DIR}/${image_name%.bin}_fs_uuid.txt"
-        if [[ -f "${fs_uuid_file}" ]]; then
-          bootloader_args+=(--fs_uuid="${fs_uuid_file}")
+        if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
+          # UKI cmdline construction is UUID-based (dedicated hash partition);
+          # GRUB reverted to inline verity (PARTUUID+hash-offset) and doesn't
+          # consume these.
+          local verity_uuid_file="${BUILD_DIR}/${image_name%.bin}_verity_uuid.txt"
+          if [[ -f "${verity_uuid_file}" ]]; then
+            bootloader_args+=(--verity_uuid="${verity_uuid_file}")
+          fi
+          local fs_uuid_file="${BUILD_DIR}/${image_name%.bin}_fs_uuid.txt"
+          if [[ -f "${fs_uuid_file}" ]]; then
+            bootloader_args+=(--fs_uuid="${fs_uuid_file}")
+          fi
         fi
       fi
     else
