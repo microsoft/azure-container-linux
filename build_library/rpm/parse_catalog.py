@@ -37,12 +37,11 @@ def parse_catalog(path):
             return
         if mode == "list":
             rpms = " ".join(current_list)
-            print(f"{current_key}\t{rpms}\tnull\tnull")
+            print(f"{current_key}\t{rpms}\tnull")
         elif mode == "obj":
             rpm = current_obj.get("rpm", "SKIP")
             arch = current_obj.get("arch", "null")
-            bootloader = current_obj.get("bootloader", "null")
-            print(f"{current_key}\t{rpm}\t{arch}\t{bootloader}")
+            print(f"{current_key}\t{rpm}\t{arch}")
 
     for raw in lines:
         line = raw.rstrip("\n")
