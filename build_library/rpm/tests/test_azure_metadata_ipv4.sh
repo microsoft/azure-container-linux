@@ -4,7 +4,7 @@
 #
 # Offline regression checks for the Azure RPM metadata correction.
 # Usage: bash build_library/rpm/tests/test_azure_metadata_ipv4.sh
-# Run in the SDK: Bash/jq are real; ip/curl only serve local fixtures.
+# Bash/jq are real; ip/curl are local fixtures, so no SDK or network is needed.
 
 set -euo pipefail
 export LC_ALL=C
@@ -33,8 +33,8 @@ pass() {
 check_prerequisites() {
     local dependency asset
 
-    for dependency in bash jq curl ip; do
-        command -v "$dependency" > /dev/null || fail "missing SDK dependency: $dependency"
+    for dependency in bash jq; do
+        command -v "$dependency" > /dev/null || fail "missing dependency: $dependency"
     done
     for asset in "$HELPER" "$DROPIN" "${OEM_FILES}/manglefs.sh" "${OEM_FILES}/manglefs_rpm.sh"; do
         [[ -f "$asset" ]] || fail "missing source asset: $asset"
