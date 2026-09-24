@@ -942,6 +942,7 @@ EOF
   fi
 
   rm -rf "${BUILD_DIR}"/configroot
+  rm -f "${BUILD_DIR}"/.*_manifest_packages.tmp
   cleanup_mounts "${root_fs_dir}"
   trap - EXIT
 
