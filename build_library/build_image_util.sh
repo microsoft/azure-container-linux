@@ -965,7 +965,7 @@ EOF
         fi
         if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
           # UKI cmdline construction is UUID-based (dedicated hash partition);
-          # GRUB reverted to inline verity (PARTUUID+hash-offset) and doesn't
+          # GRUB uses inline verity (PARTUUID+hash-offset) instead and doesn't
           # consume these.
           local verity_uuid_file="${BUILD_DIR}/${image_name%.bin}_verity_uuid.txt"
           if [[ -f "${verity_uuid_file}" ]]; then
