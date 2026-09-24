@@ -55,7 +55,7 @@ The `/usr` partition (USR-A) is a read-only btrfs filesystem with zstd compressi
 
 - The verity hash tree is stored in a dedicated hash partition (HASH-A, immediately following USR-A on disk).
 - At boot, `systemd-veritysetup` activates the verity device using slot-specific parameters delivered via a per-slot systemd-stub addon: `systemd.verity_usr_data=PARTUUID=<usr-data-partition>`, `systemd.verity_usr_hash=PARTUUID=<usr-hash-partition>`, and `systemd.verity_usr_options=panic-on-corruption`.
-- The main UKI cmdline stays slot-independent (`mount.usr=/dev/mapper/usr`); Trident switches slots by swapping which addon is active in `<uki>.efi.extra.d/`, so the same signed UKI boots either A or B. (The secondary GRUB boot path instead builds the verity cmdline from filesystem/verity UUIDs, `UUID=<btrfs-uuid>` / `UUID=<verity-uuid>`.)
+- The main UKI cmdline stays slot-independent (`mount.usr=/dev/mapper/usr`); Trident switches slots by swapping which addon is active in `<uki>.efi.extra.d/`, so the same signed UKI boots either A or B. (The secondary GRUB boot path is out of scope for A/B update and is unchanged: it still uses the inline PARTUUID + hash-offset verity cmdline on the existing non-UKI partition layout.)
 - Any corruption of `/usr` causes an immediate kernel panic, preventing the system from running a tampered image.
 
 The A/B partition scheme (USR-A / USR-B) enables safe updates: the inactive slot is written, verified, and then atomically switched on reboot.
