@@ -234,6 +234,8 @@ tests:
       - platforms: [azure]
         reason: Test expects installer-written cloud-config to own hostname, which conflicts with Azure hostname handling
 
+  - name: cl.metadata.azure
+
   - name: acl.network.initramfs.second-boot
     exceptions:
       - platforms: [azure]

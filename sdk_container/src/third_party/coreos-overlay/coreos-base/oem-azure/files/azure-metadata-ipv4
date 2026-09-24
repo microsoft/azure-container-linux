@@ -1,0 +1,85 @@
+#!/bin/bash
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# WireServer SharedConfig can contain an address that is not assigned to the VM.
+# Normalize the legacy field before coreos-metadata.service releases consumers.
+set -euo pipefail
+export LC_ALL=C
+
+metadata=""
+interface=""
+ipv4=""
+mac=""
+
+fail() {
+    echo "azure-metadata-ipv4: $*" >&2
+    exit 1
+}
+
+check_metadata_file() {
+    metadata="${1:-/run/metadata/flatcar}"
+    [[ $# -le 1 && -f "$metadata" && ! -L "$metadata" ]] || fail "expected a metadata file"
+    [[ "$(grep -c '^COREOS_AZURE_IPV4_DYNAMIC=' "$metadata")" == 1 ]] || fail "expected one Azure IPv4 field"
+}
+
+read_route_source() {
+    local route
+
+    route=$(ip -j -4 route get 168.63.129.16) || fail "cannot determine the Azure route"
+    interface=$(jq -er 'select(length == 1) | .[0].dev | strings' <<< "$route") || fail "missing route interface"
+    ipv4=$(jq -er 'select(length == 1) | .[0].prefsrc | strings' <<< "$route") || fail "missing route source IPv4"
+    [[ "$ipv4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fail "invalid route source IPv4"
+}
+
+check_interface_address() {
+    local addresses
+
+    # Do not pass -4 here: iproute omits the link-layer MAC in that output mode.
+    addresses=$(ip -j address show dev "$interface") || fail "cannot read route interface addresses"
+    jq -e --arg interface "$interface" --arg ip "$ipv4" '
+        length == 1 and .[0].ifname == $interface and
+        any(.[0].addr_info[]; .family == "inet" and .scope == "global" and .local == $ip)
+    ' <<< "$addresses" > /dev/null || fail "route source IPv4 is not assigned to the interface"
+    mac=$(jq -er '.[0].address | strings | ascii_downcase | gsub(":"; "")' <<< "$addresses") || fail "missing interface MAC"
+    [[ "$mac" =~ ^[0-9a-f]{12}$ ]] || fail "invalid interface MAC"
+}
+
+check_imds_address() {
+    local imds
+
+    # Bind to the selected interface and bypass proxies. Do not follow redirects or
+    # guess interface/IP array indices: match this interface's MAC and assigned IP.
+    imds=$(curl --noproxy '*' --interface "$interface" --proto '=http' \
+        --fail --silent --show-error --connect-timeout 2 --max-time 10 --max-filesize 1048576 \
+        -H 'Metadata: true' 'http://169.254.169.254/metadata/instance/network?api-version=2021-02-01') \
+        || fail "cannot verify the private IPv4 with IMDS"
+    jq -e --arg mac "$mac" --arg ip "$ipv4" '
+        [.interface[] | select((.macAddress | ascii_downcase | gsub(":"; "")) == $mac)
+         | .ipv4.ipAddress[] | select(.privateIpAddress == $ip)] | length == 1
+    ' <<< "$imds" > /dev/null || fail "IMDS does not agree with the route interface and IPv4"
+}
+
+update_metadata() {
+    if grep -Fxq "COREOS_AZURE_IPV4_DYNAMIC=$ipv4" "$metadata"; then
+        return 0
+    fi
+
+    # Keep the first uncorrected result for diagnostics during this boot. sed's
+    # replacement is atomic and preserves the metadata file's permissions/context.
+    if [[ ! -e "${metadata}.wireserver" ]]; then
+        cp --preserve=all -- "$metadata" "${metadata}.wireserver"
+    fi
+    sed -i "s/^COREOS_AZURE_IPV4_DYNAMIC=.*/COREOS_AZURE_IPV4_DYNAMIC=$ipv4/" "$metadata"
+    echo "azure-metadata-ipv4: using $ipv4 on $interface (verified against IMDS)"
+}
+
+main() {
+    check_metadata_file "$@"
+    read_route_source
+    check_interface_address
+    check_imds_address
+    update_metadata
+}
+
+main "$@"
