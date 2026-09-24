@@ -872,15 +872,16 @@ TMPFILES_KDUMP
 
     # Ensure /etc/kdump.conf exists with a default config.
     # kdumpctl expects this file to determine the dump target.
-    # dracut_args --tmpdir /var/crash: use ext4 ROOT partition for dracut's
-    #   scratch space instead of /tmp (tmpfs) to avoid tmpfs space pressure
-    #   when building the kdump initramfs.
+    # dracut_args:
+    #   --tmpdir /var/crash: use ext4 ROOT for dracut scratch (avoids tmpfs pressure)
+    #   -o "setup-root ignition": crash kernel cannot mount dm-verity /usr, so
+    #     these modules must be excluded to prevent emergency.target on aarch64
     sudo tee "${root_fs_dir}/etc/kdump.conf" > /dev/null <<'KDUMP_CONF'
 # kdump configuration for ACL
 # Dump to local filesystem
 path /var/crash
 core_collector makedumpfile -l --message-level 7 -d 31
-dracut_args --tmpdir /var/crash
+dracut_args --tmpdir /var/crash -o "setup-root ignition"
 KDUMP_CONF
 
     # kdumpctl constructs the kernel path as:
@@ -899,6 +900,9 @@ KDUMP_CONF
 # The kernel is copied here by the kdump.service ExecStartPre drop-in.
 KDUMP_BOOTDIR="/var/crash"
 KDUMP_IMG="vmlinuz"
+# Crash kernel cmdline: nr_cpus=1 avoids SMP hang on aarch64,
+# irqpoll + reset_devices ensure stable device access post-panic.
+KDUMP_COMMANDLINE_APPEND="irqpoll nr_cpus=1 reset_devices"
 KDUMP_SYSCONFIG
 }
 
@@ -1085,30 +1089,6 @@ SYSUSERS_EOF
         | sudo tee "${root_fs_dir}/usr/lib/systemd/system/etcd-member.service" > /dev/null
     # etcd-wrapper.conf -> /usr/lib/tmpfiles.d/ (creates /var/lib/etcd 0700 etcd:etcd)
     sudo cp "${etcd_wrapper_src}/etcd-wrapper.conf" "${root_fs_dir}/usr/lib/tmpfiles.d/etcd-wrapper.conf"
-}
-
-# Install flannel service units into the rootfs so Ignition can enable them.
-# Same rationale as etcd-member.service above: Ignition runs before sysext
-# merge, so it can't read [Install] sections from sysext-only unit files.
-# The flannel-wrapper binary stays in the docker sysext (it depends on Docker).
-_configure_flannel_services_rpm() {
-    local root_fs_dir="$1"
-
-    local flannel_wrapper_src="${SCRIPT_ROOT}/sdk_container/src/third_party/coreos-overlay/app-admin/flannel-wrapper/files"
-    local flannel_version="0.14.0"
-    if [[ ! -d "${flannel_wrapper_src}" ]]; then
-        die "flannel-wrapper source not found at ${flannel_wrapper_src}"
-    fi
-
-    info "RPM mode: Installing flannel service units into rootfs (Ignition visibility)"
-    # flanneld.service (substitute image tag)
-    sed "s|@FLANNEL_IMAGE_TAG@|v${flannel_version}|g" \
-        "${flannel_wrapper_src}/flanneld.service" \
-        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/flanneld.service" > /dev/null
-    # flannel-docker-opts.service (substitute image tag)
-    sed "s|@FLANNEL_IMAGE_TAG@|v${flannel_version}|g" \
-        "${flannel_wrapper_src}/flannel-docker-opts.service" \
-        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/flannel-docker-opts.service" > /dev/null
 }
 
 # CIS Level 1 hardening
@@ -1389,7 +1369,6 @@ finish_image_post_tmpfiles_rpm() {
     _remove_unused_systemd_components_rpm "${root_fs_dir}"
     _configure_pcrlock_rpm "${root_fs_dir}"
     _configure_etcd_rpm "${root_fs_dir}"
-    _configure_flannel_services_rpm "${root_fs_dir}"
     _configure_kdump_rpm "${root_fs_dir}"
     _configure_misc_rpm "${root_fs_dir}"
     _configure_cis_hardening_rpm "${root_fs_dir}"
@@ -1445,6 +1424,35 @@ finish_image_backup_etc_rpm() {
     info "RPM mode: Copying /etc to ${ETC_FULL_PATH} for overlay lowerdir"
     sudo rm -rf "${ETC_FULL_PATH}"
     sudo cp -a "${root_fs_dir}/etc" "${ETC_FULL_PATH}"
+}
+
+# Write the image's package list and SPDX manifest from the final rpmdb.
+finish_image_package_manifest_rpm() {
+    local root_fs_dir="$1"
+    local image_base_name="$2"
+
+    if [[ -z "${BUILD_DIR:-}" ]]; then
+        die "RPM mode: BUILD_DIR is not set — cannot write the image package list"
+    fi
+
+    local packages_file="${BUILD_DIR}/${image_base_name}_packages.txt"
+
+    info "RPM mode: Writing ${packages_file##*/}"
+    rpm_query_packages "${root_fs_dir}" > "${packages_file}"
+    if [[ ! -s "${packages_file}" ]]; then
+        die "RPM mode: No packages in ${root_fs_dir}"
+    fi
+
+    local created_epoch
+    created_epoch=$(stat -c '%Y' "${root_fs_dir}/usr/lib/os-release")
+
+    write_package_manifest \
+        image \
+        "${root_fs_dir}" \
+        "${image_base_name}" \
+        "${IMAGE_VERSION_ID}${IMAGE_BUILD_ID:++${IMAGE_BUILD_ID}}" \
+        "${packages_file}" \
+        "${created_epoch}"
 }
 
 # Escape a string for JSON - handles quotes, backslashes, and control characters

@@ -1,0 +1,29 @@
+From 1299975ad7844e95b95f90214801ed6c12ae9ea0 Mon Sep 17 00:00:00 2001
+From: Sean Dougherty <sdougherty@microsoft.com>
+Date: Mon, 31 Aug 2026 17:45:00 +0000
+Subject: [PATCH] container: Allow log reader runtime probes
+
+Fluent Bit probes VM overcommit and sysfs state during startup. Preserve the
+read-only access available to the default container domain without granting
+broad sysctl or sysfs access to container_logreader_t.
+
+Signed-off-by: Sean Dougherty <sdougherty@microsoft.com>
+---
+ policy/modules/services/container.te | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/policy/modules/services/container.te b/policy/modules/services/container.te
+index e244da8..5402ec4 100644
+--- a/policy/modules/services/container.te
++++ b/policy/modules/services/container.te
+@@ -626,6 +626,8 @@ logging_read_audit_log(container_logreader_t)
+ logging_list_logs(container_logreader_t)
+ allow container_logreader_t logfile:lnk_file read_lnk_file_perms;
+ allow container_logreader_t container_log_t:file watch;
++kernel_read_vm_overcommit_sysctl(container_logreader_t)
++dev_read_sysfs(container_logreader_t)
+ 
+ optional_policy(`
+ 	systemd_read_journal_files(container_logreader_t)
+--
+2.51.0
