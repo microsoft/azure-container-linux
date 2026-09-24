@@ -84,7 +84,7 @@ def LoadPartitionConfig(options):
       '_comment', 'type', 'num', 'label', 'blocks', 'block_size', 'fs_blocks',
       'fs_block_size', 'fs_type', 'features', 'uuid', 'part_alignment', 'mount',
       'binds', 'fs_subvolume', 'fs_bytes_per_inode', 'fs_inode_size', 'fs_label',
-      'fs_compression', 'verity_hash', 'legacy_inline_verity'))
+      'fs_compression', 'verity_hash'))
   integer_layout_keys = set((
       'blocks', 'block_size', 'fs_blocks', 'fs_block_size', 'part_alignment',
       'fs_bytes_per_inode', 'fs_inode_size'))
