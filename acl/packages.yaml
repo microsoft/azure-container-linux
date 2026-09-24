@@ -33,3 +33,4 @@ packages:
   - microcode_ctl       # CPU microcode updater (Fedora import)
   - runc                # Pre-merge validation of Azure Linux container runtime changes
   - selinux-policy      # SELinux reference policy (ACL-specific modules)
+  - walinuxagent-acl-config # Prevent waagent from activating sshd.service
