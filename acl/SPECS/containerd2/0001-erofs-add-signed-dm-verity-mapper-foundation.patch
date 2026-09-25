@@ -539,12 +539,13 @@ index 8039b3350..2f4d70901 100644
  	"github.com/containerd/containerd/v2/internal/fsview"
  	"github.com/containerd/errdefs"
  	"github.com/erofs/go-erofs"
-@@ -43,6 +44,14 @@ func handleMount(m mount.Mount) (fsview.View, error) {
+@@ -43,6 +44,15 @@ func handleMount(m mount.Mount) (fsview.View, error) {
  		return nil, errdefs.ErrNotImplemented
  	}
  
 +	for _, opt := range m.Options {
-+		if strings.HasPrefix(opt, dmverity.MountOptionRootHashPrefix) ||
++		if strings.HasPrefix(opt, dmverity.MountOptionModePrefix) ||
++			strings.HasPrefix(opt, dmverity.MountOptionRootHashPrefix) ||
 +			strings.HasPrefix(opt, dmverity.MountOptionSignatureDigestPrefix) {
 +			// Direct userspace access would bypass the dm-verity mount handler.
 +			return nil, fmt.Errorf("dm-verity EROFS mount requires kernel mount handling: %w", errdefs.ErrNotImplemented)
@@ -556,4 +557,3 @@ index 8039b3350..2f4d70901 100644
  		return nil, err
 -- 
 2.43.0
-

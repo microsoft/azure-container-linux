@@ -5,7 +5,7 @@
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.4
-Release: 6028.verity%{?dist}
+Release: 6030.verity%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -139,6 +139,10 @@ fi
 %dir %{_prefix}/lib/systemd/system/containerd.service.d
 
 %changelog
+* Fri Sep 25 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6030.verity
+- Route locally formatted dm-verity EROFS layers through kernel mounts instead
+  of attempting a direct filesystem view without their external data devices.
+
 * Thu Sep 17 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6028.verity
 - Replace the previous signed EROFS carry with the reviewed two-commit compact
   v1 referrer implementation while preserving the IPE-aware runtime profile.
