@@ -19,8 +19,8 @@ acl_security_profile_cache_failure() {
     mv -f "${temporary_failure_cache}" "${ACL_SECURITY_PROFILE_FAILURE_CACHE}"
 }
 
-acl_security_profile_parse() {
-    acl_usrbin jq -ser '
+acl_security_profile_jq_filter() {
+    cat <<'JQ'
         if length != 1 then
             error("IMDS response must contain exactly one JSON document")
         elif (.[0] | type) != "array" then
@@ -30,19 +30,24 @@ acl_security_profile_parse() {
             |
             [
                 $document[]
-                | select(type == "object" and .name? == "acl-node-security-profile")
+                | select(type == "object" and .name? == $tag)
             ] as $matches
             | if ($matches | length) == 0 then
-                ""
+                {present: false, value: ""}
               elif ($matches | length) > 1 then
-                error("duplicate acl-node-security-profile tags")
+                error("duplicate security profile tags")
               elif ($matches[0].value | type) != "string" then
-                error("acl-node-security-profile value is not a string")
+                error("security profile tag value is not a string")
               else
-                $matches[0].value
+                {present: true, value: $matches[0].value}
               end
         end
-    '
+JQ
+}
+
+acl_security_profile_parse() {
+    acl_usrbin jq -ser --arg tag "acl-node-security-profile" \
+        "$(acl_security_profile_jq_filter) | .value"
 }
 
 acl_security_profile() {

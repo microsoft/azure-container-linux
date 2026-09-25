@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source "${SCRIPT_DIR}/build_library/rpm/additional_files/acl-node-security-profile.sh"
+
 SSH_OPTS=()
 SECURITY_PROFILE_TAG_NAME="acl-node-security-profile"
 ORIGINAL_SECURITY_PROFILE_STATE=""
@@ -26,25 +28,8 @@ imds_security_profile_state() {
     raw=$(ssh_cmd "curl -sf -H Metadata:true --noproxy '*' \
         'http://169.254.169.254/metadata/instance/compute/tagsList?api-version=2021-02-01'" \
         2>/dev/null) || return 1
-    jq -sce --arg tag "${SECURITY_PROFILE_TAG_NAME}" '
-        if length != 1 then
-            error("IMDS response must contain exactly one JSON document")
-        elif (.[0] | type) != "array" then
-            error("IMDS tagsList response is not an array")
-        else
-            .[0] as $document
-            | [$document[] | select(type == "object" and .name? == $tag)] as $matches
-            | if ($matches | length) == 0 then
-                {present: false, value: ""}
-              elif ($matches | length) > 1 then
-                error("duplicate security profile tags")
-              elif ($matches[0].value | type) != "string" then
-                error("security profile tag value is not a string")
-              else
-                {present: true, value: $matches[0].value}
-              end
-        end
-    ' <<<"$raw"
+    jq -sce --arg tag "${SECURITY_PROFILE_TAG_NAME}" \
+        "$(acl_security_profile_jq_filter)" <<<"${raw}"
 }
 
 imds_security_profile() {

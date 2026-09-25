@@ -19,6 +19,7 @@ set -euo pipefail
 
 source "${SCRIPT_DIR}/acl/validate/validate_common.sh"
 source "${SCRIPT_DIR}/acl/tests/azure-security-profile-test-common.sh"
+source "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-permissive-test.sh"
 # Reuse the exact same key=value profile parser the in-guest loader uses,
 # so the host-side test can never disagree with production parsing.
 source "${SCRIPT_DIR}/build_library/rpm/additional_files/acl-node-security-profile.sh"
@@ -90,6 +91,7 @@ assert_ipe_mode() {
 assert_ipe_assets_present() {
     local expected_active="${1:-0}"
     local cmdline usr_hash expected_signature_path policy_hash policy_active
+    local verity_usr_options verity_sig_path
     cmdline=$(ssh_cmd "cat /proc/cmdline")
 
     if [[ " ${cmdline} " == *" ipe.enforce="* ]]; then
@@ -97,11 +99,7 @@ assert_ipe_assets_present() {
         return 1
     fi
     # Verify the policy hash token is present on cmdline
-    policy_hash="$(
-        tr ' ' '\n' <<< "${cmdline}" |
-            sed -n 's/^acl\.ipe\.policy_sha256=//p' |
-            head -n 1
-    )"
+    policy_hash="$(ipe_cmdline_field "${cmdline}" acl.ipe.policy_sha256)"
     if ! [[ "${policy_hash}" =~ ^[0-9a-f]{64}$ ]]; then
         error "acl.ipe.policy_sha256 token is missing or malformed in UKI cmdline"
         return 1
@@ -118,18 +116,16 @@ assert_ipe_assets_present() {
         error "IPE policy active state is '${policy_active}', expected '${expected_active}'"
         return 1
     fi
-    usr_hash="$(
-        tr ' ' '\n' <<< "${cmdline}" |
-            sed -n 's/^usrhash=//p' |
-            head -n 1 |
-            tr '[:upper:]' '[:lower:]'
-    )"
+    usr_hash="$(ipe_cmdline_field "${cmdline}" usrhash)"
+    usr_hash="${usr_hash,,}"
     if ! [[ "${usr_hash}" =~ ^[[:xdigit:]]{64}$ ]]; then
         error "Valid /usr root hash is missing from the UKI"
         return 1
     fi
     expected_signature_path="/.extra/credentials/verity-usr-${usr_hash}.p7s.cred"
-    if [[ "${cmdline}" != *"root-hash-signature=${expected_signature_path}"* ]]; then
+    verity_usr_options="$(ipe_cmdline_field "${cmdline}" systemd.verity_usr_options)"
+    verity_sig_path="$(ipe_cmdline_field "${verity_usr_options}" root-hash-signature ',')"
+    if [[ "${verity_sig_path}" != "${expected_signature_path}" ]]; then
         error "Hash-matched /usr root-hash signature companion is missing from the UKI"
         return 1
     fi

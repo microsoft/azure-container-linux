@@ -4,14 +4,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
-AZURE_SCRIPT="${SCRIPT_DIR}/ci-automation/vendor-testing/azure.sh"
-
-eval "$(
-    sed -n \
-        -e '/^validate_trusted_launch_generation() {/,/^}/p' \
-        -e '/^should_schedule_v1() {/,/^}/p' \
-        "${AZURE_SCRIPT}"
-)"
+source "${SCRIPT_DIR}/acl/tests/ipe/offline/function-extraction.sh"
+source_test_functions "${SCRIPT_DIR}/ci-automation/vendor-testing/azure.sh" \
+    validate_trusted_launch_generation should_schedule_v1
 
 AZURE_TRUSTED_LAUNCH=true
 validate_trusted_launch_generation V2

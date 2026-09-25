@@ -9,6 +9,7 @@ trap 'rm -rf "${TEST_DIR}"' EXIT
 
 # shellcheck source=../../../../build_library/rpm/ipe_artifact.sh
 source "${SCRIPT_DIR}/build_library/rpm/ipe_artifact.sh"
+source "${SCRIPT_DIR}/acl/tests/ipe/offline/function-extraction.sh"
 
 expect_failure() {
     if "$@" >/dev/null 2>&1; then
@@ -167,7 +168,7 @@ test_argument_contracts() {
 
 test_build_wrapper_contract() {
     local build_script="${SCRIPT_DIR}/acl/build_rpm_image.sh"
-    eval "$(sed -n '/^validate_ipe_boot_path() {/,/^}/p' "${build_script}")"
+    source_test_functions "${build_script}" validate_ipe_boot_path
     error() { :; }
 
     ACL_IPE_CAPABLE=true
