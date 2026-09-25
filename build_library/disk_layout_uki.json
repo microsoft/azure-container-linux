@@ -24,7 +24,7 @@
                 "uuid": "7130c94a-213a-4e5a-8e26-6cce9662f132",
                 "type": "flatcar-rootfs",
                 "blocks": "2097152",
-                "fs_blocks": "262144",
+                "fs_blocks": "260094",
                 "fs_type": "btrfs",
                 "fs_compression": "zstd",
                 "mount": "/usr",
@@ -45,7 +45,7 @@
                 "uuid": "e03dd35c-7c2d-4a47-b3fe-27f15780a57c",
                 "type": "flatcar-rootfs",
                 "blocks": "2097152",
-                "fs_blocks": "262144",
+                "fs_blocks": "260094",
                 "verity_hash": "5"
             },
             "5": {
