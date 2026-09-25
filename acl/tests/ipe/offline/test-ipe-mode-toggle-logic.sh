@@ -127,6 +127,111 @@ test_host_imds_rejects_multiple_documents() (
     fi
 )
 
+test_shared_cmdline_fields() {
+    local cmdline='usrhash=ABC usrhash=DEF acl.ipe.policy_sha256=123 systemd.verity_usr_options=foo=bar,root-hash-signature=/expected,other=value'
+
+    [[ "$(ipe_cmdline_field "${cmdline}" usrhash)" == "ABC" ]]
+    [[ "$(ipe_cmdline_field "${cmdline}" acl.ipe.policy_sha256)" == "123" ]]
+    [[ -z "$(ipe_cmdline_field "${cmdline}" unknown)" ]]
+    [[ "$(ipe_cmdline_field \
+        "$(ipe_cmdline_field "${cmdline}" systemd.verity_usr_options)" \
+        root-hash-signature ',')" == "/expected" ]]
+}
+
+test_host_imds_matches_guest_parser() (
+    acl_usrbin() { command "$@"; }
+    local response expected_state expected_value
+
+    for response in \
+        '[]' \
+        '[{"name":"acl-node-security-profile","value":""}]' \
+        '[{"name":"acl-node-security-profile","value":"ipe=audit"}]'; do
+        ssh_cmd() { printf '%s' "${response}"; }
+        expected_state="$(imds_security_profile_state)"
+        expected_value="$(jq -r '.value' <<< "${expected_state}")"
+        [[ "$(printf '%s' "${response}" | acl_security_profile_parse)" == "${expected_value}" ]]
+    done
+    [[ "$(jq -r '.present' <<< "${expected_state}")" == "true" ]]
+    ssh_cmd() { printf '%s' '[{"name":"acl-node-security-profile","value":""}]'; }
+    [[ "$(jq -r '.present' <<< "$(imds_security_profile_state)")" == "true" ]]
+    ssh_cmd() { printf '%s' '[]'; }
+    [[ "$(jq -r '.present' <<< "$(imds_security_profile_state)")" == "false" ]]
+
+    for response in \
+        '{}' \
+        '[{"name":"acl-node-security-profile","value":null}]' \
+        '[{"name":"acl-node-security-profile","value":"ipe=audit"},{"name":"acl-node-security-profile","value":"ipe=off"}]' \
+        '[{"name":"acl-node-security-profile","value":"ipe=audit"}] []'; do
+        ssh_cmd() { printf '%s' "${response}"; }
+        if imds_security_profile_state >/dev/null 2>&1 ||
+            printf '%s' "${response}" | acl_security_profile_parse >/dev/null 2>&1; then
+            echo "host or guest accepted invalid IMDS response: ${response}" >&2
+            return 1
+        fi
+    done
+)
+
+mock_guest_cmdline() {
+    cat() {
+        if [[ "$1" == "/proc/cmdline" ]]; then
+            printf 'usrhash=not-a-hash\n'
+        else
+            command cat "$@"
+        fi
+    }
+    export -f cat
+}
+
+test_streamed_guest_contains_cmdline_parser() (
+    local payload="${TMPDIR:-/tmp}/ipe-guest-payload.$$"
+    trap 'rm -f "${payload}" "${payload}.out"' EXIT
+    VM_SSH_USER=tester
+    VM_IP=test-vm
+    ssh() { cat > "${payload}"; }
+
+    run_permissive_validation
+    bash -n "${payload}"
+    grep -Fq 'ipe_cmdline_field() {' "${payload}"
+    grep -Fq 'usr_hash="$(ipe_cmdline_field "${cmdline}" usrhash)"' "${payload}"
+    mock_guest_cmdline
+    if bash -s < "${payload}" > "${payload}.out" 2>&1; then
+        echo "Streamed guest script accepted an invalid root hash" >&2
+        return 1
+    fi
+    grep -Fq 'FAILED: could not read the /usr dm-verity SHA-256 root hash from the command line' \
+        "${payload}.out"
+)
+
+test_copied_guest_script_needs_no_sibling_file() (
+    local test_dir script output_log
+    test_dir="$(mktemp -d)"
+    trap 'rm -rf "${test_dir}"' EXIT
+    script="${SCRIPT_DIR}/acl/tests/ipe/run-ipe-permissive-test.sh"
+    output_log="${test_dir}/output"
+    VM_SSH_USER=tester
+    VM_SSH_KEY=unused
+    SCRIPT_RESULTS_NAMES=()
+    SCRIPT_RESULTS_STATUS=()
+    info() { :; }
+    error() { :; }
+    scp() {
+        local source_file="${@: -2:1}"
+        cp "${source_file}" "${test_dir}/$(basename "${source_file}")"
+    }
+    ssh() {
+        mock_guest_cmdline
+        bash "${test_dir}/$(basename "${script}")" > "${output_log}" 2>&1
+    }
+
+    if run_scripts_on_vm test-vm "${script}"; then
+        echo "Guest script accepted an invalid root hash" >&2
+        return 1
+    fi
+    grep -Fq 'FAILED: could not read the /usr dm-verity SHA-256 root hash from the command line' \
+        "${output_log}"
+    [[ "${SCRIPT_RESULTS_STATUS[0]}" -eq 1 ]]
+)
+
 test_cleanup_preserves_primary_failure() {
     local status
 
@@ -192,6 +297,10 @@ test_acl_security_profile_value_reused
 test_security_profile_updates_preserve_unrelated_keys
 test_tag_state_distinguishes_absent_from_empty
 test_host_imds_rejects_multiple_documents
+test_shared_cmdline_fields
+test_host_imds_matches_guest_parser
+test_streamed_guest_contains_cmdline_parser
+test_copied_guest_script_needs_no_sibling_file
 test_cleanup_preserves_primary_failure
 test_cleanup_reboots_after_any_mutation
 

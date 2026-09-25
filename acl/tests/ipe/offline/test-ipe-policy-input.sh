@@ -11,6 +11,7 @@ trap 'rm -rf "${TEST_DIR}"' EXIT
 source "${SCRIPT_DIR}/build_library/rpm/rpm_install.sh"
 source "${SCRIPT_DIR}/build_library/rpm/ipe_verity.sh"
 source "${SCRIPT_DIR}/build_library/rpm/ipe_artifact.sh"
+source "${SCRIPT_DIR}/acl/tests/ipe/offline/function-extraction.sh"
 
 info() { :; }
 die() { echo "$*" >&2; exit 1; }
@@ -225,12 +226,8 @@ test_markerless_ipe_assets_are_rejected() {
     local artifact_dir="${TEST_DIR}/markerless-artifact"
     local esp_dir="${TEST_DIR}/markerless-esp"
 
-    eval "$(
-        sed -n \
-            -e '/^has_ipe_assets() {/,/^}/p' \
-            -e '/^validate_ipe_marker_consistency() {/,/^}/p' \
-            "${image_to_vm}"
-    )"
+    source_test_functions "${image_to_vm}" \
+        has_ipe_assets validate_ipe_marker_consistency
 
     mkdir -p "${artifact_dir}/acl-ipe-policy" "${esp_dir}/EFI/Linux/acl.efi.extra.d"
     : > "${artifact_dir}/acl-ipe-policy/acl-ipe-policy.p7b.cred"
@@ -288,7 +285,7 @@ test_incomplete_or_mismatched_cert_pair_rejected() {
 
 test_markerless_secure_boot_cert_remains_disabled() {
     local build_script="${SCRIPT_DIR}/acl/build_rpm_image.sh"
-    eval "$(sed -n '/^load_artifact_ipe_signing_mode() {/,/^}/p' "${build_script}")"
+    source_test_functions "${build_script}" load_artifact_ipe_signing_mode
     configure_ipe_mode() { :; }
     error() { echo "$*" >&2; }
 
@@ -311,13 +308,9 @@ test_markerless_secure_boot_cert_remains_disabled() {
 
 test_pure_vm_reuse_skips_local_artifact() {
     local build_script="${SCRIPT_DIR}/acl/build_rpm_image.sh"
-    eval "$(
-        sed -n \
-            -e '/^operation_uses_vm_image() {/,/^}/p' \
-            -e '/^operation_uses_gallery_image() {/,/^}/p' \
-            -e '/^operation_uses_local_image_artifact() {/,/^}/p' \
-            "${build_script}"
-    )"
+    source_test_functions "${build_script}" \
+        operation_uses_vm_image operation_uses_gallery_image \
+        operation_uses_local_image_artifact
 
     BUILD_IMAGE=false
     BUILD_VM_IMAGE=false
@@ -340,7 +333,7 @@ test_pure_vm_reuse_skips_local_artifact() {
 test_reused_vm_type_loaded_from_state() {
     local build_script="${SCRIPT_DIR}/acl/build_rpm_image.sh"
     local state_file="${TEST_DIR}/vm-state.env"
-    eval "$(sed -n '/^load_reused_vm_type() {/,/^}/p' "${build_script}")"
+    source_test_functions "${build_script}" load_reused_vm_type
     error() { echo "$*" >&2; }
 
     REUSE_VM=true

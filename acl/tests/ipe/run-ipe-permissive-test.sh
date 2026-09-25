@@ -3,6 +3,26 @@
 
 set -euo pipefail
 
+ipe_cmdline_field() {
+    local input="$1" name="$2" delimiter="${3:- }" field
+    local -a fields=()
+
+    IFS="${delimiter}" read -r -a fields <<< "${input}"
+    for field in "${fields[@]}"; do
+        if [[ "${field}" == "${name}="* ]]; then
+            printf '%s\n' "${field#*=}"
+            return 0
+        fi
+    done
+    printf '\n'
+}
+
+# Sourcing exposes the parser to the host test without running guest assertions.
+# Stdin scripts have no BASH_SOURCE path, so they still execute on the guest.
+if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    return 0
+fi
+
 POLICY_NAME="acl_ipe_boot_policy"
 IPE_DIR="/sys/kernel/security/ipe"
 POLICY_DIR="${IPE_DIR}/policies/${POLICY_NAME}"
@@ -23,25 +43,13 @@ echo "Kernel command line: ${cmdline}"
 if [[ " ${cmdline} " == *" ipe.enforce="* ]]; then
     fail "IPE mode must be selected at runtime, not by the signed kernel command line"
 fi
-usr_hash="$(
-    tr ' ' '\n' <<< "${cmdline}" |
-        sed -n 's/^usrhash=//p' |
-        head -n 1 |
-        tr '[:upper:]' '[:lower:]'
-)"
+usr_hash="$(ipe_cmdline_field "${cmdline}" usrhash)"
+usr_hash="${usr_hash,,}"
 if ! [[ "${usr_hash}" =~ ^[[:xdigit:]]{64}$ ]]; then
     fail "could not read the /usr dm-verity SHA-256 root hash from the command line"
 fi
-verity_usr_options="$(
-    tr ' ' '\n' <<< "${cmdline}" |
-        sed -n 's/^systemd\.verity_usr_options=//p' |
-        head -n 1
-)"
-verity_sig_path="$(
-    tr ',' '\n' <<< "${verity_usr_options}" |
-        sed -n 's/^root-hash-signature=//p' |
-        head -n 1
-)"
+verity_usr_options="$(ipe_cmdline_field "${cmdline}" systemd.verity_usr_options)"
+verity_sig_path="$(ipe_cmdline_field "${verity_usr_options}" root-hash-signature ',')"
 expected_verity_sig_path="/.extra/credentials/verity-usr-${usr_hash}.p7s.cred"
 if [[ "${verity_sig_path}" != "${expected_verity_sig_path}" ]]; then
     fail "signed /usr root-hash signature does not match the UKI root hash"

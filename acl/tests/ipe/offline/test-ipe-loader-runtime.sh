@@ -16,6 +16,13 @@ make_credential() {
     printf 'test-credential-content\n' > "${path}"
 }
 
+write_hashed_cmdline() {
+    local credential="$1" prefix="${2:-}" hash
+    hash="$(sha256sum "${credential}" | cut -d' ' -f1)" || return 1
+    printf '%sacl.ipe.policy_sha256=%s\n' \
+        "${prefix:+${prefix} }" "${hash}" > "${CASE_DIR}/cmdline"
+}
+
 prepare_case() {
     local name="$1"
     CASE_DIR="${TMP_DIR}/${name}"
@@ -84,9 +91,7 @@ run_inactive_case() {
     local name="$1" imds_mode="$2"
     prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
-    local h
-    h="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
-    printf 'flatcar.oem.id=azure acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
 
     # Override IMDS to return the requested inactive-style mode
     cat > "${CASE_DIR}/security-profile.sh" <<EOF
@@ -122,9 +127,7 @@ run_active_case() {
     # Keep the writer blocked while the simulated kernel creates the policy
     # directory after accepting the first byte.
     dd if=/dev/zero bs=65536 count=64 >> "${CASE_DIR}/credential.p7b.cred" 2>/dev/null
-    local h
-    h="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
-    printf 'flatcar.oem.id=azure acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
 
     cat > "${CASE_DIR}/security-profile.sh" <<EOF
 acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
@@ -162,9 +165,7 @@ EOF
 test_enforcing_mode_safe_fallback() {
     prepare_case enforcing-fallback
     make_credential "${CASE_DIR}/credential.p7b.cred"
-    local h
-    h="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
-    printf 'flatcar.oem.id=azure acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
 
     cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
 acl_security_profile() { printf '%s\n' 'ipe=enforcing'; }
@@ -222,9 +223,7 @@ test_symlink_credential() {
         echo "skipping test_symlink_credential (symlinks not supported)"
         return 0
     fi
-    local h
-    h="$(sha256sum "${CASE_DIR}/real.cred" | cut -d' ' -f1)"
-    printf 'acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
+    write_hashed_cmdline "${CASE_DIR}/real.cred"
     assert_best_effort_skip "credential must not be a symlink" \
         "${CASE_DIR}/credential.p7b.cred"
 }
@@ -243,9 +242,7 @@ test_mismatched_credential() {
 test_missing_ipe_interface() {
     prepare_case no-ipe
     make_credential "${CASE_DIR}/credential.p7b.cred"
-    local h
-    h="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
-    printf 'acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred"
     # Remove the IPE directory to simulate missing kernel support
     rm -rf "${IPE_DIR}"
     mkdir "${IPE_DIR}"
@@ -257,9 +254,7 @@ test_missing_ipe_interface() {
 test_rejected_write() {
     prepare_case rejected-write
     make_credential "${CASE_DIR}/credential.p7b.cred"
-    local h
-    h="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
-    printf 'acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred"
     # Make new_policy a directory to simulate write rejection
     rm "${IPE_DIR}/new_policy"
     mkdir "${IPE_DIR}/new_policy"
@@ -271,9 +266,7 @@ test_rejected_write() {
 test_preexisting_ambiguity() {
     prepare_case preexisting
     make_credential "${CASE_DIR}/credential.p7b.cred"
-    local h
-    h="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
-    printf 'acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred"
     mkdir -p "${IPE_DIR}/policies/acl_ipe_boot_policy"
     assert_best_effort_skip "IPE already has a loaded policy" \
         "${CASE_DIR}/credential.p7b.cred"
@@ -283,9 +276,7 @@ test_preexisting_ambiguity() {
 test_other_preexisting_ambiguity() {
     prepare_case other-preexisting
     make_credential "${CASE_DIR}/credential.p7b.cred"
-    local h
-    h="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
-    printf 'acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred"
     mkdir -p "${IPE_DIR}/policies/another_policy"
     assert_best_effort_skip "IPE already has a loaded policy" \
         "${CASE_DIR}/credential.p7b.cred"
@@ -295,9 +286,7 @@ test_other_preexisting_ambiguity() {
 test_missing_security_profile_helper() {
     prepare_case missing-profile-helper
     make_credential "${CASE_DIR}/credential.p7b.cred"
-    local h
-    h="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
-    printf 'acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred"
     rm "${CASE_DIR}/security-profile.sh"
     assert_best_effort_skip "security profile helper is missing or unreadable" \
         "${CASE_DIR}/credential.p7b.cred"
@@ -307,9 +296,7 @@ test_missing_security_profile_helper() {
 test_incomplete_security_profile_helper() {
     prepare_case incomplete-profile-helper
     make_credential "${CASE_DIR}/credential.p7b.cred"
-    local h
-    h="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
-    printf 'acl.ipe.policy_sha256=%s\n' "${h}" > "${CASE_DIR}/cmdline"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred"
     cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
 acl_security_profile() { printf '%s\n' 'ipe=off'; }
 EOF
@@ -369,6 +356,20 @@ test_best_effort_service_wiring() {
         { echo "service missing StandardError=journal+console" >&2; return 1; }
 }
 
+test_hashed_cmdline_helper() {
+    prepare_case hashed-cmdline
+    make_credential "${CASE_DIR}/credential.p7b.cred"
+    local expected_hash
+    expected_hash="$(sha256sum "${CASE_DIR}/credential.p7b.cred" | cut -d' ' -f1)"
+
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
+    [[ "$(<"${CASE_DIR}/cmdline")" == "flatcar.oem.id=azure acl.ipe.policy_sha256=${expected_hash}" ]]
+
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred"
+    [[ "$(<"${CASE_DIR}/cmdline")" == "acl.ipe.policy_sha256=${expected_hash}" ]]
+}
+
+test_hashed_cmdline_helper
 test_absent_token
 test_missing_cmdline
 test_valid_inactive_load
