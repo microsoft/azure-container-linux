@@ -38,7 +38,7 @@
                 "label": "HASH-A",
                 "uuid": "b736baf1-cdb4-4535-beba-ddaaa30ad7b7",
                 "type": "dps-usr-verity",
-                "blocks": "20480"
+                "blocks": "16400"
             },
             "4": {
                 "label": "USR-B",
@@ -52,7 +52,7 @@
                 "label": "HASH-B",
                 "uuid": "35bdf78b-c453-4661-98e6-f834f534ef5b",
                 "type": "dps-usr-verity",
-                "blocks": "20480"
+                "blocks": "16400"
             },
             "6": {
                 "label": "OEM",
