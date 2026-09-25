@@ -155,7 +155,42 @@ Build the Flatcar production image using RPM package sources.
 ./acl/build_rpm_image.sh --rebuild
 ```
 
+Development and test images can include IPE assets signed with a build-local
+ephemeral PKCS#7 signature:
+
+```bash
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit --ipe-signing-mode=ephemeral
+```
+
+Production IPE validation builds use `--ipe-signing-mode=esrp`; normal
+production pipeline defaults remain `--ipe-mode=disabled` until activation is
+approved. The build still creates a build-local ephemeral candidate CMS so
+pre-publish VHDs remain bootable; the Pipelines collector exports the staged
+raw policy from `${BUILD_DIR}/acl-ipe-policy/` for downstream ESRP signing by
+definition 5425.
+
+```bash
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit --ipe-signing-mode=esrp
+```
+
+The candidate CMS is staged at
+`${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred` and installed as a
+per-UKI `.extra.d` credential companion. The UKI cmdline includes an
+`acl.ipe.policy_sha256=<hash>` token that binds the credential to the signed
+kernel command line. At boot, the initramfs loader validates the credential
+SHA-256, loads the policy into the kernel IPE subsystem, and only activates it
+when Azure IMDS requests audit (permissive) mode. Loading is best effort on
+Azure; validation or loading failures are logged and leave IPE inactive
+without blocking boot. `enforcing` is reserved for future use: it is rejected
+at build time, and a manually set runtime `ipe=enforcing` request is logged
+as unsupported and left safely inactive — it never fails boot.
+
+IPE-capable VM images currently support only the Azure Secure Boot UKI path.
+QEMU image conversion must use `--ipe-mode=disabled`, which is also the
+default.
+
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
+
 
 ### Phase 4: Build VM Image (Optional)
 
@@ -322,6 +357,20 @@ By default, before starting a new Azure VM, all the pre-existing resource groups
 ./acl/build_rpm_image.sh --start-vm --vm-type=azure --no-cleanup
 ```
 
+For an IPE-capable local VHD, the artifact directory must contain an exact
+`ipe-signing-mode` marker (`ephemeral` or `esrp`, newline terminated) and the
+matching X.509 certificate at `uki-signing-ca.pem`. The Azure launcher derives
+Trusted Launch, vTPM, Secure Boot, and gallery certificate enrollment from
+those artifacts. It fails before publishing or provisioning if the contract
+is incomplete. Azure conversion keeps both sidecars next to the output VHD,
+and the generic vendor runner retrieves them with buildcache-hosted VHDs.
+
+`--az-vm-args` remains available for unrelated `az vm create` options, but it
+cannot override the selected image, VM size on ARM64, or the Trusted Launch,
+vTPM, and Secure Boot settings. For IPE-capable local VHDs, an existing
+deterministic gallery version is not reused because its image and enrolled
+certificate identity cannot be verified.
+
 You can also use the `--run-script` flag to run tests on the Azure VM, just like with the QEMU VM.
 
 #### Access the VM
@@ -482,6 +531,17 @@ AZURE_SUBSCRIPTION_ID="<your-subscription-id>" \
 AZURE_TOKEN_CREDENTIALS=AzureCLICredential \
   ./run_azure_tests.sh amd64 2 cl.ignition.v1.once coreos.ignition.once
 ```
+
+When the selected local VHD is IPE-capable, `run_azure_tests.sh` reads the
+same adjacent marker and certificate and passes exactly one matching
+Trusted Launch/Secure Boot contract to kola. Raw test arguments cannot
+override the image source, generation, Trusted Launch, Secure Boot,
+certificate, or gallery mode.
+
+`AZURE_USE_GALLERY=--azure-use-gallery` still starts from the selected local
+VHD, so its IPE certificate is validated and enrolled when the gallery image
+is created. `AZURE_DISK_URI`, by contrast, selects a pre-existing gallery
+image version; local certificate injection is not possible on that path.
 
 **Arguments:**
 

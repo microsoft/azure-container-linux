@@ -35,6 +35,16 @@
 # - results-azure-detailed.md, results-azure-detailed.tap
 # - Detailed test output below __TESTS__/azure/
 
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=build_library/rpm/ipe_artifact.sh
+source "${SCRIPT_ROOT}/build_library/rpm/ipe_artifact.sh"
+
+configure_local_ipe_azure_trust() {
+  local host_image="$1"
+  local container_image="$2"
+  ipe_configure_azure_trust "${host_image}" "${container_image}"
+}
+
 function set_azure_vars() {
   local arch="${1}"
   local parallel="${2}"
@@ -45,7 +55,11 @@ function set_azure_vars() {
     img_name="acl_production_azure_test_image"
   fi
 
-  local azure_image="/work/__build__/images/images/${arch}-usr/latest/${img_name}.vhd"
+  local relative_image="__build__/images/images/${arch}-usr/latest/${img_name}.vhd"
+  local host_image="${SCRIPT_ROOT}/${relative_image}"
+  local azure_image="/work/${relative_image}"
+
+  configure_local_ipe_azure_trust "${host_image}" "${azure_image}" || return 1
 
   # Verify az login session is active
   if ! az account show &>/dev/null; then
@@ -99,7 +113,11 @@ ${AZURE_TOKEN_CREDENTIALS:+export AZURE_TOKEN_CREDENTIALS="${AZURE_TOKEN_CREDENT
 ${AZURE_amd64_MACHINE_SIZE:+export AZURE_amd64_MACHINE_SIZE="${AZURE_amd64_MACHINE_SIZE}"}
 ${AZURE_arm64_MACHINE_SIZE:+export AZURE_arm64_MACHINE_SIZE="${AZURE_arm64_MACHINE_SIZE}"}
 ${AZURE_KOLA_VNET:+export AZURE_KOLA_VNET="${AZURE_KOLA_VNET}"}
-${AZURE_USE_GALLERY:+export AZURE_USE_GALLERY="${AZURE_USE_GALLERY}"}
+${AZURE_USE_GALLERY:+export AZURE_USE_GALLERY=${AZURE_USE_GALLERY@Q}}
+${AZURE_TRUSTED_LAUNCH:+export AZURE_TRUSTED_LAUNCH="${AZURE_TRUSTED_LAUNCH}"}
+${AZURE_SECURE_BOOT_CERTIFICATES:+export AZURE_SECURE_BOOT_CERTIFICATES=${AZURE_SECURE_BOOT_CERTIFICATES@Q}}
+${ACL_IPE_CAPABLE:+export ACL_IPE_CAPABLE=${ACL_IPE_CAPABLE@Q}}
+${ACL_IPE_SIGNING_MODE:+export ACL_IPE_SIGNING_MODE=${ACL_IPE_SIGNING_MODE@Q}}
 ${AZURE_RESOURCE_GROUP_TAG:+export AZURE_RESOURCE_GROUP_TAG="${AZURE_RESOURCE_GROUP_TAG}"}
 ${AZURE_DISK_URI:+export AZURE_DISK_URI=${AZURE_DISK_URI@Q}}
 ${KOLA_TRUSTED_SOURCE_CIDR:+export KOLA_TRUSTED_SOURCE_CIDR=${KOLA_TRUSTED_SOURCE_CIDR@Q}}
@@ -135,7 +153,7 @@ function run_azure_tests() (
   fi
 
   source ci-automation/test.sh || exit 1
-  set_azure_vars "${arch}" "${parallel}"
+  set_azure_vars "${arch}" "${parallel}" || return 1
 
   echo "================================="
   echo "Using Mantle docker image '${mantle_container}'"

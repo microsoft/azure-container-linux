@@ -21,6 +21,8 @@ assert_not_root_user
 . "${BUILD_LIBRARY_DIR}/build_image_util.sh" || exit 1
 . "${BUILD_LIBRARY_DIR}/vm_image_util.sh" || exit 1
 . "${BUILD_LIBRARY_DIR}/cros_vm_constants.sh" || exit 1
+# shellcheck disable=SC1091 # BUILD_LIBRARY_DIR is initialized by common.sh.
+. "${BUILD_LIBRARY_DIR}/rpm/ipe_artifact.sh" || exit 1
 
 # UKI mode uses a dedicated disk layout without BIOS and unused partitions
 if [[ "${BOOTLOADER_MODE:-}" == "uki" ]]; then
@@ -136,15 +138,67 @@ install_oem_package
 install_oem_sysext
 run_fs_hook
 
+has_ipe_assets() {
+    local artifact_dir="$1" esp_dir="$2"
+
+    [[ -e "${artifact_dir}/acl-ipe-policy/acl-ipe-policy.p7b.cred" ]] ||
+        find "${esp_dir}/EFI/Linux" -type f \
+            \( -path '*.efi.extra.d/acl-ipe-policy.p7b.cred' \
+            -o -path '*.efi.extra.d/verity-usr-*.p7s.cred' \) \
+            -print -quit 2>/dev/null |
+            grep -q .
+}
+
+validate_ipe_marker_consistency() {
+    local artifact_dir="$1" esp_dir="$2"
+    local signing_mode
+
+    signing_mode="$(ipe_resolve_artifact_signing_mode "${artifact_dir}")" ||
+        return 1
+    if [[ "${signing_mode}" == "disabled" ]] &&
+        has_ipe_assets "${artifact_dir}" "${esp_dir}"; then
+        echo "IPE assets are present without a valid ipe-signing-mode marker" >&2
+        return 1
+    fi
+    printf '%s\n' "${signing_mode}"
+}
+
 # Sign UKI EFI files with an ephemeral key for Secure Boot testing. At this
 # point the ESP is still mounted at ${VM_TMP_ROOT}/boot with all EFI files in
 # place (UKI + addons). The public certificate is written to the image
 # output directory so _write_qemu_uefi_secure_conf() can enroll it in the OVMF
 # Secure Boot db.
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]; then
+    ipe_signing_mode="$(
+        validate_ipe_marker_consistency "${FLAGS_from}" "${VM_TMP_ROOT}/boot"
+    )" || die_notrace "IPE artifact metadata is inconsistent with installed assets"
+    if [[ "${ipe_signing_mode}" != "disabled" ]]; then
+        ephemeral_cert_dir="${FLAGS_from}/acl-ipe-ephemeral"
+        "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" \
+            "${ephemeral_cert_dir}" require ||
+            die_notrace "IPE artifact has missing or invalid signing material"
+        bash "${BUILD_LIBRARY_DIR}/rpm/verify_ipe_signer_continuity.sh" \
+            "${ephemeral_cert_dir}" \
+            "${FLAGS_from}" \
+            "${VM_TMP_ROOT}/boot" ||
+            die_notrace "IPE artifact signing material does not match its policy and verity signatures"
+    else
+        # Disabled images still need one shared Secure Boot signer across test
+        # and production conversions, but source artifacts may be read-only.
+        ephemeral_cert_dir="${ACL_EPHEMERAL_CERT_DIR:-$(dirname "${FLAGS_to}")/.acl-secureboot-signing}"
+        "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" \
+            "${ephemeral_cert_dir}" create ||
+            die_notrace "Failed to prepare the per-build Secure Boot certificate"
+    fi
     "${BUILD_LIBRARY_DIR}/rpm/sign_uki_ephemeral.sh" \
         "${VM_TMP_ROOT}/boot" \
-        "$(_dst_dir)"
+        "$(_dst_dir)" \
+        "${ephemeral_cert_dir}"
+    if [[ "${ipe_signing_mode}" == "disabled" ]]; then
+        rm -f "$(_dst_dir)/ipe-signing-mode"
+    else
+        printf '%s\n' "${ipe_signing_mode}" > "$(_dst_dir)/ipe-signing-mode"
+    fi
 fi
 
 # Changes done, glue it together
