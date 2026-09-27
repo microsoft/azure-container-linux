@@ -260,6 +260,26 @@ assert_local_ipe_artifact_contract() {
     printf 'PASS: local IPE artifact contract is fail-closed\n'
 }
 
+assert_arm_size_override_is_ipe_scoped() {
+    BOARD=arm64-usr
+    SECURE_BOOT_ENABLED=true
+    AZ_VM_ARGS="--siz=Standard_D2ps_v6"
+
+    ACL_IPE_CAPABLE=false
+    if ! _enforce_arm_security_contract; then
+        printf 'FAIL: non-IPE ARM launch rejected an abbreviation allowed before this PR\n' >&2
+        return 1
+    fi
+
+    ACL_IPE_CAPABLE=true
+    if _enforce_arm_security_contract >/dev/null 2>&1; then
+        printf 'FAIL: IPE-capable ARM launch accepted a VM size override\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: ARM size abbreviation protection is IPE-scoped\n'
+}
+
 assert_classification SkuNotAvailable \
     "The requested VM size is not available in this location." \
     1 RETRYABLE_VM_CREATE_ERROR
@@ -293,6 +313,7 @@ assert_classification AuthorizationFailed \
 ( assert_ipe_contract_rejects_before_az )
 ( assert_ipe_vm_argv_is_canonical )
 ( assert_local_ipe_artifact_contract )
+( assert_arm_size_override_is_ipe_scoped )
 
 assert_vm_size_family_parsing() {
     local test_case vm_size expected actual

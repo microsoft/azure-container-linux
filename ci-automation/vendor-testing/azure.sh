@@ -100,8 +100,6 @@ reconcile_buildcache_ipe_sidecars() {
 
 azure_use_gallery_args=()
 ipe_split_argument_string azure_use_gallery_args "${AZURE_USE_GALLERY:-}"
-ipe_reject_kola_managed_overrides true "${azure_use_gallery_args[@]}"
-validate_kola_test_arguments "$@"
 
 board="${CIA_ARCH}-usr"
 basename="ci-${CIA_VERNUM//+/-}-${CIA_ARCH}"
@@ -134,6 +132,10 @@ if [[ -z "${AZURE_DISK_URI:-}" ]]; then
 fi
 
 ipe_configure_azure_trust "${AZURE_IMAGE_NAME:-}" "${AZURE_IMAGE_NAME:-}"
+if [[ "${ACL_IPE_CAPABLE:-false}" == "true" ]]; then
+    ipe_reject_kola_managed_overrides true "${azure_use_gallery_args[@]}"
+    validate_kola_test_arguments "$@"
+fi
 
 validate_trusted_launch_generation() {
     local hyperv_gen="$1"
@@ -155,15 +157,14 @@ run_kola_tests() {
     local instance_tapfile="${1}"; shift
     local hyperv_gen sku
 
-    ipe_reject_kola_managed_overrides false "$@" || return 1
+    if [[ "${ACL_IPE_CAPABLE:-false}" == "true" ]]; then
+        ipe_reject_kola_managed_overrides false "$@" || return 1
+    fi
     if [ "${instance_type}" = "V1" ]; then
         hyperv_gen="V1"
         sku="alpha"
         # v5 is the last to support Gen 1. Only amd64 uses Gen 1.
         instance_type="Standard_D2s_v5"
-        if [[ -z "${AZURE_DISK_URI:-}" && ${#azure_use_gallery_args[@]} -gt 0 ]]; then
-            set -- --azure-use-gallery "${@}"
-        fi
     else
         hyperv_gen="V2"
         sku="alpha-gen2"
@@ -218,6 +219,11 @@ run_kola_tests() {
         done
     fi
 
+    local legacy_gallery_args=()
+    if [[ "${ACL_IPE_CAPABLE:-false}" != "true" ]]; then
+        legacy_gallery_args=("${azure_use_gallery_args[@]}")
+    fi
+
     timeout --signal=SIGQUIT 6h \
       kola run \
       ${debug_flag} \
@@ -235,6 +241,7 @@ run_kola_tests() {
       --azure-hyper-v-generation="${hyperv_gen}" \
       "${trusted_launch_args[@]}" \
       "${secure_boot_certificate_args[@]}" \
+      "${legacy_gallery_args[@]}" \
       ${AZURE_KOLA_VNET:+--azure-kola-vnet=${AZURE_KOLA_VNET}} \
       ${azure_vnet_subnet_name:+--azure-vnet-subnet-name=${azure_vnet_subnet_name}} \
       ${AZURE_USE_PRIVATE_IPS:+--azure-use-private-ips=${AZURE_USE_PRIVATE_IPS}} \

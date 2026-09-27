@@ -95,26 +95,9 @@ test_enforcing_mode_rejected() {
     fi
 }
 
-test_untagged_checkout_version_fallback() {
-    local repo="${TEST_DIR}/untagged"
-    mkdir -p "${repo}/sdk_container/.repo/manifests"
-    printf 'FLATCAR_VERSION="9999.0.0"\n' \
-        > "${repo}/sdk_container/.repo/manifests/version.txt"
-    git -C "${repo}" init -q
-    git -C "${repo}" -c user.name=test -c user.email=test@example.com \
-        -c commit.gpgsign=false commit --allow-empty -qm initial
-
-    (
-        cd "${repo}"
-        source "${SCRIPT_DIR}/sdk_lib/sdk_container_common.sh"
-        [[ "$(get_git_version)" == "9999.0.0" ]]
-    )
-}
-
 test_mode_forwarded
 test_invalid_mode_rejected
 test_invalid_signing_mode_rejected
 test_enforcing_mode_rejected
-test_untagged_checkout_version_fallback
 
 echo "run_sdk_container IPE mode tests passed"

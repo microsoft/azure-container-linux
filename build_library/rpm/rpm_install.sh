@@ -725,13 +725,8 @@ rpm_install_package_using_portage_name() {
         local source=$(get_package_status "$dep")
         case "$source" in
             RPM)
-                local rpm_names
-                rpm_names=$(get_rpm_package_name "$dep")
-                if [[ -n "$rpm_names" ]]; then
-                    local mapped_rpms=()
-                    read -r -a mapped_rpms <<< "$rpm_names"
-                    rpm_pkgs+=("${mapped_rpms[@]}")
-                fi
+                local rpm_name=$(get_rpm_package_name "$dep")
+                [[ -n "$rpm_name" ]] && rpm_pkgs+=("$rpm_name")
                 ;;
             PORTAGE)
                 portage_pkgs+=("$dep")
@@ -764,8 +759,7 @@ rpm_install_package_using_portage_name() {
     if [[ ${#rpm_pkgs[@]} -gt 0 ]]; then
         info "Step 3: Installing RPM packages..."
         # Remove duplicates
-        local unique_rpm_pkgs=()
-        mapfile -t unique_rpm_pkgs < <(printf '%s\n' "${rpm_pkgs[@]}" | sort -u)
+        local unique_rpm_pkgs=($(printf '%s\n' "${rpm_pkgs[@]}" | sort -u))
         rpm_install_package "${root_fs_dir}" "${unique_rpm_pkgs[@]}" || {
             error "Failed to install RPM packages during RPM mode installation"
             error "Root filesystem: ${root_fs_dir}"

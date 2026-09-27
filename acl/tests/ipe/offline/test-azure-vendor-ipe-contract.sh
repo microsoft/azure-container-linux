@@ -164,6 +164,14 @@ test_trailing_override_is_rejected_before_kola() {
         return 1
     fi
     [[ ! -e "${KOLA_ARGS_LOG}" ]]
+
+    if AZURE_IMAGE_NAME="${image}" \
+        AZURE_USE_GALLERY="--azure-trusted-launch=false" \
+        run_vendor "${root}" cl.basic >/dev/null 2>&1; then
+        echo "IPE-capable VHD accepted an Azure gallery launch override" >&2
+        return 1
+    fi
+    [[ ! -e "${KOLA_ARGS_LOG}" ]]
 }
 
 test_existing_gallery_injects_no_certificate() {
@@ -183,6 +191,24 @@ test_existing_gallery_injects_no_certificate() {
         echo "Existing gallery image attempted certificate injection" >&2
         return 1
     fi
+}
+
+test_disabled_vhd_keeps_legacy_kola_arguments() {
+    local root="${TEST_DIR}/disabled"
+    local artifact_dir="${root}/artifacts"
+    local image="${artifact_dir}/acl_production_azure_test_image.vhd"
+    prepare_vendor_work "${root}"
+    mkdir -p "${artifact_dir}"
+    printf 'vhd\n' > "${image}"
+    KOLA_ARGS_LOG="${root}/kola.args"
+    export KOLA_ARGS_LOG
+
+    AZURE_IMAGE_NAME="${image}" \
+    AZURE_USE_GALLERY="--azure-use-gallery=false" \
+        run_vendor "${root}" --enable-secureboot=false
+
+    assert_single_arg "--azure-use-gallery=false" "${KOLA_ARGS_LOG}"
+    assert_single_arg "--enable-secureboot=false" "${KOLA_ARGS_LOG}"
 }
 
 test_prefixed_retry_override_is_rejected_before_kola() {
@@ -246,6 +272,7 @@ test_buildcache_probe_failure_is_fatal_and_retried() {
 test_local_ipe_vhd_derives_final_kola_contract
 test_trailing_override_is_rejected_before_kola
 test_existing_gallery_injects_no_certificate
+test_disabled_vhd_keeps_legacy_kola_arguments
 test_prefixed_retry_override_is_rejected_before_kola
 test_buildcache_probe_failure_is_fatal_and_retried
 

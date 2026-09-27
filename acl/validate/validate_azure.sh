@@ -71,18 +71,24 @@ AZ_BACKUP_REGIONS="${AZ_BACKUP_REGIONS:-}"
 
 _enforce_arm_security_contract() {
     [[ "${BOARD:-amd64-usr}" == "arm64-usr" ]] || return 0
-    local -a az_vm_args=()
 
     if [[ "${SECURE_BOOT_ENABLED:-true}" != "true" ]]; then
         warn "Ignoring disabled Secure Boot setting: Azure ARM smoke VMs require Secure Boot and vTPM"
     fi
     SECURE_BOOT_ENABLED=true
 
-    ipe_split_argument_string az_vm_args "${AZ_VM_ARGS:-}"
-    if ! ipe_reject_azure_security_overrides "${az_vm_args[@]}" ||
-        ! ipe_reject_arm_size_overrides "${az_vm_args[@]}"; then
+    local forbidden_pattern='(^|[[:space:]])--(security-type|enable-vtpm|enable-secure-boot|size)(=|[[:space:]]|$)'
+    if [[ "${AZ_VM_ARGS:-}" =~ $forbidden_pattern ]]; then
         error "--az-vm-args cannot override size or Trusted Launch security settings for Azure ARM VMs"
         return 1
+    fi
+    if [[ "${ACL_IPE_CAPABLE:-false}" == "true" ]]; then
+        local -a az_vm_args=()
+        ipe_split_argument_string az_vm_args "${AZ_VM_ARGS:-}"
+        if ! ipe_reject_arm_size_overrides "${az_vm_args[@]}"; then
+            error "--az-vm-args cannot override VM size for IPE-capable Azure ARM VMs"
+            return 1
+        fi
     fi
 }
 
