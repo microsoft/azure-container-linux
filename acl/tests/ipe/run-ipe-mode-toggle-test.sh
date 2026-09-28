@@ -90,8 +90,7 @@ assert_ipe_mode() {
 
 assert_ipe_assets_present() {
     local expected_active="${1:-0}"
-    local cmdline usr_hash expected_signature_path policy_hash policy_active
-    local verity_usr_options verity_sig_path
+    local cmdline usr_hash policy_hash policy_active
     cmdline=$(ssh_cmd "cat /proc/cmdline")
 
     if [[ " ${cmdline} " == *" ipe.enforce="* ]]; then
@@ -122,11 +121,8 @@ assert_ipe_assets_present() {
         error "Valid /usr root hash is missing from the UKI"
         return 1
     fi
-    expected_signature_path="/.extra/credentials/verity-usr-${usr_hash}.p7s.cred"
-    verity_usr_options="$(ipe_cmdline_field "${cmdline}" systemd.verity_usr_options)"
-    verity_sig_path="$(ipe_cmdline_field "${verity_usr_options}" root-hash-signature ',')"
-    if [[ "${verity_sig_path}" != "${expected_signature_path}" ]]; then
-        error "Hash-matched /usr root-hash signature companion is missing from the UKI"
+    if ipe_has_root_hash_signature "${cmdline}"; then
+        error "Policy-only IPE must not require a /usr root-hash signature"
         return 1
     fi
     info "IPE assets are present and policy active state is '${policy_active}'"

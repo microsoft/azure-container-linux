@@ -29,8 +29,8 @@ set -euo pipefail
 
 ESP_DIR="${1:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir> [ephemeral-cert-dir]}"
 CERT_OUTPUT_DIR="${2:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir> [ephemeral-cert-dir]}"
-# Optional directory holding the per-build certificate shared by the UKI,
-# verity root hash, and IPE policy candidate.
+# Optional directory holding the per-build certificate shared by the UKI
+# and IPE policy candidate.
 EPHEMERAL_CERT_DIR="${3:-}"
 
 CERT_NAME="uki-signing-ca.pem"
@@ -76,16 +76,14 @@ trap 'rm -rf "${WORK_DIR}"' EXIT
 CERT_FILE="${CERT_OUTPUT_DIR}/${CERT_NAME}"
 
 if [[ -n "${EPHEMERAL_CERT_DIR}" ]]; then
-    # Reuse the cert that signed the detached verity root hash. The same cert
-    # must sign the UKI and be enrolled in the VM db so the kernel can verify
-    # that signature against .platform.
+    # Reuse the policy candidate's cert so test VMs need one enrolled signer.
     if [[ ! -s "${EPHEMERAL_CERT_DIR}/ca.key" || ! -s "${EPHEMERAL_CERT_DIR}/${CERT_NAME}" ]]; then
         error "Shared ephemeral cert not found in ${EPHEMERAL_CERT_DIR} (expected from the image build)"
         exit 1
     fi
     KEY_FILE="${EPHEMERAL_CERT_DIR}/ca.key"
     cp -f "${EPHEMERAL_CERT_DIR}/${CERT_NAME}" "${CERT_FILE}"
-    info "Reusing shared per-build ephemeral cert for UKI, verity, and IPE assets"
+    info "Reusing shared per-build ephemeral cert for UKI and IPE policy"
 else
     # No shared cert (non-IPE build): generate a standalone throwaway cert.
     KEY_FILE="${WORK_DIR}/ca.key"

@@ -28,7 +28,6 @@ switch_to_strict_mode
 # Must be sourced after flags are parsed
 . "${BUILD_LIBRARY_DIR}/toolchain_util.sh" || exit 1
 . "${BUILD_LIBRARY_DIR}/board_options.sh"  || exit 1
-. "${BUILD_LIBRARY_DIR}/rpm/ipe_verity.sh" || exit 1
 
 IPE_CAPABLE="${ACL_IPE_CAPABLE:-false}"
 case "${IPE_CAPABLE}" in
@@ -57,48 +56,6 @@ case "${FLAGS_target}" in
         die_notrace "Unknown target ${FLAGS_target}"
         ;;
 esac
-
-# systemd-stub transports the IPE policy and root-hash signatures from the
-# UKI's .extra.d companion directory into the initramfs at boot. Build-time
-# images use one ephemeral certificate for the UKI and both credentials.
-# Definition 5425 replaces all three signatures for esrp-mode images.
-IPE_VERITY_SIG_SOURCE=""
-IPE_VERITY_SIG_PATH=""
-
-_uki_ipe_prepare_verity_signature() {
-    local work_dir="$1" cert_dir="$2" roothash="$3"
-    local cert="${cert_dir}/uki-signing-ca.pem"
-    local key="${cert_dir}/ca.key"
-    local content="${work_dir}/usr-roothash.txt"
-    local filename="verity-usr-${roothash}.p7s.cred"
-    local output_sig="${work_dir}/${filename}"
-
-    IPE_VERITY_SIG_SOURCE=""
-    IPE_VERITY_SIG_PATH=""
-
-    if ! "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" ||
-        ! ipe_verity_write_roothash "${roothash}" "${content}"; then
-        error "UKI/RPM: failed to prepare /usr verity signing input"
-        return 1
-    fi
-    if ! openssl smime -sign -noattr -binary \
-            -in "${content}" -signer "${cert}" -inkey "${key}" \
-            -outform der -out "${output_sig}" 2>/dev/null ||
-        [[ ! -s "${output_sig}" ]]; then
-        error "UKI/RPM: failed to sign /usr verity root hash"
-        return 1
-    fi
-    if ! openssl smime -verify -inform der -binary \
-            -in "${output_sig}" -content "${content}" \
-            -certfile "${cert}" -noverify >/dev/null 2>&1; then
-        error "UKI/RPM: /usr verity root-hash signature failed self-verify"
-        return 1
-    fi
-
-    IPE_VERITY_SIG_SOURCE="${output_sig}"
-    IPE_VERITY_SIG_PATH="/.extra/credentials/${filename}"
-    info "UKI/RPM: signed /usr verity root hash ($(wc -c < "${output_sig}") B PKCS#7)"
-}
 
 uki_install_rpm() {
     info "UKI/RPM mode: Installing systemd-boot and shim to BOARD_ROOT"
@@ -219,18 +176,6 @@ OSREL
         die "UKI/RPM: IPE assets require a /usr dm-verity root hash"
     fi
 
-    if [[ "${IPE_CAPABLE}" == "true" ]]; then
-        local build_dir cert_dir
-        build_dir="$(readlink -f "$(dirname "${FLAGS_disk_image}")")"
-        cert_dir="${build_dir}/acl-ipe-ephemeral"
-        if ! _uki_ipe_prepare_verity_signature \
-                "${uki_temp_dir}" \
-                "${cert_dir}" \
-                "${usr_hash}"; then
-            die "UKI/RPM: failed to prepare /usr root-hash signature companion"
-        fi
-    fi
-
     # Bind the policy credential to the signed UKI command line.
     local ipe_policy_cred=""
     local ipe_policy_hash_token=""
@@ -251,14 +196,10 @@ OSREL
 
     local cmdline=""
     if [[ ${FLAGS_verity} -eq ${FLAGS_TRUE} ]]; then
-        local verity_usr_options="hash-offset=${verity_hash_offset},panic-on-corruption"
-        if [[ -n "${IPE_VERITY_SIG_PATH}" ]]; then
-            verity_usr_options+=",root-hash-signature=${IPE_VERITY_SIG_PATH}"
-        fi
         cmdline="mount.usr=/dev/mapper/usr mount.usrflags=ro"
         cmdline+=" systemd.verity_usr_data=PARTUUID=${usr_a_uuid}"
         cmdline+=" systemd.verity_usr_hash=PARTUUID=${usr_a_uuid}"
-        cmdline+=" systemd.verity_usr_options=${verity_usr_options}"
+        cmdline+=" systemd.verity_usr_options=hash-offset=${verity_hash_offset},panic-on-corruption"
         cmdline+=" usrhash=${usr_hash}"
     else
         cmdline="mount.usr=PARTUUID=${usr_a_uuid} mount.usrflags=ro"
@@ -376,16 +317,8 @@ OSREL
     sudo cp "${uki_output}" "${ESP_DIR}/EFI/Linux/${uki_name}"
     info "UKI/RPM: Installed UKI → EFI/Linux/${uki_name}"
 
-    if [[ -n "${IPE_VERITY_SIG_SOURCE}" ]]; then
-        local signature_dir="${ESP_DIR}/EFI/Linux/${uki_name}.extra.d"
-        sudo mkdir -p "${signature_dir}"
-        sudo rm -f "${signature_dir}"/verity-usr-*.p7s.cred
-        sudo cp "${IPE_VERITY_SIG_SOURCE}" "${signature_dir}/"
-        info "UKI/RPM: Installed /usr root-hash signature companion → EFI/Linux/${uki_name}.extra.d/$(basename "${IPE_VERITY_SIG_SOURCE}")"
-    fi
-
     local cred_dir="${ESP_DIR}/EFI/Linux/${uki_name}.extra.d"
-    sudo rm -f "${cred_dir}"/acl-ipe-policy*.cred
+    sudo rm -f "${cred_dir}"/acl-ipe-policy*.cred "${cred_dir}"/verity-usr-*.p7s.cred
     if [[ -n "${ipe_policy_cred}" ]]; then
         sudo mkdir -p "${cred_dir}"
         sudo cp "${ipe_policy_cred}" "${cred_dir}/acl-ipe-policy.p7b.cred"

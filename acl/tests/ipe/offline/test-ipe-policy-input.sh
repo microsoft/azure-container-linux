@@ -9,7 +9,6 @@ export TMPDIR="${TEST_DIR}"
 trap 'rm -rf "${TEST_DIR}"' EXIT
 
 source "${SCRIPT_DIR}/build_library/rpm/rpm_install.sh"
-source "${SCRIPT_DIR}/build_library/rpm/ipe_verity.sh"
 source "${SCRIPT_DIR}/build_library/rpm/ipe_artifact.sh"
 source "${SCRIPT_DIR}/acl/tests/ipe/offline/function-extraction.sh"
 
@@ -118,48 +117,83 @@ test_enforcing_mode_rejected() {
     unset ACL_IPE_MODE
 }
 
-test_verity_roothash_matches_kernel_input() {
-    local output="${TEST_DIR}/root-hash.txt"
-    local binary="${TEST_DIR}/root-hash.bin"
-    local signature="${TEST_DIR}/root-hash.p7s"
-    local cert_dir="${TEST_DIR}/root-hash-cert"
+test_uki_provision_preserves_unsigned_verity() (
+    source_test_functions "${SCRIPT_DIR}/build_library/rpm/uki_install.sh" uki_provision_rpm
+    sudo() { "$@"; }
+    _uki_build_firstboot_addon() { :; }
+    _uki_build_fips_addon() { :; }
+    _uki_build_kdump_addon() { :; }
+    _uki_build_debug_addon() { :; }
+    ukify() {
+        local argument output="" cmdline=""
+        for argument; do
+            case "${argument}" in
+                --cmdline=@*) cmdline="${argument#--cmdline=@}" ;;
+                --output=*) output="${argument#--output=}" ;;
+            esac
+        done
+        cp "${cmdline}" "${BUILD_DIR}/captured.cmdline"
+        printf 'test EFI\n' > "${output}"
+    }
+
+    local scenario capable esp extra cmdline policy_hash
     local roothash="000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
+    FLAGS_TRUE=0
+    for scenario in x64:false x64:true aa64:false aa64:true; do
+        EFI_ARCH="${scenario%:*}"
+        capable="${scenario#*:}"
+        prepare_case "uki-${EFI_ARCH}-${capable}"
+        IPE_CAPABLE="${capable}"
+        BOARD_ROOT="${CASE_ROOT}/board"
+        FLAGS_disk_image="${BUILD_DIR}/image.bin"
+        FLAGS_verity_hash="${BUILD_DIR}/usrhash"
+        esp="${CASE_ROOT}/esp"
+        extra="${esp}/EFI/Linux/vmlinuz-6.6.145.2.efi.extra.d"
+        mkdir -p "${esp}/flatcar" "${extra}" \
+            "${BOARD_ROOT}/usr/lib/systemd/boot/efi" \
+            "${BOARD_ROOT}/boot/efi/EFI/BOOT" \
+            "${BUILD_DIR}/acl-ipe-policy"
+        touch "${esp}/vmlinuz-6.6.145.2" "${esp}/flatcar/initramfs-a.img" \
+            "${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub" \
+            "${BOARD_ROOT}/boot/efi/EFI/BOOT/boot${EFI_ARCH}.efi" \
+            "${BOARD_ROOT}/boot/efi/EFI/BOOT/grub${EFI_ARCH}.efi"
+        printf 'policy credential\n' > "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred"
+        printf 'stale\n' > "${extra}/verity-usr-${roothash,,}.p7s.cred"
+        printf 'stale\n' > "${extra}/acl-ipe-policy.p7b.cred"
 
-    ipe_verity_write_roothash "${roothash}" "${output}"
-    [[ "$(<"${output}")" == "${roothash,,}" ]]
-    [[ "$(wc -c < "${output}")" -eq 64 ]]
-
-    "${SCRIPT_DIR}/build_library/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" create >/dev/null 2>&1
-    openssl smime -sign -noattr -binary \
-        -in "${output}" \
-        -signer "${cert_dir}/uki-signing-ca.pem" \
-        -inkey "${cert_dir}/ca.key" \
-        -outform der \
-        -out "${signature}" 2>/dev/null
-    openssl smime -verify -inform der -binary \
-        -in "${signature}" \
-        -content "${output}" \
-        -nointern -certfile "${cert_dir}/uki-signing-ca.pem" -noverify \
-        -out /dev/null >/dev/null 2>&1
-    : > "${binary}"
-    local index
-    for ((index = 0; index < ${#roothash}; index += 2)); do
-        printf '%b' "\\x${roothash:index:2}" >> "${binary}"
+        FLAGS_verity=0
+        printf 'invalid\n' > "${FLAGS_verity_hash}"
+        if (uki_provision_rpm "${esp}") >/dev/null 2>&1; then
+            echo "UKI accepted an invalid /usr root hash" >&2
+            return 1
+        fi
+        printf '%s\n' "${roothash}" > "${FLAGS_verity_hash}"
+        if [[ "${capable}" == "true" ]]; then
+            FLAGS_verity=1
+            if (uki_provision_rpm "${esp}") >/dev/null 2>&1; then
+                echo "IPE-capable UKI accepted disabled /usr verity" >&2
+                return 1
+            fi
+            FLAGS_verity=0
+        fi
+        uki_provision_rpm "${esp}"
+        cmdline="$(<"${BUILD_DIR}/captured.cmdline")"
+        [[ " ${cmdline} " == *" usrhash=${roothash,,} "* ]]
+        [[ "${cmdline}" == *"mount.usr=/dev/mapper/usr mount.usrflags=ro"* ]]
+        [[ "${cmdline}" == *"systemd.verity_usr_options=hash-offset="*",panic-on-corruption"* ]]
+        [[ "${cmdline}" != *"root-hash-signature="* ]]
+        [[ ! -e "${extra}/verity-usr-${roothash,,}.p7s.cred" ]]
+        if [[ "${capable}" == "true" ]]; then
+            policy_hash="$(sha256sum "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred" | cut -d' ' -f1)"
+            [[ " ${cmdline} " == *" acl.ipe.policy_sha256=${policy_hash} "* ]]
+            cmp "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred" \
+                "${extra}/acl-ipe-policy.p7b.cred"
+        else
+            [[ "${cmdline}" != *"acl.ipe.policy_sha256="* ]]
+            [[ ! -e "${extra}/acl-ipe-policy.p7b.cred" ]]
+        fi
     done
-    if openssl smime -verify -inform der -binary \
-        -in "${signature}" \
-        -content "${binary}" \
-        -nointern -certfile "${cert_dir}/uki-signing-ca.pem" -noverify \
-        -out /dev/null >/dev/null 2>&1; then
-        echo "root-hash signature unexpectedly verified against binary digest" >&2
-        return 1
-    fi
-
-    if ipe_verity_write_roothash "${roothash}00" "${output}"; then
-        echo "invalid root hash was serialized" >&2
-        return 1
-    fi
-}
+)
 
 test_uki_binds_policy_before_writing_cmdline() {
     local uki_install="${SCRIPT_DIR}/build_library/rpm/uki_install.sh"
@@ -182,8 +216,6 @@ test_vm_conversions_share_secure_boot_cert() {
     local artifact_dir="${TEST_DIR}/vm-artifact"
     local esp_dir="${TEST_DIR}/vm-esp"
     local extra_dir="${esp_dir}/EFI/Linux/acl.efi.extra.d"
-    local roothash="000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-    local content="${TEST_DIR}/vm-roothash.txt"
 
     "${SCRIPT_DIR}/build_library/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" create >/dev/null 2>&1
     cp "${cert_dir}/uki-signing-ca.pem" "${first_cert}"
@@ -201,14 +233,6 @@ test_vm_conversions_share_secure_boot_cert() {
     cp "${artifact_dir}/acl-ipe-policy/acl-ipe-policy.p7b.cred" \
         "${extra_dir}/acl-ipe-policy.p7b.cred"
 
-    printf '%s' "${roothash}" > "${content}"
-    openssl smime -sign -noattr -binary \
-        -in "${content}" \
-        -signer "${cert_dir}/uki-signing-ca.pem" \
-        -inkey "${cert_dir}/ca.key" \
-        -outform der \
-        -out "${extra_dir}/verity-usr-${roothash}.p7s.cred" 2>/dev/null
-
     bash "${SCRIPT_DIR}/build_library/rpm/verify_ipe_signer_continuity.sh" \
         "${cert_dir}" "${artifact_dir}" "${esp_dir}"
 
@@ -217,6 +241,12 @@ test_vm_conversions_share_secure_boot_cert() {
     if bash "${SCRIPT_DIR}/build_library/rpm/verify_ipe_signer_continuity.sh" \
         "${other_cert_dir}" "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
         echo "matching but unrelated signer pair was accepted" >&2
+        return 1
+    fi
+    printf 'invalid policy credential\n' > "${extra_dir}/acl-ipe-policy.p7b.cred"
+    if bash "${SCRIPT_DIR}/build_library/rpm/verify_ipe_signer_continuity.sh" \
+        "${cert_dir}" "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
+        echo "invalid installed policy credential was accepted" >&2
         return 1
     fi
 }
@@ -239,6 +269,11 @@ test_markerless_ipe_assets_are_rejected() {
     fi
 
     printf 'ephemeral\n' > "${artifact_dir}/ipe-signing-mode"
+    if validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
+        echo "legacy root-hash signature bypassed policy-only conversion validation" >&2
+        return 1
+    fi
+    rm "${esp_dir}/EFI/Linux/acl.efi.extra.d/verity-usr-000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f.p7s.cred"
     validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}"
 }
 
@@ -355,7 +390,7 @@ test_disabled_cleanup_removes_stale_assets
 test_audit_ephemeral_stages_candidate
 test_audit_esrp_stages_candidate
 test_enforcing_mode_rejected
-test_verity_roothash_matches_kernel_input
+test_uki_provision_preserves_unsigned_verity
 test_uki_binds_policy_before_writing_cmdline
 test_vm_conversions_share_secure_boot_cert
 test_markerless_ipe_assets_are_rejected

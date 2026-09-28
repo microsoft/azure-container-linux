@@ -143,18 +143,24 @@ has_ipe_assets() {
 
     [[ -e "${artifact_dir}/acl-ipe-policy/acl-ipe-policy.p7b.cred" ]] ||
         find "${esp_dir}/EFI/Linux" -type f \
-            \( -path '*.efi.extra.d/acl-ipe-policy.p7b.cred' \
-            -o -path '*.efi.extra.d/verity-usr-*.p7s.cred' \) \
+            -path '*.efi.extra.d/acl-ipe-policy.p7b.cred' \
             -print -quit 2>/dev/null |
             grep -q .
 }
 
 validate_ipe_marker_consistency() {
     local artifact_dir="$1" esp_dir="$2"
-    local signing_mode
+    local signing_mode root_signature
 
     signing_mode="$(ipe_resolve_artifact_signing_mode "${artifact_dir}")" ||
         return 1
+    root_signature="$(find "${esp_dir}/EFI/Linux" \
+        -path '*.efi.extra.d/verity-usr-*.p7s.cred' -print -quit)" ||
+        return 1
+    if [[ -n "${root_signature}" ]]; then
+        echo "Legacy /usr root-hash signature found: ${root_signature}; rebuild the source image for policy-only IPE" >&2
+        return 1
+    fi
     if [[ "${signing_mode}" == "disabled" ]] &&
         has_ipe_assets "${artifact_dir}" "${esp_dir}"; then
         echo "IPE assets are present without a valid ipe-signing-mode marker" >&2
@@ -181,7 +187,7 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]
             "${ephemeral_cert_dir}" \
             "${FLAGS_from}" \
             "${VM_TMP_ROOT}/boot" ||
-            die_notrace "IPE artifact signing material does not match its policy and verity signatures"
+            die_notrace "IPE artifact signing material does not match its policy signatures"
     else
         # Disabled images still need one shared Secure Boot signer across test
         # and production conversions, but source artifacts may be read-only.

@@ -185,6 +185,14 @@ without blocking boot. `enforcing` is reserved for future use: it is rejected
 at build time, and a manually set runtime `ipe=enforcing` request is logged
 as unsupported and left safely inactive — it never fails boot.
 
+`/usr` retains its read-only dm-verity mapping, root hash and corruption
+checks, but no detached root-hash signature is generated or required.
+When IPE is active in audit mode, `/usr` execution succeeds with would-deny
+events because it does not match the policy's signed-dm-verity allow rule.
+The IPE policy itself remains signed and must be accepted by the kernel.
+Rebuild older source images that carry `verity-usr-*.p7s.cred` companions;
+conversion rejects them rather than silently dropping a required signature.
+
 IPE-capable VM images currently support only the Azure Secure Boot UKI path.
 QEMU image conversion must use `--ipe-mode=disabled`, which is also the
 default.

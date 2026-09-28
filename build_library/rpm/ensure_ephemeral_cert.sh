@@ -3,8 +3,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# Create or validate the per-build test certificate shared by the IPE policy,
-# /usr root-hash signature, and UKI. Enrolling this certificate in UEFI db
+# Create or validate the per-build test certificate shared by the IPE policy
+# and UKI. Enrolling this certificate in UEFI db
 # makes it available to the kernel through the .platform keyring.
 
 set -euo pipefail

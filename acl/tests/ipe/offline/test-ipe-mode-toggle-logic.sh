@@ -138,6 +138,43 @@ test_shared_cmdline_fields() {
         root-hash-signature ',')" == "/expected" ]]
 }
 
+test_policy_only_cmdline_contract() {
+    local cmdline
+    if ipe_has_root_hash_signature \
+        'usrhash=abc systemd.verity_usr_options=hash-offset=4096,panic-on-corruption'; then
+        echo "unsigned verity was classified as requiring a signature" >&2
+        return 1
+    fi
+    for cmdline in \
+        'root-hash-signature=/unexpected' \
+        'systemd.verity_usr_options=root-hash-signature=/unexpected' \
+        'systemd.verity_usr_options=hash-offset=4096,root-hash-signature=,panic-on-corruption' \
+        'systemd.verity_usr_options=hash-offset=4096 systemd.verity_usr_options=root-hash-signature=/unexpected'; do
+        ipe_has_root_hash_signature "${cmdline}" || {
+            echo "required root signature was missed: ${cmdline}" >&2
+            return 1
+        }
+    done
+}
+
+test_probe_denial_correlation() {
+    local event='type=1420 ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=123 comm="true" path="/usr/bin/true" rule="DEFAULT op=EXECUTE action=DENY"'
+    local invalid
+    [[ "$(ipe_find_denial_event "${event}" /usr/bin/true 123)" == "${event}" ]]
+    for invalid in \
+        "${event/pid=123/pid=1234}" \
+        "${event/\/usr\/bin\/true/\/var\/tmp\/true}" \
+        "${event/enforcing=0/enforcing=1}" \
+        "${event/ipe_op=EXECUTE/ipe_op=READ}" \
+        "${event/action=DENY/action=ALLOW}" \
+        ""; do
+        if ipe_find_denial_event "${invalid}" /usr/bin/true 123 >/dev/null; then
+            echo "unrelated or missing audit record satisfied the /usr probe" >&2
+            return 1
+        fi
+    done
+}
+
 test_host_imds_matches_guest_parser() (
     acl_usrbin() { command "$@"; }
     local response expected_state expected_value
@@ -298,6 +335,8 @@ test_security_profile_updates_preserve_unrelated_keys
 test_tag_state_distinguishes_absent_from_empty
 test_host_imds_rejects_multiple_documents
 test_shared_cmdline_fields
+test_policy_only_cmdline_contract
+test_probe_denial_correlation
 test_host_imds_matches_guest_parser
 test_streamed_guest_contains_cmdline_parser
 test_copied_guest_script_needs_no_sibling_file

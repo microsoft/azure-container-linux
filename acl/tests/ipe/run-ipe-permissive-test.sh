@@ -1,5 +1,5 @@
 #!/bin/bash
-# Live-VM validation of IPE permissive mode inside a Secure Boot VM.
+# Live-VM validation of policy-only IPE permissive mode.
 
 set -euo pipefail
 
@@ -17,7 +17,38 @@ ipe_cmdline_field() {
     printf '\n'
 }
 
-# Sourcing exposes the parser to the host test without running guest assertions.
+ipe_has_root_hash_signature() {
+    local word option
+    local -a options=()
+
+    for word in $1; do
+        case "${word}" in
+            root-hash-signature=*) return 0 ;;
+            systemd.verity_usr_options=*)
+                IFS=, read -r -a options <<< "${word#*=}"
+                for option in "${options[@]}"; do
+                    [[ "${option}" != root-hash-signature=* ]] || return 0
+                done
+                ;;
+        esac
+    done
+    return 1
+}
+
+ipe_find_denial_event() {
+    local logs="$1" executable="$2" pid="$3"
+    [[ "${pid}" =~ ^[1-9][0-9]*$ ]] || {
+        echo "Invalid IPE probe PID: ${pid}" >&2
+        return 1
+    }
+    grep -F "path=\"${executable}\"" <<< "${logs}" |
+        grep -E "(^|[[:space:]])pid=${pid}([[:space:]]|$)" |
+        grep -E 'ipe_op=EXECUTE([[:space:]]|$)' |
+        grep -E 'enforcing=0([[:space:]]|$)' |
+        grep -E 'rule="[^"]*action=DENY"'
+}
+
+# Sourcing exposes the helpers to host tests without running guest assertions.
 # Stdin scripts have no BASH_SOURCE path, so they still execute on the guest.
 if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "${0}" ]]; then
     return 0
@@ -48,11 +79,8 @@ usr_hash="${usr_hash,,}"
 if ! [[ "${usr_hash}" =~ ^[[:xdigit:]]{64}$ ]]; then
     fail "could not read the /usr dm-verity SHA-256 root hash from the command line"
 fi
-verity_usr_options="$(ipe_cmdline_field "${cmdline}" systemd.verity_usr_options)"
-verity_sig_path="$(ipe_cmdline_field "${verity_usr_options}" root-hash-signature ',')"
-expected_verity_sig_path="/.extra/credentials/verity-usr-${usr_hash}.p7s.cred"
-if [[ "${verity_sig_path}" != "${expected_verity_sig_path}" ]]; then
-    fail "signed /usr root-hash signature does not match the UKI root hash"
+if ipe_has_root_hash_signature "${cmdline}"; then
+    fail "policy-only IPE must not require a /usr root-hash signature"
 fi
 
 if [[ ! -r "${IPE_DIR}/enforce" ]]; then
@@ -105,18 +133,24 @@ verity_table="$(dmsetup table --showkeys "${verity_name}" 2>/dev/null)" ||
 if ! grep -Eq "(^|[[:space:]])${usr_hash}([[:space:]]|$)" <<< "${verity_table}"; then
     fail "active /usr dm-verity table does not contain the UKI root hash"
 fi
-if ! grep -Eq '(^|[[:space:]])root_hash_sig_key_desc[[:space:]]+[^[:space:]]+' \
+if grep -Eq '(^|[[:space:]])root_hash_sig_key_desc([[:space:]]|$)' \
     <<< "${verity_table}"; then
-    fail "active /usr dm-verity mapping was not activated with a root-hash signature"
+    fail "policy-only /usr dm-verity mapping unexpectedly requires a root-hash signature"
 fi
 
-# An executable copied to writable storage matches the policy's deny default.
-# It must still run in permissive mode while generating audit data.
-probe="/var/tmp/acl-ipe-permissive-probe"
+# Neither unsigned /usr nor writable storage matches the signature allow rule.
+# Record each exec PID so older audit events cannot satisfy these probes.
+usr_probe="$(readlink -f /usr/bin/true)" || fail "could not resolve /usr probe"
+[[ "${usr_probe}" == /usr/* ]] || fail "probe executable is not on /usr"
+usr_probe_pid="$(bash -c 'printf "%s\n" "$$"; exec "$1"' -- "${usr_probe}")" ||
+    fail "/usr execution was blocked in permissive mode"
+probe="$(mktemp /var/tmp/acl-ipe-permissive-probe.XXXXXX)" ||
+    fail "could not create writable-storage probe"
 trap 'rm -f "${probe}"' EXIT
-cp /usr/bin/true "${probe}"
+cp "${usr_probe}" "${probe}"
 chmod 0755 "${probe}"
-"${probe}" || fail "untrusted execution was blocked in permissive mode"
+probe_pid="$(bash -c 'printf "%s\n" "$$"; exec "$1"' -- "${probe}")" ||
+    fail "writable-storage execution was blocked in permissive mode"
 
 boot_logs="$(
     {
@@ -133,32 +167,19 @@ if [[ -n "${loader_errors}" ]]; then
     echo "${loader_errors}" >&2
     fail "IPE or dm-verity boot errors were detected"
 fi
-unsigned_fallback="$(
-    grep -Ei \
-        'succeeded without root hash signature|retrying without( the)? root hash signature' \
-        <<< "${boot_logs}" || true
-)"
-if [[ -n "${unsigned_fallback}" ]]; then
-    echo "${unsigned_fallback}" >&2
-    fail "/usr dm-verity activation fell back to unsigned mode"
-fi
-
-audit_event="$(
-    grep -F "${probe}" <<< "${boot_logs}" |
-        grep -E 'ipe_op=EXECUTE.*enforcing=0|enforcing=0.*ipe_op=EXECUTE' ||
-        true
-)"
-if [[ -n "${audit_event}" ]]; then
-    echo "Observed permissive IPE audit event:"
+probes=("${usr_probe}" "${probe}")
+probe_pids=("${usr_probe_pid}" "${probe_pid}")
+for index in "${!probes[@]}"; do
+    audit_event="$(ipe_find_denial_event \
+        "${boot_logs}" "${probes[index]}" "${probe_pids[index]}")" ||
+        fail "${probes[index]} (pid=${probe_pids[index]}) succeeded without its expected IPE denial audit event"
+    echo "Observed permissive IPE audit event for ${probes[index]}:"
     echo "${audit_event}"
-else
-    fail "the permissive probe succeeded without the expected IPE audit event"
-fi
+done
 
 echo ""
 echo "IPE policy: ${POLICY_NAME}"
 echo "IPE enforce state: 0 (permissive)"
 echo "/usr dm-verity root hash: ${usr_hash}"
-echo "/usr dm-verity root-hash signature: ${verity_sig_path} (per-UKI ESP companion)"
-echo "/usr dm-verity mapping: ${verity_name} (signed root hash enforced)"
+echo "/usr dm-verity mapping: ${verity_name} (no root-hash signature required)"
 echo "SUCCESS: IPE is active in permissive mode with no detected boot errors"
