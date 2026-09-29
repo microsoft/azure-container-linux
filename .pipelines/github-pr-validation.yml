@@ -47,3 +47,23 @@ extends:
     aclRef: $(Build.SourceBranch)
     mantleRef: 'aclmain'
     testGeneratePackageManifest: true
+    extraStages:
+      - stage: azure_launcher_contracts
+        displayName: 'Azure launcher contract tests'
+        dependsOn: []
+        jobs:
+          - job: contracts
+            timeoutInMinutes: 15
+            pool:
+              name: acl-builder-lite-amd64
+              os: linux
+            steps:
+              - checkout: self
+                path: s/azure-launch-contracts
+              - bash: |
+                  set -euo pipefail
+                  git rev-parse HEAD
+                  bash acl/validate/test_validate_azure.sh
+                  bash acl/tests/test-azure-kola-security-profile.sh
+                workingDirectory: '$(Pipeline.Workspace)/s/azure-launch-contracts'
+                displayName: 'Test actual VM arguments and container-to-Kola forwarding'

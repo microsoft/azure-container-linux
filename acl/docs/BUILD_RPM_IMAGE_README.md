@@ -324,6 +324,17 @@ By default, before starting a new Azure VM, all the pre-existing resource groups
 
 You can also use the `--run-script` flag to run tests on the Azure VM, just like with the QEMU VM.
 
+AMD64 smoke VMs use Trusted Launch, Secure Boot and vTPM by default.
+`--no-secure-boot` (or `SECURE_BOOT_ENABLED=false`) selects Standard and omits
+both UEFI security arguments. Set `AZURE_TRUSTED_LAUNCH=true` explicitly to
+retain Trusted Launch with Secure Boot off. Secure Boot with explicit
+`AZURE_TRUSTED_LAUNCH=false` is rejected. ARM64 smoke keeps its existing
+Secure Boot/vTPM requirements.
+
+`--run-tests` includes the Secure Boot guest check only when applicable,
+regardless of flag order; explicitly requested `--run-script` checks are retained.
+These profile controls do not enable IPE or change image signing.
+
 #### Access the VM
 
 **SSH Access**
@@ -498,6 +509,12 @@ AZURE_TOKEN_CREDENTIALS=AzureCLICredential \
 | `AZURE_LOCATION` | Azure region for test VMs | `westus2` |
 | `AZURE_amd64_MACHINE_SIZE` | VM size for amd64 tests | `Standard_D2s_v6` |
 | `AZURE_arm64_MACHINE_SIZE` | VM size for arm64 tests | (default) |
+| `AZURE_TRUSTED_LAUNCH` | `true` requests Gen2 Trusted Launch, Secure Boot and vTPM; `false` retains the normal Standard path | `false` |
+| `AZURE_SECURE_BOOT_CERTIFICATES` | Colon-separated certificate paths inside the Mantle container, for local-VHD enrollment with Trusted Launch; not allowed with an existing gallery version | Unset |
+
+The host runner forwards both profile settings through the generated container
+environment. Explicit Trusted Launch excludes Gen1 test scheduling. Legacy
+non-RPM Standard local-VHD runs retain their Gen1 coverage.
 
 **Output:**
 

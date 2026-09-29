@@ -51,7 +51,7 @@
 #   --rebuild-and-test                   Rebuild image and run smoke tests (equivalent to
 #                                        --rebuild --build-vm-image --run-tests)
 #   --run-tests                          Start a VM and run a series of predefined tests on the VM after boot
-#                                        (includes run-secureboot-test.sh, run-container-test.sh,
+#                                        (includes run-secureboot-test.sh when Secure Boot is enabled, run-container-test.sh,
 #                                        run-systemd-health-test.sh, run-dmesg-io-error-test.sh,
 #                                        run-selinux-avc-test.sh)
 #   --run-script=PATH                    Run script on VM after boot (can specify multiple times)
@@ -306,7 +306,6 @@ parse_args() {
             --run-tests)
                 START_VM=true
                 RUN_TESTS=true
-                RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-systemd-health-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-dmesg-io-error-test.sh")
@@ -635,6 +634,13 @@ parse_args() {
                 exit 1
                 ;;
         esac
+    fi
+
+    # Resolve after all flags so --no-secure-boot works in either order.
+    if [[ "${RUN_TESTS:-false}" == "true" ]] &&
+        [[ "${SECURE_BOOT_ENABLED:-true}" == "true" ||
+        ( "$VM_TYPE" == "azure" && "$BOARD" == "arm64-usr" ) ]]; then
+        RUN_SCRIPTS=("./acl/tests/run-secureboot-test.sh" "${RUN_SCRIPTS[@]}")
     fi
 
     # Add platform-specific host-side tests when --run-tests is used.

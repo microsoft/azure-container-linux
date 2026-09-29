@@ -170,6 +170,52 @@ assert_classification AuthorizationFailed \
 ( assert_successful_vm_create_returns_cli_output )
 ( assert_arm_warning_does_not_corrupt_vm_result )
 
+assert_vm_security_profile() (
+    BOARD="$1"
+    SECURE_BOOT_ENABLED="$2"
+    AZURE_TRUSTED_LAUNCH="$3"
+    local expected="$4" expected_secure_boot="$5"
+    local args_file="${TEST_TMPDIR}/security-profile.args"
+    warn() { printf 'WARN: %s\n' "$*" >&2; }
+    az() {
+        printf '%s\n' "$@" > "${args_file}"
+        printf '{"id":"test-vm"}\n'
+    }
+    _try_vm_create test-rg test-vm test-image test-sku test-region
+    [[ "$(grep -A1 -Fx -- --security-type "${args_file}" | tail -1)" == "${expected}" ]]
+    if [[ "${expected}" == Standard ]]; then
+        if grep -Eq '^--enable-(vtpm|secure-boot)$' "${args_file}"; then
+            echo 'FAIL: Standard VM received UEFI security arguments' >&2
+            return 1
+        fi
+    else
+        [[ "$(grep -A1 -Fx -- --enable-vtpm "${args_file}" | tail -1)" == true ]]
+        [[ "$(grep -A1 -Fx -- --enable-secure-boot "${args_file}" | tail -1)" == "${expected_secure_boot}" ]]
+    fi
+    echo "PASS: ${BOARD}, secure-boot=${SECURE_BOOT_ENABLED}, requested-TL=${AZURE_TRUSTED_LAUNCH:-default} -> ${expected}"
+)
+
+assert_invalid_vm_security_profile() (
+    BOARD=amd64-usr
+    SECURE_BOOT_ENABLED="$1"
+    AZURE_TRUSTED_LAUNCH="$2"
+    local args_file="${TEST_TMPDIR}/invalid-profile-${1}-${2}.args"
+    az() { printf '%s\n' "$@" > "${args_file}"; }
+    local rc=0
+    _try_vm_create test-rg test-vm test-image test-sku test-region 2>/dev/null || rc=$?
+    [[ "${rc}" == 2 && ! -e "${args_file}" ]]
+    echo "PASS: invalid security profile ${1}/${2} rejected before Azure CLI"
+)
+
+assert_vm_security_profile amd64-usr true "" TrustedLaunch true
+assert_vm_security_profile amd64-usr false "" Standard false
+assert_vm_security_profile amd64-usr false false Standard false
+assert_vm_security_profile amd64-usr false true TrustedLaunch false
+assert_vm_security_profile arm64-usr false "" TrustedLaunch true
+assert_invalid_vm_security_profile true false
+assert_invalid_vm_security_profile invalid true
+assert_invalid_vm_security_profile false invalid
+
 assert_vm_size_family_parsing() {
     local test_case vm_size expected actual
     local cases=(

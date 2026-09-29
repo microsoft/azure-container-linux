@@ -12,10 +12,45 @@ source ci-automation/vendor_test.sh
 
 # $@ now contains tests / test patterns to run
 
+trusted_launch_args=()
+secure_boot_certificate_args=()
+case "${AZURE_TRUSTED_LAUNCH:-false}" in
+    true) trusted_launch_args=(--azure-trusted-launch --enable-secureboot) ;;
+    false) ;;
+    *)
+        echo "AZURE_TRUSTED_LAUNCH must be true or false" >&2
+        exit 1
+        ;;
+esac
+if [[ -n "${AZURE_SECURE_BOOT_CERTIFICATES:-}" ]]; then
+    if [[ "${AZURE_TRUSTED_LAUNCH:-false}" != true ]]; then
+        echo "AZURE_SECURE_BOOT_CERTIFICATES requires AZURE_TRUSTED_LAUNCH=true" >&2
+        exit 1
+    fi
+    if [[ -n "${AZURE_DISK_URI:-}" ]]; then
+        echo "AZURE_SECURE_BOOT_CERTIFICATES cannot modify an existing gallery image version" >&2
+        exit 1
+    fi
+    case "${AZURE_SECURE_BOOT_CERTIFICATES}" in
+        :*|*:|*::*)
+            echo "AZURE_SECURE_BOOT_CERTIFICATES contains an empty path" >&2
+            exit 1
+            ;;
+    esac
+    IFS=':' read -r -a certificates <<< "${AZURE_SECURE_BOOT_CERTIFICATES}"
+    for certificate in "${certificates[@]}"; do
+        secure_boot_certificate_args+=("--azure-secureboot-certificate=${certificate}")
+    done
+fi
+
 board="${CIA_ARCH}-usr"
 basename="ci-${CIA_VERNUM//+/-}-${CIA_ARCH}"
 azure_instance_type_var="AZURE_${CIA_ARCH}_MACHINE_SIZE"
 azure_instance_type="${!azure_instance_type_var}"
+if [[ "${AZURE_TRUSTED_LAUNCH:-false}" == true && "${azure_instance_type}" == V1 ]]; then
+    echo "Azure Trusted Launch requires Hyper-V generation V2, got V1" >&2
+    exit 1
+fi
 # Use the override if explicitly set (even if empty), otherwise default to location-based name.
 if [[ -v AZURE_VNET_SUBNET_NAME ]]; then
     azure_vnet_subnet_name="${AZURE_VNET_SUBNET_NAME}"
@@ -86,6 +121,8 @@ run_kola_tests() {
       --azure-size="${instance_type}" \
       --azure-sku="${sku}" \
       --azure-hyper-v-generation="${hyperv_gen}" \
+      "${trusted_launch_args[@]}" \
+      "${secure_boot_certificate_args[@]}" \
       ${AZURE_USE_GALLERY} \
       ${AZURE_KOLA_VNET:+--azure-kola-vnet=${AZURE_KOLA_VNET}} \
       ${azure_vnet_subnet_name:+--azure-vnet-subnet-name=${azure_vnet_subnet_name}} \
@@ -107,7 +144,7 @@ if [[ "${CIA_ARCH}" = 'amd64' ]] && [[ "${PACKAGE_SOURCE_MODE:-PORTAGE}" != 'RPM
     # Gen1 (V1) is incompatible with --azure-disk-uri: a gallery image-definition
     # is locked to a single Hyper-V generation, and our *-test image-defs are
     # Gen2-only. Skip the V1 run when running in disk-URI (gallery) mode.
-    if [[ -z "${AZURE_DISK_URI:-}" ]]; then
+    if [[ -z "${AZURE_DISK_URI:-}" && "${AZURE_TRUSTED_LAUNCH:-false}" != true ]]; then
         other_instance_types+=('V1')
     fi
     other_instance_types+=('Standard_NC6s_v3')

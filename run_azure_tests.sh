@@ -29,6 +29,8 @@
 # - AZURE_LOCATION (default: westus2)
 # - AZURE_amd64_MACHINE_SIZE / AZURE_arm64_MACHINE_SIZE
 # - MAX_RUNS to control retry count (default: 1)
+# - AZURE_TRUSTED_LAUNCH=true to request Gen2 Trusted Launch and Secure Boot.
+# - AZURE_SECURE_BOOT_CERTIFICATES: colon-separated local-VHD enrollment paths.
 #
 # Output:
 # - results-azure.md, results-azure.tap
@@ -99,7 +101,9 @@ ${AZURE_TOKEN_CREDENTIALS:+export AZURE_TOKEN_CREDENTIALS="${AZURE_TOKEN_CREDENT
 ${AZURE_amd64_MACHINE_SIZE:+export AZURE_amd64_MACHINE_SIZE="${AZURE_amd64_MACHINE_SIZE}"}
 ${AZURE_arm64_MACHINE_SIZE:+export AZURE_arm64_MACHINE_SIZE="${AZURE_arm64_MACHINE_SIZE}"}
 ${AZURE_KOLA_VNET:+export AZURE_KOLA_VNET="${AZURE_KOLA_VNET}"}
-${AZURE_USE_GALLERY:+export AZURE_USE_GALLERY="${AZURE_USE_GALLERY}"}
+${AZURE_USE_GALLERY:+export AZURE_USE_GALLERY=${AZURE_USE_GALLERY@Q}}
+${AZURE_TRUSTED_LAUNCH:+export AZURE_TRUSTED_LAUNCH=${AZURE_TRUSTED_LAUNCH@Q}}
+${AZURE_SECURE_BOOT_CERTIFICATES:+export AZURE_SECURE_BOOT_CERTIFICATES=${AZURE_SECURE_BOOT_CERTIFICATES@Q}}
 ${AZURE_RESOURCE_GROUP_TAG:+export AZURE_RESOURCE_GROUP_TAG="${AZURE_RESOURCE_GROUP_TAG}"}
 ${AZURE_DISK_URI:+export AZURE_DISK_URI=${AZURE_DISK_URI@Q}}
 ${KOLA_TRUSTED_SOURCE_CIDR:+export KOLA_TRUSTED_SOURCE_CIDR=${KOLA_TRUSTED_SOURCE_CIDR@Q}}
@@ -135,7 +139,7 @@ function run_azure_tests() (
   fi
 
   source ci-automation/test.sh || exit 1
-  set_azure_vars "${arch}" "${parallel}"
+  set_azure_vars "${arch}" "${parallel}" || return 1
 
   echo "================================="
   echo "Using Mantle docker image '${mantle_container}'"

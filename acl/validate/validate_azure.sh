@@ -76,6 +76,24 @@ _enforce_arm_security_contract() {
     fi
 }
 
+_resolve_azure_trusted_launch() {
+    local secure_boot="${SECURE_BOOT_ENABLED:-true}"
+    local trusted_launch="${AZURE_TRUSTED_LAUNCH:-${secure_boot}}"
+
+    case "${secure_boot}:${trusted_launch}" in
+        true:true|false:true|false:false) ;;
+        true:false)
+            echo "Secure Boot requires Trusted Launch; use --no-secure-boot for Standard VMs" >&2
+            return 1
+            ;;
+        *)
+            echo "Secure Boot and Trusted Launch settings must be true or false" >&2
+            return 1
+            ;;
+    esac
+    printf '%s\n' "${trusted_launch}"
+}
+
 # Resolve Azure VM size and image definition based on BOARD.
 # Must be called after argument parsing so that --board is applied.
 resolve_azure_defaults() {
@@ -691,6 +709,8 @@ _try_vm_create() {
     local -a extra_tags=("$@")
     _VM_CREATE_RESULT=""
     _enforce_arm_security_contract || return 2
+    local trusted_launch
+    trusted_launch="$(_resolve_azure_trusted_launch)" || return 2
     local boot_diagnostics_storage_name
     boot_diagnostics_storage_name=$(get_boot_diagnostics_storage_name "$vm_rg_name")
 
@@ -701,8 +721,6 @@ _try_vm_create() {
         --os-disk-size-gb 60
         --admin-username "$VM_SSH_USER"
         --ssh-key-values "@${VM_SSH_KEY}.pub"
-        --security-type TrustedLaunch
-        --enable-vtpm true
         --image "$image_id"
         --location "$region"
         --public-ip-address ""
@@ -710,7 +728,12 @@ _try_vm_create() {
         --tags "${extra_tags[@]}"
     )
 
-    vm_create_args+=(--enable-secure-boot "${SECURE_BOOT_ENABLED:-true}")
+    if [[ "${trusted_launch}" == true ]]; then
+        vm_create_args+=(--security-type TrustedLaunch --enable-vtpm true)
+        vm_create_args+=(--enable-secure-boot "${SECURE_BOOT_ENABLED:-true}")
+    else
+        vm_create_args+=(--security-type Standard)
+    fi
 
     if [[ -n "$AZ_VM_ARGS" ]]; then
         vm_create_args+=($AZ_VM_ARGS)
