@@ -15,10 +15,8 @@ KEYWORDS="amd64 arm64"
 RDEPEND=">=app-admin/sdnotify-proxy-0.1.0"
 
 src_install() {
+	# MCR publishes a single multi-arch index per version; no per-arch tag suffix.
 	local tag="v${PV}"
-	if [[ "${ARCH}" != "amd64" ]]; then
-		tag+="-${ARCH}"
-	fi
 
 	exeinto /usr/lib/flatcar
 	doexe "${FILESDIR}"/etcd-wrapper
