@@ -257,12 +257,8 @@ validate_ipe_boot_path() {
         error "IPE requires BOOTLOADER_MODE=uki"
         return 1
     fi
-    if [[ "${SECURE_BOOT_ENABLED:-true}" != "true" ]]; then
-        error "IPE requires Secure Boot"
-        return 1
-    fi
     if [[ "${vm_type}" == "qemu" ]]; then
-        error "IPE is supported only by the Azure Secure Boot UKI path"
+        error "IPE runtime mode testing requires the Azure IMDS UKI path"
         return 1
     fi
     if [[ "${vm_type}" == "azure" ]]; then
@@ -482,7 +478,6 @@ parse_args() {
             --run-tests)
                 START_VM=true
                 RUN_TESTS=true
-                RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-systemd-health-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-dmesg-io-error-test.sh")
@@ -837,10 +832,16 @@ parse_args() {
     fi
     validate_ipe_boot_path "${ipe_vm_type}" || exit 1
 
+    # Resolve this after all flags so --no-secure-boot works in either order.
+    if [[ "${RUN_TESTS:-false}" == "true" ]] &&
+        [[ "${SECURE_BOOT_ENABLED:-true}" == "true" ||
+        ( "$VM_TYPE" == "azure" && "$BOARD" == "arm64-usr" ) ]]; then
+        RUN_SCRIPTS=("./acl/tests/run-secureboot-test.sh" "${RUN_SCRIPTS[@]}")
+    fi
+
     # Add platform-specific host-side tests when --run-tests is used.
     if [[ "${RUN_TESTS:-false}" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
-        if [[ "${ACL_IPE_CAPABLE}" == "true" ]] &&
-            [[ "${SECURE_BOOT_ENABLED:-true}" == "true" ]]; then
+        if [[ "${ACL_IPE_CAPABLE}" == "true" ]]; then
             RUN_HOST_SCRIPTS+=("./acl/tests/ipe/run-ipe-mode-toggle-test.sh")
         fi
         RUN_HOST_SCRIPTS+=("./acl/tests/run-selinux-toggle-test.sh")

@@ -48,6 +48,7 @@ _LOCAL_IPE_ARTIFACT_PATH=""
 _LOCAL_IPE_SIGNING_MODE=disabled
 _LOCAL_IPE_SIGNING_CERT=""
 _LOCAL_IPE_SIGNING_CERT_B64=""
+_LOCAL_IPE_TRUSTED_LAUNCH=true
 
 validate_azure_configuration() {
     if ! [[ "$AZ_MAX_PROVISIONING_TIMEOUTS" =~ ^[1-9][0-9]*$ ]]; then
@@ -96,11 +97,6 @@ _enforce_ipe_security_contract() {
     [[ "${ACL_IPE_CAPABLE:-false}" == "true" ]] || return 0
     local -a az_vm_args=()
 
-    if [[ "${SECURE_BOOT_ENABLED:-true}" != "true" ]]; then
-        error "IPE-capable Azure VMs require Secure Boot"
-        return 1
-    fi
-
     ipe_split_argument_string az_vm_args "${AZ_VM_ARGS:-}"
     if ! ipe_reject_azure_ipe_overrides "${az_vm_args[@]}"; then
         error "--az-vm-args cannot override the image or Trusted Launch settings for IPE-capable Azure VMs"
@@ -112,9 +108,14 @@ _prepare_local_ipe_artifact_contract() {
     local vm_image_path="$1"
     local canonical_image_path signing_mode certificate
 
+    _enforce_arm_security_contract || return 1
+    _LOCAL_IPE_TRUSTED_LAUNCH="$(
+        ipe_resolve_azure_trusted_launch "${SECURE_BOOT_ENABLED:-true}" "${AZURE_TRUSTED_LAUNCH:-}"
+    )" || return 1
     canonical_image_path="$(cd "$(dirname "${vm_image_path}")" && pwd)/$(basename "${vm_image_path}")"
     signing_mode="$(
-        ipe_validate_local_vhd_contract "${canonical_image_path}" "${ACL_IPE_CAPABLE:-}"
+        ipe_validate_local_vhd_contract "${canonical_image_path}" "${ACL_IPE_CAPABLE:-}" \
+            "${_LOCAL_IPE_TRUSTED_LAUNCH}"
     )" || return 1
 
     _VM_IMAGE_DIR="$(dirname "${canonical_image_path}")"
@@ -123,8 +124,8 @@ _prepare_local_ipe_artifact_contract() {
     _LOCAL_IPE_SIGNING_CERT=""
     _LOCAL_IPE_SIGNING_CERT_B64=""
     certificate="${_VM_IMAGE_DIR}/uki-signing-ca.pem"
-    if [[ "${signing_mode}" != "disabled" ||
-        -e "${certificate}" || -L "${certificate}" ]]; then
+    if [[ "${_LOCAL_IPE_TRUSTED_LAUNCH}" == "true" ]] &&
+        [[ "${signing_mode}" != "disabled" || -e "${certificate}" || -L "${certificate}" ]]; then
         ipe_validate_signing_certificate "${certificate}" || return 1
         if ! _LOCAL_IPE_SIGNING_CERT_B64="$(
             openssl x509 -in "${certificate}" -outform DER |
@@ -643,7 +644,8 @@ create_gallery_image_version() {
     # Enroll the exact certificate bytes captured during local artifact
     # preflight. The Azure CLI does not expose securityProfile on image-version
     # create, so certificate-bearing versions use the REST API.
-    if [[ "${_LOCAL_IPE_SIGNING_MODE}" != "disabled" &&
+    if [[ "${_LOCAL_IPE_TRUSTED_LAUNCH}" == "true" &&
+        "${_LOCAL_IPE_SIGNING_MODE}" != "disabled" &&
         -z "${_LOCAL_IPE_SIGNING_CERT_B64}" ]]; then
         error "IPE-capable gallery publication is missing its validated signing certificate"
         exit 1
@@ -766,6 +768,10 @@ _try_vm_create() {
     _VM_CREATE_RESULT=""
     _enforce_arm_security_contract || return 2
     _enforce_ipe_security_contract || return 2
+    local trusted_launch
+    trusted_launch="$(
+        ipe_resolve_azure_trusted_launch "${SECURE_BOOT_ENABLED:-true}" "${AZURE_TRUSTED_LAUNCH:-}"
+    )" || return 2
     ipe_split_argument_string az_vm_args "${AZ_VM_ARGS:-}"
     local boot_diagnostics_storage_name
     boot_diagnostics_storage_name=$(get_boot_diagnostics_storage_name "$vm_rg_name")
@@ -777,8 +783,6 @@ _try_vm_create() {
         --os-disk-size-gb 60
         --admin-username "$VM_SSH_USER"
         --ssh-key-values "@${VM_SSH_KEY}.pub"
-        --security-type TrustedLaunch
-        --enable-vtpm true
         --image "$image_id"
         --location "$region"
         --public-ip-address ""
@@ -786,7 +790,12 @@ _try_vm_create() {
         --tags "${extra_tags[@]}"
     )
 
-    vm_create_args+=(--enable-secure-boot "${SECURE_BOOT_ENABLED:-true}")
+    if [[ "${trusted_launch}" == "true" ]]; then
+        vm_create_args+=(--security-type TrustedLaunch --enable-vtpm true)
+        vm_create_args+=(--enable-secure-boot "${SECURE_BOOT_ENABLED:-true}")
+    else
+        vm_create_args+=(--security-type Standard)
+    fi
 
     if [[ ${#az_vm_args[@]} -gt 0 ]]; then
         vm_create_args+=("${az_vm_args[@]}")

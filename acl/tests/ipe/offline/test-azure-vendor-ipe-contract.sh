@@ -174,6 +174,25 @@ test_trailing_override_is_rejected_before_kola() {
     [[ ! -e "${KOLA_ARGS_LOG}" ]]
 }
 
+test_standard_local_ipe_vhd_needs_no_enrollment() {
+    local root="${TEST_DIR}/standard"
+    local artifact_dir="${root}/artifacts"
+    local image="${artifact_dir}/acl_production_azure_test_image.vhd"
+    prepare_vendor_work "${root}"
+    mkdir -p "${artifact_dir}"
+    printf 'vhd\n' > "${image}"
+    printf 'esrp\n' > "${artifact_dir}/ipe-signing-mode"
+    KOLA_ARGS_LOG="${root}/kola.args"
+    export KOLA_ARGS_LOG
+    AZURE_IMAGE_NAME="${image}" AZURE_TRUSTED_LAUNCH=false \
+        run_vendor "${root}" cl.basic
+    assert_single_arg "--azure-image-file=${image}" "${KOLA_ARGS_LOG}"
+    if grep -Eq -- '^--(azure-trusted-launch|enable-secureboot|azure-secureboot-certificate)' "${KOLA_ARGS_LOG}"; then
+        echo "Standard IPE launch unexpectedly enabled Trusted Launch or enrollment" >&2
+        return 1
+    fi
+}
+
 test_existing_gallery_injects_no_certificate() {
     local root="${TEST_DIR}/gallery"
     prepare_vendor_work "${root}"
@@ -270,6 +289,7 @@ test_buildcache_probe_failure_is_fatal_and_retried() {
 }
 
 test_local_ipe_vhd_derives_final_kola_contract
+test_standard_local_ipe_vhd_needs_no_enrollment
 test_trailing_override_is_rejected_before_kola
 test_existing_gallery_injects_no_certificate
 test_disabled_vhd_keeps_legacy_kola_arguments

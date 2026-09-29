@@ -148,7 +148,8 @@ assert_ipe_contract_rejects_before_az() {
 
     BOARD=amd64-usr
     ACL_IPE_CAPABLE=true
-    SECURE_BOOT_ENABLED=false
+    SECURE_BOOT_ENABLED=true
+    AZURE_TRUSTED_LAUNCH=false
     AZ_VM_ARGS=""
     if _try_vm_create test-rg test-vm test-image test-sku test-region >/dev/null 2>&1; then
         rc=0
@@ -156,12 +157,13 @@ assert_ipe_contract_rejects_before_az() {
         rc=$?
     fi
     [[ ${rc} -eq 2 && ${az_calls} -eq 0 ]] || {
-        printf 'FAIL: disabled Secure Boot reached az vm create: rc=%s calls=%s\n' \
+        printf 'FAIL: contradictory security profile reached az vm create: rc=%s calls=%s\n' \
             "${rc}" "${az_calls}" >&2
         return 1
     }
 
     SECURE_BOOT_ENABLED=true
+    unset AZURE_TRUSTED_LAUNCH
     local override
     for override in \
         "--security-type Standard" \
@@ -218,6 +220,15 @@ assert_ipe_vm_argv_is_canonical() {
     grep -Fxq -- '--user-data' "${args_file}"
     grep -Fxq -- 'config.ign' "${args_file}"
 
+    SECURE_BOOT_ENABLED=false
+    _try_vm_create test-rg test-vm test-image test-sku test-region >/dev/null
+    [[ "$(grep -cx -- '--security-type' "${args_file}")" -eq 1 ]]
+    grep -Fxq -- 'Standard' "${args_file}"
+    if grep -Eq -- '^--enable-(secure-boot|vtpm)$' "${args_file}"; then
+        echo 'FAIL: Standard VM unexpectedly received UEFI security arguments' >&2
+        return 1
+    fi
+
     printf 'PASS: IPE VM creation argv is canonical\n'
 }
 
@@ -236,6 +247,9 @@ assert_local_ipe_artifact_contract() {
         -days 1 >/dev/null 2>&1
 
     ACL_IPE_CAPABLE=""
+    BOARD=amd64-usr
+    SECURE_BOOT_ENABLED=true
+    AZ_VM_ARGS=""
     _prepare_local_ipe_artifact_contract "${image}"
     local canonical_artifact_dir
     canonical_artifact_dir="$(cd "${artifact_dir}" && pwd)"
@@ -256,6 +270,11 @@ assert_local_ipe_artifact_contract() {
         printf 'FAIL: IPE local artifact without certificate was accepted\n' >&2
         return 1
     fi
+
+    SECURE_BOOT_ENABLED=false
+    _prepare_local_ipe_artifact_contract "${image}"
+    [[ "${ACL_IPE_CAPABLE}" == true && "${_LOCAL_IPE_TRUSTED_LAUNCH}" == false ]]
+    [[ -z "${_LOCAL_IPE_SIGNING_CERT}" && -z "${_LOCAL_IPE_SIGNING_CERT_B64}" ]]
 
     printf 'PASS: local IPE artifact contract is fail-closed\n'
 }

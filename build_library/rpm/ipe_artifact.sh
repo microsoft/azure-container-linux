@@ -77,8 +77,13 @@ ipe_validate_signing_certificate() {
 ipe_validate_local_vhd_contract() {
     local image="$1"
     local expected_capability="${2:-}"
+    local require_certificate="${3:-true}"
     local artifact_dir signing_mode certificate
 
+    case "${require_certificate}" in
+        true|false) ;;
+        *) echo "Invalid certificate requirement: ${require_certificate}" >&2; return 1 ;;
+    esac
     if [[ -L "${image}" || ! -f "${image}" || ! -r "${image}" || ! -s "${image}" ]]; then
         echo "Azure VHD must be a readable, nonempty regular file: ${image}" >&2
         return 1
@@ -87,12 +92,30 @@ ipe_validate_local_vhd_contract() {
     artifact_dir="$(cd "$(dirname "${image}")" && pwd)"
     signing_mode="$(ipe_resolve_artifact_signing_mode "${artifact_dir}" "${expected_capability}")" ||
         return 1
-    if [[ "${signing_mode}" != "disabled" ]]; then
+    if [[ "${signing_mode}" != "disabled" && "${require_certificate}" == "true" ]]; then
         certificate="${artifact_dir}/uki-signing-ca.pem"
         ipe_validate_signing_certificate "${certificate}" || return 1
     fi
 
     printf '%s\n' "${signing_mode}"
+}
+
+ipe_resolve_azure_trusted_launch() {
+    local secure_boot="${1:-true}"
+    local trusted_launch="${2:-${secure_boot}}"
+
+    case "${secure_boot}:${trusted_launch}" in
+        true:true|false:true|false:false) ;;
+        true:false)
+            echo "Secure Boot requires Trusted Launch; use --no-secure-boot for Standard VMs" >&2
+            return 1
+            ;;
+        *)
+            echo "Secure Boot and Trusted Launch settings must be true or false" >&2
+            return 1
+            ;;
+    esac
+    printf '%s\n' "${trusted_launch}"
 }
 
 ipe_configure_azure_trust() {
@@ -108,26 +131,24 @@ ipe_configure_azure_trust() {
             ;;
     esac
 
+    case "${AZURE_TRUSTED_LAUNCH:-}" in
+        ""|true|false) ;;
+        *) echo "Invalid AZURE_TRUSTED_LAUNCH value" >&2; return 1 ;;
+    esac
+
     if [[ -n "${AZURE_DISK_URI:-}" ]]; then
         if [[ -n "${AZURE_SECURE_BOOT_CERTIFICATES:-}" ]]; then
             echo "AZURE_SECURE_BOOT_CERTIFICATES cannot modify an existing gallery image version" >&2
             return 1
         fi
-        if [[ "${ACL_IPE_CAPABLE:-false}" == "true" ]]; then
-            case "${AZURE_TRUSTED_LAUNCH:-}" in
-                ""|true) AZURE_TRUSTED_LAUNCH=true ;;
-                *)
-                    echo "IPE-capable gallery images require AZURE_TRUSTED_LAUNCH=true" >&2
-                    return 1
-                    ;;
-            esac
-        fi
+        AZURE_TRUSTED_LAUNCH="${AZURE_TRUSTED_LAUNCH:-false}"
         export AZURE_TRUSTED_LAUNCH
         return 0
     fi
 
     signing_mode="$(
-        ipe_validate_local_vhd_contract "${host_image}" "${ACL_IPE_CAPABLE:-}"
+        ipe_validate_local_vhd_contract "${host_image}" "${ACL_IPE_CAPABLE:-}" \
+            "${AZURE_TRUSTED_LAUNCH:-true}"
     )" || return 1
     if [[ "${signing_mode}" == "disabled" ]]; then
         if [[ -z "${ACL_IPE_CAPABLE:-}" ]]; then
@@ -137,17 +158,22 @@ ipe_configure_azure_trust() {
         return 0
     fi
 
+    ACL_IPE_CAPABLE=true
+    ACL_IPE_SIGNING_MODE="${signing_mode}"
+    export ACL_IPE_CAPABLE ACL_IPE_SIGNING_MODE
+    if [[ "${AZURE_TRUSTED_LAUNCH:-}" == "false" ]]; then
+        if [[ -n "${AZURE_SECURE_BOOT_CERTIFICATES:-}" ]]; then
+            echo "Standard VMs cannot enroll AZURE_SECURE_BOOT_CERTIFICATES" >&2
+            return 1
+        fi
+        export AZURE_TRUSTED_LAUNCH
+        return 0
+    fi
+
     host_certificate="$(dirname "${host_image}")/uki-signing-ca.pem"
     runtime_certificate="$(dirname "${runtime_image}")/uki-signing-ca.pem"
     ipe_validate_signing_certificate "${host_certificate}" || return 1
 
-    case "${AZURE_TRUSTED_LAUNCH:-}" in
-        ""|true) ;;
-        *)
-            echo "IPE-capable local VHDs require AZURE_TRUSTED_LAUNCH=true" >&2
-            return 1
-            ;;
-    esac
     case "${AZURE_SECURE_BOOT_CERTIFICATES:-}" in
         ""|"${runtime_certificate}") ;;
         *)
@@ -156,8 +182,6 @@ ipe_configure_azure_trust() {
             ;;
     esac
 
-    ACL_IPE_CAPABLE=true
-    ACL_IPE_SIGNING_MODE="${signing_mode}"
     AZURE_TRUSTED_LAUNCH=true
     AZURE_SECURE_BOOT_CERTIFICATES="${runtime_certificate}"
     export ACL_IPE_CAPABLE ACL_IPE_SIGNING_MODE

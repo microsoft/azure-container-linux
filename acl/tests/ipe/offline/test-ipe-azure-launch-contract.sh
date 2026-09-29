@@ -109,6 +109,12 @@ test_trust_derivation() {
     [[ "${AZURE_SECURE_BOOT_CERTIFICATES}" == "/work/artifacts/uki-signing-ca.pem" ]]
 
     AZURE_TRUSTED_LAUNCH=false
+    unset AZURE_SECURE_BOOT_CERTIFICATES
+    ipe_configure_azure_trust "${image}" "${runtime_image}"
+    [[ "${AZURE_TRUSTED_LAUNCH}" == "false" ]]
+    [[ -z "${AZURE_SECURE_BOOT_CERTIFICATES:-}" ]]
+    [[ "${ACL_IPE_SIGNING_MODE}" == "esrp" ]]
+    AZURE_SECURE_BOOT_CERTIFICATES="/work/artifacts/uki-signing-ca.pem"
     expect_failure ipe_configure_azure_trust "${image}" "${runtime_image}"
     AZURE_TRUSTED_LAUNCH=true
     AZURE_SECURE_BOOT_CERTIFICATES="/work/other.pem"
@@ -121,7 +127,28 @@ test_trust_derivation() {
     ACL_IPE_CAPABLE=true
     AZURE_TRUSTED_LAUNCH=""
     ipe_configure_azure_trust "${image}" "${runtime_image}"
-    [[ "${AZURE_TRUSTED_LAUNCH}" == "true" ]]
+    [[ "${AZURE_TRUSTED_LAUNCH}" == "false" ]]
+}
+
+test_standard_profile_contract() {
+    [[ "$(ipe_resolve_azure_trusted_launch false)" == false ]]
+    [[ "$(ipe_resolve_azure_trusted_launch true)" == true ]]
+    [[ "$(ipe_resolve_azure_trusted_launch false true)" == true ]]
+    expect_failure ipe_resolve_azure_trusted_launch true false
+    expect_failure ipe_resolve_azure_trusted_launch bogus
+    expect_failure ipe_resolve_azure_trusted_launch false bogus
+
+    local directory="${TEST_DIR}/standard"
+    local image="${directory}/acl_production_azure_test_image.vhd"
+    prepare_vhd "${directory}"
+    printf 'esrp\n' > "${directory}/ipe-signing-mode"
+    [[ "$(ipe_validate_local_vhd_contract "${image}" true false)" == esrp ]]
+    expect_failure ipe_validate_local_vhd_contract "${image}" true true
+    expect_failure ipe_validate_local_vhd_contract "${image}" true bogus
+    unset AZURE_DISK_URI AZURE_SECURE_BOOT_CERTIFICATES ACL_IPE_CAPABLE
+    AZURE_TRUSTED_LAUNCH=false
+    ipe_configure_azure_trust "${image}" "${image}"
+    [[ "${ACL_IPE_CAPABLE}" == true && "${AZURE_TRUSTED_LAUNCH}" == false ]]
 }
 
 test_argument_contracts() {
@@ -176,6 +203,9 @@ test_build_wrapper_contract() {
     SECURE_BOOT_ENABLED=true
     AZ_VM_ARGS="--user-data config.ign"
     validate_ipe_boot_path azure
+    SECURE_BOOT_ENABLED=false
+    validate_ipe_boot_path azure
+    SECURE_BOOT_ENABLED=true
 
     AZ_VM_ARGS="--enable-secure-boot false"
     expect_failure validate_ipe_boot_path azure
@@ -199,12 +229,52 @@ test_artifact_preflight_ordering() {
         "${image_to_vm}"
 }
 
+# shellcheck disable=SC2329
+check_build_test_selection() (
+    local expected_secure_boot_tests="$1"
+    shift
+    source_test_functions "${SCRIPT_DIR}/acl/build_rpm_image.sh" \
+        parse_args validate_ipe_boot_path
+    validate_ipe_mode_value() { :; }
+    load_reused_vm_type() { :; }
+    configure_ipe_mode() { :; }
+    operation_uses_local_image_artifact() { return 1; }
+    operation_uses_gallery_image() { return 1; }
+    operation_uses_vm_image() { return 0; }
+    error() { echo "$*" >&2; }
+
+    local BOARD=amd64-usr GROUP=production VM_TYPE=azure RETRY_ATTEMPTS=0
+    local BUILD_VM_IMAGE=false START_VM=false REUSE_IMAGE=false ACG_IMAGE_VERSION_ID=""
+    local ACL_IPE_CAPABLE=true BOOTLOADER_MODE=uki AZ_VM_ARGS="" SECURE_BOOT_ENABLED=true
+    local -a RUN_SCRIPTS=() RUN_HOST_SCRIPTS=()
+    unset RUN_TESTS
+    parse_args "$@"
+
+    local script secure_boot_tests=0
+    for script in "${RUN_SCRIPTS[@]}"; do
+        if [[ "${script}" == "./acl/tests/run-secureboot-test.sh" ]]; then
+            secure_boot_tests=$((secure_boot_tests + 1))
+        fi
+    done
+    [[ "${secure_boot_tests}" == "${expected_secure_boot_tests}" ]]
+    if [[ "${RUN_TESTS:-false}" == true ]]; then
+        [[ " ${RUN_HOST_SCRIPTS[*]} " == *" ./acl/tests/ipe/run-ipe-mode-toggle-test.sh "* ]]
+    fi
+)
+
 test_marker_contract
 test_local_vhd_contract
 test_trust_derivation
+test_standard_profile_contract
 test_argument_contracts
 test_build_wrapper_contract
 test_artifact_preflight_ordering
+check_build_test_selection 1 --run-tests
+check_build_test_selection 0 --run-tests --no-secure-boot
+check_build_test_selection 0 --no-secure-boot --run-tests
+check_build_test_selection 1 --run-tests --no-secure-boot --run-script=./acl/tests/run-secureboot-test.sh
+check_build_test_selection 1 --board=arm64-usr --run-tests --no-secure-boot
+check_build_test_selection 0 --run-script=custom-test.sh
 
 grep -Fq 'configure_local_ipe_azure_trust "${host_image}" "${azure_image}" || return 1' \
     "${SCRIPT_DIR}/run_azure_tests.sh"
