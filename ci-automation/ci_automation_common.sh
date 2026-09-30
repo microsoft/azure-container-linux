@@ -260,8 +260,9 @@ function docker_image_from_registry_or_buildcache() {
 }
 # --
 
-# Called by vendor test in case of complete failure not eligible for
-# reruns (like trying to run tests on unsupported architecture).
+# Called explicitly by a vendor test when a failure is not eligible for reruns
+# (for example, an unsupported architecture). Ordinary test failures never call
+# this helper and continue through the configured retry count.
 function break_retest_cycle() {
     local work_dir
     work_dir=$(dirname -- "${PWD}")

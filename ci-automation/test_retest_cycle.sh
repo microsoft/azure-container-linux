@@ -3,7 +3,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 #
-# Regression tests for grouped Kola retry-cycle stop signals.
+# Regression tests for explicit non-retryable stop signals in grouped Kola runs.
 
 set -euo pipefail
 
@@ -35,6 +35,9 @@ else
 fi
 rm -f "${TEST_TMPDIR}/__TESTS__/break_retests"
 
+# Ordinary test failures do not call break_retest_cycle() and continue through
+# MAX_RUNS. This models a vendor wrapper explicitly declaring that retrying
+# cannot help, and verifies that the grouped work directory preserves that signal.
 if (
     cd "${TEST_TMPDIR}"
     MAX_RUNS=3
@@ -52,9 +55,9 @@ if (
     done
     [[ "${ATTEMPTS}" -eq 1 ]]
 ); then
-    pass "nested test group stops a multi-attempt retry cycle"
+    pass "nested test group honors an explicit non-retryable stop signal"
 else
-    fail "nested test group did not stop after the first attempt"
+    fail "nested test group ignored an explicit non-retryable stop signal"
 fi
 
 (
