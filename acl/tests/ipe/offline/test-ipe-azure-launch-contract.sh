@@ -82,78 +82,31 @@ test_local_vhd_contract() {
     printf 'ephemeral\n' > "${directory}/ipe-signing-mode"
     [[ "$(ipe_validate_local_vhd_contract "${image}")" == "ephemeral" ]]
 
+    ipe_validate_signing_certificate "${directory}/uki-signing-ca.pem"
     printf 'not-a-certificate\n' > "${directory}/uki-signing-ca.pem"
-    expect_failure ipe_validate_local_vhd_contract "${image}"
+    expect_failure ipe_validate_signing_certificate "${directory}/uki-signing-ca.pem"
     create_certificate "${directory}"
     mv "${directory}/uki-signing-ca.pem" "${directory}/real-cert.pem"
     if [[ -z "${MSYSTEM:-}" ]] &&
         ln -s real-cert.pem "${directory}/uki-signing-ca.pem" 2>/dev/null; then
-        expect_failure ipe_validate_local_vhd_contract "${image}"
+        expect_failure ipe_validate_signing_certificate "${directory}/uki-signing-ca.pem"
     fi
-}
-
-test_trust_derivation() {
-    local directory="${TEST_DIR}/trust"
-    local image="${directory}/acl_production_azure_test_image.vhd"
-    local runtime_image="/work/artifacts/acl_production_azure_test_image.vhd"
-    prepare_vhd "${directory}"
-    create_certificate "${directory}"
+    rm -f "${directory}/uki-signing-ca.pem"
+    expect_failure ipe_validate_signing_certificate "${directory}/uki-signing-ca.pem"
     printf 'esrp\n' > "${directory}/ipe-signing-mode"
-
-    unset ACL_IPE_CAPABLE ACL_IPE_SIGNING_MODE
-    unset AZURE_DISK_URI AZURE_TRUSTED_LAUNCH AZURE_SECURE_BOOT_CERTIFICATES
-    ipe_configure_azure_trust "${image}" "${runtime_image}"
-    [[ "${ACL_IPE_CAPABLE}" == "true" ]]
-    [[ "${ACL_IPE_SIGNING_MODE}" == "esrp" ]]
-    [[ "${AZURE_TRUSTED_LAUNCH}" == "true" ]]
-    [[ "${AZURE_SECURE_BOOT_CERTIFICATES}" == "/work/artifacts/uki-signing-ca.pem" ]]
-
-    AZURE_TRUSTED_LAUNCH=false
-    unset AZURE_SECURE_BOOT_CERTIFICATES
-    ipe_configure_azure_trust "${image}" "${runtime_image}"
-    [[ "${AZURE_TRUSTED_LAUNCH}" == "false" ]]
-    [[ -z "${AZURE_SECURE_BOOT_CERTIFICATES:-}" ]]
-    [[ "${ACL_IPE_SIGNING_MODE}" == "esrp" ]]
-    AZURE_SECURE_BOOT_CERTIFICATES="/work/artifacts/uki-signing-ca.pem"
-    expect_failure ipe_configure_azure_trust "${image}" "${runtime_image}"
-    AZURE_TRUSTED_LAUNCH=true
-    AZURE_SECURE_BOOT_CERTIFICATES="/work/other.pem"
-    expect_failure ipe_configure_azure_trust "${image}" "${runtime_image}"
-
-    AZURE_DISK_URI="/subscriptions/example/image"
-    AZURE_SECURE_BOOT_CERTIFICATES="/work/artifacts/uki-signing-ca.pem"
-    expect_failure ipe_configure_azure_trust "${image}" "${runtime_image}"
-    unset AZURE_SECURE_BOOT_CERTIFICATES
-    ACL_IPE_CAPABLE=true
-    AZURE_TRUSTED_LAUNCH=""
-    ipe_configure_azure_trust "${image}" "${runtime_image}"
-    [[ "${AZURE_TRUSTED_LAUNCH}" == "false" ]]
-}
-
-test_standard_profile_contract() {
-    [[ "$(ipe_resolve_azure_trusted_launch false)" == false ]]
-    [[ "$(ipe_resolve_azure_trusted_launch true)" == true ]]
-    [[ "$(ipe_resolve_azure_trusted_launch false true)" == true ]]
-    expect_failure ipe_resolve_azure_trusted_launch true false
-    expect_failure ipe_resolve_azure_trusted_launch bogus
-    expect_failure ipe_resolve_azure_trusted_launch false bogus
-
-    local directory="${TEST_DIR}/standard"
-    local image="${directory}/acl_production_azure_test_image.vhd"
-    prepare_vhd "${directory}"
-    printf 'esrp\n' > "${directory}/ipe-signing-mode"
-    [[ "$(ipe_validate_local_vhd_contract "${image}" true false)" == esrp ]]
-    expect_failure ipe_validate_local_vhd_contract "${image}" true true
-    expect_failure ipe_validate_local_vhd_contract "${image}" true bogus
-    unset AZURE_DISK_URI AZURE_SECURE_BOOT_CERTIFICATES ACL_IPE_CAPABLE
-    AZURE_TRUSTED_LAUNCH=false
-    ipe_configure_azure_trust "${image}" "${image}"
-    [[ "${ACL_IPE_CAPABLE}" == true && "${AZURE_TRUSTED_LAUNCH}" == false ]]
+    [[ "$(ipe_validate_local_vhd_contract "${image}" true)" == esrp ]]
+    expect_failure ipe_validate_local_vhd_contract "${image}" false
+    : > "${image}"
+    expect_failure ipe_validate_local_vhd_contract "${image}" true
 }
 
 test_argument_contracts() {
     local argument
     local forbidden=(
+        "--image other"
+        "--ima=other"
+    )
+    local allowed=(
         "--security-type Standard"
         "--secu=Standard"
         "--security-t=Standard"
@@ -162,35 +115,27 @@ test_argument_contracts() {
         "--enable-secure-boot false"
         "--enable-s=false"
         "--enable-secure-b=false"
-        "--image other"
-        "--ima=other"
+        "--size Standard_D2s_v5"
+        "--si=Standard_D2s_v5"
+        "--siz=Standard_D2s_v5"
     )
 
     for argument in "${forbidden[@]}"; do
         local -a parsed=()
         ipe_split_argument_string parsed "${argument}"
-        expect_failure ipe_reject_azure_ipe_overrides "${parsed[@]}"
+        expect_failure ipe_reject_azure_image_overrides "${parsed[@]}"
     done
-    ipe_reject_azure_ipe_overrides --user-data config.ign
-
-    expect_failure ipe_reject_arm_size_overrides --size Standard_D2s_v5
-    expect_failure ipe_reject_arm_size_overrides --si=Standard_D2s_v5
-    expect_failure ipe_reject_arm_size_overrides --siz=Standard_D2s_v5
+    for argument in "${allowed[@]}"; do
+        local -a parsed=()
+        ipe_split_argument_string parsed "${argument}"
+        ipe_reject_azure_image_overrides "${parsed[@]}"
+    done
+    ipe_reject_azure_image_overrides --user-data config.ign
 
     local -a multiline=()
     ipe_split_argument_string multiline $'--priority Regular\n--user-data config.ign'
     [[ "${multiline[*]}" == "--priority Regular --user-data config.ign" ]]
 
-    expect_failure ipe_reject_kola_managed_overrides false --azure-image-file=other.vhd
-    expect_failure ipe_reject_kola_managed_overrides false --azure-disk-uri=id
-    expect_failure ipe_reject_kola_managed_overrides false --azure-blob-url=url
-    expect_failure ipe_reject_kola_managed_overrides false --azure-hyper-v-generation=V1
-    expect_failure ipe_reject_kola_managed_overrides false --azure-trusted-launch=false
-    expect_failure ipe_reject_kola_managed_overrides false --enable-secureboot=false
-    expect_failure ipe_reject_kola_managed_overrides false --azure-secureboot-certificate=other.pem
-    expect_failure ipe_reject_kola_managed_overrides false --azure-use-gallery
-    ipe_reject_kola_managed_overrides true --azure-use-gallery
-    expect_failure ipe_reject_kola_managed_overrides true --azure-use-gallery=false
 }
 
 test_build_wrapper_contract() {
@@ -208,7 +153,7 @@ test_build_wrapper_contract() {
     SECURE_BOOT_ENABLED=true
 
     AZ_VM_ARGS="--enable-secure-boot false"
-    expect_failure validate_ipe_boot_path azure
+    validate_ipe_boot_path azure
     AZ_VM_ARGS="--ima=other"
     expect_failure validate_ipe_boot_path azure
 
@@ -264,25 +209,14 @@ check_build_test_selection() (
 
 test_marker_contract
 test_local_vhd_contract
-test_trust_derivation
-test_standard_profile_contract
 test_argument_contracts
 test_build_wrapper_contract
 test_artifact_preflight_ordering
 check_build_test_selection 1 --run-tests
-check_build_test_selection 0 --run-tests --no-secure-boot
-check_build_test_selection 0 --no-secure-boot --run-tests
-check_build_test_selection 1 --run-tests --no-secure-boot --run-script=./acl/tests/run-secureboot-test.sh
+check_build_test_selection 1 --run-tests --no-secure-boot
+check_build_test_selection 1 --no-secure-boot --run-tests
+check_build_test_selection 2 --run-tests --no-secure-boot --run-script=./acl/tests/run-secureboot-test.sh
 check_build_test_selection 1 --board=arm64-usr --run-tests --no-secure-boot
 check_build_test_selection 0 --run-script=custom-test.sh
-
-grep -Fq 'configure_local_ipe_azure_trust "${host_image}" "${azure_image}" || return 1' \
-    "${SCRIPT_DIR}/run_azure_tests.sh"
-grep -Fq 'ipe_configure_azure_trust "${AZURE_IMAGE_NAME:-}" "${AZURE_IMAGE_NAME:-}"' \
-    "${SCRIPT_DIR}/ci-automation/vendor-testing/azure.sh"
-grep -Fq 'ipe_reject_kola_managed_overrides false "$@"' \
-    "${SCRIPT_DIR}/ci-automation/vendor-testing/azure.sh"
-grep -Fq 'images/${CIA_ARCH}/${CIA_VERNUM}/ipe-signing-mode' \
-    "${SCRIPT_DIR}/ci-automation/vendor-testing/azure.sh"
 
 echo "IPE Azure launch contract tests passed"

@@ -368,22 +368,21 @@ By default, before starting a new Azure VM, all the pre-existing resource groups
 
 For an IPE-capable local VHD, the artifact directory must contain an exact
 `ipe-signing-mode` marker (`ephemeral` or `esrp`, newline terminated).
-On AMD64, `--no-secure-boot` selects Standard Gen2 without vTPM or certificate
-enrollment. The default Secure Boot test lane instead requires the matching
-X.509 certificate at `uki-signing-ca.pem`. Azure ARM smoke constraints remain
-unchanged. An explicit `AZURE_TRUSTED_LAUNCH=true` can retain Trusted Launch
-with Secure Boot disabled; contradictory settings fail.
-`--run-tests` includes the Secure Boot check only when enabled (always for
-Azure ARM); an explicitly requested `--run-script` is never removed.
+The default Secure Boot smoke lane requires the matching X.509 certificate
+at `uki-signing-ca.pem`. On AMD64, `--no-secure-boot` disables Secure Boot
+without requiring that certificate, but retains the existing Trusted Launch
+VM and vTPM. An available certificate is still validated and enrolled.
+Azure ARM smoke constraints and `--run-tests` selection remain unchanged;
+the latter continues to include the Secure Boot check.
 
 The policy must still be kernel-trusted. An `esrp` marker alone is not proof:
 unpublished candidates and ESRP dev-test policies use test trust. Use the
 Secure Boot/enrollment lane for those policies, and require the live IPE
 assertions when claiming active audit on Standard.
 
-`--az-vm-args` remains available for unrelated `az vm create` options, but it
-cannot override the selected image, VM size on ARM64, or the Trusted Launch,
-vTPM, and Secure Boot settings. For IPE-capable local VHDs, an existing
+`--az-vm-args` cannot override the selected image for an IPE-capable launch.
+Other arguments retain the existing platform restrictions, including the
+ARM guard against size and security overrides. For IPE-capable local VHDs, an existing
 deterministic gallery version is not reused because its image and enrolled
 certificate identity cannot be verified.
 
@@ -548,19 +547,15 @@ AZURE_TOKEN_CREDENTIALS=AzureCLICredential \
   ./run_azure_tests.sh amd64 2 cl.ignition.v1.once coreos.ignition.once
 ```
 
-For local candidate VHDs, `run_azure_tests.sh` retains its Trusted Launch
-test-key lane by default. Set `AZURE_TRUSTED_LAUNCH=false` for Standard
-testing; no enrollment certificate is then required or injected. Existing
-gallery versions no longer force Trusted Launch merely because they are
-IPE-capable. Set `AZURE_TRUSTED_LAUNCH=true` for an intentional Secure Boot
-lane or legacy signature-bearing image. Raw test arguments cannot
-override the image source, generation, Trusted Launch, Secure Boot,
-certificate, or gallery mode.
-
-`AZURE_USE_GALLERY=--azure-use-gallery` still starts from the selected local
-VHD; its certificate is validated and enrolled only in the Trusted Launch
-lane. `AZURE_DISK_URI`, by contrast, selects a pre-existing gallery
-image version; local certificate injection is not possible on that path.
+`run_azure_tests.sh` and the Kola vendor launcher retain their default-branch
+behavior for both IPE-capable and disabled images. IPE does not inject
+Trusted Launch, Secure Boot or enrollment arguments. Existing raw Kola
+arguments remain available; this PR does not introduce profile selectors.
+`AZURE_USE_GALLERY=--azure-use-gallery` starts from the selected local VHD,
+whereas `AZURE_DISK_URI` selects a pre-existing gallery image version.
+Test-signed policies still need their test trust to activate: a booted but
+inactive policy is not evidence of working audit. Use the Secure Boot smoke
+lane for candidate-policy acceptance.
 
 **Arguments:**
 

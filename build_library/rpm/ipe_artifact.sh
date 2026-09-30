@@ -77,13 +77,8 @@ ipe_validate_signing_certificate() {
 ipe_validate_local_vhd_contract() {
     local image="$1"
     local expected_capability="${2:-}"
-    local require_certificate="${3:-true}"
-    local artifact_dir signing_mode certificate
+    local artifact_dir signing_mode
 
-    case "${require_certificate}" in
-        true|false) ;;
-        *) echo "Invalid certificate requirement: ${require_certificate}" >&2; return 1 ;;
-    esac
     if [[ -L "${image}" || ! -f "${image}" || ! -r "${image}" || ! -s "${image}" ]]; then
         echo "Azure VHD must be a readable, nonempty regular file: ${image}" >&2
         return 1
@@ -92,100 +87,7 @@ ipe_validate_local_vhd_contract() {
     artifact_dir="$(cd "$(dirname "${image}")" && pwd)"
     signing_mode="$(ipe_resolve_artifact_signing_mode "${artifact_dir}" "${expected_capability}")" ||
         return 1
-    if [[ "${signing_mode}" != "disabled" && "${require_certificate}" == "true" ]]; then
-        certificate="${artifact_dir}/uki-signing-ca.pem"
-        ipe_validate_signing_certificate "${certificate}" || return 1
-    fi
-
     printf '%s\n' "${signing_mode}"
-}
-
-ipe_resolve_azure_trusted_launch() {
-    local secure_boot="${1:-true}"
-    local trusted_launch="${2:-${secure_boot}}"
-
-    case "${secure_boot}:${trusted_launch}" in
-        true:true|false:true|false:false) ;;
-        true:false)
-            echo "Secure Boot requires Trusted Launch; use --no-secure-boot for Standard VMs" >&2
-            return 1
-            ;;
-        *)
-            echo "Secure Boot and Trusted Launch settings must be true or false" >&2
-            return 1
-            ;;
-    esac
-    printf '%s\n' "${trusted_launch}"
-}
-
-ipe_configure_azure_trust() {
-    local host_image="$1"
-    local runtime_image="$2"
-    local signing_mode host_certificate runtime_certificate
-
-    case "${ACL_IPE_CAPABLE:-}" in
-        ""|true|false) ;;
-        *)
-            echo "Invalid ACL_IPE_CAPABLE value: ${ACL_IPE_CAPABLE}" >&2
-            return 1
-            ;;
-    esac
-
-    case "${AZURE_TRUSTED_LAUNCH:-}" in
-        ""|true|false) ;;
-        *) echo "Invalid AZURE_TRUSTED_LAUNCH value" >&2; return 1 ;;
-    esac
-
-    if [[ -n "${AZURE_DISK_URI:-}" ]]; then
-        if [[ -n "${AZURE_SECURE_BOOT_CERTIFICATES:-}" ]]; then
-            echo "AZURE_SECURE_BOOT_CERTIFICATES cannot modify an existing gallery image version" >&2
-            return 1
-        fi
-        AZURE_TRUSTED_LAUNCH="${AZURE_TRUSTED_LAUNCH:-false}"
-        export AZURE_TRUSTED_LAUNCH
-        return 0
-    fi
-
-    signing_mode="$(
-        ipe_validate_local_vhd_contract "${host_image}" "${ACL_IPE_CAPABLE:-}" \
-            "${AZURE_TRUSTED_LAUNCH:-true}"
-    )" || return 1
-    if [[ "${signing_mode}" == "disabled" ]]; then
-        if [[ -z "${ACL_IPE_CAPABLE:-}" ]]; then
-            ACL_IPE_CAPABLE=false
-        fi
-        export ACL_IPE_CAPABLE
-        return 0
-    fi
-
-    ACL_IPE_CAPABLE=true
-    ACL_IPE_SIGNING_MODE="${signing_mode}"
-    export ACL_IPE_CAPABLE ACL_IPE_SIGNING_MODE
-    if [[ "${AZURE_TRUSTED_LAUNCH:-}" == "false" ]]; then
-        if [[ -n "${AZURE_SECURE_BOOT_CERTIFICATES:-}" ]]; then
-            echo "Standard VMs cannot enroll AZURE_SECURE_BOOT_CERTIFICATES" >&2
-            return 1
-        fi
-        export AZURE_TRUSTED_LAUNCH
-        return 0
-    fi
-
-    host_certificate="$(dirname "${host_image}")/uki-signing-ca.pem"
-    runtime_certificate="$(dirname "${runtime_image}")/uki-signing-ca.pem"
-    ipe_validate_signing_certificate "${host_certificate}" || return 1
-
-    case "${AZURE_SECURE_BOOT_CERTIFICATES:-}" in
-        ""|"${runtime_certificate}") ;;
-        *)
-            echo "IPE-capable local VHDs require the exact certificate ${runtime_certificate}" >&2
-            return 1
-            ;;
-    esac
-
-    AZURE_TRUSTED_LAUNCH=true
-    AZURE_SECURE_BOOT_CERTIFICATES="${runtime_certificate}"
-    export ACL_IPE_CAPABLE ACL_IPE_SIGNING_MODE
-    export AZURE_TRUSTED_LAUNCH AZURE_SECURE_BOOT_CERTIFICATES
 }
 
 ipe_split_argument_string() {
@@ -213,25 +115,9 @@ ipe_option_is_abbreviation() {
         [[ "${option}" == "${minimum_prefix}"* && "${canonical}" == "${option}"* ]]
 }
 
-ipe_reject_azure_security_overrides() {
+ipe_reject_azure_image_overrides() {
     local argument option
 
-    for argument; do
-        [[ "${argument}" == --* ]] || continue
-        option="$(ipe_option_name "${argument}")"
-        if ipe_option_is_abbreviation "${option}" --security-type --secu ||
-            ipe_option_is_abbreviation "${option}" --enable-vtpm --enable-v ||
-            ipe_option_is_abbreviation "${option}" --enable-secure-boot --enable-s; then
-            echo "IPE-capable Azure launches cannot override ${option}" >&2
-            return 1
-        fi
-    done
-}
-
-ipe_reject_azure_ipe_overrides() {
-    local argument option
-
-    ipe_reject_azure_security_overrides "$@" || return 1
     for argument; do
         [[ "${argument}" == --* ]] || continue
         option="$(ipe_option_name "${argument}")"
@@ -239,43 +125,5 @@ ipe_reject_azure_ipe_overrides() {
             echo "IPE-capable Azure launches cannot override ${option}" >&2
             return 1
         fi
-    done
-}
-
-ipe_reject_arm_size_overrides() {
-    local argument option
-
-    for argument; do
-        [[ "${argument}" == --* ]] || continue
-        option="$(ipe_option_name "${argument}")"
-        if ipe_option_is_abbreviation "${option}" --size --si; then
-            echo "Azure ARM launches cannot override ${option}" >&2
-            return 1
-        fi
-    done
-}
-
-ipe_reject_kola_managed_overrides() {
-    local allow_use_gallery="${1:-false}"
-    shift
-    local argument option
-
-    for argument; do
-        [[ "${argument}" == --* ]] || continue
-        option="$(ipe_option_name "${argument}")"
-        case "${option}" in
-            --azure-trusted-launch|--enable-secureboot|--azure-secureboot-certificate|\
-            --azure-image-file|--azure-disk-uri|--azure-blob-url|\
-            --azure-hyper-v-generation)
-                echo "Azure Kola launch arguments cannot override ${option}" >&2
-                return 1
-                ;;
-            --azure-use-gallery)
-                if [[ "${allow_use_gallery}" != "true" || "${argument}" != "--azure-use-gallery" ]]; then
-                    echo "Azure Kola launch arguments cannot override ${argument}" >&2
-                    return 1
-                fi
-                ;;
-        esac
     done
 }

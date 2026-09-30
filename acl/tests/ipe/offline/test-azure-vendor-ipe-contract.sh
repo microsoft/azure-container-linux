@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091,SC2016,SC2034
 
 set -euo pipefail
 
@@ -30,72 +31,10 @@ EOF
 
 cat > "${MOCK_BIN}/curl" <<'EOF'
 #!/bin/bash
-set -euo pipefail
-url="${*: -1}"
-if [[ " $* " == *" --head "* ]]; then
-    case "${BUILD_CACHE_MARKER_PROBE:-absent}" in
-        present) printf '200' ;;
-        absent) printf '404' ;;
-        error) exit 7 ;;
-        *) exit 2 ;;
-    esac
-    exit 0
-fi
-
-output_dir=.
-while [[ $# -gt 0 ]]; do
-    if [[ "$1" == "--output-dir" ]]; then
-        output_dir="$2"
-        shift 2
-        continue
-    fi
-    shift
-done
-mkdir -p "${output_dir}"
-case "${url##*/}" in
-    *.bz2)
-        : > "${output_dir}/${url##*/}"
-        ;;
-    ipe-signing-mode)
-        printf 'ephemeral\n' > "${output_dir}/ipe-signing-mode"
-        ;;
-    uki-signing-ca.pem)
-        cp "${BUILD_CACHE_CERT_SOURCE:?}" "${output_dir}/uki-signing-ca.pem"
-        ;;
-    *)
-        exit 2
-        ;;
-esac
+echo "Unexpected network request: $*" >&2
+exit 1
 EOF
-
-cat > "${MOCK_BIN}/lbzcat" <<'EOF'
-#!/bin/bash
-printf 'vhd\n'
-EOF
-
-chmod +x "${MOCK_BIN}/timeout" "${MOCK_BIN}/kola" \
-    "${MOCK_BIN}/curl" "${MOCK_BIN}/lbzcat"
-
-create_certificate() {
-    local directory="$1"
-    local subject='/CN=Azure vendor IPE test/'
-    if [[ -n "${MSYSTEM:-}" && "${MSYS2_ARG_CONV_EXCL:-}" != "*" ]]; then
-        subject='//CN=Azure vendor IPE test'
-    fi
-    openssl req -x509 -newkey rsa:2048 -nodes \
-        -subj "${subject}" \
-        -keyout "${directory}/ca.key" \
-        -out "${directory}/uki-signing-ca.pem" \
-        -days 1 >/dev/null 2>&1
-}
-
-prepare_vendor_work() {
-    local root="$1"
-    mkdir -p "${root}/work"
-    printf 'test-version\n' > "${root}/git_version"
-    printf 'developer\n' > "${root}/git_channel"
-    touch "${root}/first_run"
-}
+chmod +x "${MOCK_BIN}/timeout" "${MOCK_BIN}/kola" "${MOCK_BIN}/curl"
 
 assert_single_arg() {
     local expected="$1" file="$2"
@@ -106,194 +45,112 @@ assert_single_arg() {
 }
 
 run_vendor() {
-    local main_dir="$1"
-    shift
+    local main_dir="$1" arch="$2"
+    shift 2
     (
         cd "${SCRIPT_DIR}"
         PATH="${MOCK_BIN}:${PATH}" \
-        KOLA_ARGS_LOG="${KOLA_ARGS_LOG}" \
-        PACKAGE_SOURCE_MODE="${TEST_PACKAGE_SOURCE_MODE:-RPM}" \
+        PACKAGE_SOURCE_MODE=RPM \
         AZURE_amd64_MACHINE_SIZE=Standard_D2s_v5 \
+        AZURE_arm64_MACHINE_SIZE=Standard_D2ps_v5 \
         AZURE_LOCATION=westus2 \
         AZURE_PARALLEL=1 \
         bash ci-automation/vendor-testing/azure.sh \
-            "${main_dir}" "${main_dir}/work" amd64 1.0.0 results.tap "$@"
-    )
+            "${main_dir}" "${main_dir}/work" "${arch}" 1.0.0 results.tap "$@"
+    ) > "${main_dir}/vendor.log" 2>&1 || {
+        cat "${main_dir}/vendor.log" >&2
+        return 1
+    }
 }
 
-test_local_ipe_vhd_derives_final_kola_contract() {
-    local root="${TEST_DIR}/local"
-    local artifact_dir="${root}/artifacts"
-    local image="${artifact_dir}/acl_production_azure_test_image.vhd"
-    prepare_vendor_work "${root}"
-    mkdir -p "${artifact_dir}"
-    printf 'vhd\n' > "${image}"
-    printf 'ephemeral\n' > "${artifact_dir}/ipe-signing-mode"
-    create_certificate "${artifact_dir}"
-    KOLA_ARGS_LOG="${root}/kola.args"
-    export KOLA_ARGS_LOG
+test_ipe_does_not_select_kola_security() (
+    local arch="$1" source="$2"
+    local root="${TEST_DIR}/${arch}-${source}" mode size=Standard_D2s_v5
+    [[ "${arch}" != arm64 ]] || size=Standard_D2ps_v5
+    mkdir -p "${root}/work" "${root}/artifacts"
+    printf 'test-version\n' > "${root}/git_version"
+    printf 'developer\n' > "${root}/git_channel"
+    touch "${root}/first_run"
+    export KOLA_ARGS_LOG="${root}/kola.args"
+    export AZURE_IMAGE_NAME="${root}/artifacts/test.vhd"
+    export AZURE_USE_GALLERY=""
+    export AZURE_DISK_URI=""
+    export AZURE_TRUSTED_LAUNCH=true
+    export AZURE_SECURE_BOOT_CERTIFICATES="${root}/artifacts/uki-signing-ca.pem"
+    if [[ "${source}" == gallery ]]; then
+        AZURE_DISK_URI="/subscriptions/example/imageVersions/1"
+    else
+        printf 'vhd\n' > "${AZURE_IMAGE_NAME}"
+    fi
 
-    AZURE_IMAGE_NAME="${image}" \
-    AZURE_USE_GALLERY="--azure-use-gallery" \
-        run_vendor "${root}" cl.basic
+    for mode in disabled ephemeral esrp; do
+        export ACL_IPE_CAPABLE=false
+        export ACL_IPE_SIGNING_MODE="${mode}"
+        if [[ "${mode}" != disabled ]]; then
+            ACL_IPE_CAPABLE=true
+            printf '%s\n' "${mode}" > "${root}/artifacts/ipe-signing-mode"
+        fi
+        run_vendor "${root}" "${arch}" cl.basic >/dev/null
+        assert_single_arg "--board=${arch}-usr" "${KOLA_ARGS_LOG}"
+        assert_single_arg "--azure-size=${size}" "${KOLA_ARGS_LOG}"
+        assert_single_arg "--azure-hyper-v-generation=V2" "${KOLA_ARGS_LOG}"
+        if [[ "${source}" == gallery ]]; then
+            assert_single_arg "--azure-disk-uri=${AZURE_DISK_URI}" "${KOLA_ARGS_LOG}"
+            if grep -Fq -- '--azure-use-gallery' "${KOLA_ARGS_LOG}"; then
+                echo "Existing gallery launch unexpectedly requested image creation" >&2
+                return 1
+            fi
+        else
+            assert_single_arg "--azure-image-file=${AZURE_IMAGE_NAME}" "${KOLA_ARGS_LOG}"
+            assert_single_arg "--azure-use-gallery" "${KOLA_ARGS_LOG}"
+        fi
+        if grep -Eq -- '^--(azure-trusted-launch|enable-secureboot|azure-secureboot-certificate)' "${KOLA_ARGS_LOG}"; then
+            echo "IPE unexpectedly changed ${arch} ${source} launch security" >&2
+            return 1
+        fi
+        if [[ "${mode}" == disabled ]]; then
+            cp "${KOLA_ARGS_LOG}" "${root}/baseline.args"
+        else
+            cmp "${root}/baseline.args" "${KOLA_ARGS_LOG}"
+        fi
+    done
 
-    assert_single_arg "--azure-image-file=${image}" "${KOLA_ARGS_LOG}"
-    assert_single_arg "--azure-hyper-v-generation=V2" "${KOLA_ARGS_LOG}"
-    assert_single_arg "--azure-trusted-launch" "${KOLA_ARGS_LOG}"
-    assert_single_arg "--enable-secureboot" "${KOLA_ARGS_LOG}"
-    assert_single_arg "--azure-secureboot-certificate=${artifact_dir}/uki-signing-ca.pem" "${KOLA_ARGS_LOG}"
-    assert_single_arg "--azure-use-gallery" "${KOLA_ARGS_LOG}"
-}
+    AZURE_USE_GALLERY="--azure-trusted-launch --enable-secureboot" \
+        run_vendor "${root}" "${arch}" --azure-use-gallery=false >/dev/null
+    assert_single_arg --azure-trusted-launch "${KOLA_ARGS_LOG}"
+    assert_single_arg --enable-secureboot "${KOLA_ARGS_LOG}"
+    assert_single_arg --azure-use-gallery=false "${KOLA_ARGS_LOG}"
+)
 
-test_trailing_override_is_rejected_before_kola() {
-    local root="${TEST_DIR}/override"
-    local artifact_dir="${root}/artifacts"
-    local image="${artifact_dir}/acl_production_azure_test_image.vhd"
-    prepare_vendor_work "${root}"
-    mkdir -p "${artifact_dir}"
-    printf 'vhd\n' > "${image}"
-    printf 'esrp\n' > "${artifact_dir}/ipe-signing-mode"
-    create_certificate "${artifact_dir}"
-    KOLA_ARGS_LOG="${root}/kola.args"
-    export KOLA_ARGS_LOG
-    rm -f "${KOLA_ARGS_LOG}"
-
-    if AZURE_IMAGE_NAME="${image}" \
-        run_vendor "${root}" --enable-secureboot=false >/dev/null 2>&1; then
-        echo "Trailing Secure Boot override was accepted" >&2
+test_wrapper_does_not_forward_ipe_security() (
+    source "${SCRIPT_DIR}/run_azure_tests.sh"
+    local root="${TEST_DIR}/wrapper"
+    mkdir -p "${root}/sdk_container" "${root}/home/.azure"
+    cd "${root}"
+    export HOME="${root}/home"
+    export AZURE_SUBSCRIPTION_ID=00000000-0000-0000-0000-000000000000
+    export AZURE_TRUSTED_LAUNCH=true
+    export AZURE_SECURE_BOOT_CERTIFICATES=/work/uki-signing-ca.pem
+    export ACL_IPE_CAPABLE=true
+    export ACL_IPE_SIGNING_MODE=esrp
+    export PACKAGE_SOURCE_MODE=RPM
+    export AZURE_USE_GALLERY=--azure-use-gallery
+    az() { printf 'test-tenant\n'; }
+    set_azure_vars arm64 1
+    if grep -Eq 'AZURE_TRUSTED_LAUNCH|AZURE_SECURE_BOOT_CERTIFICATES|ACL_IPE_' sdk_container/.env; then
+        echo "Wrapper unexpectedly forwarded IPE launch settings" >&2
         return 1
     fi
-    [[ ! -e "${KOLA_ARGS_LOG}" ]]
+    unset AZURE_USE_GALLERY
+    source sdk_container/.env
+    [[ "${AZURE_USE_GALLERY}" == --azure-use-gallery ]]
+    [[ "${AZURE_IMAGE_NAME}" == /work/__build__/images/images/arm64-usr/latest/acl_production_azure_test_image.vhd ]]
+)
 
-    if AZURE_IMAGE_NAME="${image}" \
-        AZURE_USE_GALLERY="--azure-trusted-launch=false" \
-        run_vendor "${root}" cl.basic >/dev/null 2>&1; then
-        echo "IPE-capable VHD accepted an Azure gallery launch override" >&2
-        return 1
-    fi
-    [[ ! -e "${KOLA_ARGS_LOG}" ]]
-}
-
-test_standard_local_ipe_vhd_needs_no_enrollment() {
-    local root="${TEST_DIR}/standard"
-    local artifact_dir="${root}/artifacts"
-    local image="${artifact_dir}/acl_production_azure_test_image.vhd"
-    prepare_vendor_work "${root}"
-    mkdir -p "${artifact_dir}"
-    printf 'vhd\n' > "${image}"
-    printf 'esrp\n' > "${artifact_dir}/ipe-signing-mode"
-    KOLA_ARGS_LOG="${root}/kola.args"
-    export KOLA_ARGS_LOG
-    AZURE_IMAGE_NAME="${image}" AZURE_TRUSTED_LAUNCH=false \
-        run_vendor "${root}" cl.basic
-    assert_single_arg "--azure-image-file=${image}" "${KOLA_ARGS_LOG}"
-    if grep -Eq -- '^--(azure-trusted-launch|enable-secureboot|azure-secureboot-certificate)' "${KOLA_ARGS_LOG}"; then
-        echo "Standard IPE launch unexpectedly enabled Trusted Launch or enrollment" >&2
-        return 1
-    fi
-}
-
-test_existing_gallery_injects_no_certificate() {
-    local root="${TEST_DIR}/gallery"
-    prepare_vendor_work "${root}"
-    KOLA_ARGS_LOG="${root}/kola.args"
-    export KOLA_ARGS_LOG
-    unset AZURE_IMAGE_NAME AZURE_USE_GALLERY
-    unset ACL_IPE_CAPABLE ACL_IPE_SIGNING_MODE
-    unset AZURE_TRUSTED_LAUNCH AZURE_SECURE_BOOT_CERTIFICATES
-
-    AZURE_DISK_URI="/subscriptions/example/imageVersions/1" \
-        run_vendor "${root}" cl.basic
-
-    assert_single_arg "--azure-disk-uri=/subscriptions/example/imageVersions/1" "${KOLA_ARGS_LOG}"
-    if grep -Fq -- '--azure-secureboot-certificate=' "${KOLA_ARGS_LOG}"; then
-        echo "Existing gallery image attempted certificate injection" >&2
-        return 1
-    fi
-}
-
-test_disabled_vhd_keeps_legacy_kola_arguments() {
-    local root="${TEST_DIR}/disabled"
-    local artifact_dir="${root}/artifacts"
-    local image="${artifact_dir}/acl_production_azure_test_image.vhd"
-    prepare_vendor_work "${root}"
-    mkdir -p "${artifact_dir}"
-    printf 'vhd\n' > "${image}"
-    KOLA_ARGS_LOG="${root}/kola.args"
-    export KOLA_ARGS_LOG
-
-    AZURE_IMAGE_NAME="${image}" \
-    AZURE_USE_GALLERY="--azure-use-gallery=false" \
-        run_vendor "${root}" --enable-secureboot=false
-
-    assert_single_arg "--azure-use-gallery=false" "${KOLA_ARGS_LOG}"
-    assert_single_arg "--enable-secureboot=false" "${KOLA_ARGS_LOG}"
-}
-
-test_prefixed_retry_override_is_rejected_before_kola() {
-    local root="${TEST_DIR}/prefixed-override"
-    local artifact_dir="${root}/artifacts"
-    local image="${artifact_dir}/acl_production_azure_test_image.vhd"
-    prepare_vendor_work "${root}"
-    rm "${root}/first_run"
-    mkdir -p "${artifact_dir}"
-    printf 'vhd\n' > "${image}"
-    printf 'ephemeral\n' > "${artifact_dir}/ipe-signing-mode"
-    create_certificate "${artifact_dir}"
-    KOLA_ARGS_LOG="${root}/kola.args"
-    export KOLA_ARGS_LOG
-    rm -f "${KOLA_ARGS_LOG}"
-
-    if TEST_PACKAGE_SOURCE_MODE=PORTAGE \
-        AZURE_IMAGE_NAME="${image}" \
-        run_vendor "${root}" \
-            'extra-test.[Standard_NC6s_v3].--enable-secureboot=false' \
-            >/dev/null 2>&1; then
-        echo "Prefixed retry override was accepted" >&2
-        return 1
-    fi
-    [[ ! -e "${KOLA_ARGS_LOG}" ]]
-}
-
-test_buildcache_probe_failure_is_fatal_and_retried() {
-    local root="${TEST_DIR}/buildcache"
-    local cert_dir="${root}/cert"
-    prepare_vendor_work "${root}"
-    mkdir -p "${cert_dir}"
-    create_certificate "${cert_dir}"
-    KOLA_ARGS_LOG="${root}/kola.args"
-    export KOLA_ARGS_LOG
-    rm -f "${KOLA_ARGS_LOG}"
-
-    if BUILD_CACHE_MARKER_PROBE=error \
-        BUILD_CACHE_CERT_SOURCE="${cert_dir}/uki-signing-ca.pem" \
-        AZURE_IMAGE_NAME=downloaded.vhd \
-        run_vendor "${root}" cl.basic >/dev/null 2>&1; then
-        echo "Buildcache metadata transport failure was accepted" >&2
-        return 1
-    fi
-    [[ -f "${root}/work/downloaded.vhd" ]]
-    [[ -f "${root}/work/downloaded.vhd.buildcache-source" ]]
-    [[ ! -e "${KOLA_ARGS_LOG}" ]]
-
-    CIA_DEBUGIMAGESEXIST=no \
-    BUILD_CACHE_MARKER_PROBE=present \
-    BUILD_CACHE_CERT_SOURCE="${cert_dir}/uki-signing-ca.pem" \
-    AZURE_IMAGE_NAME=downloaded.vhd \
-        run_vendor "${root}" cl.basic >/dev/null 2>&1
-
-    assert_single_arg "--azure-image-file=downloaded.vhd" "${KOLA_ARGS_LOG}"
-    assert_single_arg "--azure-trusted-launch" "${KOLA_ARGS_LOG}"
-    assert_single_arg "--enable-secureboot" "${KOLA_ARGS_LOG}"
-    assert_single_arg "--azure-secureboot-certificate=./uki-signing-ca.pem" "${KOLA_ARGS_LOG}"
-}
-
-test_local_ipe_vhd_derives_final_kola_contract
-test_standard_local_ipe_vhd_needs_no_enrollment
-test_trailing_override_is_rejected_before_kola
-test_existing_gallery_injects_no_certificate
-test_disabled_vhd_keeps_legacy_kola_arguments
-test_prefixed_retry_override_is_rejected_before_kola
-test_buildcache_probe_failure_is_fatal_and_retried
-
-echo "Azure vendor IPE contract tests passed"
+for arch in amd64 arm64; do
+    for source in local gallery; do
+        test_ipe_does_not_select_kola_security "${arch}" "${source}"
+    done
+done
+test_wrapper_does_not_forward_ipe_security
+echo "Azure vendor baseline launch contract tests passed"

@@ -263,8 +263,8 @@ validate_ipe_boot_path() {
     fi
     if [[ "${vm_type}" == "azure" ]]; then
         ipe_split_argument_string az_vm_args "${AZ_VM_ARGS:-}"
-        if ! ipe_reject_azure_ipe_overrides "${az_vm_args[@]}"; then
-            error "--az-vm-args cannot override the image or Trusted Launch settings for IPE-capable Azure images"
+        if ! ipe_reject_azure_image_overrides "${az_vm_args[@]}"; then
+            error "--az-vm-args cannot override the image for IPE-capable Azure images"
             return 1
         fi
     fi
@@ -478,6 +478,7 @@ parse_args() {
             --run-tests)
                 START_VM=true
                 RUN_TESTS=true
+                RUN_SCRIPTS+=("./acl/tests/run-secureboot-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-container-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-systemd-health-test.sh")
                 RUN_SCRIPTS+=("./acl/tests/run-dmesg-io-error-test.sh")
@@ -831,13 +832,6 @@ parse_args() {
         ipe_vm_type="${VM_TYPE}"
     fi
     validate_ipe_boot_path "${ipe_vm_type}" || exit 1
-
-    # Resolve this after all flags so --no-secure-boot works in either order.
-    if [[ "${RUN_TESTS:-false}" == "true" ]] &&
-        [[ "${SECURE_BOOT_ENABLED:-true}" == "true" ||
-        ( "$VM_TYPE" == "azure" && "$BOARD" == "arm64-usr" ) ]]; then
-        RUN_SCRIPTS=("./acl/tests/run-secureboot-test.sh" "${RUN_SCRIPTS[@]}")
-    fi
 
     # Add platform-specific host-side tests when --run-tests is used.
     if [[ "${RUN_TESTS:-false}" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
