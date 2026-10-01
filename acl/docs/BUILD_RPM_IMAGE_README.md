@@ -155,7 +155,51 @@ Build the Flatcar production image using RPM package sources.
 ./acl/build_rpm_image.sh --rebuild
 ```
 
+Development and test images can include IPE assets signed with a build-local
+ephemeral PKCS#7 signature:
+
+```bash
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit --ipe-signing-mode=ephemeral
+```
+
+Production IPE validation builds use `--ipe-signing-mode=esrp`; normal
+production pipeline defaults remain `--ipe-mode=disabled` until activation is
+approved. The build still creates a build-local ephemeral candidate CMS so
+pre-publish VHDs remain bootable; the Pipelines collector exports the staged
+raw policy from `${BUILD_DIR}/acl-ipe-policy/` for downstream ESRP signing by
+definition 5425.
+
+```bash
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit --ipe-signing-mode=esrp
+```
+
+The candidate CMS is staged at
+`${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred` and installed as a
+per-UKI `.extra.d` credential companion. The UKI cmdline includes an
+`acl.ipe.policy_sha256=<hash>` token that binds the credential to the signed
+kernel command line. At boot, the initramfs loader validates the credential
+SHA-256, loads the policy into the kernel IPE subsystem, and only activates it
+when Azure IMDS requests audit (permissive) mode. Loading is best effort on
+Azure; validation or loading failures are logged and leave IPE inactive
+without blocking boot. `enforcing` is reserved for future use: it is rejected
+at build time, and a manually set runtime `ipe=enforcing` request is logged
+as unsupported and left safely inactive — it never fails boot.
+
+`/usr` retains its read-only dm-verity mapping, root hash and corruption
+checks, but no detached root-hash signature is generated or required.
+When IPE is active in audit mode, `/usr` execution succeeds with would-deny
+events because it does not match the policy's signed-dm-verity allow rule.
+The IPE policy itself remains signed and must be accepted by the kernel.
+Rebuild older source images that carry `verity-usr-*.p7s.cred` companions;
+conversion rejects them rather than silently dropping a required signature.
+
+Live IPE mode testing currently uses the Azure IMDS UKI path. IPE capability
+does not require Secure Boot: a production policy trusted by the kernel can
+run in audit mode on Standard Gen2. QEMU runtime testing still requires
+`--ipe-mode=disabled`, which is also the default.
+
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
+
 
 ### Phase 4: Build VM Image (Optional)
 
@@ -322,6 +366,26 @@ By default, before starting a new Azure VM, all the pre-existing resource groups
 ./acl/build_rpm_image.sh --start-vm --vm-type=azure --no-cleanup
 ```
 
+For an IPE-capable local VHD, the artifact directory must contain an exact
+`ipe-signing-mode` marker (`ephemeral` or `esrp`, newline terminated).
+The default Secure Boot smoke lane requires the matching X.509 certificate
+at `uki-signing-ca.pem`. On AMD64, `--no-secure-boot` disables Secure Boot
+without requiring that certificate, but retains the existing Trusted Launch
+VM and vTPM. An available certificate is still validated and enrolled.
+Azure ARM smoke constraints and `--run-tests` selection remain unchanged;
+the latter continues to include the Secure Boot check.
+
+The policy must still be kernel-trusted. An `esrp` marker alone is not proof:
+unpublished candidates and ESRP dev-test policies use test trust. Use the
+Secure Boot/enrollment lane for those policies, and require the live IPE
+assertions when claiming active audit on Standard.
+
+`--az-vm-args` cannot override the selected image for an IPE-capable launch.
+Other arguments retain the existing platform restrictions, including the
+ARM guard against size and security overrides. For IPE-capable local VHDs, an existing
+deterministic gallery version is not reused because its image and enrolled
+certificate identity cannot be verified.
+
 You can also use the `--run-script` flag to run tests on the Azure VM, just like with the QEMU VM.
 
 #### Access the VM
@@ -482,6 +546,16 @@ AZURE_SUBSCRIPTION_ID="<your-subscription-id>" \
 AZURE_TOKEN_CREDENTIALS=AzureCLICredential \
   ./run_azure_tests.sh amd64 2 cl.ignition.v1.once coreos.ignition.once
 ```
+
+`run_azure_tests.sh` and the Kola vendor launcher retain their default-branch
+behavior for both IPE-capable and disabled images. IPE does not inject
+Trusted Launch, Secure Boot or enrollment arguments. Existing raw Kola
+arguments remain available; this PR does not introduce profile selectors.
+`AZURE_USE_GALLERY=--azure-use-gallery` starts from the selected local VHD,
+whereas `AZURE_DISK_URI` selects a pre-existing gallery image version.
+Test-signed policies still need their test trust to activate: a booted but
+inactive policy is not evidence of working audit. Use the Secure Boot smoke
+lane for candidate-policy acceptance.
 
 **Arguments:**
 
