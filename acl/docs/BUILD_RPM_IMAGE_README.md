@@ -162,11 +162,15 @@ Build the Flatcar production image using RPM package sources.
 The containerd sysext includes `erofs-utils`, an inactive configuration fragment
 at `/usr/share/containerd2/acl-erofs.toml`, and the
 `/usr/libexec/containerd2/acl-select-profile` helper. On every containerd start,
-the helper uses `containerd config dump` to resolve and migrate the existing
-`CONTAINERD_CONFIG`, including its transitive imports. It writes that native
-version-4 configuration under `/run/containerd/acl-config.toml`, replacing only
-the generated root import list with the EROFS fragment. The base files remain
-untouched, and nested imports cannot override the fragment afterward.
+the helper writes a version-4 import wrapper at `/run/containerd/acl-config.toml`
+that imports the existing `CONTAINERD_CONFIG` followed by the EROFS fragment.
+Containerd loads and merges the original files itself; they are never rewritten
+or replaced by `config dump` output. This preserves explicit empty settings and
+normal daemon errors for missing imports.
+The helper uses `config dump` only to check the three required profile settings.
+Because native imports load breadth-first, nested base imports that override
+those settings are rejected; remove the conflicting settings from those imports
+before activating the profile. Compatible nested imports remain supported.
 The fragment enables the snapshotter's `enable_dmverity_referrers` option,
 selects EROFS for CRI, and enables its differ for create-time re-unpacking.
 The matching consumer discovers signed referrers through the transfer service;
