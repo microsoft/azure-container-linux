@@ -10,20 +10,24 @@ if [[ -z "${base_config}" || ! -r "${base_config}" ]]; then
     exit 1
 fi
 
-if [[ "${base_config}" != /* ]]; then
-    base_config="$(pwd)/${base_config}"
-fi
-escaped_base="${base_config//\\/\\\\}"
-escaped_base="${escaped_base//\"/\\\"}"
-
 mkdir -p "$(dirname "${config_path}")"
 temporary_config="${config_path}.tmp.$$"
 trap 'rm -f -- "${temporary_config}"' EXIT
-{
-    printf 'version = 3\nimports = [\n'
-    printf '  "%s",\n' "${escaped_base}"
-    printf '  "/usr/share/containerd2/acl-erofs.toml",\n]\n'
-} > "${temporary_config}"
+# Native dumping resolves and migrates the complete base import graph first.
+# Replace only its normalized root imports, so nested files cannot undo the profile.
+if ! containerd --config "${base_config}" config dump |
+    awk '
+        /^imports = / {
+            print "imports = [\"/usr/share/containerd2/acl-erofs.toml\"]"
+            found++
+            next
+        }
+        { print }
+        END { if (found != 1) exit 1 }
+    ' > "${temporary_config}"; then
+    echo "ERROR: failed to resolve containerd base config at ${base_config}" >&2
+    exit 1
+fi
 mv -Tf "${temporary_config}" "${config_path}"
 trap - EXIT
 

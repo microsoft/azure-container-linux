@@ -161,19 +161,31 @@ Build the Flatcar production image using RPM package sources.
 
 The containerd sysext includes `erofs-utils`, an inactive configuration fragment
 at `/usr/share/containerd2/acl-erofs.toml`, and the
-`/usr/libexec/containerd2/acl-select-profile` helper. The helper imports the
-existing `CONTAINERD_CONFIG` plus the fragment without rewriting the base file.
+`/usr/libexec/containerd2/acl-select-profile` helper. On every containerd start,
+the helper uses `containerd config dump` to resolve and migrate the existing
+`CONTAINERD_CONFIG`, including its transitive imports. It writes that native
+version-4 configuration under `/run/containerd/acl-config.toml`, replacing only
+the generated root import list with the EROFS fragment. The base files remain
+untouched, and nested imports cannot override the fragment afterward.
 The fragment enables the snapshotter's `enable_dmverity_referrers` option,
-selects EROFS for CRI, and enables its differ for local pulls.
+selects EROFS for CRI, and enables its differ for create-time re-unpacking.
+The matching consumer discovers signed referrers through the transfer service;
+do not set `use_local_image_pull = true`. Explicit local pulling or CRI settings
+that trigger automatic local fallback are incompatible with the signed
+snapshotter and are rejected by the consumer, rather than silently unpacking
+unsigned layers.
 It leaves `dmverity_mode` at the upstream default (`auto`) unless the base
 configuration sets it; an explicit `off` is incompatible with referrers and
 causes snapshotter initialization to fail.
 Transfer unpacking and unsigned EROFS formatting retain upstream defaults
 unless the base configuration overrides them.
 
-This config-only branch does not add containerd patches or the IPE loader.
-Referrer support requires the signed EROFS containerd patches. Automatic
-activation requires the separate IPE integration to install
+The config regression test exercises the native loader, not just TOML syntax.
+Run it with the matching staged consumer binary:
+`CONTAINERD_BIN=/path/to/containerd bash acl/tests/ipe/offline/test-containerd-runtime-profile.sh`.
+
+This branch includes the signed EROFS containerd patches but not the IPE loader.
+Automatic activation requires the separate IPE integration to install
 `build_library/rpm/additional_files/containerd2/containerd-acl-profile.conf`
 as `/run/systemd/system/containerd.service.d/90-acl-profile.conf` after successful
 policy activation. Shipping these files alone leaves the normal runtime
