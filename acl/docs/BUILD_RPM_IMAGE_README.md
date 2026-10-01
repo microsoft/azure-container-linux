@@ -186,8 +186,12 @@ at build time, and a manually set runtime `ipe=enforcing` request is logged
 as unsupported and left safely inactive — it never fails boot.
 
 After successful IPE activation, the loader selects the signed EROFS containerd
-profile. It imports the node's existing `CONTAINERD_CONFIG` plus
-`/usr/share/containerd2/acl-erofs.toml`; it does not rewrite the base file.
+profile. On each containerd start, the helper uses `containerd config dump`
+to resolve and migrate the node's existing `CONTAINERD_CONFIG`, including
+transitive imports. It writes the native version-4 output to
+`/run/containerd/acl-config.toml`, replacing only its generated root import list
+with `/usr/share/containerd2/acl-erofs.toml`. Base files remain untouched, and
+nested imports cannot override the profile afterward.
 The profile enables `enable_dmverity_referrers` only on the EROFS snapshotter,
 without overriding `dmverity_mode` (upstream defaults to `auto`). An explicit
 `off` in the base config is incompatible with referrers and causes snapshotter
@@ -196,12 +200,21 @@ this profile. Inactive or rejected IPE activation leaves the base containerd
 configuration selected. The profile and `erofs-utils` always ship, so manual
 EROFS configuration does not require a separate package or build flag.
 The override selects EROFS for CRI and places the EROFS differ before `walking`
-for local pulls. Transfer-service unpack configuration is left to the base
+for create-time re-unpacking. The matching consumer discovers signed referrers
+through the transfer service; do not set `use_local_image_pull = true`.
+Explicit local pulling or CRI settings that trigger automatic local fallback
+are incompatible with the signed snapshotter and are rejected by the consumer,
+rather than silently unpacking unsigned layers.
+Transfer-service unpack configuration is left to the base
 configuration or containerd's built-in defaults; no per-architecture list is
 replaced.
 Signed referrers supply the producer's EROFS metadata; local tar-index and
 `mkfs_options` overrides are unnecessary. Unsigned EROFS layers use upstream
 formatting defaults.
+
+The config regression test exercises the native loader, not just TOML syntax.
+Run it with the matching staged consumer binary:
+`CONTAINERD_BIN=/path/to/containerd bash acl/tests/ipe/offline/test-containerd-runtime-profile.sh`.
 
 `/usr` retains its read-only dm-verity mapping, root hash and corruption
 checks, but no detached root-hash signature is generated or required.
@@ -217,7 +230,6 @@ run in audit mode on Standard Gen2. QEMU runtime testing still requires
 `--ipe-mode=disabled`, which is also the default.
 
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
-
 
 ### Phase 4: Build VM Image (Optional)
 
