@@ -185,6 +185,15 @@ without blocking boot. `enforcing` is reserved for future use: it is rejected
 at build time, and a manually set runtime `ipe=enforcing` request is logged
 as unsupported and left safely inactive — it never fails boot.
 
+After successful IPE activation, the loader selects the signed EROFS containerd
+profile. It imports the node's existing `CONTAINERD_CONFIG` plus
+`/usr/share/containerd2/acl-erofs.toml`; it does not rewrite the base file.
+The profile enables `enable_dmverity_referrers` only on the EROFS snapshotter,
+with `dmverity_mode = "auto"`. Both `ipe=audit` and `ipe=permissive` activate
+this profile. Inactive or rejected IPE activation leaves the base containerd
+configuration selected. The profile and `erofs-utils` always ship, so manual
+EROFS configuration does not require a separate package or build flag.
+
 `/usr` retains its read-only dm-verity mapping, root hash and corruption
 checks, but no detached root-hash signature is generated or required.
 When IPE is active in audit mode, `/usr` execution succeeds with would-deny

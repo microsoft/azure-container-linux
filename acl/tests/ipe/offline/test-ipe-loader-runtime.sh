@@ -6,6 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 LOADER="${SCRIPT_DIR}/build_library/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.sh"
 PROFILE_HELPER="${SCRIPT_DIR}/build_library/rpm/additional_files/acl-node-security-profile.sh"
+CONTAINERD_PROFILE="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-profile.conf"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
@@ -27,6 +28,7 @@ prepare_case() {
     local name="$1"
     CASE_DIR="${TMP_DIR}/${name}"
     IPE_DIR="${CASE_DIR}/ipe"
+    CONTAINERD_DROPIN="${CASE_DIR}/run/systemd/system/containerd.service.d/90-acl-profile.conf"
 
     mkdir -p "${IPE_DIR}"
     : > "${IPE_DIR}/new_policy"
@@ -48,6 +50,8 @@ run_loader() {
     ACL_IPE_CMDLINE_FILE="${CASE_DIR}/cmdline" \
     ACL_IPE_CREDENTIAL_PATH="${credential}" \
     ACL_IPE_SECURITY_PROFILE_HELPER="${CASE_DIR}/security-profile.sh" \
+    ACL_IPE_CONTAINERD_PROFILE="${ACL_IPE_CONTAINERD_PROFILE:-${CONTAINERD_PROFILE}}" \
+    ACL_IPE_CONTAINERD_DROPIN="${CONTAINERD_DROPIN}" \
         bash "${LOADER}" 2>&1
 }
 
@@ -61,6 +65,7 @@ assert_best_effort_skip() {
         { echo "missing best-effort warning: ${expected}" >&2; return 1; }
     grep -Fq 'continuing boot without activating IPE' <<< "${output}" ||
         { echo "loader did not report that boot would continue" >&2; return 1; }
+    [[ ! -e "${CONTAINERD_DROPIN}" ]]
 }
 
 # ---- Test: absent token → succeed as disabled ----
@@ -68,6 +73,7 @@ test_absent_token() {
     prepare_case absent-token
     printf 'root=/dev/sda1\n' > "${CASE_DIR}/cmdline"
     run_loader
+    [[ ! -e "${CONTAINERD_DROPIN}" ]]
 }
 
 # ---- Test: unreadable/missing cmdline → skip IPE and continue boot ----
@@ -105,6 +111,7 @@ EOF
     [[ -s "${IPE_DIR}/new_policy" ]]
     # enforce should remain unchanged (not set to 0)
     [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
+    [[ ! -e "${CONTAINERD_DROPIN}" ]]
 }
 
 # ---- Test: valid permissive activation ----
@@ -122,6 +129,7 @@ test_valid_audit_alias_active() {
 
 run_active_case() {
     local name="$1" imds_mode="$2"
+    local profile="${3:-${CONTAINERD_PROFILE}}" expected_status="${4:-0}"
     prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
     # Keep the writer blocked while the simulated kernel creates the policy
@@ -151,14 +159,47 @@ EOF
         exec 3<&-
     ) &
 
-    local output
-    output="$(run_loader "${CASE_DIR}/credential.p7b.cred")"
+    local output status=0
+    output="$(ACL_IPE_CONTAINERD_PROFILE="${profile}" run_loader "${CASE_DIR}/credential.p7b.cred")" ||
+        status=$?
     wait
+    [[ "${status}" == "${expected_status}" ]] ||
+        { echo "Unexpected loader status ${status}: ${output}" >&2; return 1; }
     grep -Fq "Using IPE mode '${imds_mode}'." <<< "${output}" ||
         { echo "loader did not report requested mode '${imds_mode}'" >&2; return 1; }
     [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
     [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
+    if [[ "${expected_status}" == 0 ]]; then
+        cmp "${CONTAINERD_PROFILE}" "${CONTAINERD_DROPIN}"
+    else
+        grep -Fq "ERROR: active IPE policy has no containerd profile" <<< "${output}"
+        [[ ! -e "${CONTAINERD_DROPIN}" ]]
+    fi
 }
+
+test_missing_containerd_profile() {
+    run_active_case missing-containerd-profile audit "${TMP_DIR}/missing.conf" 1
+}
+
+test_containerd_profile_install() (
+    moddir="${TMP_DIR}/fake-dracut-module"
+    initdir="${TMP_DIR}/fake-initrd"
+    systemdsystemunitdir="/usr/lib/systemd/system"
+    local seen=0
+    mkdir -p "${moddir}"
+    cp "${CONTAINERD_PROFILE}" "${moddir}/containerd-acl-profile.conf"
+    inst_multiple() { :; }
+    inst_script() { :; }
+    inst_simple() {
+        if [[ "$2" == "/usr/lib/acl/containerd-profile.conf" ]]; then
+            cmp "${CONTAINERD_PROFILE}" "$1"
+            seen=1
+        fi
+    }
+    source "${SCRIPT_DIR}/build_library/rpm/additional_files/dracut-acl-ipe-load/module-setup.sh"
+    install
+    [[ "${seen}" == 1 ]]
+)
 
 # ---- Test: 'enforcing' is reserved; loader logs an explicit unsupported
 # diagnostic and falls back safely to inactive without failing boot ----
@@ -181,6 +222,7 @@ EOF
     # Verify policy was loaded but not activated, and boot was not blocked.
     [[ -s "${IPE_DIR}/new_policy" ]]
     [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
+    [[ ! -e "${CONTAINERD_DROPIN}" ]]
 }
 
 
@@ -376,6 +418,8 @@ test_valid_inactive_load
 test_valid_disabled_alias_inactive
 test_valid_permissive
 test_valid_audit_alias_active
+test_missing_containerd_profile
+test_containerd_profile_install
 test_enforcing_mode_safe_fallback
 test_duplicate_token
 test_malformed_hash
