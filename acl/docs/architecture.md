@@ -53,7 +53,7 @@ ACL's primary boot path uses **systemd-boot** with **Unified Kernel Images (UKI)
 
 The `/usr` partition (USR-A) is a read-only btrfs filesystem with zstd compression. **dm-verity** provides block-level integrity verification:
 
-- The verity hash tree is stored in a dedicated hash partition (HASH-A, immediately following USR-A on disk).
+- The verity hash tree is stored in a dedicated hash partition (HASH-A, immediately following USR-A on disk). A separate, currently-unused 1 MiB partition (HASH-SIG-A) immediately follows HASH-A, reserved for a future verity root-hash signature.
 - At boot, `systemd-veritysetup` activates the verity device using slot-specific parameters delivered via a per-slot systemd-stub addon: `systemd.verity_usr_data=PARTUUID=<usr-data-partition>`, `systemd.verity_usr_hash=PARTUUID=<usr-hash-partition>`, and `systemd.verity_usr_options=panic-on-corruption`.
 - The main UKI cmdline stays slot-independent (`mount.usr=/dev/mapper/usr`); Trident switches slots by swapping which addon is active in `<uki>.efi.extra.d/`, so the same signed UKI boots either A or B. (The secondary GRUB boot path is out of scope for A/B update and is unchanged: it still uses the inline PARTUUID + hash-offset verity cmdline on the existing non-UKI partition layout.)
 - Any corruption of `/usr` causes an immediate kernel panic, preventing the system from running a tampered image.
