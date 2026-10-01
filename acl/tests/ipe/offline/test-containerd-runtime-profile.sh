@@ -70,7 +70,7 @@ assert set(plugins) == {
 }
 snapshotter = plugins["io.containerd.snapshotter.v1.erofs"]
 assert snapshotter["enable_dmverity_referrers"] is True
-assert snapshotter["dmverity_mode"] in ("auto", "on")
+assert set(snapshotter) == {"enable_dmverity_referrers"}
 assert plugins["io.containerd.cri.v1.images"]["snapshotter"] == "erofs"
 assert plugins["io.containerd.service.v1.diff-service"]["default"] == ["erofs", "walking"]
 PY

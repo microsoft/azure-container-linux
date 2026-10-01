@@ -189,7 +189,9 @@ After successful IPE activation, the loader selects the signed EROFS containerd
 profile. It imports the node's existing `CONTAINERD_CONFIG` plus
 `/usr/share/containerd2/acl-erofs.toml`; it does not rewrite the base file.
 The profile enables `enable_dmverity_referrers` only on the EROFS snapshotter,
-with `dmverity_mode = "auto"`. Both `ipe=audit` and `ipe=permissive` activate
+without overriding `dmverity_mode` (upstream defaults to `auto`). An explicit
+`off` in the base config is incompatible with referrers and causes snapshotter
+initialization to fail. Both `ipe=audit` and `ipe=permissive` activate
 this profile. Inactive or rejected IPE activation leaves the base containerd
 configuration selected. The profile and `erofs-utils` always ship, so manual
 EROFS configuration does not require a separate package or build flag.
