@@ -4,28 +4,56 @@ set -euo pipefail
 
 base_config="${1:-}"
 config_path="${ACL_CONTAINERD_CONFIG_PATH:-/run/containerd/acl-config.toml}"
+profile_path="${ACL_CONTAINERD_PROFILE_PATH:-/usr/share/containerd2/acl-erofs.toml}"
 
 if [[ -z "${base_config}" || ! -r "${base_config}" ]]; then
     echo "ERROR: containerd base config is not readable: ${base_config}" >&2
     exit 1
 fi
 
+if [[ ! -r "${profile_path}" ]]; then
+    echo "ERROR: containerd EROFS profile is not readable: ${profile_path}" >&2
+    exit 1
+fi
+
+toml_path() {
+    local path="$1"
+    [[ "${path}" == /* ]] || path="$(pwd)/${path}"
+    path="${path//\\/\\\\}"
+    path="${path//\"/\\\"}"
+    printf '"%s"' "${path}"
+}
+
 mkdir -p "$(dirname "${config_path}")"
 temporary_config="${config_path}.tmp.$$"
 trap 'rm -f -- "${temporary_config}"' EXIT
-# Native dumping resolves and migrates the complete base import graph first.
-# Replace only its normalized root imports, so nested files cannot undo the profile.
-if ! containerd --config "${base_config}" config dump |
+{
+    printf 'version = 4\nimports = ['
+    toml_path "${base_config}"
+    printf ', '
+    toml_path "${profile_path}"
+    printf ']\n'
+} > "${temporary_config}"
+
+# Inspect normalized output only; never use the lossy dump as runtime config.
+# Native imports are breadth-first, so nested base imports can override the profile.
+if ! containerd --config "${temporary_config}" config dump |
     awk '
-        /^imports = / {
-            print "imports = [\"/usr/share/containerd2/acl-erofs.toml\"]"
-            found++
-            next
+        {
+            gsub(/\047/, "\"")
+            sub(/^[[:space:]]+/, "")
+            sub(/[[:space:]]+$/, "")
         }
-        { print }
-        END { if (found != 1) exit 1 }
-    ' > "${temporary_config}"; then
-    echo "ERROR: failed to resolve containerd base config at ${base_config}" >&2
+        /^\[/ { section = $0 }
+        section == "[plugins.\"io.containerd.snapshotter.v1.erofs\"]" &&
+            /^enable_dmverity_referrers =/ { referrers = ($0 == "enable_dmverity_referrers = true") }
+        section == "[plugins.\"io.containerd.cri.v1.images\"]" &&
+            /^snapshotter =/ { snapshotter = ($0 == "snapshotter = \"erofs\"") }
+        section == "[plugins.\"io.containerd.service.v1.diff-service\"]" &&
+            /^default =/ { differ = ($0 == "default = [\"erofs\", \"walking\"]") }
+        END { if (!referrers || !snapshotter || !differ) exit 1 }
+    '; then
+    echo "ERROR: cannot select EROFS profile; check config errors or conflicting nested imports in ${base_config}" >&2
     exit 1
 fi
 mv -Tf "${temporary_config}" "${config_path}"

@@ -15,6 +15,7 @@ containerd_bin="$(command -v "${CONTAINERD_BIN:-containerd}")"
 mkdir "${TEST_ROOT}/bin"
 ln -s "${containerd_bin}" "${TEST_ROOT}/bin/containerd"
 export PATH="${TEST_ROOT}/bin:${PATH}"
+export ACL_CONTAINERD_PROFILE_PATH="${PROFILE_DIR}/containerd-acl-erofs.toml"
 
 prepare_root() {
     local root="$1"
@@ -53,7 +54,6 @@ ACL_CONTAINERD_CONFIG_PATH="${config_path}" "${SELECTOR}" "${base}" >/dev/null
 
 python3 - "${config_path}" "${base}" \
     "${PROFILE_DIR}/containerd-acl-erofs.toml" "${SELECTOR}" "${TEST_ROOT}" <<'PY'
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -63,7 +63,7 @@ import tomllib
 config_path, base, profile_path, selector, test_root = map(Path, sys.argv[1:])
 config = tomllib.loads(config_path.read_text())
 assert config["version"] == 4, "Set CONTAINERD_BIN to the target containerd 2.3.4 binary"
-assert config["imports"] == ["/usr/share/containerd2/acl-erofs.toml"]
+assert config == {"version": 4, "imports": [str(base), str(profile_path)]}
 
 with profile_path.open("rb") as profile_file:
     profile = tomllib.load(profile_file)
@@ -92,16 +92,8 @@ def generate(base_path, *, cwd=None, success=True):
     return result
 
 def effective():
-    # Resolve the installed profile path to the checkout without modifying /usr.
-    text = config_path.read_text()
-    assert text.count('imports = ["/usr/share/containerd2/acl-erofs.toml"]') == 1
-    probe = test_root / "effective.toml"
-    probe.write_text(text.replace(
-        'imports = ["/usr/share/containerd2/acl-erofs.toml"]',
-        f"imports = [{json.dumps(str(profile_path))}]",
-    ))
     result = subprocess.run(
-        ["containerd", "--config", str(probe), "config", "dump"],
+        ["containerd", "--config", str(config_path), "config", "dump"],
         text=True, capture_output=True, check=True,
     )
     return tomllib.loads(result.stdout)
@@ -128,15 +120,10 @@ for version in (2, 3, 4):
                 else 'plugins."io.containerd.cri.v1.images".registry')
     snapshotter = 'plugins."io.containerd.snapshotter.v1.erofs"'
     runtime.write_text(f'''version = {version}
-[{cri}]
-snapshotter = "overlayfs"
 [{registry}]
 config_path = "/etc/containerd/custom-certs.d"
 [{snapshotter}]
-enable_dmverity_referrers = false
 dmverity_mode = "auto"
-[plugins."io.containerd.service.v1.diff-service"]
-default = ["walking"]
 [plugins."io.containerd.transfer.v1.local"]
 max_concurrent_downloads = 7
 ''')
@@ -147,6 +134,9 @@ max_concurrent_downloads = 7
     source.write_text(
         f'version = {version}\nroot = "/var/lib/containerd-custom"\n'
         'imports = ["conf.d/*.toml"]\n'
+        f'[{cri}]\nsnapshotter = "overlayfs"\n'
+        f'[{snapshotter}]\nenable_dmverity_referrers = false\n'
+        '[plugins."io.containerd.service.v1.diff-service"]\ndefault = ["walking"]\n'
     )
     original = source.read_bytes()
     generate("base.toml", cwd=directory)
@@ -157,9 +147,25 @@ max_concurrent_downloads = 7
     assert merged["plugins"]["io.containerd.cri.v1.images"]["registry"]["config_path"] == "/etc/containerd/custom-certs.d"
     assert merged["plugins"]["io.containerd.transfer.v1.local"]["max_concurrent_downloads"] == 7
 
-    # Re-resolve imports on every start; do not reuse a stale flattened base.
+    # Native imports are breadth-first: reject conflicts without rewriting inputs.
+    previous_wrapper = config_path.read_bytes()
+    nested = runtime.read_text()
+    for conflicting in (
+        nested.replace('dmverity_mode =', 'enable_dmverity_referrers = false\ndmverity_mode ='),
+        nested + f'[{cri}]\nsnapshotter = "native"\n' +
+        (f'[{cri}.runtimes.runc]\nruntime_type = "io.containerd.runc.v2"\n' if version == 2 else ''),
+        nested + '[plugins."io.containerd.service.v1.diff-service"]\ndefault = ["walking"]\n',
+    ):
+        runtime.write_text(conflicting)
+        result = generate(source, success=False)
+        assert "conflicting nested imports" in result.stderr
+        assert config_path.read_bytes() == previous_wrapper
+        assert runtime.read_text() == conflicting
+        assert source.read_bytes() == original
+    runtime.write_text(nested)
+
+    # Native loading observes later changes; no flattened base is cached.
     runtime.write_text(runtime.read_text().replace("= 7", "= 9").replace('"auto"', '"off"'))
-    generate(source)
     merged = effective()
     assert_profile(merged)
     assert merged["plugins"]["io.containerd.transfer.v1.local"]["max_concurrent_downloads"] == 9
@@ -180,11 +186,39 @@ generate(escaped_base)
 # Preserve incompatible operator choices; the signed consumer rejects local pulls.
 assert effective()["plugins"]["io.containerd.cri.v1.images"]["use_local_image_pull"] is True
 
+empty_base = test_root / "empty-unpack.toml"
+empty_base.write_text('''version = 4
+[plugins."io.containerd.transfer.v1.local"]
+unpack_config = []
+''')
+generate(empty_base)
+# The actual input remains the original file, not the dump that drops this key.
+wrapper = tomllib.loads(config_path.read_text())
+assert wrapper == {"version": 4, "imports": [str(empty_base), str(profile_path)]}
+assert tomllib.loads(empty_base.read_text())["plugins"]["io.containerd.transfer.v1.local"]["unpack_config"] == []
+
+missing_import = test_root / "missing-import.toml"
+missing_import.write_text('version = 4\nimports = ["missing.toml", "empty-unpack.toml"]\n')
+# Dump may succeed partially; the daemon must still load the original import graph.
+generate(missing_import)
+assert tomllib.loads(config_path.read_text())["imports"][0] == str(missing_import)
+result = subprocess.run(
+    ["containerd", "--config", str(config_path),
+     "--root", str(test_root / "daemon-root"),
+     "--state", str(test_root / "daemon-state"),
+     "--address", str(test_root / "daemon.sock")],
+    text=True, capture_output=True, timeout=10,
+)
+assert result.returncode != 0
+assert "missing.toml" in result.stderr and "no such file" in result.stderr
+assert not (test_root / "daemon-root").exists()
+assert not (test_root / "daemon-state").exists()
+
 previous = config_path.read_bytes()
 invalid = test_root / "invalid.toml"
 invalid.write_text("not valid TOML !\n")
 result = generate(invalid, success=False)
-assert "failed to resolve containerd base config" in result.stderr
+assert "cannot select EROFS profile" in result.stderr
 assert config_path.read_bytes() == previous
 generate(test_root / "missing.toml", success=False)
 assert config_path.read_bytes() == previous
@@ -208,7 +242,7 @@ for failure in partial missing-imports; do
         echo "Selector accepted ${failure} dump output" >&2
         exit 1
     fi
-    grep -q 'ERROR: failed to resolve containerd base config' "${TEST_ROOT}/failure.log"
+    grep -q 'ERROR: cannot select EROFS profile' "${TEST_ROOT}/failure.log"
     cmp "${config_path}" "${TEST_ROOT}/previous.toml"
     [[ -z "$(find "$(dirname "${config_path}")" -name '*.tmp.*' -print)" ]]
 done
