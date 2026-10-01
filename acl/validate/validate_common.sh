@@ -342,6 +342,12 @@ run_scripts_via_console() {
 start_vm() {
     local vm_image_path="$1"
     local board="$2"
+    if [[ "${VM_TYPE}" == "azure" &&
+        -z "${ACG_IMAGE_VERSION_ID:-}" &&
+        "${REUSE_IMAGE:-false}" != "true" ]]; then
+        _prepare_local_ipe_artifact_contract "${vm_image_path}" ||
+            die "Local Azure image does not satisfy the IPE trust contract"
+    fi
     remove_old_vm
     section "Starting a ${VM_TYPE} VM '${VM_NAME}' Board: '${BOARD}'"
     case "$VM_TYPE" in
@@ -934,7 +940,12 @@ validate_main() {
             local host_failed=0
             for script in "${RUN_HOST_SCRIPTS[@]}"; do
                 info "Running host script: $script"
-                local host_args=("--vm-type=${VM_TYPE}" "--ssh-user=${VM_SSH_USER}")
+                local host_args=(
+                    "--vm-type=${VM_TYPE}"
+                    "--ssh-user=${VM_SSH_USER}"
+                    "--ssh-timeout=${VM_SSH_TIMEOUT}"
+                    "--boot-timeout=${VM_BOOT_TIMEOUT}"
+                )
                 [[ -n "${VM_SSH_KEY:-}" ]] && host_args+=("--ssh-key=${VM_SSH_KEY}")
                 if SCRIPT_DIR="${SCRIPT_DIR}" bash "$script" "${host_args[@]}"; then
                     info "Host script completed: $script"

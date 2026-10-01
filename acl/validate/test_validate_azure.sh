@@ -139,6 +139,168 @@ assert_arm_warning_does_not_corrupt_vm_result() {
     printf 'PASS: ARM security warnings do not corrupt VM classification\n'
 }
 
+assert_ipe_contract_rejects_before_az() {
+    local az_calls=0 rc=0
+    az() {
+        az_calls=$((az_calls + 1))
+        return 0
+    }
+
+    BOARD=amd64-usr
+    ACL_IPE_CAPABLE=true
+    SECURE_BOOT_ENABLED=true
+    local override
+    for override in \
+        "--image other" \
+        "--ima=other"; do
+        AZ_VM_ARGS="${override}"
+        rc=0
+        if _try_vm_create test-rg test-vm test-image test-sku test-region >/dev/null 2>&1; then
+            rc=0
+        else
+            rc=$?
+        fi
+        [[ ${rc} -eq 2 && ${az_calls} -eq 0 ]] || {
+            printf 'FAIL: IPE override %q reached az vm create: rc=%s calls=%s\n' \
+                "${override}" "${rc}" "${az_calls}" >&2
+            return 1
+        }
+    done
+
+    ACL_IPE_CAPABLE=false
+    AZ_VM_ARGS="--enable-secure-boot false"
+    printf 'PASS: IPE image contract rejects overrides before Azure CLI\n'
+}
+
+assert_ipe_vm_argv_is_canonical() {
+    warn() { :; }
+    local args_file="${TEST_TMPDIR}/ipe-vm-create-args"
+    az() {
+        if [[ "$1 $2" != "vm create" ]]; then
+            printf 'unexpected Azure CLI command: %s\n' "$*" >&2
+            return 1
+        fi
+        printf '%s\n' "$@" > "${args_file}"
+        printf '{"id":"test-vm"}\n'
+    }
+
+    local capability board secure_boot expected_secure_boot
+    export AZURE_TRUSTED_LAUNCH=false
+    AZ_VM_ARGS="--user-data config.ign"
+    for capability in false true; do
+        for board in amd64-usr arm64-usr; do
+            for secure_boot in false true; do
+                ACL_IPE_CAPABLE="${capability}"
+                BOARD="${board}"
+                SECURE_BOOT_ENABLED="${secure_boot}"
+                expected_secure_boot="${secure_boot}"
+                [[ "${board}" != arm64-usr ]] || expected_secure_boot=true
+                _try_vm_create test-rg test-vm test-image test-sku test-region >/dev/null
+
+                [[ "$(grep -cx -- '--security-type' "${args_file}")" -eq 1 ]]
+                [[ "$(grep -cx -- '--enable-vtpm' "${args_file}")" -eq 1 ]]
+                [[ "$(grep -cx -- '--enable-secure-boot' "${args_file}")" -eq 1 ]]
+                grep -Fxq -- 'TrustedLaunch' "${args_file}"
+                [[ "$(grep -A1 -x -- '--enable-vtpm' "${args_file}" | tail -1)" == true ]]
+                [[ "$(grep -A1 -x -- '--enable-secure-boot' "${args_file}" | tail -1)" == "${expected_secure_boot}" ]]
+                grep -Fxq -- '--user-data' "${args_file}"
+                grep -Fxq -- 'config.ign' "${args_file}"
+            done
+        done
+    done
+
+    printf 'PASS: smoke launch defaults are independent of IPE capability\n'
+}
+
+assert_local_ipe_artifact_contract() {
+    warn() { :; }
+    local artifact_dir="${TEST_TMPDIR}/ipe-local-artifact"
+    local image="${artifact_dir}/acl_production_azure_test_image.vhd"
+    mkdir -p "${artifact_dir}"
+    printf 'vhd\n' > "${image}"
+    printf 'ephemeral\n' > "${artifact_dir}/ipe-signing-mode"
+    local subject='/CN=validate azure test/'
+    [[ -z "${MSYSTEM:-}" ]] || subject='//CN=validate azure test'
+    openssl req -x509 -newkey rsa:2048 -nodes \
+        -subj "${subject}" \
+        -keyout "${artifact_dir}/ca.key" \
+        -out "${artifact_dir}/uki-signing-ca.pem" \
+        -days 1 >/dev/null 2>&1
+
+    ACL_IPE_CAPABLE=""
+    BOARD=amd64-usr
+    SECURE_BOOT_ENABLED=true
+    AZ_VM_ARGS=""
+    _prepare_local_ipe_artifact_contract "${image}"
+    local canonical_artifact_dir
+    canonical_artifact_dir="$(cd "${artifact_dir}" && pwd)"
+    [[ "${ACL_IPE_CAPABLE}" == "true" ]]
+    [[ "${_LOCAL_IPE_SIGNING_MODE}" == "ephemeral" ]]
+    [[ "${_LOCAL_IPE_SIGNING_CERT}" == "${canonical_artifact_dir}/uki-signing-ca.pem" ]]
+    [[ "${_LOCAL_IPE_ARTIFACT_PATH}" == "${canonical_artifact_dir}/acl_production_azure_test_image.vhd" ]]
+    local expected_cert_b64
+    expected_cert_b64="$(
+        openssl x509 -in "${artifact_dir}/uki-signing-ca.pem" -outform DER |
+            base64 |
+            tr -d '\r\n'
+    )"
+    [[ "${_LOCAL_IPE_SIGNING_CERT_B64}" == "${expected_cert_b64}" ]]
+
+    SECURE_BOOT_ENABLED=false
+    _prepare_local_ipe_artifact_contract "${image}"
+    [[ "${_LOCAL_IPE_SIGNING_CERT_B64}" == "${expected_cert_b64}" ]]
+    printf 'not a certificate\n' > "${artifact_dir}/uki-signing-ca.pem"
+    if _prepare_local_ipe_artifact_contract "${image}" >/dev/null 2>&1; then
+        printf 'FAIL: invalid supplied certificate was accepted with Secure Boot off\n' >&2
+        return 1
+    fi
+
+    SECURE_BOOT_ENABLED=true
+    rm -f "${artifact_dir}/uki-signing-ca.pem"
+    if _prepare_local_ipe_artifact_contract "${image}" >/dev/null 2>&1; then
+        printf 'FAIL: IPE local artifact without certificate was accepted\n' >&2
+        return 1
+    fi
+
+    SECURE_BOOT_ENABLED=false
+    _prepare_local_ipe_artifact_contract "${image}"
+    [[ "${ACL_IPE_CAPABLE}" == true ]]
+    [[ -z "${_LOCAL_IPE_SIGNING_CERT}" && -z "${_LOCAL_IPE_SIGNING_CERT_B64}" ]]
+
+    BOARD=arm64-usr
+    if _prepare_local_ipe_artifact_contract "${image}" >/dev/null 2>&1; then
+        printf 'FAIL: ARM Secure Boot launch accepted a missing certificate\n' >&2
+        return 1
+    fi
+
+    printf 'PASS: local IPE artifact contract is fail-closed\n'
+}
+
+assert_arm_guard_is_independent_of_ipe() {
+    warn() { :; }
+    BOARD=arm64-usr
+    local capability override
+    for capability in false true; do
+        ACL_IPE_CAPABLE="${capability}"
+        SECURE_BOOT_ENABLED=false
+        AZ_VM_ARGS=""
+        _enforce_arm_security_contract >/dev/null
+        [[ "${SECURE_BOOT_ENABLED}" == true ]]
+        for override in "--size Standard_D2ps_v5" "--security-type Standard" \
+            "--enable-vtpm false" "--enable-secure-boot false"; do
+            AZ_VM_ARGS="${override}"
+            if _enforce_arm_security_contract >/dev/null 2>&1; then
+                printf 'FAIL: existing ARM guard accepted %s (IPE=%s)\n' "${override}" "${capability}" >&2
+                return 1
+            fi
+        done
+        AZ_VM_ARGS="--siz=Standard_D2ps_v6"
+        _enforce_arm_security_contract
+    done
+
+    printf 'PASS: existing ARM guard is independent of IPE capability\n'
+}
+
 assert_classification SkuNotAvailable \
     "The requested VM size is not available in this location." \
     1 RETRYABLE_VM_CREATE_ERROR
@@ -169,6 +331,10 @@ assert_classification AuthorizationFailed \
     2 ""
 ( assert_successful_vm_create_returns_cli_output )
 ( assert_arm_warning_does_not_corrupt_vm_result )
+( assert_ipe_contract_rejects_before_az )
+( assert_ipe_vm_argv_is_canonical )
+( assert_local_ipe_artifact_contract )
+( assert_arm_guard_is_independent_of_ipe )
 
 assert_vm_size_family_parsing() {
     local test_case vm_size expected actual
