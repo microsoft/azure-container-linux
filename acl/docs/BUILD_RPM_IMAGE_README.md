@@ -193,6 +193,10 @@ with `dmverity_mode = "auto"`. Both `ipe=audit` and `ipe=permissive` activate
 this profile. Inactive or rejected IPE activation leaves the base containerd
 configuration selected. The profile and `erofs-utils` always ship, so manual
 EROFS configuration does not require a separate package or build flag.
+The override selects EROFS for CRI and places the EROFS differ before `walking`
+for local pulls. Transfer-service unpack configuration is left to the base
+configuration or containerd's built-in defaults; no per-architecture list is
+replaced.
 
 `/usr` retains its read-only dm-verity mapping, root hash and corruption
 checks, but no detached root-hash signature is generated or required.

@@ -60,7 +60,15 @@ assert config["imports"] == [
 ]
 
 with open(sys.argv[3], "rb") as profile_file:
-    plugins = tomllib.load(profile_file)["plugins"]
+    profile = tomllib.load(profile_file)
+assert profile["version"] == 3
+plugins = profile["plugins"]
+assert set(plugins) == {
+    "io.containerd.snapshotter.v1.erofs",
+    "io.containerd.differ.v1.erofs",
+    "io.containerd.cri.v1.images",
+    "io.containerd.service.v1.diff-service",
+}
 snapshotter = plugins["io.containerd.snapshotter.v1.erofs"]
 differ = plugins["io.containerd.differ.v1.erofs"]
 assert snapshotter["enable_dmverity_referrers"] is True
@@ -71,11 +79,6 @@ assert differ["enable_tar_index"] is True
 assert differ["mkfs_options"] == ["--sort=none", "-T", "0", "--mkfs-time"]
 assert plugins["io.containerd.cri.v1.images"]["snapshotter"] == "erofs"
 assert plugins["io.containerd.service.v1.diff-service"]["default"] == ["erofs", "walking"]
-assert plugins["io.containerd.transfer.v1.local"]["unpack_config"] == [
-    {"platform": f"linux/{arch}", "snapshotter": snapshotter, "differ": differ}
-    for arch in ("amd64", "arm64")
-    for snapshotter, differ in (("overlayfs", "walking"), ("erofs", "erofs"))
-]
 PY
 
 version3_base="${TEST_ROOT}/version3.toml"
