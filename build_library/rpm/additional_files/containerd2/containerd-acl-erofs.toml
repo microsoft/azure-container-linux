@@ -1,0 +1,17 @@
+# Imported for boot-activated IPE or explicit manual configuration.
+version = 3
+
+[plugins."io.containerd.snapshotter.v1.erofs"]
+  # Referrer discovery requires "auto" or "on", never "off".
+  dmverity_mode = "auto"
+  enable_dmverity_referrers = true
+
+[plugins."io.containerd.differ.v1.erofs"]
+  # The patched differ advertises signed materialization automatically.
+  enable_dmverity = true
+
+[plugins."io.containerd.cri.v1.images"]
+  snapshotter = "erofs"
+
+[plugins."io.containerd.service.v1.diff-service"]
+  default = ["erofs", "walking"]

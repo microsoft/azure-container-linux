@@ -1,0 +1,30 @@
+#!/bin/bash
+
+set -euo pipefail
+
+base_config="${1:-}"
+config_path="${ACL_CONTAINERD_CONFIG_PATH:-/run/containerd/acl-config.toml}"
+
+if [[ -z "${base_config}" || ! -r "${base_config}" ]]; then
+    echo "ERROR: containerd base config is not readable: ${base_config}" >&2
+    exit 1
+fi
+
+if [[ "${base_config}" != /* ]]; then
+    base_config="$(pwd)/${base_config}"
+fi
+escaped_base="${base_config//\\/\\\\}"
+escaped_base="${escaped_base//\"/\\\"}"
+
+mkdir -p "$(dirname "${config_path}")"
+temporary_config="${config_path}.tmp.$$"
+trap 'rm -f -- "${temporary_config}"' EXIT
+{
+    printf 'version = 3\nimports = [\n'
+    printf '  "%s",\n' "${escaped_base}"
+    printf '  "/usr/share/containerd2/acl-erofs.toml",\n]\n'
+} > "${temporary_config}"
+mv -Tf "${temporary_config}" "${config_path}"
+trap - EXIT
+
+echo "Selected EROFS containerd runtime profile (base: ${base_config})"

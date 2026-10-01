@@ -157,6 +157,25 @@ Build the Flatcar production image using RPM package sources.
 
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
 
+#### Signed EROFS configuration
+
+The containerd sysext includes `erofs-utils`, an inactive configuration fragment
+at `/usr/share/containerd2/acl-erofs.toml`, and the
+`/usr/libexec/containerd2/acl-select-profile` helper. The helper imports the
+existing `CONTAINERD_CONFIG` plus the fragment without rewriting the base file.
+The fragment enables the snapshotter's `enable_dmverity_referrers` option with
+`dmverity_mode = "auto"`, selects EROFS for CRI, and enables its differ for local
+pulls. Transfer unpacking and unsigned EROFS formatting retain upstream defaults
+unless the base configuration overrides them.
+
+This config-only branch does not add containerd patches or the IPE loader.
+Referrer support requires the signed EROFS containerd patches. Automatic
+activation requires the separate IPE integration to install
+`build_library/rpm/additional_files/containerd2/containerd-acl-profile.conf`
+as `/run/systemd/system/containerd.service.d/90-acl-profile.conf` after successful
+policy activation. Shipping these files alone leaves the normal runtime
+configuration selected.
+
 ### Phase 4: Build VM Image (Optional)
 
 Convert the production image to a VM-ready format. The script supports building two different types of images:
