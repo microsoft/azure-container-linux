@@ -186,12 +186,15 @@ at build time, and a manually set runtime `ipe=enforcing` request is logged
 as unsupported and left safely inactive — it never fails boot.
 
 After successful IPE activation, the loader selects the signed EROFS containerd
-profile. On each containerd start, the helper uses `containerd config dump`
-to resolve and migrate the node's existing `CONTAINERD_CONFIG`, including
-transitive imports. It writes the native version-4 output to
-`/run/containerd/acl-config.toml`, replacing only its generated root import list
-with `/usr/share/containerd2/acl-erofs.toml`. Base files remain untouched, and
-nested imports cannot override the profile afterward.
+profile. On each containerd start, the helper writes a version-4 import wrapper
+at `/run/containerd/acl-config.toml`, importing the existing `CONTAINERD_CONFIG`
+followed by `/usr/share/containerd2/acl-erofs.toml`. Containerd loads and merges
+the original files itself; they are never rewritten or replaced by `config dump`
+output. This preserves explicit empty settings and normal daemon errors for
+missing imports. The helper uses `config dump` only to check the three required
+profile settings. Native imports load breadth-first, so nested base imports
+that override those settings are rejected; remove the conflicting settings
+before activating the profile. Compatible nested imports remain supported.
 The profile enables `enable_dmverity_referrers` only on the EROFS snapshotter,
 without overriding `dmverity_mode` (upstream defaults to `auto`). An explicit
 `off` in the base config is incompatible with referrers and causes snapshotter
