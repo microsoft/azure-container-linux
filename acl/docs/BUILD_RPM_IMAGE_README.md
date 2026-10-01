@@ -197,6 +197,9 @@ The override selects EROFS for CRI and places the EROFS differ before `walking`
 for local pulls. Transfer-service unpack configuration is left to the base
 configuration or containerd's built-in defaults; no per-architecture list is
 replaced.
+Signed referrers supply the producer's EROFS metadata; local tar-index and
+`mkfs_options` overrides are unnecessary. Unsigned EROFS layers use upstream
+formatting defaults.
 
 `/usr` retains its read-only dm-verity mapping, root hash and corruption
 checks, but no detached root-hash signature is generated or required.

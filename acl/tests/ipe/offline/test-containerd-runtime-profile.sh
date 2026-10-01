@@ -75,8 +75,7 @@ assert snapshotter["enable_dmverity_referrers"] is True
 assert snapshotter["dmverity_mode"] in ("auto", "on")
 assert "enable_dmverity_referrers" not in differ
 assert differ["enable_dmverity"] is True
-assert differ["enable_tar_index"] is True
-assert differ["mkfs_options"] == ["--sort=none", "-T", "0", "--mkfs-time"]
+assert set(differ) == {"enable_dmverity"}
 assert plugins["io.containerd.cri.v1.images"]["snapshotter"] == "erofs"
 assert plugins["io.containerd.service.v1.diff-service"]["default"] == ["erofs", "walking"]
 PY

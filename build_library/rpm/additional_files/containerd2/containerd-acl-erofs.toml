@@ -9,9 +9,6 @@ version = 3
 [plugins."io.containerd.differ.v1.erofs"]
   # The patched differ advertises signed materialization automatically.
   enable_dmverity = true
-  enable_tar_index = true
-  # Match the producer's formatting; the differ supplies the layer UUID.
-  mkfs_options = ["--sort=none", "-T", "0", "--mkfs-time"]
 
 [plugins."io.containerd.cri.v1.images"]
   snapshotter = "erofs"
