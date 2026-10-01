@@ -65,17 +65,12 @@ assert profile["version"] == 3
 plugins = profile["plugins"]
 assert set(plugins) == {
     "io.containerd.snapshotter.v1.erofs",
-    "io.containerd.differ.v1.erofs",
     "io.containerd.cri.v1.images",
     "io.containerd.service.v1.diff-service",
 }
 snapshotter = plugins["io.containerd.snapshotter.v1.erofs"]
-differ = plugins["io.containerd.differ.v1.erofs"]
 assert snapshotter["enable_dmverity_referrers"] is True
 assert snapshotter["dmverity_mode"] in ("auto", "on")
-assert "enable_dmverity_referrers" not in differ
-assert differ["enable_dmverity"] is True
-assert set(differ) == {"enable_dmverity"}
 assert plugins["io.containerd.cri.v1.images"]["snapshotter"] == "erofs"
 assert plugins["io.containerd.service.v1.diff-service"]["default"] == ["erofs", "walking"]
 PY
