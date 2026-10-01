@@ -2,8 +2,6 @@
 version = 3
 
 [plugins."io.containerd.snapshotter.v1.erofs"]
-  # Referrer discovery requires "auto" or "on", never "off".
-  dmverity_mode = "auto"
   enable_dmverity_referrers = true
 
 [plugins."io.containerd.cri.v1.images"]

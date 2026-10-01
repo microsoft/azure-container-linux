@@ -163,9 +163,12 @@ The containerd sysext includes `erofs-utils`, an inactive configuration fragment
 at `/usr/share/containerd2/acl-erofs.toml`, and the
 `/usr/libexec/containerd2/acl-select-profile` helper. The helper imports the
 existing `CONTAINERD_CONFIG` plus the fragment without rewriting the base file.
-The fragment enables the snapshotter's `enable_dmverity_referrers` option with
-`dmverity_mode = "auto"`, selects EROFS for CRI, and enables its differ for local
-pulls. Transfer unpacking and unsigned EROFS formatting retain upstream defaults
+The fragment enables the snapshotter's `enable_dmverity_referrers` option,
+selects EROFS for CRI, and enables its differ for local pulls.
+It leaves `dmverity_mode` at the upstream default (`auto`) unless the base
+configuration sets it; an explicit `off` is incompatible with referrers and
+causes snapshotter initialization to fail.
+Transfer unpacking and unsigned EROFS formatting retain upstream defaults
 unless the base configuration overrides them.
 
 This config-only branch does not add containerd patches or the IPE loader.
