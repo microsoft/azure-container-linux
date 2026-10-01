@@ -5,7 +5,7 @@
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.4
-Release: 6030.verity%{?dist}
+Release: 3%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -15,26 +15,20 @@ Distribution: Azure Linux
 Source0: https://github.com/containerd/containerd/archive/v%{version}.tar.gz#/%{upstream_name}-%{version}.tar.gz
 Source1: containerd.service
 Source2: containerd.toml
-Source3: containerd-acl-erofs.toml
-Source4: containerd-acl-config.toml
-Source5: containerd-acl-profile.conf
-Source6: containerd-acl-tmpfiles.conf
-Source7: containerd-acl-erofs-runtime.toml
-Source8: containerd-acl-erofs-config.toml
-Source9: containerd-acl-select-profile
 
 Patch0:	multi-snapshotters-support.patch
 Patch1:	tardev-support.patch
 Patch2:	fix-TestCgroupNamespace-cgroupv1.patch
 Patch3:	CVE-2026-56852.patch
 Patch4:	CVE-2026-37236.patch
-Patch5:	0001-erofs-add-signed-dm-verity-mapper-foundation.patch
-Patch6:	0002-erofs-consume-compact-v1-signed-artifacts.patch
+Patch5:	fix-wrapped-enotsup-selinux-relabel.patch
+Patch6:	0001-erofs-add-signed-dm-verity-mapper-foundation.patch
+Patch7:	0002-erofs-discover-and-validate-signed-dmverity-referrers.patch
 
 %{?systemd_requires}
 
 # Temporarily stay on Go 1.26 until the Go 1.27 ML-KEM backend is fixed.
-BuildRequires: golang = 1.26.7
+BuildRequires: (golang < 1.27 with golang >= 1.26.7)
 BuildRequires: go-md2man
 BuildRequires: make
 BuildRequires: systemd-rpm-macros
@@ -63,26 +57,18 @@ low-level storage and network attachments, etc.
 containerd is designed to be embedded into a larger system, rather than being
 used directly by developers or end-users.
 
-%package erofs
-Summary: EROFS/dm-verity profile for Azure Container Linux
-Requires: %{name} = %{version}-%{release}
-Requires: erofs-utils
-
-%description erofs
-Provides the opt-in EROFS and signed dm-verity runtime profile used by Azure
-Container Linux. The main containerd2 package remains behavior-neutral.
-
 %prep
 %autosetup -p1 -n %{upstream_name}-%{version}
 
 %build
-export GOEXPERIMENT=ms_nocgo_opensslcrypto
 export BUILDTAGS="-mod=vendor"
+# Go 1.26 requires this experiment for cgo-less OpenSSL systemcrypto.
+export GOEXPERIMENT=ms_nocgo_opensslcrypto
 make VERSION="%{version}" REVISION="%{commit_hash}" binaries man
 
 %check
-export GOEXPERIMENT=ms_nocgo_opensslcrypto
 export BUILDTAGS="-mod=vendor"
+export GOEXPERIMENT=ms_nocgo_opensslcrypto
 make VERSION="%{version}" REVISION="%{commit_hash}" test
 
 %install
@@ -92,14 +78,6 @@ mkdir -p %{buildroot}/%{_unitdir}
 install -D -p -m 0644 %{SOURCE1} %{buildroot}%{_unitdir}/containerd.service
 install -D -p -m 0644 %{SOURCE2} %{buildroot}%{_sysconfdir}/containerd/config.toml
 install -vdm 755 %{buildroot}/opt/containerd/{bin,lib}
-
-install -D -p -m 0644 %{SOURCE3} %{buildroot}%{_datadir}/containerd2/acl-erofs.toml
-install -D -p -m 0644 %{SOURCE4} %{buildroot}%{_datadir}/containerd2/acl-config.toml
-install -D -p -m 0644 %{SOURCE5} %{buildroot}%{_prefix}/lib/systemd/system/containerd.service.d/90-acl-profile.conf
-install -D -p -m 0644 %{SOURCE6} %{buildroot}%{_prefix}/lib/tmpfiles.d/10-containerd-acl.conf
-install -D -p -m 0644 %{SOURCE7} %{buildroot}%{_datadir}/containerd2/acl-erofs-runtime.toml
-install -D -p -m 0644 %{SOURCE8} %{buildroot}%{_datadir}/containerd2/acl-erofs-config.toml
-install -D -p -m 0755 %{SOURCE9} %{buildroot}%{_libexecdir}/containerd2/acl-select-profile
 
 %post
 %systemd_post containerd.service
@@ -121,52 +99,31 @@ fi
 %{_mandir}/*
 %config(noreplace) %{_unitdir}/containerd.service
 %config(noreplace) %{_sysconfdir}/containerd/config.toml
-%dir %{_sysconfdir}/containerd
 %dir /opt/containerd
 %dir /opt/containerd/bin
 %dir /opt/containerd/lib
 
-%files erofs
-%{_datadir}/containerd2/acl-erofs.toml
-%{_datadir}/containerd2/acl-config.toml
-%{_datadir}/containerd2/acl-erofs-runtime.toml
-%{_datadir}/containerd2/acl-erofs-config.toml
-%{_libexecdir}/containerd2/acl-select-profile
-%{_prefix}/lib/systemd/system/containerd.service.d/90-acl-profile.conf
-%{_prefix}/lib/tmpfiles.d/10-containerd-acl.conf
-%dir %{_datadir}/containerd2
-%dir %{_libexecdir}/containerd2
-%dir %{_prefix}/lib/systemd/system/containerd.service.d
-
 %changelog
-* Fri Sep 25 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6030.verity
-- Route locally formatted dm-verity EROFS layers through kernel mounts instead
-  of attempting a direct filesystem view without their external data devices.
+* Wed Oct 01 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-3
+- Add signed EROFS dm-verity mount activation and referrer discovery.
+- Unsigned EROFS and OverlayFS behavior is unchanged.
 
-* Thu Sep 17 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6028.verity
-- Replace the previous signed EROFS carry with the reviewed two-commit compact
-  v1 referrer implementation while preserving the IPE-aware runtime profile.
-- Keep signatures optional so unsigned images retain the ordinary containerd
-  path and IPE remains the execution-policy owner.
-- Patch for CVE-2026-37236.
+* Fri Sep 18 2026 Nan Liu <liunan@microsoft.com> - 2.3.4-2
+- Tolerate wrapped ENOTSUP errors from SELinux mount relabeling
 
-* Sun Sep 13 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6027.verity
-- Route dm-verity EROFS fsview requests through the verified kernel mount path.
+* Wed Sep 09 2026 Nan Liu <liunan@microsoft.com> - 2.3.4-1
+- Upgrade to 2.3.4
+- Remove CVE patches fixed upstream
+- Rebase multi-snapshotter support and CVE-2026-56852 patches
 
-* Sat Sep 12 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6026.verity
-- Pin the build toolchain to Go 1.26.7 while the Go 1.27 ML-KEM backend remains disabled.
+* Tue Sep 08 2026 Azure Linux Security Servicing Account <azurelinux-security@microsoft.com> - 2.2.4-9
+- Patch for CVE-2026-37236
 
-* Wed Sep 09 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6025.verity
-- Rebase the signed EROFS/dm-verity carry onto containerd 2.3.4.
-- Keep signed OCI referrer handling separate from upstream local dm-verity.
-- Preserve the ordinary overlayfs lifecycle and add package-time regression tests.
-
-* Tue Sep 08 2026 Dallas Delaney <dadelan@microsoft.com> - 2.2.4-6024.verity
-- Add four production-only patches for signed EROFS/dm-verity materialization,
-  bounded referrer pagination, and CRI snapshotter-cache refresh.
-- Add the opt-in ACL EROFS runtime profile; the base package remains unchanged.
-- Keep Go 1.26 ACL builds on the cgo-less system-crypto experiment while
-  preserving the Go 1.27 behavior inherited from Azure Linux 3.0-dev.
+* Thu Sep 03 2026 Aadhar Agarwal <aadagarwal@microsoft.com> - 2.2.4-8
+- Temporarily build with Microsoft Go 1.26 to avoid the Go 1.27 systemcrypto
+  ML-KEM panic on OpenSSL 3.3.
+- Restore GOEXPERIMENT=ms_nocgo_opensslcrypto for the Go 1.26 cgo-less OpenSSL
+  backend.
 
 * Wed Sep 02 2026 Muhammad Falak R Wani <mwani@microsoft.com> - 2.2.4-7
 - Drop 'GOEXPERIMENT=ms_nocgo_opensslcrypto', removed in Go 1.27. Systemcrypto is
