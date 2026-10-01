@@ -27,8 +27,6 @@
 #                    - qemu-img              # installed on all architectures
 #                    - name: qemu-kvm        # installed only on amd64
 #                      archs: [amd64]
-#                  An object may also carry a 'feature' field. The package is
-#                  installed only when that name appears in ACL_FEATURES.
 #      mode      — "embedded" or "standalone" (required).
 #                  "embedded" sysexts are placed on the /usr filesystem inside the
 #                  image and activated at boot.  "standalone" sysexts are built as
@@ -59,8 +57,7 @@ sysexts:
     mode: embedded
     packages:
       - app-containers/containerd
-      - name: containerd2-erofs
-        feature: erofs
+      - erofs-utils
 
  # --- scenario-specific sysexts -----------------------------------------
   - name: docker

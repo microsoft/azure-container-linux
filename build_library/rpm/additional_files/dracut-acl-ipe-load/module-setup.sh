@@ -4,13 +4,15 @@
 
 install() {
     # acl-ipe-load mounts securityfs if the initramfs has not mounted it yet.
-    inst_multiple -o mkdir mount mv
+    inst_multiple -o cp mkdir mount mv
 
     inst_simple "${moddir}/acl-node-security-profile.sh" \
                 "/usr/lib/acl/acl-node-security-profile.sh"
 
     inst_script "${moddir}/acl-ipe-load.sh" \
                 "/usr/bin/acl-ipe-load"
+    inst_simple "${moddir}/containerd-acl-profile.conf" \
+                "/usr/lib/acl/containerd-profile.conf"
 
     inst_simple "${moddir}/acl-ipe-load.service" \
                 "${systemdsystemunitdir}/acl-ipe-load.service"

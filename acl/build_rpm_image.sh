@@ -94,8 +94,6 @@
 # Environment Variables:
 #   ACL_SDK_IMAGE           Override SDK container image (e.g., <your-registry>/sdk:<release>)
 #                           Bypasses auto-detection from version.txt when set
-#   ACL_EROFS_ENABLE        Static EROFS test override: 1 forces EROFS at boot
-#                           (default: 0; IPE-capable images select it dynamically)
 #   NO_TTY                  Set to "true" to disable TTY allocation (for CI pipelines)
 #   RPM_REPO_URL            Azure Linux repository URL
 #   RPM_ARCH                Target architecture (default: x86_64)
@@ -174,11 +172,6 @@ export BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
 export IMAGE_VERSION="${IMAGE_VERSION:-}"
 export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
-# Include the EROFS/dm-verity capability in IPE-capable images without forcing
-# the EROFS runtime profile before the boot-time IPE selector runs.
-export ACL_EROFS_ENABLE="${ACL_EROFS_ENABLE:-0}"
-ACL_FEATURES="${ACL_FEATURES:-}"
-export ACL_FEATURES
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
 # Build-time IPE asset mode. Runtime activation is selected only through the
@@ -194,24 +187,6 @@ if [[ -v ACL_IPE_VERITY_SIGNATURE ]]; then
     IPE_VERITY_SIGNATURE_OVERRIDE_SET=true
 fi
 ACL_IPE_VERITY_SIGNATURE="${ACL_IPE_VERITY_SIGNATURE:-true}"
-
-append_acl_feature() {
-    local feature="$1"
-    case ",${ACL_FEATURES}," in
-        *",${feature},"*) ;;
-        *) ACL_FEATURES="${ACL_FEATURES:+${ACL_FEATURES},}${feature}" ;;
-    esac
-}
-
-configure_acl_features() {
-    if [[ "${ACL_EROFS_ENABLE}" == "1" ]]; then
-        append_acl_feature erofs
-        append_acl_feature erofs-static
-    elif [[ "${ACL_IPE_ASSET_MODE}" != "disabled" ]]; then
-        append_acl_feature erofs
-    fi
-    export ACL_FEATURES
-}
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
@@ -1500,7 +1475,6 @@ run_with_retry() {
 # Main entry point
 main() {
     parse_args "$@"
-    configure_acl_features
 
     section "Azure Container Linux Image Builder"
     info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"

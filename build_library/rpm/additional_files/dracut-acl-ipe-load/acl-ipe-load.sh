@@ -12,6 +12,8 @@ IPE_DIR="${ACL_IPE_DIR:-/sys/kernel/security/ipe}"
 POLICY_FILE="${ACL_IPE_POLICY_FILE:-/sysroot/usr/lib/ipe/acl.pol.p7b}"
 CMDLINE_FILE="${ACL_IPE_CMDLINE_FILE:-/proc/cmdline}"
 SECURITY_PROFILE_HELPER="${ACL_IPE_SECURITY_PROFILE_HELPER:-/usr/lib/acl/acl-node-security-profile.sh}"
+CONTAINERD_PROFILE="${ACL_IPE_CONTAINERD_PROFILE:-/usr/lib/acl/containerd-profile.conf}"
+CONTAINERD_DROPIN="${ACL_IPE_CONTAINERD_DROPIN:-/run/systemd/system/containerd.service.d/90-acl-profile.conf}"
 
 log() { echo "acl-ipe-load: $*" >&2; }
 
@@ -89,3 +91,14 @@ if [[ "${policy_active}" != "1" ]]; then
     log "WARNING: policy ${POLICY_NAME} is not active."
     exit 0
 fi
+
+if [[ ! -r "${CONTAINERD_PROFILE}" ]]; then
+    log "ERROR: active IPE policy has no containerd profile at ${CONTAINERD_PROFILE}."
+    exit 1
+fi
+if ! mkdir -p "${CONTAINERD_DROPIN%/*}" ||
+    ! cp "${CONTAINERD_PROFILE}" "${CONTAINERD_DROPIN}"; then
+    log "ERROR: failed to install the containerd profile at ${CONTAINERD_DROPIN}."
+    exit 1
+fi
+log "Enabled the EROFS containerd profile for the active IPE policy."

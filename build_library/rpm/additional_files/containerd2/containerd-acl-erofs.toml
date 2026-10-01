@@ -1,0 +1,45 @@
+# Imported for boot-activated IPE or explicit manual configuration.
+version = 2
+
+[plugins."io.containerd.snapshotter.v1.erofs"]
+  # Referrer discovery requires "auto" or "on", never "off".
+  dmverity_mode = "auto"
+  enable_dmverity_referrers = true
+
+[plugins."io.containerd.differ.v1.erofs"]
+  # The patched differ advertises signed materialization automatically.
+  enable_dmverity = true
+  enable_tar_index = true
+  # Match the producer's formatting; the differ supplies the layer UUID.
+  mkfs_options = ["--sort=none", "-T", "0", "--mkfs-time"]
+
+[plugins."io.containerd.grpc.v1.cri".containerd]
+  snapshotter = "erofs"
+
+[plugins."io.containerd.cri.v1.images"]
+  snapshotter = "erofs"
+
+[plugins."io.containerd.service.v1.diff-service"]
+  default = ["erofs", "walking"]
+
+[plugins."io.containerd.transfer.v1.local"]
+  # An explicit list replaces the defaults; retain OverlayFS alongside EROFS.
+  [[plugins."io.containerd.transfer.v1.local".unpack_config]]
+    platform = "linux/amd64"
+    snapshotter = "overlayfs"
+    differ = "walking"
+
+  [[plugins."io.containerd.transfer.v1.local".unpack_config]]
+    platform = "linux/amd64"
+    snapshotter = "erofs"
+    differ = "erofs"
+
+  [[plugins."io.containerd.transfer.v1.local".unpack_config]]
+    platform = "linux/arm64"
+    snapshotter = "overlayfs"
+    differ = "walking"
+
+  [[plugins."io.containerd.transfer.v1.local".unpack_config]]
+    platform = "linux/arm64"
+    snapshotter = "erofs"
+    differ = "erofs"

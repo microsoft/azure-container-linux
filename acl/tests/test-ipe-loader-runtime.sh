@@ -5,7 +5,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOADER="${SCRIPT_DIR}/build_library/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.sh"
+MODULE_SETUP="${SCRIPT_DIR}/build_library/rpm/additional_files/dracut-acl-ipe-load/module-setup.sh"
 PROFILE_HELPER="${SCRIPT_DIR}/build_library/rpm/additional_files/acl-node-security-profile.sh"
+CONTAINERD_PROFILE="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-profile.conf"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
@@ -13,6 +15,7 @@ prepare_case() {
     local name="$1" requested_mode="$2"
     CASE_DIR="${TMP_DIR}/${name}"
     IPE_DIR="${CASE_DIR}/ipe"
+    CONTAINERD_DROPIN="${CASE_DIR}/run/systemd/system/containerd.service.d/90-acl-profile.conf"
 
     mkdir -p "${IPE_DIR}"
     : > "${IPE_DIR}/new_policy"
@@ -34,6 +37,8 @@ run_loader() {
     ACL_IPE_CMDLINE_FILE="${CASE_DIR}/cmdline" \
     ACL_IPE_POLICY_FILE="${CASE_DIR}/policy.p7b" \
     ACL_IPE_SECURITY_PROFILE_HELPER="${CASE_DIR}/security-profile.sh" \
+    ACL_IPE_CONTAINERD_PROFILE="${ACL_IPE_CONTAINERD_PROFILE:-${CONTAINERD_PROFILE}}" \
+    ACL_IPE_CONTAINERD_DROPIN="${CONTAINERD_DROPIN}" \
         bash "${LOADER}" >/dev/null 2>&1
 }
 
@@ -47,7 +52,47 @@ test_existing_policy_mode() {
 
     [[ "$(<"${IPE_DIR}/enforce")" == "${expected_enforce}" ]]
     [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "${expected_active}" ]]
+    if [[ "${expected_active}" == 1 ]]; then
+        cmp "${CONTAINERD_PROFILE}" "${CONTAINERD_DROPIN}"
+    else
+        [[ ! -e "${CONTAINERD_DROPIN}" ]]
+    fi
 }
+
+test_missing_containerd_profile_fails() {
+    prepare_case missing-profile permissive
+    mkdir -p "${IPE_DIR}/policies/acl_ipe_boot_policy"
+    printf '0\n' > "${IPE_DIR}/policies/acl_ipe_boot_policy/active"
+
+    if ACL_IPE_CONTAINERD_PROFILE="${CASE_DIR}/missing.conf" run_loader; then
+        echo "Loader accepted a missing containerd profile with active IPE" >&2
+        exit 1
+    fi
+    [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == 1 ]]
+    [[ ! -e "${CONTAINERD_DROPIN}" ]]
+}
+
+test_erofs_profile_install() (
+    moddir="${TMP_DIR}/fake-dracut-module"
+    initdir="${TMP_DIR}/fake-initrd"
+    systemdsystemunitdir="/usr/lib/systemd/system"
+    local seen=0
+    mkdir -p "${moddir}"
+    cp "${CONTAINERD_PROFILE}" "${moddir}/containerd-acl-profile.conf"
+
+    inst_multiple() { :; }
+    inst_script() { :; }
+    inst_simple() {
+        if [[ "$2" == "/usr/lib/acl/containerd-profile.conf" ]]; then
+            cmp "${CONTAINERD_PROFILE}" "$1"
+            seen=1
+        fi
+    }
+
+    source "${MODULE_SETUP}"
+    install
+    [[ "${seen}" == 1 ]]
+)
 
 test_signed_policy_is_loaded() {
     prepare_case load-policy permissive
@@ -106,6 +151,8 @@ test_existing_policy_mode off 9 0
 test_existing_policy_mode invalid 9 0
 test_existing_policy_mode enforcing 9 0
 test_existing_policy_mode permissive 0 1
+test_missing_containerd_profile_fails
+test_erofs_profile_install
 test_signed_policy_is_loaded
 test_missing_policy_is_ignored
 test_rejected_policy_write_is_ignored
