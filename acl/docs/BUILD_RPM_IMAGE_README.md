@@ -215,12 +215,14 @@ Transfer unpacking and unsigned EROFS formatting retain upstream defaults
 unless the base configuration overrides them.
 
 This branch includes the IPE candidate but does not add containerd patches.
-Referrer support requires the signed EROFS containerd patches. Automatic
-activation requires the separate IPE integration to install
+Referrer support requires the signed EROFS containerd patches. After successful
+IPE policy activation in audit or permissive mode, the initramfs loader installs
 `build_library/rpm/additional_files/containerd2/containerd-acl-profile.conf`
-as `/run/systemd/system/containerd.service.d/90-acl-profile.conf` after successful
-policy activation. Shipping these files alone leaves the normal runtime
-configuration selected.
+as `/run/systemd/system/containerd.service.d/90-acl-profile.conf`.
+Inactive or rejected IPE activation leaves the normal runtime configuration
+selected. The base IPE candidate is `aadagarwal/acl-ipe-mode-toggle` at
+`6def8a69c30925d0227bec414e9878423d016333`; compare it with `dadelan/ipe-config`
+to review only the EROFS configuration and activation additions.
 
 ### Phase 4: Build VM Image (Optional)
 
