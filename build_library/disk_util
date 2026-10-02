@@ -39,6 +39,11 @@ DPS_USR_VERITY_GUIDS = {
     'aarch64': '6E11A4E7-FBCA-4DED-B9E9-E1A512BB664E',
 }
 
+DPS_USR_VERITY_SIG_GUIDS = {
+    'x86_64':  'E7BB33FB-06CF-4E81-8273-E543B413E2E2',
+    'aarch64': 'C23CE4FF-44BD-4B00-B2D4-B41B3419E02A',
+}
+
 # Map BOARD names used by the build system to machine architecture values.
 BOARD_TO_ARCH = {
     'amd64-usr': 'x86_64',
@@ -49,12 +54,14 @@ def _resolve_dps_types(config, arch):
   """Replace symbolic DPS partition type names with architecture-specific GUIDs.
 
   Currently supported placeholders:
-    dps-root        →  DPS root partition GUID for the target architecture
-    dps-usr-verity  →  DPS /usr verity hash partition GUID
+    dps-root            →  DPS root partition GUID for the target architecture
+    dps-usr-verity      →  DPS /usr verity hash partition GUID
+    dps-usr-verity-sig  →  DPS /usr verity signature partition GUID
   """
   dps_map = {
       'dps-root': DPS_ROOT_GUIDS,
       'dps-usr-verity': DPS_USR_VERITY_GUIDS,
+      'dps-usr-verity-sig': DPS_USR_VERITY_SIG_GUIDS,
   }
   for layout in config.get('layouts', {}).values():
     for part in layout.values():
