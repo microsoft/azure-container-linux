@@ -35,14 +35,14 @@
                 ]
             },
             "3": {
-                "_comment": "9 MiB verity hash tree for USR-A.",
+                "_comment": "9 MiB verity hash tree for USR-A (1 GiB). Assumes sha256 + 4096-byte data/hash blocks (dm-verity default): tree size is ~8.08 MiB (2048 level-0 hash blocks + 17 upper-level blocks + superblock), so 9 MiB leaves headroom for growth. Recompute if USR-A size or verity hash/block params change.",
                 "label": "HASH-A",
                 "uuid": "b736baf1-cdb4-4535-beba-ddaaa30ad7b7",
                 "type": "dps-usr-verity",
                 "blocks": "18432"
             },
             "4": {
-                "_comment": "1 MiB reserved for a future USR-A verity root-hash signature. part_alignment is overridden to 1 MiB (vs. the 2 MiB default) so this partition packs directly after the 9 MiB HASH-A with no padding gap; the combined 10 MiB HASH-A+HASH-SIG-A still lands on a 2 MiB boundary for USR-B.",
+                "_comment": "1 MiB reserved for a future USR-A verity root-hash signature. blocks/part_alignment are 512-byte sectors (see metadata.block_size); part_alignment is overridden to 2048 sectors (1 MiB, vs. the file-wide 4096-sector/2 MiB default) so this partition packs directly after HASH-A with no gap, while the combined 10 MiB HASH-A+HASH-SIG-A still lands on the 2 MiB boundary required by USR-B.",
                 "label": "HASH-SIG-A",
                 "uuid": "3514648f-e3da-44ae-89ba-8d0552418f88",
                 "type": "dps-usr-verity-sig",
@@ -58,14 +58,14 @@
                 "verity_hash": "6"
             },
             "6": {
-                "_comment": "9 MiB verity hash tree for USR-B.",
+                "_comment": "9 MiB verity hash tree for USR-B. See HASH-A comment for sizing rationale.",
                 "label": "HASH-B",
                 "uuid": "35bdf78b-c453-4661-98e6-f834f534ef5b",
                 "type": "dps-usr-verity",
                 "blocks": "18432"
             },
             "7": {
-                "_comment": "1 MiB reserved for a future USR-B verity root-hash signature. See HASH-SIG-A comment re: part_alignment override.",
+                "_comment": "1 MiB reserved for a future USR-B verity root-hash signature. See HASH-SIG-A comment for units and part_alignment rationale.",
                 "label": "HASH-SIG-B",
                 "uuid": "d8941eb2-f713-4bb6-b4ae-bd8350ca27d4",
                 "type": "dps-usr-verity-sig",
