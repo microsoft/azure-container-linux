@@ -42,10 +42,11 @@
                 "blocks": "18432"
             },
             "4": {
-                "_comment": "1 MiB reserved for a future USR-A verity root-hash signature.",
+                "_comment": "1 MiB reserved for a future USR-A verity root-hash signature. part_alignment is overridden to 1 MiB (vs. the 2 MiB default) so this partition packs directly after the 9 MiB HASH-A with no padding gap; the combined 10 MiB HASH-A+HASH-SIG-A still lands on a 2 MiB boundary for USR-B.",
                 "label": "HASH-SIG-A",
                 "uuid": "3514648f-e3da-44ae-89ba-8d0552418f88",
                 "type": "dps-usr-verity-sig",
+                "part_alignment": "2048",
                 "blocks": "2048"
             },
             "5": {
@@ -64,10 +65,11 @@
                 "blocks": "18432"
             },
             "7": {
-                "_comment": "1 MiB reserved for a future USR-B verity root-hash signature.",
+                "_comment": "1 MiB reserved for a future USR-B verity root-hash signature. See HASH-SIG-A comment re: part_alignment override.",
                 "label": "HASH-SIG-B",
                 "uuid": "d8941eb2-f713-4bb6-b4ae-bd8350ca27d4",
                 "type": "dps-usr-verity-sig",
+                "part_alignment": "2048",
                 "blocks": "2048"
             },
             "8": {
