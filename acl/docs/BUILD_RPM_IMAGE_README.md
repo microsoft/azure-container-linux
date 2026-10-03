@@ -184,9 +184,11 @@ causes snapshotter initialization to fail.
 Transfer unpacking and unsigned EROFS formatting retain upstream defaults
 unless the base configuration overrides them.
 
-The config regression test exercises the native loader, not just TOML syntax.
-Run it with the matching staged consumer binary:
+The offline suite checks packaging and wrapper construction with a normalized
+dump fixture, without using the build host's containerd. To additionally run
+the native loader checks, supply the matching patched consumer binary:
 `CONTAINERD_BIN=/path/to/containerd bash acl/tests/ipe/offline/test-containerd-runtime-profile.sh`.
+An explicitly supplied binary must pass the checks; failures are not skipped.
 
 This branch includes the signed EROFS containerd patches but not the IPE loader.
 Automatic activation requires the separate IPE integration to install
