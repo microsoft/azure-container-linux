@@ -118,7 +118,8 @@ test_enforcing_mode_rejected() {
 }
 
 test_uki_provision_preserves_unsigned_verity() (
-    source_test_functions "${SCRIPT_DIR}/build_library/rpm/uki_install.sh" uki_provision_rpm
+    source_test_functions "${SCRIPT_DIR}/build_library/rpm/uki_install.sh" \
+        uki_provision_rpm _uki_build_verity_addons
     sudo() { "$@"; }
     _uki_build_firstboot_addon() { :; }
     _uki_build_fips_addon() { :; }
@@ -132,11 +133,13 @@ test_uki_provision_preserves_unsigned_verity() (
                 --output=*) output="${argument#--output=}" ;;
             esac
         done
-        cp "${cmdline}" "${BUILD_DIR}/captured.cmdline"
-        printf 'test EFI\n' > "${output}"
+        cp "${cmdline}" "${BUILD_DIR}/${output##*/}.cmdline"
+        cp "${cmdline}" "${output}"
     }
 
-    local scenario capable esp extra cmdline policy_hash
+    local scenario capable esp extra cmdline policy_hash failure invalid_hash
+    local slot addon_cmdline data_uuid hash_uuid
+    local uki_name="vmlinuz-6.6.145.2.efi"
     local roothash="000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
     FLAGS_TRUE=0
     for scenario in x64:false x64:true aa64:false aa64:true; do
@@ -147,8 +150,10 @@ test_uki_provision_preserves_unsigned_verity() (
         BOARD_ROOT="${CASE_ROOT}/board"
         FLAGS_disk_image="${BUILD_DIR}/image.bin"
         FLAGS_verity_hash="${BUILD_DIR}/usrhash"
+        FLAGS_fs_uuid="${BUILD_DIR}/fs_uuid"
+        FLAGS_verity_uuid="${BUILD_DIR}/verity_uuid"
         esp="${CASE_ROOT}/esp"
-        extra="${esp}/EFI/Linux/vmlinuz-6.6.145.2.efi.extra.d"
+        extra="${esp}/EFI/Linux/${uki_name}.extra.d"
         mkdir -p "${esp}/flatcar" "${extra}" \
             "${BOARD_ROOT}/usr/lib/systemd/boot/efi" \
             "${BOARD_ROOT}/boot/efi/EFI/BOOT" \
@@ -160,28 +165,63 @@ test_uki_provision_preserves_unsigned_verity() (
         printf 'policy credential\n' > "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred"
         printf 'stale\n' > "${extra}/verity-usr-${roothash,,}.p7s.cred"
         printf 'stale\n' > "${extra}/acl-ipe-policy.p7b.cred"
+        printf '11111111-2222-3333-4444-555555555555\n' > "${FLAGS_fs_uuid}"
+        printf '66666666-7777-8888-9999-aaaaaaaaaaaa\n' > "${FLAGS_verity_uuid}"
 
         FLAGS_verity=0
-        printf 'invalid\n' > "${FLAGS_verity_hash}"
-        if (uki_provision_rpm "${esp}") >/dev/null 2>&1; then
-            echo "UKI accepted an invalid /usr root hash" >&2
+        if failure="$(_uki_build_verity_addons "${esp}" "${uki_name}" 2>&1)"; then
+            echo "UKI addons accepted a missing /usr root hash" >&2
             return 1
         fi
+        [[ "${failure}" == *"Verity enabled but no hash file"* ]]
+        for invalid_hash in "" invalid "${roothash}0"; do
+            printf '%s\n' "${invalid_hash}" > "${FLAGS_verity_hash}"
+            if failure="$(_uki_build_verity_addons "${esp}" "${uki_name}" 2>&1)"; then
+                echo "UKI addons accepted an invalid /usr root hash" >&2
+                return 1
+            fi
+            [[ "${failure}" == *"invalid SHA-256 /usr verity root hash"* ]]
+        done
         printf '%s\n' "${roothash}" > "${FLAGS_verity_hash}"
         if [[ "${capable}" == "true" ]]; then
             FLAGS_verity=1
-            if (uki_provision_rpm "${esp}") >/dev/null 2>&1; then
+            if failure="$(uki_provision_rpm "${esp}" 2>&1)"; then
                 echo "IPE-capable UKI accepted disabled /usr verity" >&2
                 return 1
             fi
+            [[ "${failure}" == *"IPE assets require a /usr dm-verity root hash"* ]]
             FLAGS_verity=0
+
+            mv "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred" \
+                "${BUILD_DIR}/policy.cred"
+            if failure="$(uki_provision_rpm "${esp}" 2>&1)"; then
+                echo "IPE-capable UKI accepted a missing policy credential" >&2
+                return 1
+            fi
+            [[ "${failure}" == *"staged IPE policy candidate not found"* ]]
+            mv "${BUILD_DIR}/policy.cred" \
+                "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred"
         fi
         uki_provision_rpm "${esp}"
-        cmdline="$(<"${BUILD_DIR}/captured.cmdline")"
-        [[ " ${cmdline} " == *" usrhash=${roothash,,} "* ]]
+        cmdline="$(<"${BUILD_DIR}/${uki_name}.cmdline")"
         [[ "${cmdline}" == *"mount.usr=/dev/mapper/usr mount.usrflags=ro"* ]]
-        [[ "${cmdline}" == *"systemd.verity_usr_options=hash-offset="*",panic-on-corruption"* ]]
+        [[ "${cmdline}" != *"usrhash="* && "${cmdline}" != *"systemd.verity_usr_"* ]]
+        [[ "${cmdline}" != *"acl.slot="* ]]
         [[ "${cmdline}" != *"root-hash-signature="* ]]
+        for slot in a b; do
+            addon_cmdline="$(<"${BUILD_DIR}/slot-${slot}.addon.efi.cmdline")"
+            data_uuid="$(jq -r --arg label "USR-${slot^^}" \
+                '.layouts.base[] | select(.label == $label) | .uuid' \
+                "${BUILD_LIBRARY_DIR}/disk_layout_uki.json")"
+            hash_uuid="$(jq -r --arg label "HASH-${slot^^}" \
+                '.layouts.base[] | select(.label == $label) | .uuid' \
+                "${BUILD_LIBRARY_DIR}/disk_layout_uki.json")"
+            [[ "${addon_cmdline}" == "systemd.verity_usr_data=PARTUUID=${data_uuid} systemd.verity_usr_hash=PARTUUID=${hash_uuid} systemd.verity_usr_options=panic-on-corruption usrhash=${roothash,,} acl.slot=${slot}" ]]
+            cmp "${BUILD_DIR}/slot-${slot}.addon.efi.cmdline" \
+                "${esp}/acl/uki-addons/slot-${slot}.addon.efi"
+        done
+        cmp "${esp}/acl/uki-addons/slot-a.addon.efi" "${extra}/slot-a.addon.efi"
+        [[ ! -e "${extra}/slot-b.addon.efi" ]]
         [[ ! -e "${extra}/verity-usr-${roothash,,}.p7s.cred" ]]
         if [[ "${capable}" == "true" ]]; then
             policy_hash="$(sha256sum "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred" | cut -d' ' -f1)"
@@ -192,6 +232,7 @@ test_uki_provision_preserves_unsigned_verity() (
             [[ "${cmdline}" != *"acl.ipe.policy_sha256="* ]]
             [[ ! -e "${extra}/acl-ipe-policy.p7b.cred" ]]
         fi
+        cmp "${BUILD_DIR}/${uki_name}.cmdline" "${esp}/EFI/Linux/${uki_name}"
     done
 )
 
