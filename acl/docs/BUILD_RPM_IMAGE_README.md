@@ -227,9 +227,12 @@ causes snapshotter initialization to fail.
 Transfer unpacking and unsigned EROFS formatting retain upstream defaults
 unless the base configuration overrides them.
 
-The config regression test exercises the native loader, not just TOML syntax.
-Run it with the matching staged consumer binary:
+The offline suite checks profile packaging and wrapper construction using a
+normalized dump fixture, without depending on the build host's containerd.
+To additionally exercise native loading, migration, nested-import precedence,
+and missing-import failures, run it with the matching patched consumer binary:
 `CONTAINERD_BIN=/path/to/containerd bash acl/tests/ipe/offline/test-containerd-runtime-profile.sh`.
+An explicitly supplied binary must pass the native checks; failures are not skipped.
 
 This branch includes the IPE candidate but does not add containerd patches.
 Referrer support requires the signed EROFS containerd patches. After successful
@@ -238,8 +241,20 @@ IPE policy activation in audit or permissive mode, the initramfs loader installs
 as `/run/systemd/system/containerd.service.d/90-acl-profile.conf`.
 Inactive or rejected IPE activation leaves the normal runtime configuration
 selected. The base IPE candidate is `aadagarwal/acl-ipe-mode-toggle` at
-`6def8a69c30925d0227bec414e9878423d016333`; compare it with `dadelan/ipe-config`
+`c9c9fef4ad209da2137f02c574264d86dd3df468`; compare it with `dadelan/ipe-config`
 to review only the EROFS configuration and activation additions.
+
+For candidate pipeline runs, use the existing `acldevel` definition (5303) with
+the `acl-pipelines` branch `aadagarwal/dev-ipe-audit` (PR 29563), not the older
+`dadelan/ipe-erofs-mainline-20261001` pipeline branch. Set `aclScriptsRef` to the
+desired source branch: `aadagarwal/acl-ipe-mode-toggle` for the upstream IPE
+baseline, or this branch for the EROFS config integration. Select
+`bootloaderMode=uki`, `ipeMode=audit`, and the appropriate `ipeSigningMode`.
+The pipeline's default is `ephemeral`; build 1215521 used `esrp` with the exact
+upstream candidate. Ephemeral runtime activation still requires test-policy
+trust. This config-only branch requires a matching patched containerd RPM for
+EROFS runtime testing; changing the pipeline branch does not supply that code.
+Do not reuse prior RPM artifacts across a changed source/package ref.
 
 ### Phase 4: Build VM Image (Optional)
 
