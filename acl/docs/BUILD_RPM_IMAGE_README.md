@@ -215,9 +215,24 @@ Signed referrers supply the producer's EROFS metadata; local tar-index and
 `mkfs_options` overrides are unnecessary. Unsigned EROFS layers use upstream
 formatting defaults.
 
-The config regression test exercises the native loader, not just TOML syntax.
-Run it with the matching staged consumer binary:
+The offline suite checks packaging and wrapper construction with a normalized
+dump fixture, without using the build host's containerd. To additionally run
+the native loader checks, supply the matching patched consumer binary:
 `CONTAINERD_BIN=/path/to/containerd bash acl/tests/ipe/offline/test-containerd-runtime-profile.sh`.
+An explicitly supplied binary must pass the checks; failures are not skipped.
+
+The source baseline is `aadagarwal/acl-ipe-mode-toggle` at
+`c9c9fef4ad209da2137f02c574264d86dd3df468`. For a config-only comparison, use
+that candidate against `dadelan/ipe-config`.
+Use the existing `acldevel` definition (5303) with the `acl-pipelines` branch
+`aadagarwal/dev-ipe-audit` (PR 29563) and an explicit `aclScriptsRef`, rather
+than the older `dadelan/ipe-erofs-mainline-20261001` pipeline branch.
+Set `bootloaderMode=uki`, `ipeMode=audit`, and the appropriate
+`ipeSigningMode` (`ephemeral` by default; upstream build 1215521 used `esrp`).
+This integration branch retains its older containerd RPM patch carry: refresh
+it to the matching transfer-service consumer before signed EROFS runtime tests.
+Changing pipeline branches does not refresh package code. Do not reuse prior
+RPM artifacts across a changed source/package ref.
 
 `/usr` retains its read-only dm-verity mapping, root hash and corruption
 checks, but no detached root-hash signature is generated or required.
