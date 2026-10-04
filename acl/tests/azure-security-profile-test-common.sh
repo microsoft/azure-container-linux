@@ -74,7 +74,51 @@ security_profile_with_key() {
 }
 
 boot_id() {
-    ssh_cmd 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null
+    ssh_cmd 'cat /proc/sys/kernel/random/boot_id' 2>>"${SECURITY_PROFILE_SSH_LOG:-/dev/null}"
+}
+
+capture_security_profile_diagnostic() {
+    local output="$1" limit="$2" status=0
+    shift 2
+
+    timeout --signal=TERM --kill-after=5s "${limit}" "$@" \
+        >"${output}" 2>"${output}.stderr" || status=$?
+    printf '%s\n' "${status}" >"${output}.exit-code"
+    if [[ "${status}" -ne 0 ]]; then
+        warn "Diagnostic command failed (exit=${status}); see ${output}.stderr"
+    fi
+    return "${status}"
+}
+
+collect_security_profile_guest_diagnostics() {
+    local output="$1"
+    capture_security_profile_diagnostic "${output}" 30s \
+        ssh "${SSH_OPTS[@]}" -v "${VM_SSH_USER}@${VM_IP}" "sudo -n sh -s" \
+        <"${SCRIPT_DIR}/acl/tests/collect-security-profile-diagnostics.sh"
+}
+
+collect_security_profile_failure_diagnostics() {
+    local prefix="$1" agent_script
+
+    capture_security_profile_diagnostic "${prefix}/instance-view.json" 20s \
+        az vm get-instance-view --resource-group "${VM_RG}" --name "${VM_NAME}" \
+        --query 'instanceView.{statuses:statuses,vmAgent:vmAgent.statuses}' -o json ||
+        warn "Could not collect VM instance view"
+    capture_security_profile_diagnostic "${prefix}/serial.log" 30s \
+        az vm boot-diagnostics get-boot-log --resource-group "${VM_RG}" --name "${VM_NAME}" ||
+        warn "Could not collect the serial log"
+
+    if ! collect_security_profile_guest_diagnostics "${prefix}/guest-timeout.log"; then
+        warn "SSH diagnostics unavailable; trying bounded, read-only Azure Run Command (output tail only)"
+        agent_script="$(printf '%s\n' "timeout --signal=TERM --kill-after=5s 45s sh <<'ACL_SECURITY_PROFILE_DIAGNOSTICS'"
+            cat "${SCRIPT_DIR}/acl/tests/collect-security-profile-diagnostics.sh"
+            printf '%s\n' 'ACL_SECURITY_PROFILE_DIAGNOSTICS')"
+        capture_security_profile_diagnostic "${prefix}/run-command.json" 90s \
+            az vm run-command invoke --resource-group "${VM_RG}" --name "${VM_NAME}" \
+            --command-id RunShellScript --scripts "${agent_script}" -o json ||
+            warn "Could not collect guest diagnostics through Azure Run Command"
+    fi
+    info "Failure diagnostics saved to ${prefix}; VM cleanup is unchanged"
 }
 
 set_security_profile_tag_state() {
@@ -159,35 +203,45 @@ capture_security_profile_state() {
 }
 
 reboot_and_wait() {
-    local old new reboot_timeout
+    local old new reboot_timeout diag_dir prefix probe_status reboot_status=0
     reboot_timeout="${VM_BOOT_TIMEOUT:-$VM_SSH_TIMEOUT}"
-    old=$(boot_id) || { error "Cannot read boot_id - VM unreachable?"; return 1; }
+    diag_dir="${DIAGNOSTICS_DIR:-/tmp}"
+    mkdir -p "${diag_dir}" || { error "Cannot create diagnostics directory"; return 1; }
+    prefix="$(mktemp -d "${diag_dir}/security-profile-${VM_NAME}.XXXXXX")" ||
+        { error "Cannot create reboot diagnostics directory"; return 1; }
+    local SECURITY_PROFILE_SSH_LOG="${prefix}/ssh-poll.log"
+    if ! old=$(boot_id); then
+        collect_security_profile_failure_diagnostics "${prefix}"
+        error "Cannot read boot_id - VM unreachable?"
+        return 1
+    fi
+    printf 'old_boot_id=%s\n' "${old}" >"${prefix}/reboot.log"
+    collect_security_profile_guest_diagnostics "${prefix}/guest-before.log" ||
+        warn "Pre-reboot guest snapshot incomplete; continuing the test"
+
     info "Rebooting VM ${VM_NAME} via SSH (old boot_id=${old})..."
     timeout --signal=TERM --kill-after=5s 15s \
-        ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" "sudo reboot" || true
+        ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" "sudo reboot" \
+        >"${prefix}/reboot-command.log" 2>&1 || reboot_status=$?
+    printf 'reboot_command_exit=%s (SSH disconnect is expected)\n' "${reboot_status}" \
+        >>"${prefix}/reboot.log"
     local deadline=$(( $(date +%s) + reboot_timeout ))
     while (( $(date +%s) < deadline )); do
-        new=$(boot_id) && [[ "$new" != "$old" ]] && {
+        probe_status=0
+        new=$(boot_id) || probe_status=$?
+        printf '%s exit=%s boot_id=%s\n' "$(date -u +%FT%TZ)" "${probe_status}" "${new}" \
+            >>"${prefix}/reboot.log"
+        if [[ "${probe_status}" -eq 0 && "$new" != "$old" ]]; then
             info "VM rebooted (new boot_id=${new})"
+            collect_security_profile_guest_diagnostics "${prefix}/guest-after.log" ||
+                warn "Post-reboot guest snapshot incomplete; continuing the test"
+            info "Reboot diagnostics saved to ${prefix}"
             return 0
-        }
+        fi
         sleep 2
     done
     warn "VM did not come back after reboot within ${reboot_timeout}s - capturing VM diagnostics"
-
-    local diag_dir prefix
-    diag_dir="${DIAGNOSTICS_DIR:-/tmp}"
-    mkdir -p "$diag_dir"
-    prefix="${diag_dir}/$(date +%Y%m%d-%H%M%S)-${VM_NAME}"
-    az vm get-instance-view --resource-group "$VM_RG" --name "$VM_NAME" \
-        --query 'instanceView.{statuses:statuses,vmAgent:vmAgent.statuses}' \
-        -o json 2>&1 | tee "${prefix}-instance-view.json" || true
-    az vm boot-diagnostics get-boot-log --resource-group "$VM_RG" --name "$VM_NAME" 2>&1 \
-        | jq -r . > "${prefix}-serial.log" || true
-
-    info "Full serial log: ${prefix}-serial.log ($(wc -c <"${prefix}-serial.log") bytes); last 200 lines:"
-    tail -200 "${prefix}-serial.log" | sed 's/^/  [serial] /' || true
-    info "Diagnostics saved to ${prefix}-{instance-view.json,serial.log}"
+    collect_security_profile_failure_diagnostics "${prefix}"
     error "VM did not come back after reboot"
     return 1
 }
