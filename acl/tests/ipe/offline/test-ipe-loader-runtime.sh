@@ -87,16 +87,28 @@ test_valid_disabled_alias_inactive() {
     run_inactive_case valid-disabled-alias disabled
 }
 
+test_unknown_ipe_mode_stays_off() {
+    run_inactive_case unknown-mode unknown
+}
+
+test_invalid_ipe_settings_stay_off() {
+    run_inactive_case empty-mode '' 'ipe='
+    run_inactive_case bare-key '' 'ipe'
+    run_inactive_case duplicate-key '' 'ipe=,ipe=off'
+    run_inactive_case duplicate-audit '' 'ipe=audit,ipe=audit'
+    run_inactive_case conflicting-modes '' 'ipe=audit,ipe=disabled'
+}
+
 run_inactive_case() {
-    local name="$1" imds_mode="$2"
+    local name="$1" profile="${3-ipe=${2}}"
     prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
     write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
 
     # Override IMDS to return the requested inactive-style mode
     cat > "${CASE_DIR}/security-profile.sh" <<EOF
-acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
-acl_security_profile_value() { printf '%s\n' '${imds_mode}'; }
+source "${PROFILE_HELPER}"
+acl_security_profile() { printf '%s\n' '${profile}'; }
 EOF
 
     # The policy is loaded into new_policy but not activated
@@ -120,8 +132,14 @@ test_valid_audit_alias_active() {
     run_active_case valid-audit-alias audit
 }
 
+test_default_audit_without_ipe_tag() {
+    run_active_case default-audit '' audit 'selinux=permissive'
+    run_active_case default-audit-empty-profile '' audit ''
+}
+
 run_active_case() {
-    local name="$1" imds_mode="$2"
+    local name="$1" expected_mode="${3:-${2}}"
+    local profile="${4-ipe=${2}}"
     prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
     # Keep the writer blocked while the simulated kernel creates the policy
@@ -130,8 +148,8 @@ run_active_case() {
     write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
 
     cat > "${CASE_DIR}/security-profile.sh" <<EOF
-acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
-acl_security_profile_value() { printf '%s\n' '${imds_mode}'; }
+source "${PROFILE_HELPER}"
+acl_security_profile() { printf '%s\n' '${profile}'; }
 EOF
 
     # Replace new_policy with a named pipe; a background reader simulates the
@@ -154,10 +172,39 @@ EOF
     local output
     output="$(run_loader "${CASE_DIR}/credential.p7b.cred")"
     wait
-    grep -Fq "Using IPE mode '${imds_mode}'." <<< "${output}" ||
-        { echo "loader did not report requested mode '${imds_mode}'" >&2; return 1; }
+    grep -Fq "Using IPE mode '${expected_mode}'." <<< "${output}" ||
+        { echo "loader did not report expected mode '${expected_mode}'" >&2; return 1; }
     [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
     [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
+}
+
+test_imds_failure_stays_off() {
+    prepare_case imds-failure
+    make_credential "${CASE_DIR}/credential.p7b.cred"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
+    cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
+acl_security_profile() { return 1; }
+acl_security_profile_value() { return 1; }
+EOF
+
+    local output
+    output="$(run_loader)"
+    grep -Fq "IMDS unavailable; leaving IPE inactive" <<< "${output}"
+    grep -Fq "Using IPE mode 'off'." <<< "${output}"
+    [[ -s "${IPE_DIR}/new_policy" ]]
+    [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
+}
+
+test_non_azure_stays_off() {
+    prepare_case non-azure
+    make_credential "${CASE_DIR}/credential.p7b.cred"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred"
+
+    local output
+    output="$(run_loader)"
+    grep -Fq "Using IPE mode 'off'." <<< "${output}"
+    [[ -s "${IPE_DIR}/new_policy" ]]
+    [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
 }
 
 # ---- Test: 'enforcing' is reserved; loader logs an explicit unsupported
@@ -374,8 +421,13 @@ test_absent_token
 test_missing_cmdline
 test_valid_inactive_load
 test_valid_disabled_alias_inactive
+test_unknown_ipe_mode_stays_off
+test_invalid_ipe_settings_stay_off
 test_valid_permissive
 test_valid_audit_alias_active
+test_default_audit_without_ipe_tag
+test_imds_failure_stays_off
+test_non_azure_stays_off
 test_enforcing_mode_safe_fallback
 test_duplicate_token
 test_malformed_hash

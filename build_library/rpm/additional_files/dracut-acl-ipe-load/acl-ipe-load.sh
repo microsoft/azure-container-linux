@@ -78,16 +78,34 @@ declare -F acl_security_profile_value >/dev/null ||
 mode="off"
 if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
     if security_profile="$(acl_security_profile)"; then
-        requested_mode="$(acl_security_profile_value "${security_profile}" "ipe")"
-        case "${requested_mode}" in
-            disabled|off|audit|permissive) mode="${requested_mode}" ;;
-            enforcing)
-                log "IPE mode 'enforcing' is not supported at runtime; leaving IPE inactive."
-                mode="off"
-                ;;
-            "") ;;
-            *) log "Ignoring unrecognized IPE mode '${requested_mode}' from IMDS." ;;
-        esac
+        ipe_key_count=0
+        IFS=',' read -ra profile_parts <<< "${security_profile}"
+        for profile_part in "${profile_parts[@]}"; do
+            if [[ "${profile_part%%=*}" == "ipe" ]]; then
+                ipe_key_count=$((ipe_key_count + 1))
+            fi
+        done
+        if (( ipe_key_count > 1 )); then
+            log "Ignoring ambiguous duplicate IPE settings from IMDS."
+        else
+            requested_mode="$(acl_security_profile_value "${security_profile}" "ipe")"
+            case "${requested_mode}" in
+                disabled|off|audit|permissive) mode="${requested_mode}" ;;
+                enforcing)
+                    log "IPE mode 'enforcing' is not supported at runtime; leaving IPE inactive."
+                    ;;
+                "")
+                    if (( ipe_key_count == 0 )); then
+                        # Validation branch only; production no-tag behavior is unchanged.
+                        mode="audit"
+                        log "No IPE setting in validated IMDS profile; defaulting to audit."
+                    else
+                        log "Ignoring empty IPE mode from IMDS."
+                    fi
+                    ;;
+                *) log "Ignoring unrecognized IPE mode '${requested_mode}' from IMDS." ;;
+            esac
+        fi
     else
         log "IMDS unavailable; leaving IPE inactive (policy loaded but not activated)."
     fi
