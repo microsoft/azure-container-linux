@@ -1,11 +1,11 @@
 %global debug_package %{nil}
 %define upstream_name containerd
-%define commit_hash db8809540e1a7a9da5d518876894933ff55692ab
+%define commit_hash 774bc80b3b952a07fefb4424b65a7c9115e9f8c6
 
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.4
-Release: 2%{?dist}
+Release: 4%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -22,6 +22,10 @@ Patch2:	fix-TestCgroupNamespace-cgroupv1.patch
 Patch3:	CVE-2026-56852.patch
 Patch4:	CVE-2026-37236.patch
 Patch5:	fix-wrapped-enotsup-selinux-relabel.patch
+Patch6:	0001-erofs-add-signed-dm-verity-mapper-foundation.patch
+Patch7:	0002-erofs-plain-chainid-signed-foundation.patch
+Patch8:	0003-erofs-generic-signed-referrer-integration.patch
+Patch9:	0004-dmverity-preserve-concurrent-mapper-ownership.patch
 
 %{?systemd_requires}
 
@@ -68,6 +72,7 @@ make VERSION="%{version}" REVISION="%{commit_hash}" binaries man
 export BUILDTAGS="-mod=vendor"
 export GOEXPERIMENT=ms_nocgo_opensslcrypto
 make VERSION="%{version}" REVISION="%{commit_hash}" test
+go test -mod=vendor ./vendor/github.com/containerd/go-dmverity/pkg/verity
 
 %install
 make VERSION="%{version}" REVISION="%{commit_hash}" DESTDIR="%{buildroot}" PREFIX="/usr" install install-man
@@ -102,6 +107,10 @@ fi
 %dir /opt/containerd/lib
 
 %changelog
+* Tue Oct 06 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-4
+- Add signed EROFS mount, preparation, transfer, and cached CRI support.
+- Retain compatible layer roots and preserve concurrent mapper ownership.
+
 * Fri Sep 18 2026 Nan Liu <liunan@microsoft.com> - 2.3.4-2
 - Tolerate wrapped ENOTSUP errors from SELinux mount relabeling
 
