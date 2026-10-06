@@ -584,9 +584,7 @@ packages:
   app-misc/c_rehash: SKIP
   app-misc/pax-utils: SKIP
   dev-cpp/glog: SKIP
-  # TODO: we should create a new client package for etcdctl instead of using
-  # the full package
-  dev-db/etcdctl: etcd
+  dev-db/etcdctl: SKIP  # No etcd server or client needed in RPM mode
   dev-libs/jose: SKIP  # not used, skipping to not bring "jose" from extended
   dev-libs/libbsd: SKIP
   dev-libs/libverto: SKIP
