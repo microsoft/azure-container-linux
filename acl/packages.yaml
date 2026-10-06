@@ -13,9 +13,6 @@
 # This file is part of the pipeline cache key — changes here invalidate
 # the RPM staging cache even when SPECS/ content is unchanged.
 #
-# NOTE: qemu is not listed here — it is built separately via --build-rpms-qemu
-# for arm64 cross-compilation and has its own pipeline cache key.
-
 packages:
   # --- Ported from Flatcar ------------------------------------------------
   - coreos-init         # Init scripts, systemd units, generators (autologin fix)
