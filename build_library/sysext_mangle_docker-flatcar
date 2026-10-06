@@ -28,8 +28,3 @@ cp -vdR --preserve=mode,timestamps "${files_dir}/"* "${rootfs}"
 
 mkdir -p "${rootfs}/usr/lib/systemd/system/sockets.target.d"
 { echo "[Unit]"; echo "Upholds=docker.socket"; } > "${rootfs}/usr/lib/systemd/system/sockets.target.d/10-docker-socket.conf"
-
-# RPM-specific mangle (etcd-wrapper, etc.)
-if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
-  "$(dirname "$0")/rpm/sysext_mangle_docker-flatcar.sh" "${rootfs}"
-fi

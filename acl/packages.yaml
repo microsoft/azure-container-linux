@@ -19,7 +19,6 @@
 packages:
   # --- Ported from Flatcar ------------------------------------------------
   - coreos-init         # Init scripts, systemd units, generators (autologin fix)
-  - sdnotify-proxy      # sd_notify proxy for containerized services
 
   # --- LISA testing dependencies ------------------------------------------
   - stress-ng           # Stress test tool
