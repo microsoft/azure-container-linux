@@ -155,6 +155,23 @@ Build the Flatcar production image using RPM package sources.
 ./acl/build_rpm_image.sh --rebuild
 ```
 
+**Optional IPE audit (UKI images)**
+
+Use `ephemeral` for dev/test or `esrp` for later production signing by
+`ACL-Publish-MCR-And-ACG`; both initially build a test-signed policy.
+
+```bash
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit --ipe-signing-mode=ephemeral
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit --ipe-signing-mode=esrp
+```
+
+IPE defaults to disabled. On Azure, set the VM tag
+`acl-node-security-profile=ipe=audit` to log would-deny events without blocking
+execution. Policy-load failures are logged and leave IPE inactive without
+blocking boot. `enforcing` is unsupported; QEMU runtime testing requires
+`--ipe-mode=disabled`. See [architecture](architecture.md) for policy trust,
+credential handling and dm-verity details.
+
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
 
 ### Phase 4: Build VM Image (Optional)
@@ -322,6 +339,11 @@ By default, before starting a new Azure VM, all the pre-existing resource groups
 ./acl/build_rpm_image.sh --start-vm --vm-type=azure --no-cleanup
 ```
 
+For test-signed IPE policies, including unpublished ESRP candidates, use the
+Secure Boot smoke path with the matching `uki-signing-ca.pem`. Kernel-trusted
+production policies can activate on Standard Gen2, but IPE does not select
+that VM profile automatically. `--run-tests` still includes the Secure Boot check.
+
 You can also use the `--run-script` flag to run tests on the Azure VM, just like with the QEMU VM.
 
 #### Access the VM
@@ -482,6 +504,9 @@ AZURE_SUBSCRIPTION_ID="<your-subscription-id>" \
 AZURE_TOKEN_CREDENTIALS=AzureCLICredential \
   ./run_azure_tests.sh amd64 2 cl.ignition.v1.once coreos.ignition.once
 ```
+
+Kola boot success alone does not prove active IPE audit. Use the IPE smoke
+test to verify policy activation and execution-correlated audit events.
 
 **Arguments:**
 
