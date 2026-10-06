@@ -36,6 +36,7 @@ BuildRequires:  protobuf-compiler
 BuildRequires:  protobuf-devel
 BuildRequires:  systemd-units
 BuildRequires:  rust
+BuildRequires:  bzip2
 
 %if %{undefined rpm_ver}
 # For distro build, require cargo to build and osmodifier
@@ -224,6 +225,7 @@ be removed once the fix is merged in AZL 4.0.
 %package acl
 Summary:        Trident ACL Components
 Requires:       %{name} = %{version}-%{release}
+Requires:       %{name}-static-pcrlock-files = %{version}-%{release}
 
 %description acl
 The Trident ACL components required to orchestrate servicing of ACL images.
@@ -283,7 +285,7 @@ make -f %{_datadir}/selinux/devel/Makefile %{name}.pp
 bzip2 -9 %{name}.pp
 
 %check
-# Test the trident variable for the appropiate version
+# Test the trident variable for the appropriate version
 %if %{undefined rpm_ver}
 # Use %{version}-%{release} for TRIDENT_VERSION in distro build
 test "$(./target/release/trident --version)" = "trident %{version}-%{release}"
