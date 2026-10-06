@@ -28,20 +28,8 @@ version: 1
 
 tests:
   - name: acl.basic
-  - name: acl.etcd-member.discovery
-    exceptions:
-      - platforms: [qemu]
-        architectures: [aarch64]
-        reason: 3-node etcd cluster on TCG-emulated arm64 races systemd's DefaultDeviceTimeoutSec for /dev/disk/by-label/OEM; tracked by the OEM fsck conditional dropin work
-      - platforms: [azure]
-        reason: Azure version depends on discovery.etcd.io, which is unmaintained.
-      - imageVariants: [acl-t]
-        reason: |
-          The test's etcd server runs in a docker container
-          (etcd-member.service via etcd-wrapper), and acl-t has no
-          docker daemon — the standalone `docker` sysext is not carried
-          and docker has no RPM replacement (same as docker.*) — so no
-          etcd server can start for the test to drive.
+  # Mantle PR #48 excludes the legacy Docker-based etcd-member and kubeadm
+  # registrations on ACL; restore their enforcement only when tests return.
 
   - name: acl.internet
     exceptions:
@@ -139,27 +127,6 @@ tests:
       - platforms: [qemu]
         architectures: [aarch64]
         reason: Flakiness on TCG-emulated arm64, failures due to slow device enumeration.
-
-  - name: cl.etcd-member.etcdctlv3
-    exceptions:
-      - imageVariants: [acl-t]
-        reason: |
-          The test's etcd server runs in a docker container
-          (etcd-member.service via etcd-wrapper), and acl-t has no
-          docker daemon — the standalone `docker` sysext is not carried
-          and docker has no RPM replacement (same as docker.*) — so no
-          etcd server can start for the test to drive.
-  - name: cl.etcd-member.v2-backup-restore
-    exceptions:
-      - platforms: [azure]
-        reason: Azure version depends on discovery.etcd.io, which is unmaintained.
-      - imageVariants: [acl-t]
-        reason: |
-          The test's etcd server runs in a docker container
-          (etcd-member.service via etcd-wrapper), and acl-t has no
-          docker daemon — the standalone `docker` sysext is not carried
-          and docker has no RPM replacement (same as docker.*) — so no
-          etcd server can start for the test to drive.
 
   - name: cl.filesystem
     exceptions:
@@ -356,115 +323,6 @@ tests:
           ships containerd/ctr only (containerd-only runtime, matching
           AKS). containerd-native (ctr) replacement tests are tracked as
           a follow-up.
-
-  - name: kubeadm.v1.32.4.calico.base
-    exceptions:
-      - platforms: [qemu]
-        architectures: [aarch64]
-        reason: kubectl wait timeouts on emulated arm64 QEMU
-      - imageVariants: [acl-t]
-        reason: |
-          The kubeadm cluster provisions an etcd node that runs etcd in
-          a docker container (etcd-member.service via etcd-wrapper);
-          acl-t has no docker daemon — the standalone `docker` sysext is
-          not carried and docker has no RPM replacement (same as
-          docker.*) — so the control plane cannot bootstrap.
-  - name: kubeadm.v1.32.4.cilium.base
-    exceptions:
-      - platforms: [qemu]
-        architectures: [aarch64]
-        reason: kubectl wait timeouts on emulated arm64 QEMU
-      - imageVariants: [acl-t]
-        reason: |
-          The kubeadm cluster provisions an etcd node that runs etcd in
-          a docker container (etcd-member.service via etcd-wrapper);
-          acl-t has no docker daemon — the standalone `docker` sysext is
-          not carried and docker has no RPM replacement (same as
-          docker.*) — so the control plane cannot bootstrap.
-  - name: kubeadm.v1.32.4.flannel.base
-    exceptions:
-      - platforms: [qemu]
-        architectures: [aarch64]
-        reason: kubectl wait timeouts on emulated arm64 QEMU
-      - imageVariants: [acl-t]
-        reason: |
-          The kubeadm cluster provisions an etcd node that runs etcd in
-          a docker container (etcd-member.service via etcd-wrapper);
-          acl-t has no docker daemon — the standalone `docker` sysext is
-          not carried and docker has no RPM replacement (same as
-          docker.*) — so the control plane cannot bootstrap.
-  - name: kubeadm.v1.33.0.calico.base
-    exceptions:
-      - platforms: [qemu]
-        architectures: [aarch64]
-        reason: kubectl wait timeouts on emulated arm64 QEMU
-      - imageVariants: [acl-t]
-        reason: |
-          The kubeadm cluster provisions an etcd node that runs etcd in
-          a docker container (etcd-member.service via etcd-wrapper);
-          acl-t has no docker daemon — the standalone `docker` sysext is
-          not carried and docker has no RPM replacement (same as
-          docker.*) — so the control plane cannot bootstrap.
-  - name: kubeadm.v1.33.0.cilium.base
-    exceptions:
-      - platforms: [qemu]
-        architectures: [aarch64]
-        reason: kubectl wait timeouts on emulated arm64 QEMU
-      - imageVariants: [acl-t]
-        reason: |
-          The kubeadm cluster provisions an etcd node that runs etcd in
-          a docker container (etcd-member.service via etcd-wrapper);
-          acl-t has no docker daemon — the standalone `docker` sysext is
-          not carried and docker has no RPM replacement (same as
-          docker.*) — so the control plane cannot bootstrap.
-  - name: kubeadm.v1.33.0.flannel.base
-    exceptions:
-      - platforms: [qemu]
-        architectures: [aarch64]
-        reason: kubectl wait timeouts on emulated arm64 QEMU
-      - imageVariants: [acl-t]
-        reason: |
-          The kubeadm cluster provisions an etcd node that runs etcd in
-          a docker container (etcd-member.service via etcd-wrapper);
-          acl-t has no docker daemon — the standalone `docker` sysext is
-          not carried and docker has no RPM replacement (same as
-          docker.*) — so the control plane cannot bootstrap.
-  - name: kubeadm.v1.34.1.calico.base
-    exceptions:
-      - platforms: [qemu]
-        architectures: [aarch64]
-        reason: kubectl wait timeouts on emulated arm64 QEMU
-      - imageVariants: [acl-t]
-        reason: |
-          The kubeadm cluster provisions an etcd node that runs etcd in
-          a docker container (etcd-member.service via etcd-wrapper);
-          acl-t has no docker daemon — the standalone `docker` sysext is
-          not carried and docker has no RPM replacement (same as
-          docker.*) — so the control plane cannot bootstrap.
-  - name: kubeadm.v1.34.1.cilium.base
-    exceptions:
-      - platforms: [qemu]
-        architectures: [aarch64]
-        reason: kubectl wait timeouts on emulated arm64 QEMU
-      - imageVariants: [acl-t]
-        reason: |
-          The kubeadm cluster provisions an etcd node that runs etcd in
-          a docker container (etcd-member.service via etcd-wrapper);
-          acl-t has no docker daemon — the standalone `docker` sysext is
-          not carried and docker has no RPM replacement (same as
-          docker.*) — so the control plane cannot bootstrap.
-  - name: kubeadm.v1.34.1.flannel.base
-    exceptions:
-      - platforms: [qemu]
-        architectures: [aarch64]
-        reason: kubectl wait timeouts on emulated arm64 QEMU
-      - imageVariants: [acl-t]
-        reason: |
-          The kubeadm cluster provisions an etcd node that runs etcd in
-          a docker container (etcd-member.service via etcd-wrapper);
-          acl-t has no docker daemon — the standalone `docker` sysext is
-          not carried and docker has no RPM replacement (same as
-          docker.*) — so the control plane cannot bootstrap.
 
   - name: linux.nfs.v3
     exceptions:
