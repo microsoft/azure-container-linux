@@ -269,6 +269,12 @@ OSREL
     sudo cp "${sd_boot_efi}" "${ESP_DIR}/EFI/BOOT/grub${EFI_ARCH}.efi"
     info "UKI/RPM: Installed systemd-boot → EFI/BOOT/grub${EFI_ARCH}.efi"
 
+    # Mirror EFI/BOOT into EFI/AZLA so the Azure Linux Agent bootloader
+    # path is byte-for-byte identical to the default fallback path.
+    sudo mkdir -p "${ESP_DIR}/EFI/AZLA"
+    sudo cp -a "${ESP_DIR}/EFI/BOOT/." "${ESP_DIR}/EFI/AZLA/"
+    info "UKI/RPM: Mirrored EFI/BOOT → EFI/AZLA"
+
     # The kernel and initramfs are now embedded inside the UKI. Remove them from
     # the ESP to reclaim space.
     info "UKI/RPM: Cleaning up pre-UKI files from ESP"
