@@ -180,10 +180,7 @@ credential handling and dm-verity details.
 ```
 
 This opt-in defaults to false (`ACL_USR_HASH_SIGNATURE` in SDK automation) and
-requires IPE-capable UKIs. Rebuild ACL's `cryptsetup` RPM first: its patch
-preserves kernel key errors so boot can distinguish signature rejection from
-storage/setup failures. The stock library supports signatures, but loses that
-distinction; signed builds reject it rather than retry arbitrary failures.
+requires IPE-capable UKIs. It uses the stock cryptsetup library.
 
 Factory builds sign finalized USR-A/HASH-A with the per-build IPE signer and
 write HASH-SIG-A. B stays empty for Image Customizer discovery and the first
@@ -194,12 +191,13 @@ Publication must replace/verify A's signature before producing the update COSI.
 
 Before mounting `/usr`, a bounded 25-second Azure tag lookup selects the mode
 using a cache separate from SELinux's. Only `ipe=audit` attempts signed
-activation. Missing/invalid signatures or classified kernel key errors fall
-back to ordinary dm-verity with the same hash and `panic-on-corruption`.
-Other activation failures and existing mappings are not retried. Lookup
-failure leaves IPE inactive; signature fallback retains the audit request.
-Inspect `/run/acl/usr-verity.json` and the journal for
-`systemd-veritysetup@usr.service` and `acl-usr-verity-attempt.service`.
+activation, bounded to 30 seconds plus a 2-second kill grace period.
+Missing/invalid signatures or failed signed activation fall back to ordinary
+dm-verity with the same hash and `panic-on-corruption`. If that also fails,
+boot stops. Existing mappings are never reused. Lookup failure leaves IPE
+inactive; signature fallback retains the audit request and reports degraded
+verification. Inspect `/run/acl/usr-verity.json` and the journal for
+`systemd-veritysetup@usr.service`.
 Verification status does not prove policy activation or reduced audit noise.
 
 HASH-SIG contains DPS JSON with exactly `rootHash` and `signature`: detached

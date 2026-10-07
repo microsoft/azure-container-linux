@@ -6,7 +6,7 @@ depends() {
 }
 
 install() {
-    inst_multiple systemd-run systemctl timeout lsblk blockdev \
+    inst_multiple systemctl timeout lsblk blockdev \
         dd wc base64 grep sleep cat mkdir mv rm uname chmod dmsetup
     # Bootengine wraps some /usr tools through /sysusr. Early boot cannot use those.
     local tool

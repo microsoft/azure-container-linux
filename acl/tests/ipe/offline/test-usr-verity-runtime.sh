@@ -7,7 +7,7 @@ trap 'rm -rf "${work}"' EXIT
 export ACL_VERITY_RUN_DIR="${work}"
 source "${ROOT}/build_library/rpm/additional_files/dracut-acl-usr-verity/acl-verity-setup.sh"
 root_hash="$(printf 'a%.0s' {1..64})"
-mapping=false signed_result=0 unsigned_result=0
+mapping=false mapping_after_attempt=false signed_result=0 unsigned_result=0
 signed_calls=0 unsigned_calls=0
 VERITYSETUP=mock_veritysetup
 acl_verity_mapping_exists() { [[ "${mapping}" == true ]]; }
@@ -15,19 +15,6 @@ mock_veritysetup() {
     unsigned_calls=$((unsigned_calls + 1))
     [[ "$*" == "attach usr ${data_device} ${hash_device} ${root_hash} panic-on-corruption" ]] || return 1
     return "${unsigned_result}"
-}
-systemd-run() {
-    signed_calls=$((signed_calls + 1))
-    [[ "$*" == *"attach usr ${data_device} ${hash_device} ${root_hash} panic-on-corruption,root-hash-signature=${work}/usr.p7s" ]] || return 1
-    return "${signed_result}"
-}
-systemctl() {
-    case "$*" in
-        "show --value -p StatusErrno "*) echo "${mock_errno}" ;;
-        "show --value -p Result "*) echo "${mock_result}" ;;
-        "reset-failed "*) ;;
-        *) echo "Unexpected systemctl call: $*" >&2; return 1 ;;
-    esac
 }
 reject() {
     if "$@" > "${work}/failure.out" 2>&1; then
@@ -41,6 +28,12 @@ timeout() {
     case "$*" in
         *--profile) printf '%s\n' "${profile_value}"; return "${profile_result}" ;;
         *--check-signature*) return "${validation_result}" ;;
+        *root-hash-signature=*)
+            signed_calls=$((signed_calls + 1))
+            [[ "$*" == "--kill-after=2s 30s ${VERITYSETUP} attach usr ${data_device} ${hash_device} ${root_hash} panic-on-corruption,root-hash-signature=${work}/usr.p7s" ]] || return 1
+            mapping="${mapping_after_attempt}"
+            return "${signed_result}"
+            ;;
         *) command timeout "$@" ;;
     esac
 }
@@ -69,22 +62,18 @@ profile_result=0 signature_available=true signed_result=0
 acl_verity_main
 [[ "$(jq -r .verification "${work}/usr-verity.json")" == verified ]]
 before="${unsigned_calls}"
-signed_result=1 mock_result=exit-code
-for mock_errno in 126 127 128 129; do
+for signed_result in 1 124; do
     acl_verity_main
-    [[ "$(jq -r .verification "${work}/usr-verity.json")" == degraded ]]
+    jq -e '.verification == "degraded" and .requestedMode == "audit" and
+        .reason == "signed-activation-failed"' "${work}/usr-verity.json" > /dev/null
 done
-[[ "${unsigned_calls}" == "$((before + 4))" ]]
+[[ "${unsigned_calls}" == "$((before + 2))" ]]
 before="${unsigned_calls}"
-for mock_errno in 0 5 22; do
-    reject acl_verity_main
-done
-mock_errno=126 mock_result=timeout
+mapping_after_attempt=true
 reject acl_verity_main
-mapping=true
 reject acl_verity_main
 [[ "${unsigned_calls}" == "${before}" ]]
-mapping=false unsigned_result=1 mock_result=exit-code
+mapping=false mapping_after_attempt=false unsigned_result=1
 rm "${work}/usr-verity.json"
 reject acl_verity_main
 [[ ! -e "${work}/usr-verity.json" ]]

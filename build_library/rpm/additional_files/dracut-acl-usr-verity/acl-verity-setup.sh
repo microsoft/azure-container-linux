@@ -7,7 +7,6 @@ CMDLINE_FILE="${ACL_VERITY_CMDLINE_FILE:-/proc/cmdline}"
 VERITYSETUP="${ACL_VERITYSETUP:-/usr/lib/systemd/systemd-veritysetup}"
 PAYLOAD_HELPER="${ACL_VERITY_PAYLOAD_HELPER:-/usr/lib/acl/acl-usr-verity-payload.sh}"
 PROFILE_HELPER="${ACL_VERITY_PROFILE_HELPER:-/usr/lib/acl/acl-node-security-profile.sh}"
-ATTEMPT_UNIT=acl-usr-verity-attempt.service
 
 log() { echo "acl-verity-setup: $*" >&2; }
 
@@ -80,32 +79,19 @@ acl_verity_signature_device() {
 }
 
 acl_verity_signed() {
-    local signature="$1" error_number result
+    local signature="$1"
     if acl_verity_mapping_exists; then
         log "Refusing to call an already active mapping signature-verified"
         return 1
     fi
-    # A supervised main process gives systemd a reliable, typed sd_notify ERRNO.
-    # Exit status alone cannot distinguish rejected keys from setup/I/O errors.
-    if systemd-run --quiet --wait --unit="${ATTEMPT_UNIT}" \
-        --property=DefaultDependencies=no --property=Type=oneshot \
-        --property=NotifyAccess=main --property=TimeoutStartSec=30s \
-        --property=StandardError=journal+console -- \
+    if timeout --kill-after=2s 30s \
         "${VERITYSETUP}" attach usr "${data_device}" "${hash_device}" \
         "${root_hash}" "${options},root-hash-signature=${signature}"; then
         acl_verity_status verified kernel-verified || return 1
         return 0
     fi
-    error_number="$(systemctl show --value -p StatusErrno "${ATTEMPT_UNIT}")"
-    result="$(systemctl show --value -p Result "${ATTEMPT_UNIT}")"
-    if [[ "${result}" == exit-code && "${error_number}" =~ ^(126|127|128|129)$ ]]; then
-        acl_verity_unsigned degraded "kernel-key-rejected-${error_number}" || return 1
-        systemctl reset-failed "${ATTEMPT_UNIT}" ||
-            log "Could not clear the reported signature-attempt failure"
-        return 0
-    fi
-    log "Signed activation failed: result=${result} errno=${error_number}; not a classified signature failure"
-    return 1
+    log "Signed activation failed; retrying ordinary dm-verity with the same root hash"
+    acl_verity_unsigned degraded signed-activation-failed
 }
 
 acl_verity_main() {
