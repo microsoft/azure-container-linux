@@ -185,15 +185,23 @@ enforcement. Rebuild the ACL `cryptsetup` RPM first: stock Azure Linux 3
 libcryptsetup discards kernel key-error categories. The ACL backport preserves
 those errors for dm-verity, and the image build rejects an unpatched library
 instead of relying on ambiguous failure codes.
-Fresh signed-root builds copy finalized USR-A/HASH-A to B and
-populate both HASH-SIG partitions with the same per-build signer used for IPE.
+Fresh signed-root builds sign finalized USR-A/HASH-A with the same per-build
+signer used for IPE and populate HASH-SIG-A. They preserve the existing empty
+USR-B/HASH-B/HASH-SIG-B factory slot until Trident's first successful update
+writes the complete new tuple there, leaving A available for rollback. Copying
+the initial `/usr` into B would duplicate Image Customizer's discovery fstab
+and make conversion reject two root-filesystem candidates.
 The exported `usr-root-signatures.json` describes **ephemeral candidates**,
 including when ESRP publication is requested. Production finalization must
-replace and verify those signatures before producing the final update package.
+replace and verify the initialized A signature before producing the final
+update package; it must not describe the empty B slot as verified.
 
 Each signed slot addon advertises
 `acl.verity_usr_signature=PARTUUID=<matching HASH-SIG UUID>`, not an unconditional
-`root-hash-signature` option. In Azure initrd, a bounded 25-second tag lookup
+`root-hash-signature` option. Both factory addon templates name source A's root
+hash, so the update package can install that source tuple into either slot.
+The B template is not a claim that the factory B slot is bootable.
+In Azure initrd, a bounded 25-second tag lookup
 chooses the IPE mode before `/usr` opens; its cache is separate from SELinux's.
 Only `ipe=audit` attempts signed activation. Invalid/missing payloads or
 classified kernel key errors fall back to ordinary dm-verity with

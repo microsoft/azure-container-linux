@@ -20,32 +20,38 @@ partition() {
 }
 data_a="$(partition USR-A)" data_b="$(partition USR-B)"
 hash_a="$(partition HASH-A)" hash_b="$(partition HASH-B)"
-for pair in "${data_a}:${data_b}" "${hash_a}:${hash_b}"; do
-    [[ "$(blockdev --getsize64 "${pair%:*}")" == "$(blockdev --getsize64 "${pair#*:}")" ]] ||
+signature_a="$(partition HASH-SIG-A)" signature_b="$(partition HASH-SIG-B)"
+for label in USR HASH; do
+    capacity_a="$(blockdev --getsize64 "$(partition "${label}-A")")"
+    capacity_b="$(blockdev --getsize64 "$(partition "${label}-B")")"
+    [[ "${capacity_a}" =~ ^[1-9][0-9]*$ && "${capacity_a}" == "${capacity_b}" ]] ||
         { echo "A/B partition capacity mismatch" >&2; exit 1; }
 done
+for device in "${signature_a}" "${signature_b}"; do
+    [[ "$(blockdev --getsize64 "${device}")" == 1048576 ]] ||
+        { echo "HASH-SIG partitions must be exactly 1 MiB" >&2; exit 1; }
+done
 veritysetup verify "${data_a}" "${hash_a}" "${root_hash}"
-# Only this fresh-image builder initializes B. Servicing must never do this.
-dd if="${data_a}" of="${data_b}" bs=4M conv=fsync status=none
-dd if="${hash_a}" of="${hash_b}" bs=1M conv=fsync status=none
-veritysetup verify "${data_b}" "${hash_b}" "${root_hash}"
+# Keep the factory B slot uninitialized. Copying /usr also duplicates the
+# Image Customizer discovery fstab, making COSI conversion ambiguous.
+for device in "${data_b}" "${hash_b}" "${signature_b}"; do
+    capacity="$(blockdev --getsize64 "${device}")"
+    cmp -n "${capacity}" "${device}" /dev/zero ||
+        { echo "Fresh signed images require an empty B slot: ${device}" >&2; exit 1; }
+done
 printf '%s' "${root_hash}" > "${work}/root.hash"
 openssl cms -sign -binary -noattr -md sha256 -in "${work}/root.hash" \
     -signer "${cert_dir}/uki-signing-ca.pem" -inkey "${cert_dir}/ca.key" \
     -outform DER -out "${work}/root.p7s"
 acl_verity_check_cms "${root_hash}" "${work}/root.p7s"
-for slot in A B; do
-    device="$(partition "HASH-SIG-${slot}")"
-    capacity="$(blockdev --getsize64 "${device}")"
-    acl_verity_encode_payload "${root_hash}" "${work}/root.p7s" "${work}/payload" "${capacity}"
-    dd if="${work}/payload" of="${device}" bs=4096 conv=fsync status=none
-    cmp -n "${capacity}" "${work}/payload" "${device}"
-    jq -cn --arg slot "${slot,,}" --arg hash "${root_hash}" --arg sig_hash "$(sha256sum "${work}/root.p7s" | cut -d' ' -f1)" \
-        --arg data "$(blkid -s PARTUUID -o value "$(partition "USR-${slot}")")" \
-        --arg tree "$(blkid -s PARTUUID -o value "$(partition "HASH-${slot}")")" \
-        --arg signature "$(blkid -s PARTUUID -o value "${device}")" \
-        '{slot:$slot,rootHash:$hash,dataPartUuid:$data,hashPartUuid:$tree,signaturePartUuid:$signature,signatureSha256:$sig_hash}' \
-        >> "${work}/slots.jsonl"
-done
-jq -s '{version:1,signingMode:"ephemeral",slots:.}' "${work}/slots.jsonl" > "${metadata}.tmp"
+acl_verity_encode_payload "${root_hash}" "${work}/root.p7s" "${work}/payload" 1048576
+dd if="${work}/payload" of="${signature_a}" bs=4096 conv=fsync status=none
+cmp -n 1048576 "${work}/payload" "${signature_a}"
+jq -cn --arg hash "${root_hash}" --arg sig_hash "$(sha256sum "${work}/root.p7s" | cut -d' ' -f1)" \
+    --arg data "$(blkid -s PARTUUID -o value "${data_a}")" \
+    --arg tree "$(blkid -s PARTUUID -o value "${hash_a}")" \
+    --arg signature "$(blkid -s PARTUUID -o value "${signature_a}")" \
+    '{slot:"a",rootHash:$hash,dataPartUuid:$data,hashPartUuid:$tree,signaturePartUuid:$signature,signatureSha256:$sig_hash}' \
+    > "${work}/slots.jsonl"
+jq -s '{version:1,signingMode:"ephemeral",initializedSlots:["a"],slots:.}' "${work}/slots.jsonl" > "${metadata}.tmp"
 mv -f "${metadata}.tmp" "${metadata}"
