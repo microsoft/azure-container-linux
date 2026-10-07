@@ -185,7 +185,7 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]
             "${ephemeral_cert_dir}" \
             "${FLAGS_from}" \
             "${VM_TMP_ROOT}/boot" ||
-            die_notrace "IPE artifact signing material does not match its policy signatures"
+            die_notrace "IPE policy signature or UKI credential binding verification failed"
     else
         # Share a signer across this build's test and production conversions,
         # outside published artifacts. FLAGS_to already resolves latest links.

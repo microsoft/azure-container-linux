@@ -240,6 +240,11 @@ test_uki_binds_policy_before_writing_cmdline() {
     grep -Fq 'EFI/Linux/${uki_name}.extra.d/acl-ipe-policy.p7b.cred' "${uki_install}"
 }
 
+write_test_uki() {
+    printf 'mock UKI\n' > "$1"
+    printf '%s\n' "$2" > "$1.cmdline"
+}
+
 test_vm_conversions_share_secure_boot_cert() {
     local cert_dir="${TEST_DIR}/vm-shared-cert"
     local other_cert_dir="${TEST_DIR}/vm-other-cert"
@@ -247,13 +252,24 @@ test_vm_conversions_share_secure_boot_cert() {
     local artifact_dir="${TEST_DIR}/vm-artifact"
     local esp_dir="${TEST_DIR}/vm-esp"
     local extra_dir="${esp_dir}/EFI/Linux/acl.efi.extra.d"
+    local uki="${esp_dir}/EFI/Linux/acl.efi"
+    local verifier="${SCRIPT_DIR}/build_library/rpm/verify_ipe_signer_continuity.sh"
+
+    ukify() {
+        [[ "$1" == inspect && "$3" == --json=short &&
+            "$4" == --section=.cmdline:text && "$(<"$2")" == "mock UKI" &&
+            -r "$2.cmdline" ]] || return 1
+        jq -n --arg text "$(<"$2.cmdline")" '{".cmdline": {"text": $text}}'
+    }
+    export -f ukify
 
     "${SCRIPT_DIR}/build_library/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" create >/dev/null 2>&1
     cp "${cert_dir}/uki-signing-ca.pem" "${first_cert}"
     "${SCRIPT_DIR}/build_library/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" require >/dev/null 2>&1
     cmp -s "${first_cert}" "${cert_dir}/uki-signing-ca.pem"
 
-    mkdir -p "${artifact_dir}/acl-ipe-policy" "${extra_dir}"
+    mkdir -p "${artifact_dir}/acl-ipe-policy" "${extra_dir}" "${esp_dir}/loader"
+    printf 'default acl.efi\n' > "${esp_dir}/loader/loader.conf"
     openssl smime -sign -binary \
         -in "${policy}" \
         -signer "${cert_dir}/uki-signing-ca.pem" \
@@ -264,22 +280,80 @@ test_vm_conversions_share_secure_boot_cert() {
     cp "${artifact_dir}/acl-ipe-policy/acl-ipe-policy.p7b.cred" \
         "${extra_dir}/acl-ipe-policy.p7b.cred"
 
-    bash "${SCRIPT_DIR}/build_library/rpm/verify_ipe_signer_continuity.sh" \
-        "${cert_dir}" "${artifact_dir}" "${esp_dir}"
+    local hash token
+    hash="$(sha256sum "${extra_dir}/acl-ipe-policy.p7b.cred" | cut -d' ' -f1)"
+    token="acl.ipe.policy_sha256=${hash}"
+    write_test_uki "${uki}" "quiet ${token}"
+    bash "${verifier}" "${cert_dir}" "${artifact_dir}" "${esp_dir}"
+
+    local bad_cmdline
+    for bad_cmdline in "" quiet "acl.ipe.policy_sha256=bad" \
+        "acl.ipe.policy_sha256=$(printf '%064d' 0)" "${token} ${token}"; do
+        write_test_uki "${uki}" "${bad_cmdline}"
+        if bash "${verifier}" "${cert_dir}" "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
+            echo "missing, malformed, wrong or duplicate UKI policy hash was accepted" >&2
+            return 1
+        fi
+    done
+    write_test_uki "${uki}" "${token}"
+
+    local loader_config
+    for loader_config in "" "default other.efi" "default *.efi" \
+        $'default acl.efi\ndefault other.efi'; do
+        printf '%s\n' "${loader_config}" > "${esp_dir}/loader/loader.conf"
+        if bash "${verifier}" "${cert_dir}" "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
+            echo "missing or ambiguous selected UKI was accepted" >&2
+            return 1
+        fi
+    done
+    printf 'default acl.efi\n' > "${esp_dir}/loader/loader.conf"
+    mv "${extra_dir}" "${esp_dir}/EFI/Linux/other.efi.extra.d"
+    if bash "${verifier}" "${cert_dir}" "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
+        echo "another UKI's credential satisfied the selected UKI" >&2
+        return 1
+    fi
+    mv "${esp_dir}/EFI/Linux/other.efi.extra.d" "${extra_dir}"
+
+    printf 'not a UKI\n' > "${uki}"
+    if bash "${verifier}" "${cert_dir}" "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
+        echo "invalid UKI was accepted" >&2
+        return 1
+    fi
+    write_test_uki "${uki}" "${token}"
+
+    local staged="${artifact_dir}/acl-ipe-policy/acl-ipe-policy.p7b.cred"
+    cp "${staged}" "${TEST_DIR}/original.cred"
+    { cat "${policy}"; printf '\n# alternate signed input\n'; } > "${TEST_DIR}/alternate.pol"
+    openssl smime -sign -binary -in "${TEST_DIR}/alternate.pol" \
+        -signer "${cert_dir}/uki-signing-ca.pem" -inkey "${cert_dir}/ca.key" \
+        -noattr -nodetach -nosmimecap -outform der \
+        -out "${extra_dir}/acl-ipe-policy.p7b.cred" 2>/dev/null
+    if bash "${verifier}" "${cert_dir}" "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
+        echo "different installed credential with the same signer was accepted" >&2
+        return 1
+    fi
+    cp "${extra_dir}/acl-ipe-policy.p7b.cred" "${staged}"
+    if bash "${verifier}" "${cert_dir}" "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
+        echo "matching credentials not bound into the UKI were accepted" >&2
+        return 1
+    fi
+    cp "${TEST_DIR}/original.cred" "${staged}"
+    cp "${staged}" "${extra_dir}/acl-ipe-policy.p7b.cred"
 
     "${SCRIPT_DIR}/build_library/rpm/ensure_ephemeral_cert.sh" \
         "${other_cert_dir}" create >/dev/null 2>&1
-    if bash "${SCRIPT_DIR}/build_library/rpm/verify_ipe_signer_continuity.sh" \
+    if bash "${verifier}" \
         "${other_cert_dir}" "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
         echo "matching but unrelated signer pair was accepted" >&2
         return 1
     fi
     printf 'invalid policy credential\n' > "${extra_dir}/acl-ipe-policy.p7b.cred"
-    if bash "${SCRIPT_DIR}/build_library/rpm/verify_ipe_signer_continuity.sh" \
+    if bash "${verifier}" \
         "${cert_dir}" "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
         echo "invalid installed policy credential was accepted" >&2
         return 1
     fi
+    unset -f ukify
 }
 
 test_disabled_vm_signing_is_scoped_to_build() (

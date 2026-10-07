@@ -342,11 +342,14 @@ run_scripts_via_console() {
 start_vm() {
     local vm_image_path="$1"
     local board="$2"
-    if [[ "${VM_TYPE}" == "azure" &&
-        -z "${ACG_IMAGE_VERSION_ID:-}" &&
-        "${REUSE_IMAGE:-false}" != "true" ]]; then
-        _prepare_local_ipe_artifact_contract "${vm_image_path}" ||
-            die "Local Azure image does not satisfy the IPE trust contract"
+    if [[ "${VM_TYPE}" == "azure" ]]; then
+        if [[ -z "${ACG_IMAGE_VERSION_ID:-}" &&
+            "${REUSE_IMAGE:-false}" != "true" ]]; then
+            _prepare_local_ipe_artifact_contract "${vm_image_path}" ||
+                die "Local Azure image does not satisfy the IPE trust contract"
+        fi
+        _enforce_ipe_image_contract ||
+            die "Azure image selection does not satisfy the IPE contract"
     fi
     remove_old_vm
     section "Starting a ${VM_TYPE} VM '${VM_NAME}' Board: '${BOARD}'"

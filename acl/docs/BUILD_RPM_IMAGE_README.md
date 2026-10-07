@@ -344,6 +344,12 @@ Secure Boot smoke path with the matching `uki-signing-ca.pem`. Kernel-trusted
 production policies can activate on Standard Gen2, but IPE does not select
 that VM profile automatically. `--run-tests` still includes the Secure Boot check.
 
+IPE-capable launches reject image overrides and `--reuse-image` before VM cleanup.
+The latest gallery version has no verified IPE capability/signing contract, so
+use a local IPE VHD or explicitly select a gallery version whose IPE
+capability and signing provenance you have verified separately.
+Non-IPE `--reuse-image` behavior is unchanged.
+
 You can also use the `--run-script` flag to run tests on the Azure VM, just like with the QEMU VM.
 
 #### Access the VM

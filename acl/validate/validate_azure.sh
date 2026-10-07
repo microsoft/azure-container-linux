@@ -88,6 +88,10 @@ _enforce_ipe_image_contract() {
     [[ "${ACL_IPE_CAPABLE:-false}" == "true" ]] || return 0
     local -a az_vm_args=()
 
+    if [[ "${REUSE_IMAGE:-false}" == "true" ]]; then
+        error "--reuse-image is not supported for IPE-capable Azure images: latest gallery capability and signing provenance are not verified"
+        return 1
+    fi
     ipe_split_argument_string az_vm_args "${AZ_VM_ARGS:-}"
     if ! ipe_reject_azure_image_overrides "${az_vm_args[@]}"; then
         error "--az-vm-args cannot override the image for IPE-capable Azure VMs"
@@ -1283,6 +1287,9 @@ start_vm_azure() {
                 die "Local Azure image does not satisfy the IPE trust contract"
         fi
     fi
+
+    _enforce_ipe_image_contract ||
+        die "Azure image selection does not satisfy the IPE contract"
 
     section "Starting Azure VM for board '${BOARD}'"
 

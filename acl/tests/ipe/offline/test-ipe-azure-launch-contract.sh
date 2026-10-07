@@ -183,6 +183,95 @@ test_artifact_preflight_ordering() {
 }
 
 # shellcheck disable=SC2329
+test_launch_contract_before_side_effects() (
+    source_test_functions "${SCRIPT_DIR}/acl/validate/validate_common.sh" start_vm
+    source_test_functions "${SCRIPT_DIR}/acl/validate/validate_azure.sh" \
+        _prepare_local_ipe_artifact_contract _enforce_arm_security_contract \
+        _enforce_ipe_image_contract start_vm_azure
+    local directory="${TEST_DIR}/launch-order"
+    local effects="${directory}/effects" rc entrypoint option
+    prepare_vhd "${directory}"
+    printf 'ephemeral\n' > "${directory}/ipe-signing-mode"
+    local image="${directory}/acl_production_azure_test_image.vhd"
+    local VM_TYPE=azure BOARD=amd64-usr VM_NAME=test
+    local ACG_IMAGE_VERSION_ID="" REUSE_IMAGE=false SECURE_BOOT_ENABLED=false
+    local ACL_IPE_CAPABLE="" AZ_VM_ARGS="" _LOCAL_IPE_ARTIFACT_PATH=""
+
+    error() { echo "$*" >&2; }
+    die() { error "$*"; exit 1; }
+    remove_old_vm() { echo cleanup >> "${effects}"; }
+    section() { echo section >> "${effects}"; exit 97; }
+    az() { echo az >> "${effects}"; exit 98; }
+
+    for entrypoint in start_vm start_vm_azure; do
+        for option in --i --im --ima --imag --image; do
+            for AZ_VM_ARGS in "${option} other" "${option}=other"; do
+                ACL_IPE_CAPABLE=""
+                rc=0
+                ("${entrypoint}" "${image}" "${BOARD}") >/dev/null 2>&1 || rc=$?
+                [[ "${rc}" -eq 1 && ! -e "${effects}" ]]
+            done
+        done
+
+        ACL_IPE_CAPABLE=true
+        AZ_VM_ARGS=""
+        REUSE_IMAGE=true
+        rc=0
+        ("${entrypoint}" "${image}" "${BOARD}") >/dev/null 2>&1 || rc=$?
+        [[ "${rc}" -eq 1 && ! -e "${effects}" ]]
+        REUSE_IMAGE=false
+
+        ACG_IMAGE_VERSION_ID=explicit-version
+        AZ_VM_ARGS="--image other"
+        rc=0
+        ("${entrypoint}" "${image}" "${BOARD}") >/dev/null 2>&1 || rc=$?
+        [[ "${rc}" -eq 1 && ! -e "${effects}" ]]
+        ACG_IMAGE_VERSION_ID=""
+    done
+)
+
+# shellcheck disable=SC2329
+test_non_ipe_reuse_and_explicit_ipe_version() (
+    source_test_functions "${SCRIPT_DIR}/acl/validate/validate_azure.sh" \
+        _enforce_ipe_image_contract start_vm_azure get_latest_image_version
+    local calls="${TEST_DIR}/gallery-selection"
+    local ACL_IPE_CAPABLE=false REUSE_IMAGE=true ACG_IMAGE_VERSION_ID="" AZ_VM_ARGS=""
+    local BOARD=amd64-usr VM_NAME=test AZ_SUB_ID=test AZ_STORAGE_RG=test AZ_REGION=test
+    local AZ_ACG=test AZ_VM_IMAGE_DEF=test AZ_VM_SIZE=test AZ_GALLERY_RG=test
+    local VM_RG="" VM_IP=""
+
+    info() { :; }
+    section() { :; }
+    error() { echo "$*" >&2; }
+    die() { error "$*"; exit 1; }
+    get_vm_rg_name() { echo test-rg; }
+    check_azure_infra() { :; }
+    create_vm_azure() { printf '%s\n' "$2" >> "${calls}"; }
+    az() {
+        case "$1 $2 $3" in
+            "account set --subscription") ;;
+            "sig image-version list") printf '1.0.1\n1.0.2\n' ;;
+            "vm show -d")
+                if [[ "$*" == *"--query provisioningState"* ]]; then
+                    echo Succeeded
+                else
+                    echo 192.0.2.1
+                fi
+                ;;
+            *) echo "Unexpected Azure call: $*" >&2; return 1 ;;
+        esac
+    }
+
+    start_vm_azure missing-local-image
+    [[ "$(<"${calls}")" == 1.0.2 ]]
+    ACL_IPE_CAPABLE=true
+    REUSE_IMAGE=false
+    ACG_IMAGE_VERSION_ID=explicit-version
+    start_vm_azure missing-local-image
+    [[ "$(<"${calls}")" == $'1.0.2\nexplicit-version' ]]
+)
+
+# shellcheck disable=SC2329
 check_build_test_selection() (
     local expected_secure_boot_tests="$1"
     shift
@@ -220,6 +309,8 @@ test_local_vhd_contract
 test_argument_contracts
 test_build_wrapper_contract
 test_artifact_preflight_ordering
+test_launch_contract_before_side_effects
+test_non_ipe_reuse_and_explicit_ipe_version
 check_build_test_selection 1 --run-tests
 check_build_test_selection 1 --run-tests --no-secure-boot
 check_build_test_selection 1 --no-secure-boot --run-tests
