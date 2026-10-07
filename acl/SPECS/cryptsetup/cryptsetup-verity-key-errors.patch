@@ -1,0 +1,21 @@
+Preserve the kernel's signature failure category for the ACL audit-only
+fallback. All other targets and failures retain the existing handling.
+This is the key-error propagation used by newer cryptsetup, scoped to VERITY
+and including EKEYREJECTED for an invalid signature.
+
+--- a/lib/libdevmapper.c
++++ b/lib/libdevmapper.c
+@@ -1399,6 +1399,13 @@
+ 		goto out;
+ 
+ 	if (!dm_task_run(dmt)) {
++		if (dmd->segment.type == DM_VERITY) {
++			r = -dm_task_get_errno(dmt);
++			if (r == -ENOKEY || r == -EKEYREVOKED ||
++			    r == -EKEYEXPIRED || r == -EKEYREJECTED)
++				goto out;
++		}
++
+ 		r = dm_status_device(cd, name);;
+ 		if (r >= 0)
+ 			r = -EEXIST;

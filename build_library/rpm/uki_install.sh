@@ -617,6 +617,9 @@ _uki_build_verity_addons() {
         cmdline+=" systemd.verity_usr_options=panic-on-corruption"
         cmdline+=" usrhash=${usr_hash}"
         cmdline+=" acl.slot=${slot}"
+        if [[ "${ACL_USR_HASH_SIGNATURE:-false}" == true ]]; then
+            cmdline+=" acl.verity_usr_signature=PARTUUID=$(_lookup_partuuid "HASH-SIG-${slot_label}")"
+        fi
 
         info "UKI/RPM: Slot ${slot_label} cmdline = ${cmdline}"
 
@@ -697,6 +700,17 @@ fi
 
 # Provision systemd-boot + UKI onto the ESP
 uki_provision_rpm "${ESP_DIR}"
+
+if [[ "${ACL_USR_HASH_SIGNATURE:-false}" == true ]]; then
+    [[ "${IPE_CAPABLE}" == true ]] ||
+        die "Signed /usr requires IPE-capable UKI assets"
+    sudo bash "${BUILD_LIBRARY_DIR}/rpm/sign-usr-root-hash.sh" \
+        "${LOOP_DEV}" "$(cat "${FLAGS_verity_hash}")" \
+        "$(dirname "${FLAGS_disk_image}")/acl-ipe-ephemeral" \
+        "$(dirname "${FLAGS_disk_image}")/usr-root-signatures.json"
+else
+    sudo rm -f "$(dirname "${FLAGS_disk_image}")/usr-root-signatures.json"
+fi
 
 cleanup
 trap - EXIT

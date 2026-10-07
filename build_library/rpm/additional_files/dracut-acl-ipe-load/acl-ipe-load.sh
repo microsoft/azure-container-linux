@@ -74,7 +74,19 @@ declare -F acl_security_profile_value >/dev/null ||
     skip "security profile helper is missing required functions"
 
 mode="off"
-if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
+early_mode_file="${ACL_IPE_EARLY_MODE_FILE:-/run/acl/ipe-early-mode}"
+if [[ " ${cmdline} " == *" acl.verity_usr_signature="* ]]; then
+    if [[ -r "${early_mode_file}" ]]; then
+        early_mode="$(cat "${early_mode_file}")"
+        case "${early_mode}" in
+            audit|off) mode="${early_mode}" ;;
+            lookup-failed) log "Early IMDS lookup failed; leaving IPE inactive." ;;
+            *) log "Invalid early IPE decision; leaving IPE inactive." ;;
+        esac
+    else
+        log "Signed-root boot has no early IPE decision; leaving IPE inactive."
+    fi
+elif [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
     if security_profile="$(acl_security_profile)"; then
         requested_mode="$(acl_security_profile_value "${security_profile}" "ipe")"
         case "${requested_mode}" in

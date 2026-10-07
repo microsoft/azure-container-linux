@@ -38,6 +38,7 @@
 #   --ipe-mode=MODE                       IPE runtime mode: disabled|audit|enforcing (default: disabled)
 #                                        'enforcing' is reserved and rejected at build time.
 #   --ipe-signing-mode=MODE              IPE signing mode: ephemeral|esrp (default: ephemeral)
+#   --usr-hash-signature=true|false       Opt in to signed /usr HASH-SIG A/B (default: false)
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
@@ -188,6 +189,7 @@ if [[ -v ACL_IPE_SIGNING_MODE ]]; then
     IPE_SIGNING_MODE_OVERRIDE_SET=true
 fi
 ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE:-ephemeral}"
+ACL_USR_HASH_SIGNATURE="${ACL_USR_HASH_SIGNATURE:-false}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
@@ -298,7 +300,20 @@ configure_ipe_mode() {
             return 1
             ;;
     esac
-    export ACL_IPE_MODE ACL_IPE_SIGNING_MODE ACL_IPE_CAPABLE
+    case "${ACL_USR_HASH_SIGNATURE:-false}" in
+        false) ;;
+        true)
+            if [[ "${ACL_IPE_CAPABLE}" != "true" ]]; then
+                error "Signed /usr requires --ipe-mode=audit"
+                return 1
+            fi
+            ;;
+        *)
+            error "ACL_USR_HASH_SIGNATURE must be true or false"
+            return 1
+            ;;
+    esac
+    export ACL_IPE_MODE ACL_IPE_SIGNING_MODE ACL_IPE_CAPABLE ACL_USR_HASH_SIGNATURE
 }
 
 load_artifact_ipe_signing_mode() {
@@ -421,6 +436,14 @@ parse_args() {
             --ipe-signing-mode)
                 ACL_IPE_SIGNING_MODE="$2"
                 IPE_SIGNING_MODE_OVERRIDE_SET=true
+                shift 2
+                ;;
+            --usr-hash-signature=*)
+                ACL_USR_HASH_SIGNATURE="${1#*=}"
+                shift
+                ;;
+            --usr-hash-signature)
+                ACL_USR_HASH_SIGNATURE="$2"
                 shift 2
                 ;;
             --img-name=*)

@@ -133,14 +133,27 @@ case "${ACL_IPE_SIGNING_MODE}" in
         exit 1
         ;;
 esac
+ACL_USR_HASH_SIGNATURE="${ACL_USR_HASH_SIGNATURE:-false}"
+case "${ACL_USR_HASH_SIGNATURE}" in
+    false) ;;
+    true)
+        [[ "${ACL_IPE_CAPABLE}" == true ]] || {
+            echo "ERROR: Signed /usr requires ACL_IPE_MODE=audit" >&2
+            exit 1
+        }
+        ;;
+    *) echo "ERROR: Invalid ACL_USR_HASH_SIGNATURE" >&2; exit 1 ;;
+esac
 sed -i \
     -e '/export ACL_IPE_MODE=/d' \
     -e '/export ACL_IPE_SIGNING_MODE=/d' \
     -e '/export ACL_IPE_CAPABLE=/d' \
+    -e '/export ACL_USR_HASH_SIGNATURE=/d' \
     /home/sdk/.bashrc 2>/dev/null || true
 echo "export ACL_IPE_MODE='${ACL_IPE_MODE}'" >> /home/sdk/.bashrc
 echo "export ACL_IPE_SIGNING_MODE='${ACL_IPE_SIGNING_MODE}'" >> /home/sdk/.bashrc
 echo "export ACL_IPE_CAPABLE='${ACL_IPE_CAPABLE}'" >> /home/sdk/.bashrc
+echo "export ACL_USR_HASH_SIGNATURE='${ACL_USR_HASH_SIGNATURE}'" >> /home/sdk/.bashrc
 
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"

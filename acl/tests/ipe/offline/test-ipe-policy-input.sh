@@ -138,14 +138,19 @@ test_uki_provision_preserves_unsigned_verity() (
     }
 
     local scenario capable esp extra cmdline policy_hash failure
-    local slot addon_cmdline data_uuid hash_uuid
+    local slot addon_cmdline data_uuid hash_uuid expected_cmdline
     local uki_name="vmlinuz-6.6.145.2.efi"
     local roothash="000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
     FLAGS_TRUE=0
-    for scenario in x64:false x64:true aa64:false aa64:true; do
+    for scenario in x64:false x64:true aa64:false aa64:true x64:signed aa64:signed; do
         EFI_ARCH="${scenario%:*}"
         capable="${scenario#*:}"
-        prepare_case "uki-${EFI_ARCH}-${capable}"
+        ACL_USR_HASH_SIGNATURE=false
+        if [[ "${capable}" == signed ]]; then
+            capable=true
+            ACL_USR_HASH_SIGNATURE=true
+        fi
+        prepare_case "uki-${EFI_ARCH}-${capable}-${ACL_USR_HASH_SIGNATURE}"
         IPE_CAPABLE="${capable}"
         BOARD_ROOT="${CASE_ROOT}/board"
         FLAGS_disk_image="${BUILD_DIR}/image.bin"
@@ -207,7 +212,13 @@ test_uki_provision_preserves_unsigned_verity() (
             hash_uuid="$(jq -r --arg label "HASH-${slot^^}" \
                 '.layouts.base[] | select(.label == $label) | .uuid' \
                 "${BUILD_LIBRARY_DIR}/disk_layout_uki.json")"
-            [[ "${addon_cmdline}" == "systemd.verity_usr_data=PARTUUID=${data_uuid} systemd.verity_usr_hash=PARTUUID=${hash_uuid} systemd.verity_usr_options=panic-on-corruption usrhash=${roothash} acl.slot=${slot}" ]]
+            expected_cmdline="systemd.verity_usr_data=PARTUUID=${data_uuid} systemd.verity_usr_hash=PARTUUID=${hash_uuid} systemd.verity_usr_options=panic-on-corruption usrhash=${roothash} acl.slot=${slot}"
+            if [[ "${ACL_USR_HASH_SIGNATURE}" == true ]]; then
+                expected_cmdline+=" acl.verity_usr_signature=PARTUUID=$(jq -r --arg label "HASH-SIG-${slot^^}" \
+                    '.layouts.base[] | select(.label == $label) | .uuid' "${BUILD_LIBRARY_DIR}/disk_layout_uki.json")"
+            fi
+            [[ "${addon_cmdline}" == "${expected_cmdline}" ]]
+            [[ "${addon_cmdline}" != *"root-hash-signature="* ]]
             cmp "${BUILD_DIR}/slot-${slot}.addon.efi.cmdline" \
                 "${esp}/acl/uki-addons/slot-${slot}.addon.efi"
         done

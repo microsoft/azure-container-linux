@@ -334,6 +334,22 @@ SETUP_EOF
             ;;
     esac
 
+    if [[ "${ACL_USR_HASH_SIGNATURE:-false}" == true ]]; then
+        [[ "${ACL_IPE_CAPABLE:-false}" == true ]] ||
+            die "Signed /usr initrd requires IPE capability"
+        [[ -f "${root_fs_dir}/usr/share/acl/cryptsetup-verity-key-errors" ]] ||
+            die "Signed /usr requires ACL cryptsetup-libs with typed verity key errors; rebuild the cryptsetup RPM"
+        local verity_module="${root_fs_dir}/usr/lib/dracut/modules.d/99acl-usr-verity"
+        sudo mkdir -p "${verity_module}"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-usr-verity/"* \
+            "${verity_module}/"
+        sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/acl-usr-verity-payload.sh" \
+            "${verity_module}/"
+        sudo chmod +x "${verity_module}/module-setup.sh" \
+            "${verity_module}/acl-verity-setup.sh" \
+            "${verity_module}/acl-verity-generator.sh"
+    fi
+
     # NOTE: /etc overlay is handled by bootengine's 99setup-root/initrd-setup-root
     # We need to create the required files BEFORE dracut runs so they get included in initramfs
 

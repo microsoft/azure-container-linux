@@ -172,6 +172,56 @@ blocking boot. `enforcing` is unsupported; QEMU runtime testing requires
 `--ipe-mode=disabled`. See [architecture](architecture.md) for policy trust,
 credential handling and dm-verity details.
 
+**Optional signed `/usr` (new HASH-SIG layouts only)**
+
+```bash
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit \
+  --ipe-signing-mode=ephemeral --usr-hash-signature=true
+```
+
+The separate opt-in defaults to false (`ACL_USR_HASH_SIGNATURE` in SDK
+automation). It requires IPE-capable UKI builds and does not enable IPE
+enforcement. Rebuild the ACL `cryptsetup` RPM first: stock Azure Linux 3
+libcryptsetup discards kernel key-error categories. The ACL backport preserves
+those errors for dm-verity, and the image build rejects an unpatched library
+instead of relying on ambiguous failure codes.
+Fresh signed-root builds copy finalized USR-A/HASH-A to B and
+populate both HASH-SIG partitions with the same per-build signer used for IPE.
+The exported `usr-root-signatures.json` describes **ephemeral candidates**,
+including when ESRP publication is requested. Production finalization must
+replace and verify those signatures before producing the final update package.
+
+Each signed slot addon advertises
+`acl.verity_usr_signature=PARTUUID=<matching HASH-SIG UUID>`, not an unconditional
+`root-hash-signature` option. In Azure initrd, a bounded 25-second tag lookup
+chooses the IPE mode before `/usr` opens; its cache is separate from SELinux's.
+Only `ipe=audit` attempts signed activation. Invalid/missing payloads or
+classified kernel key errors fall back to ordinary dm-verity with
+`panic-on-corruption` unchanged. Unclassified activation/I/O errors and
+already-active mappings are not silently retried. A failed lookup leaves IPE
+inactive; a signature fallback retains the audit request. Policy activation
+can still independently fail and is reported by the policy loader.
+
+Inspect `/run/acl/usr-verity.json` and `journalctl -b -u
+systemd-veritysetup@usr.service -u acl-usr-verity-attempt.service`. The JSON
+distinguishes `verified`, `degraded`, and `not-requested`; it is not proof of
+IPE policy activation or of reduced audit events. Trident update preflight
+must still reject an invalid signed artifact. Degraded boot does not request
+automatic rollback. Older disks need reimaging; this option does not migrate
+their partition layout. Customizers must preserve the slot contract and
+re-sign after changing `/usr`; legacy one-addon customization is unsupported.
+Production enablement also requires packaging Trident's matching signed-root
+servicing implementation. Package/source pins are a coordinated landing step;
+this opt-in does not upgrade an existing Trident binary. Validate the actual
+RPM build, initrd boot and A/B update/rollback on both architectures before
+enabling publication.
+
+The payload is DPS JSON with exactly `rootHash` and `signature`: 64 lowercase
+ASCII hex characters (no newline) signed using detached DER CMS, Base64-encoded
+in JSON, with NUL padding to a 4096-byte boundary and at most 1 MiB total.
+The payload hash must match the selected addon's hash; it never overrides it.
+Kernel trust, Secure Boot trust and policy trust remain separate requirements.
+
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
 
 ### Phase 4: Build VM Image (Optional)

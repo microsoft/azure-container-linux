@@ -48,6 +48,7 @@ run_loader() {
     ACL_IPE_CMDLINE_FILE="${CASE_DIR}/cmdline" \
     ACL_IPE_CREDENTIAL_PATH="${credential}" \
     ACL_IPE_SECURITY_PROFILE_HELPER="${CASE_DIR}/security-profile.sh" \
+    ACL_IPE_EARLY_MODE_FILE="${CASE_DIR}/early-mode" \
         bash "${LOADER}" 2>&1
 }
 
@@ -88,10 +89,15 @@ test_valid_disabled_alias_inactive() {
 }
 
 run_inactive_case() {
-    local name="$1" imds_mode="$2"
+    local name="$1" imds_mode="$2" early_mode="${3:-}"
     prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
     write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
+    if [[ -n "${early_mode}" ]]; then
+        write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" \
+            "flatcar.oem.id=azure acl.verity_usr_signature=PARTUUID=3514648f-e3da-44ae-89ba-8d0552418f88"
+        printf '%s\n' "${early_mode}" > "${CASE_DIR}/early-mode"
+    fi
 
     # Override IMDS to return the requested inactive-style mode
     command cat > "${CASE_DIR}/security-profile.sh" <<EOF
@@ -121,7 +127,7 @@ test_valid_audit_active() {
 }
 
 run_active_case() (
-    local name="$1" imds_mode="$2"
+    local name="$1" imds_mode="$2" early_mode="${3:-}"
     prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
     write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
@@ -130,6 +136,16 @@ run_active_case() (
 acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
 acl_security_profile_value() { printf '%s\n' '${imds_mode}'; }
 EOF
+
+    if [[ -n "${early_mode}" ]]; then
+        write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" \
+            "flatcar.oem.id=azure acl.verity_usr_signature=PARTUUID=3514648f-e3da-44ae-89ba-8d0552418f88"
+        printf '%s\n' "${early_mode}" > "${CASE_DIR}/early-mode"
+        command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
+acl_security_profile() { echo "Unexpected late profile lookup" >&2; return 1; }
+acl_security_profile_value() { return 1; }
+EOF
+    fi
 
     # Simulate the kernel creating the policy interface when the credential
     # is written, after the loader's preexisting-policy check.
@@ -370,6 +386,10 @@ test_valid_inactive_load
 test_valid_disabled_alias_inactive
 test_removed_alias_inactive
 test_valid_audit_active
+run_active_case early-audit audit audit
+run_inactive_case early-off audit off
+run_inactive_case early-failed audit lookup-failed
+run_inactive_case early-malformed audit invalid
 test_enforcing_mode_safe_fallback
 test_duplicate_token
 test_malformed_hash
