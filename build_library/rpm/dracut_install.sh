@@ -48,10 +48,9 @@ _dracut_prepare_chroot() {
 _dracut_patch_bootengine_modules() {
     local root_fs_dir="$1"
 
-    # Remove dracut modules that require hardware we don't have in VMs
-    # This prevents systemd-cryptsetup from depending on fido2/pkcs11/tpm2-tss
-    # which would cause dracut-systemd to fail
-    for mod in 91fido2 91pkcs11 91tpm2-tss; do
+    # Non-host-only cryptsetup auto-adds available token modules. Keep TPM2
+    # for vTPM-enabled VMs; exclude FIDO2 and PKCS#11 from this image.
+    for mod in 91fido2 91pkcs11; do
         if [[ -d "${root_fs_dir}/usr/lib/dracut/modules.d/${mod}" ]]; then
             info "RPM mode: Removing dracut module ${mod} (not needed for VM boot)"
             sudo rm -rf "${root_fs_dir}/usr/lib/dracut/modules.d/${mod}"
