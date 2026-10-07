@@ -398,6 +398,16 @@ EOF
 # Disable job timeout to allow verity setup to wait for slow device enumeration
 JobRunningTimeoutSec=infinity
 EOF
+
+    # Drop-in for bootengine's decrypt-root.service (31decrypt-root dracut module).
+    # Kept here rather than as a bootengine patch to avoid rebasing with bootengine updates.
+    info "RPM mode: Creating drop-in for decrypt-root.service (ordering before root device wait)"
+    sudo mkdir -p "${systemd_dropin_dir}/decrypt-root.service.d"
+    cat <<'EOF' | sudo tee "${systemd_dropin_dir}/decrypt-root.service.d/10-acl-ordering.conf" > /dev/null
+[Unit]
+# Decrypt ROOT before initramfs waits for it.
+Before=initrd-root-device.target
+EOF
 }
 
 # Generate initramfs using dracut inside the root filesystem chroot.

@@ -73,9 +73,11 @@ fi
 # Key differences: always-step, network fallback, and optional Hyper-V PTP.
 
 # Copy Azure-optimized chrony.conf to /usr/lib/chrony/chrony.conf
-if [[ -f "${script_dir}/chrony.conf" ]]; then
-    cp "${script_dir}/chrony.conf" "${rootfs}/usr/lib/chrony/chrony.conf"
+if [[ ! -f "${script_dir}/chrony.conf" ]]; then
+    echo "ERROR: missing ${script_dir}/chrony.conf" >&2
+    exit 1
 fi
+cp "${script_dir}/chrony.conf" "${rootfs}/usr/lib/chrony/chrony.conf"
 
 # Generate the optional Hyper-V PTP source before chronyd starts.
 if [[ ! -f "${script_dir}/chrony-azure-ptp" ]]; then
