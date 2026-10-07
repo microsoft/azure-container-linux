@@ -340,9 +340,7 @@ packages:
 
   # Kernel headers and firmware
   sys-kernel/linux-headers: SKIP
-  sys-firmware/intel-microcode:
-    rpm: microcode_ctl
-    arch: amd64
+  sys-firmware/intel-microcode: SKIP
   sys-kernel/coreos-firmware: SKIP
 
   # Alternatives system (Azure Linux provides alternatives)
