@@ -179,56 +179,40 @@ credential handling and dm-verity details.
   --ipe-signing-mode=ephemeral --usr-hash-signature=true
 ```
 
-The separate opt-in defaults to false (`ACL_USR_HASH_SIGNATURE` in SDK
-automation). It requires IPE-capable UKI builds and does not enable IPE
-enforcement. Rebuild the ACL `cryptsetup` RPM first: stock Azure Linux 3
-libcryptsetup discards kernel key-error categories. The ACL backport preserves
-those errors for dm-verity, and the image build rejects an unpatched library
-instead of relying on ambiguous failure codes.
-Fresh signed-root builds sign finalized USR-A/HASH-A with the same per-build
-signer used for IPE and populate HASH-SIG-A. They preserve the existing empty
-USR-B/HASH-B/HASH-SIG-B factory slot until Trident's first successful update
-writes the complete new tuple there, leaving A available for rollback. Copying
-the initial `/usr` into B would duplicate Image Customizer's discovery fstab
-and make conversion reject two root-filesystem candidates.
-These initial signatures are **ephemeral candidates**, including when ESRP
-publication is requested. Production finalization must
-replace and verify the initialized A signature before producing the final
-update package; it must not describe the empty B slot as verified.
+This opt-in defaults to false (`ACL_USR_HASH_SIGNATURE` in SDK automation) and
+requires IPE-capable UKIs. Rebuild ACL's `cryptsetup` RPM first: its patch
+preserves kernel key errors so boot can distinguish signature rejection from
+storage/setup failures. The stock library supports signatures, but loses that
+distinction; signed builds reject it rather than retry arbitrary failures.
 
-Each signed slot addon advertises
-`acl.verity_usr_signature=PARTUUID=<matching HASH-SIG UUID>`, not an unconditional
-`root-hash-signature` option. Both factory addon templates name source A's root
-hash, so the update package can install that source tuple into either slot.
-The B template is not a claim that the factory B slot is bootable.
-In Azure initrd, a bounded 25-second tag lookup
-chooses the IPE mode before `/usr` opens; its cache is separate from SELinux's.
-Only `ipe=audit` attempts signed activation. Invalid/missing payloads or
-classified kernel key errors fall back to ordinary dm-verity with
-`panic-on-corruption` unchanged. Unclassified activation/I/O errors and
-already-active mappings are not silently retried. A failed lookup leaves IPE
-inactive; a signature fallback retains the audit request. Policy activation
-can still independently fail and is reported by the policy loader.
+Factory builds sign finalized USR-A/HASH-A with the per-build IPE signer and
+write HASH-SIG-A. B stays empty for Image Customizer discovery and the first
+Trident update. Both addon templates name source A's hash and their own
+`acl.verity_usr_signature=PARTUUID=<HASH-SIG UUID>`; factory B is not bootable.
+These signatures are **ephemeral candidates**, including for ESRP builds.
+Publication must replace/verify A's signature before producing the update COSI.
 
-Inspect `/run/acl/usr-verity.json` and `journalctl -b -u
-systemd-veritysetup@usr.service -u acl-usr-verity-attempt.service`. The JSON
-distinguishes `verified`, `degraded`, and `not-requested`; it is not proof of
-IPE policy activation or of reduced audit events. Trident update preflight
-must still reject an invalid signed artifact. Degraded boot does not request
-automatic rollback. Older disks need reimaging; this option does not migrate
-their partition layout. Customizers must preserve the slot contract and
-re-sign after changing `/usr`; legacy one-addon customization is unsupported.
-Production enablement also requires packaging Trident's matching signed-root
-servicing implementation. Package/source pins are a coordinated landing step;
-this opt-in does not upgrade an existing Trident binary. Validate the actual
-RPM build, initrd boot and A/B update/rollback on both architectures before
-enabling publication.
+Before mounting `/usr`, a bounded 25-second Azure tag lookup selects the mode
+using a cache separate from SELinux's. Only `ipe=audit` attempts signed
+activation. Missing/invalid signatures or classified kernel key errors fall
+back to ordinary dm-verity with the same hash and `panic-on-corruption`.
+Other activation failures and existing mappings are not retried. Lookup
+failure leaves IPE inactive; signature fallback retains the audit request.
+Inspect `/run/acl/usr-verity.json` and the journal for
+`systemd-veritysetup@usr.service` and `acl-usr-verity-attempt.service`.
+Verification status does not prove policy activation or reduced audit noise.
 
-The payload is DPS JSON with exactly `rootHash` and `signature`: 64 lowercase
-ASCII hex characters (no newline) signed using detached DER CMS, Base64-encoded
-in JSON, with NUL padding to a 4096-byte boundary and at most 1 MiB total.
-The payload hash must match the selected addon's hash; it never overrides it.
-Kernel trust, Secure Boot trust and policy trust remain separate requirements.
+HASH-SIG contains DPS JSON with exactly `rootHash` and `signature`: detached
+DER CMS over 64 lowercase ASCII hex characters (no newline), Base64-encoded,
+NUL-padded to 4096-byte alignment, at most 1 MiB. Its hash must match `usrhash`.
+Kernel signature trust is separate from Secure Boot and IPE policy trust.
+
+Rollout requires matching Trident signed-root servicing and coordinated pins;
+invalid updates remain rejected and degraded boot does not trigger rollback.
+Older layouts require reimaging. Customizers must preserve the slot contract
+and re-sign changed `/usr`; legacy one-addon customization is unsupported.
+Validate the RPM build, initrd boot and A/B update/rollback on both architectures
+before production enablement.
 
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
 

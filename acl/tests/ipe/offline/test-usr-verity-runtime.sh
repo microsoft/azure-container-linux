@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034,SC2154 # Variables are shared with sourced/extracted production functions.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 work="$(mktemp -d)"
@@ -6,19 +7,18 @@ trap 'rm -rf "${work}"' EXIT
 export ACL_VERITY_RUN_DIR="${work}"
 source "${ROOT}/build_library/rpm/additional_files/dracut-acl-usr-verity/acl-verity-setup.sh"
 root_hash="$(printf 'a%.0s' {1..64})"
-slot=a mode=audit options=panic-on-corruption
-data_device=/dev/data hash_device=/dev/tree
-mapping=false signed_result=0 unsigned_result=0 error_number=0 result=success
+mapping=false signed_result=0 unsigned_result=0
+signed_calls=0 unsigned_calls=0
 VERITYSETUP=mock_veritysetup
 acl_verity_mapping_exists() { [[ "${mapping}" == true ]]; }
 mock_veritysetup() {
-    printf '%s\n' "$*" >> "${work}/unsigned.calls"
+    unsigned_calls=$((unsigned_calls + 1))
     [[ "$*" == "attach usr ${data_device} ${hash_device} ${root_hash} panic-on-corruption" ]] || return 1
     return "${unsigned_result}"
 }
 systemd-run() {
-    printf '%s\n' "$*" >> "${work}/signed.calls"
-    [[ "$*" == *"root-hash-signature="* ]] || return 1
+    signed_calls=$((signed_calls + 1))
+    [[ "$*" == *"attach usr ${data_device} ${hash_device} ${root_hash} panic-on-corruption,root-hash-signature=${work}/usr.p7s" ]] || return 1
     return "${signed_result}"
 }
 systemctl() {
@@ -35,42 +35,6 @@ reject() {
         exit 1
     fi
 }
-mock_errno=0 mock_result=success
-acl_verity_signed "${work}/sig"
-[[ "$(jq -r .verification "${work}/usr-verity.json")" == verified ]]
-[[ ! -e "${work}/unsigned.calls" ]]
-rm "${work}/usr-verity.json"
-jq() { return 1; }
-reject acl_verity_signed "${work}/sig"
-[[ ! -e "${work}/usr-verity.json" ]]
-unset -f jq
-signed_result=1
-for mock_errno in 126 127 128 129; do
-    mock_result=exit-code
-    acl_verity_signed "${work}/sig"
-    [[ "$(jq -r .verification "${work}/usr-verity.json")" == degraded ]]
-done
-[[ "$(wc -l < "${work}/unsigned.calls")" == 4 ]]
-for mock_errno in 0 5 12 22; do
-    mock_result=exit-code
-    reject acl_verity_signed "${work}/sig"
-done
-mock_errno=126 mock_result=timeout
-reject acl_verity_signed "${work}/sig"
-[[ "$(wc -l < "${work}/unsigned.calls")" == 4 ]]
-mapping=true
-reject acl_verity_signed "${work}/sig"
-reject acl_verity_unsigned degraded bad-signature
-mapping=false unsigned_result=1 mock_result=exit-code
-rm "${work}/usr-verity.json"
-reject acl_verity_signed "${work}/sig"
-[[ ! -e "${work}/usr-verity.json" ]]
-unsigned_result=0 mode=off
-acl_verity_unsigned not-requested audit-not-requested
-[[ "$(jq -r .requestedMode "${work}/usr-verity.json")" == off ]]
-words=("usrhash=${root_hash}" "usrhash=${root_hash}")
-reject acl_verity_arg usrhash
-
 CMDLINE_FILE="${work}/cmdline"
 profile_result=0 profile_value=ipe=off signature_available=false validation_result=0
 timeout() {
@@ -91,6 +55,7 @@ printf '%s\n' "flatcar.oem.id=azure usrhash=${root_hash} acl.slot=a systemd.veri
 acl_verity_main
 [[ "$(<"${work}/ipe-early-mode")" == off ]]
 [[ "$(jq -r .verification "${work}/usr-verity.json")" == not-requested ]]
+[[ "${signed_calls}" == 0 ]]
 profile_value=ipe=audit
 acl_verity_main
 [[ "$(<"${work}/ipe-early-mode")" == audit ]]
@@ -103,6 +68,27 @@ acl_verity_main
 profile_result=0 signature_available=true signed_result=0
 acl_verity_main
 [[ "$(jq -r .verification "${work}/usr-verity.json")" == verified ]]
+before="${unsigned_calls}"
+signed_result=1 mock_result=exit-code
+for mock_errno in 126 127 128 129; do
+    acl_verity_main
+    [[ "$(jq -r .verification "${work}/usr-verity.json")" == degraded ]]
+done
+[[ "${unsigned_calls}" == "$((before + 4))" ]]
+before="${unsigned_calls}"
+for mock_errno in 0 5 22; do
+    reject acl_verity_main
+done
+mock_errno=126 mock_result=timeout
+reject acl_verity_main
+mapping=true
+reject acl_verity_main
+[[ "${unsigned_calls}" == "${before}" ]]
+mapping=false unsigned_result=1 mock_result=exit-code
+rm "${work}/usr-verity.json"
+reject acl_verity_main
+[[ ! -e "${work}/usr-verity.json" ]]
+unsigned_result=0
 validation_result=124
 acl_verity_main
 [[ "$(jq -r .verification "${work}/usr-verity.json")" == degraded ]]
@@ -110,4 +96,29 @@ acl_verity_main
 profile_value='ipe=,ipe=audit'
 acl_verity_main
 [[ "$(<"${work}/ipe-early-mode")" == lookup-failed ]]
-echo "Signed /usr activation: typed failure classification, mapping ownership and unchanged ordinary options passed"
+(
+    source "${ROOT}/acl/tests/ipe/offline/function-extraction.sh"
+    source_test_functions "${ROOT}/acl/build_rpm_image.sh" configure_ipe_mode validate_ipe_mode_value
+    error() { echo "$*" >&2; }
+    ACL_IPE_MODE=disabled ACL_IPE_SIGNING_MODE=ephemeral ACL_USR_HASH_SIGNATURE=false
+    configure_ipe_mode
+    ACL_USR_HASH_SIGNATURE=true
+    reject configure_ipe_mode
+    ACL_IPE_MODE=audit
+    configure_ipe_mode
+    ACL_USR_HASH_SIGNATURE=invalid
+    reject configure_ipe_mode
+)
+(
+    ln() { printf '%s\n' "$*" > "${work}/link"; }
+    export -f ln
+    export work ACL_VERITY_CMDLINE_FILE="${CMDLINE_FILE}"
+    generator="${ROOT}/build_library/rpm/additional_files/dracut-acl-usr-verity/acl-verity-generator.sh"
+    bash "${generator}" "${work}/normal" "${work}/early" "${work}/late"
+    [[ "$(<"${work}/link")" == "-sf /dev/null ${work}/early/afterburn-network-kargs.service" ]]
+    printf '%s\n' 'flatcar.oem.id=azure' > "${CMDLINE_FILE}"
+    rm "${work}/link"
+    bash "${generator}" "${work}/normal" "${work}/early" "${work}/late"
+    [[ ! -e "${work}/link" ]]
+)
+echo "Signed /usr boot gating, failure handling and initrd ordering tests passed"
