@@ -706,10 +706,7 @@ if [[ "${ACL_USR_HASH_SIGNATURE:-false}" == true ]]; then
         die "Signed /usr requires IPE-capable UKI assets"
     sudo bash "${BUILD_LIBRARY_DIR}/rpm/sign-usr-root-hash.sh" \
         "${LOOP_DEV}" "$(cat "${FLAGS_verity_hash}")" \
-        "$(dirname "${FLAGS_disk_image}")/acl-ipe-ephemeral" \
-        "$(dirname "${FLAGS_disk_image}")/usr-root-signatures.json"
-else
-    sudo rm -f "$(dirname "${FLAGS_disk_image}")/usr-root-signatures.json"
+        "$(dirname "${FLAGS_disk_image}")/acl-ipe-ephemeral"
 fi
 
 cleanup

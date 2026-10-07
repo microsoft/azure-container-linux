@@ -44,12 +44,6 @@ cat > "${work}/bin/veritysetup" <<'EOF'
 set -euo pipefail
 [[ "$1" == verify && "$2" == */USR-A && "$3" == */HASH-A && "$4" == "${MOCK_BUILD_ROOT}" ]]
 EOF
-cat > "${work}/bin/blkid" <<'EOF'
-#!/bin/bash
-set -euo pipefail
-[[ "$1 $2 $3 $4" == '-s PARTUUID -o value' ]]
-jq -er --arg path "$5" '.blockdevices[] | select(.path == $path) | .partuuid' "${MOCK_DISK_JSON}"
-EOF
 cat > "${work}/bin/dd" <<'EOF'
 #!/bin/bash
 set -euo pipefail
@@ -62,12 +56,8 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=acl-factory-test' \
     -keyout "${work}/certs/ca.key" -out "${work}/certs/uki-signing-ca.pem" \
     > "${work}/openssl.log" 2>&1
 builder="${ROOT}/build_library/rpm/sign-usr-root-hash.sh"
-bash "${builder}" /dev/mock-image "${MOCK_BUILD_ROOT}" "${work}/certs" "${work}/metadata.json"
+bash "${builder}" /dev/mock-image "${MOCK_BUILD_ROOT}" "${work}/certs"
 [[ "$(sha256sum "${work}/USR-A" "${work}/HASH-A")" == "${active_before}" ]]
-jq -e --arg hash "${MOCK_BUILD_ROOT}" '
-    .signingMode == "ephemeral" and .initializedSlots == ["a"] and
-    (.slots | length) == 1 and .slots[0].slot == "a" and .slots[0].rootHash == $hash
-' "${work}/metadata.json" > /dev/null
 source "${ROOT}/build_library/rpm/additional_files/acl-usr-verity-payload.sh"
 acl_verity_decode_payload "${work}/HASH-SIG-A" "${MOCK_BUILD_ROOT}" "${work}/decoded.p7s"
 acl_verity_check_cms "${MOCK_BUILD_ROOT}" "${work}/decoded.p7s"
@@ -77,21 +67,21 @@ for partition in USR-B HASH-B HASH-SIG-B; do
     cmp -n "${capacity}" "${work}/${partition}" /dev/zero
     printf x | "${MOCK_REAL_DD}" of="${work}/${partition}" conv=notrunc status=none
     if bash "${builder}" /dev/mock-image "${MOCK_BUILD_ROOT}" "${work}/certs" \
-        "${work}/rejected.json" > "${work}/rejected.log" 2>&1; then
+        > "${work}/rejected.log" 2>&1; then
         echo "Nonempty factory ${partition} accepted" >&2
         exit 1
     fi
-    [[ ! -e "${work}/rejected.json" && "$(wc -l < "${MOCK_DD_LOG}")" == 1 ]]
+    [[ "$(wc -l < "${MOCK_DD_LOG}")" == 1 ]]
     truncate -s 0 "${work}/${partition}"
     truncate -s "${capacity}" "${work}/${partition}"
 done
 for partition in USR-A USR-B HASH-A HASH-B HASH-SIG-A HASH-SIG-B; do
     if MOCK_SIZE_FAILURE="${partition}" bash "${builder}" /dev/mock-image \
-        "${MOCK_BUILD_ROOT}" "${work}/certs" "${work}/rejected.json" \
+        "${MOCK_BUILD_ROOT}" "${work}/certs" \
         > "${work}/rejected.log" 2>&1; then
         echo "Failed size lookup for ${partition} accepted" >&2
         exit 1
     fi
-    [[ ! -e "${work}/rejected.json" && "$(wc -l < "${MOCK_DD_LOG}")" == 1 ]]
+    [[ "$(wc -l < "${MOCK_DD_LOG}")" == 1 ]]
 done
 echo "Signed /usr factory tests passed: A signed, B empty, stale B and size errors rejected before writes"

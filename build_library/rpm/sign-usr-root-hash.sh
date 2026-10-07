@@ -3,7 +3,6 @@
 set -euo pipefail
 
 disk="${1:?disk}" root_hash="${2:?root hash}" cert_dir="${3:?certificate directory}"
-metadata="${4:?metadata output}"
 source "$(dirname "${BASH_SOURCE[0]}")/additional_files/acl-usr-verity-payload.sh"
 [[ "${root_hash}" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid /usr root hash" >&2; exit 1; }
 [[ -s "${cert_dir}/ca.key" && -s "${cert_dir}/uki-signing-ca.pem" ]] ||
@@ -11,7 +10,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/additional_files/acl-usr-verity-payload.s
 
 work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
-lsblk --json --paths --output PATH,PARTLABEL,PARTUUID,SIZE --bytes "${disk}" > "${work}/disk.json"
+lsblk --json --paths --output PATH,PARTLABEL "${disk}" > "${work}/disk.json"
 partition() {
     jq -er --arg label "$1" '
         [.. | objects | select(.partlabel? == $label)] |
@@ -47,11 +46,3 @@ acl_verity_check_cms "${root_hash}" "${work}/root.p7s"
 acl_verity_encode_payload "${root_hash}" "${work}/root.p7s" "${work}/payload" 1048576
 dd if="${work}/payload" of="${signature_a}" bs=4096 conv=fsync status=none
 cmp -n 1048576 "${work}/payload" "${signature_a}"
-jq -cn --arg hash "${root_hash}" --arg sig_hash "$(sha256sum "${work}/root.p7s" | cut -d' ' -f1)" \
-    --arg data "$(blkid -s PARTUUID -o value "${data_a}")" \
-    --arg tree "$(blkid -s PARTUUID -o value "${hash_a}")" \
-    --arg signature "$(blkid -s PARTUUID -o value "${signature_a}")" \
-    '{slot:"a",rootHash:$hash,dataPartUuid:$data,hashPartUuid:$tree,signaturePartUuid:$signature,signatureSha256:$sig_hash}' \
-    > "${work}/slots.jsonl"
-jq -s '{version:1,signingMode:"ephemeral",initializedSlots:["a"],slots:.}' "${work}/slots.jsonl" > "${metadata}.tmp"
-mv -f "${metadata}.tmp" "${metadata}"

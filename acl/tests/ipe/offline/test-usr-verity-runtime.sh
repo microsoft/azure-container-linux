@@ -99,6 +99,7 @@ profile_result=124
 acl_verity_main
 [[ "$(<"${work}/ipe-early-mode")" == lookup-failed ]]
 [[ "$(jq -r .requestedMode "${work}/usr-verity.json")" == unavailable ]]
+[[ "$(jq -r .verification "${work}/usr-verity.json")" == degraded ]]
 profile_result=0 signature_available=true signed_result=0
 acl_verity_main
 [[ "$(jq -r .verification "${work}/usr-verity.json")" == verified ]]

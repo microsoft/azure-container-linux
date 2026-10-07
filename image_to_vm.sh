@@ -203,13 +203,6 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]
     else
         printf '%s\n' "${ipe_signing_mode}" > "$(_dst_dir)/ipe-signing-mode"
     fi
-    if [[ -f "${FLAGS_from}/usr-root-signatures.json" ]]; then
-        if [[ ! "${FLAGS_from}/usr-root-signatures.json" -ef "$(_dst_dir)/usr-root-signatures.json" ]]; then
-            cp "${FLAGS_from}/usr-root-signatures.json" "$(_dst_dir)/usr-root-signatures.json"
-        fi
-    else
-        rm -f "$(_dst_dir)/usr-root-signatures.json"
-    fi
 fi
 
 # Changes done, glue it together

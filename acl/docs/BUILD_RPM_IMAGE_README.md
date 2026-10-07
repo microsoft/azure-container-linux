@@ -191,8 +191,8 @@ USR-B/HASH-B/HASH-SIG-B factory slot until Trident's first successful update
 writes the complete new tuple there, leaving A available for rollback. Copying
 the initial `/usr` into B would duplicate Image Customizer's discovery fstab
 and make conversion reject two root-filesystem candidates.
-The exported `usr-root-signatures.json` describes **ephemeral candidates**,
-including when ESRP publication is requested. Production finalization must
+These initial signatures are **ephemeral candidates**, including when ESRP
+publication is requested. Production finalization must
 replace and verify the initialized A signature before producing the final
 update package; it must not describe the empty B slot as verified.
 
