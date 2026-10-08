@@ -236,6 +236,13 @@ test_streamed_guest_contains_cmdline_parser() (
     trap 'rm -f "${payload}" "${payload}.out"' EXIT
     VM_SSH_USER=tester
     VM_IP=test-vm
+    ssh_cmd() {
+        [[ "$*" == "uname -r" ]] || {
+            echo "Unexpected guest command: $*" >&2
+            return 1
+        }
+        printf '%s\n' '6.6.157.1-stock'
+    }
     ssh() { cat > "${payload}"; }
 
     run_audit_validation
@@ -249,6 +256,25 @@ test_streamed_guest_contains_cmdline_parser() (
     fi
     grep -Fq 'FAILED: could not read the /usr dm-verity SHA-256 root hash from the command line' \
         "${payload}.out"
+)
+
+test_streamed_guest_selects_btrfs_validator() (
+    local payload="${TMPDIR:-/tmp}/ipe-btrfs-guest-payload.$$"
+    trap 'rm -f "${payload}"' EXIT
+    VM_SSH_USER=tester
+    VM_IP=test-vm
+    ssh_cmd() {
+        [[ "$*" == "uname -r" ]] || {
+            echo "Unexpected guest command: $*" >&2
+            return 1
+        }
+        printf '%s\n' '6.6.157.1-1.btrfsipe1.azl3'
+    }
+    ssh() { cat > "${payload}"; }
+
+    run_audit_validation
+    bash -n "${payload}"
+    cmp "${payload}" "${SCRIPT_DIR}/acl/tests/ipe/btrfs/run-usr-audit-test.sh"
 )
 
 test_copied_guest_script_needs_no_sibling_file() (
@@ -352,6 +378,7 @@ test_policy_only_cmdline_contract
 test_probe_denial_correlation
 test_host_imds_matches_guest_parser
 test_streamed_guest_contains_cmdline_parser
+test_streamed_guest_selects_btrfs_validator
 test_copied_guest_script_needs_no_sibling_file
 test_cleanup_preserves_primary_failure
 test_cleanup_reboots_after_any_mutation
