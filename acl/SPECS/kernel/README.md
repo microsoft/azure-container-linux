@@ -58,6 +58,8 @@ shared lab certificate. The public signature is installed as a UKI companion
 credential. Positive IPE auditing is enabled.
 Diagnostic images also install the `audit` RPM so the guest validator can
 require zero kernel-reported audit loss using `/usr/sbin/auditctl -s`.
+The diagnostic kernel command line and auditd rules set an 8192-record backlog
+to retain the extra success events during boot and auditd startup.
 Stock images do not gain this test dependency.
 
 QEMU pipeline images, staging-bundle publication, ACL-T customization and

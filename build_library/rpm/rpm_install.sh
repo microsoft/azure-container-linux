@@ -974,6 +974,10 @@ rpm_install_ipe_policy() {
             die "RPM mode: failed to install Btrfs IPE audit validation tools"
         sudo test -x "${root_fs_dir}/usr/sbin/auditctl" ||
             die "RPM mode: diagnostic image is missing auditctl"
+        sudo mkdir -p "${root_fs_dir}/etc/audit/rules.d"
+        printf '%s\n' '-b 8192' |
+            sudo tee "${root_fs_dir}/etc/audit/rules.d/99-btrfs-ipe.rules" >/dev/null ||
+            die "RPM mode: failed to configure diagnostic audit backlog"
     fi
 
     local policy_src="${BUILD_LIBRARY_DIR}/rpm/additional_files/ipe/acl-ipe-boot-policy.pol"

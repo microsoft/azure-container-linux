@@ -212,7 +212,7 @@ OSREL
         cmdline+=" ${ipe_policy_hash_token}"
     fi
     if [[ "${ACL_BTRFS_IPE_KERNEL:-0}" == "1" ]]; then
-        cmdline+=" ipe.success_audit=1"
+        cmdline+=" ipe.success_audit=1 audit_backlog_limit=8192"
     fi
     # NOTE: The main UKI cmdline contains only slot-independent args.
     # Slot-specific args are delivered via UKI addons:

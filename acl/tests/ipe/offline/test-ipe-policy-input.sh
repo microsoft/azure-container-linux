@@ -118,10 +118,12 @@ test_btrfs_diagnostic_installs_audit_tools() (
     prepare_case btrfs-audit-tools
     ACL_BTRFS_IPE_KERNEL=1 rpm_install_ipe_policy "${CASE_ROOT}"
     [[ "$(<"${BUILD_DIR}/installed-packages")" == audit ]]
+    [[ "$(<"${CASE_ROOT}/etc/audit/rules.d/99-btrfs-ipe.rules")" == "-b 8192" ]]
 
     prepare_case stock-audit-tools
     ACL_BTRFS_IPE_KERNEL=0 rpm_install_ipe_policy "${CASE_ROOT}"
     [[ ! -e "${BUILD_DIR}/installed-packages" ]]
+    [[ ! -e "${CASE_ROOT}/etc/audit/rules.d/99-btrfs-ipe.rules" ]]
 
     prepare_case btrfs-audit-tools-failed
     rpm_install_package() { return 1; }
@@ -148,6 +150,7 @@ test_enforcing_mode_rejected() {
 }
 
 test_uki_provision_preserves_unsigned_verity() (
+    ACL_IPE_SIGNING_MODE=ephemeral
     source_test_functions "${SCRIPT_DIR}/build_library/rpm/uki_install.sh" \
         uki_provision_rpm _uki_build_verity_addons
     sudo() { "$@"; }
@@ -169,13 +172,21 @@ test_uki_provision_preserves_unsigned_verity() (
 
     local scenario capable esp extra cmdline policy_hash failure
     local slot addon_cmdline data_uuid hash_uuid
-    local uki_name="vmlinuz-6.6.145.2.efi"
+    local uki_name kernel_version signature_option
     local roothash="000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
     FLAGS_TRUE=0
-    for scenario in x64:false x64:true aa64:false aa64:true; do
-        EFI_ARCH="${scenario%:*}"
-        capable="${scenario#*:}"
-        prepare_case "uki-${EFI_ARCH}-${capable}"
+    for scenario in x64:false:0 x64:true:0 aa64:false:0 aa64:true:0 x64:true:1 aa64:true:1; do
+        IFS=: read -r EFI_ARCH capable ACL_BTRFS_IPE_KERNEL <<< "${scenario}"
+        prepare_case "uki-${EFI_ARCH}-${capable}-${ACL_BTRFS_IPE_KERNEL}"
+        kernel_version=6.6.145.2
+        signature_option=""
+        if [[ "${ACL_BTRFS_IPE_KERNEL}" == 1 ]]; then
+            kernel_version=6.6.157.1-1.btrfsipe1.azl3
+            roothash="${roothash,,}"
+            signature_option=",root-hash-signature=/.extra/credentials/verity-usr-${roothash}.p7s.cred"
+            bash "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${BUILD_DIR}/acl-ipe-ephemeral"
+        fi
+        uki_name="vmlinuz-${kernel_version}.efi"
         IPE_CAPABLE="${capable}"
         BOARD_ROOT="${CASE_ROOT}/board"
         FLAGS_disk_image="${BUILD_DIR}/image.bin"
@@ -188,7 +199,7 @@ test_uki_provision_preserves_unsigned_verity() (
             "${BOARD_ROOT}/usr/lib/systemd/boot/efi" \
             "${BOARD_ROOT}/boot/efi/EFI/BOOT" \
             "${BUILD_DIR}/acl-ipe-policy"
-        touch "${esp}/vmlinuz-6.6.145.2" "${esp}/flatcar/initramfs-a.img" \
+        touch "${esp}/vmlinuz-${kernel_version}" "${esp}/flatcar/initramfs-a.img" \
             "${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub" \
             "${BOARD_ROOT}/boot/efi/EFI/BOOT/boot${EFI_ARCH}.efi" \
             "${BOARD_ROOT}/boot/efi/EFI/BOOT/grub${EFI_ARCH}.efi"
@@ -229,6 +240,12 @@ test_uki_provision_preserves_unsigned_verity() (
         [[ "${cmdline}" != *"usrhash="* && "${cmdline}" != *"systemd.verity_usr_"* ]]
         [[ "${cmdline}" != *"acl.slot="* ]]
         [[ "${cmdline}" != *"root-hash-signature="* ]]
+        if [[ "${ACL_BTRFS_IPE_KERNEL}" == 1 ]]; then
+            [[ " ${cmdline} " == *" ipe.success_audit=1 audit_backlog_limit=8192 "* ]]
+            [[ -s "${extra}/verity-usr-${roothash}.p7s.cred" ]]
+        else
+            [[ "${cmdline}" != *"ipe.success_audit="* && "${cmdline}" != *"audit_backlog_limit="* ]]
+        fi
         for slot in a b; do
             addon_cmdline="$(<"${BUILD_DIR}/slot-${slot}.addon.efi.cmdline")"
             data_uuid="$(jq -r --arg label "USR-${slot^^}" \
@@ -237,7 +254,7 @@ test_uki_provision_preserves_unsigned_verity() (
             hash_uuid="$(jq -r --arg label "HASH-${slot^^}" \
                 '.layouts.base[] | select(.label == $label) | .uuid' \
                 "${BUILD_LIBRARY_DIR}/disk_layout_uki.json")"
-            [[ "${addon_cmdline}" == "systemd.verity_usr_data=PARTUUID=${data_uuid} systemd.verity_usr_hash=PARTUUID=${hash_uuid} systemd.verity_usr_options=panic-on-corruption usrhash=${roothash} acl.slot=${slot}" ]]
+            [[ "${addon_cmdline}" == "systemd.verity_usr_data=PARTUUID=${data_uuid} systemd.verity_usr_hash=PARTUUID=${hash_uuid} systemd.verity_usr_options=panic-on-corruption${signature_option} usrhash=${roothash} acl.slot=${slot}" ]]
             cmp "${BUILD_DIR}/slot-${slot}.addon.efi.cmdline" \
                 "${esp}/acl/uki-addons/slot-${slot}.addon.efi"
         done
