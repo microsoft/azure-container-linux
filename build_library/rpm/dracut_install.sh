@@ -427,6 +427,15 @@ JobRunningTimeoutSec=infinity
 EOF
 }
 
+validate_erofs_kernel_config() {
+    local config="$1" option
+    [[ -f "${config}" ]] || die "EROFS requires the target kernel config: ${config}"
+    grep -Eq '^CONFIG_EROFS_FS=(y|m)$' "${config}" || die "Target kernel lacks EROFS"
+    for option in EROFS_FS_XATTR EROFS_FS_POSIX_ACL EROFS_FS_SECURITY EROFS_FS_ZIP; do
+        grep -qx "CONFIG_${option}=y" "${config}" || die "Target kernel lacks CONFIG_${option}=y"
+    done
+}
+
 # Generate initramfs using dracut inside the root filesystem chroot.
 # Orchestrates chroot preparation, bootengine module patching, asset installation,
 # and dracut execution to produce the initramfs.
@@ -446,6 +455,10 @@ generate_initramfs_dracut() {
 
     info "RPM mode: Generating initramfs with dracut"
 
+    if [[ "${ACL_EXPERIMENTAL_USR_FS:-}" == "erofs" ]]; then
+        validate_erofs_kernel_config "${root_fs_dir}/boot/config-${kernel_version}"
+    fi
+
     _dracut_prepare_chroot "${root_fs_dir}"
     _dracut_patch_bootengine_modules "${root_fs_dir}"
     _dracut_install_initramfs_assets "${root_fs_dir}"
@@ -454,6 +467,10 @@ generate_initramfs_dracut() {
     # We rely on standard systemd-udevd module to include libudev.so
     sudo mkdir -p "${root_fs_dir}/etc/dracut.conf.d"
     sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/99-acl.conf" "${root_fs_dir}/etc/dracut.conf.d/99-acl.conf"
+    if [[ "${ACL_EXPERIMENTAL_USR_FS:-}" == "erofs" ]]; then
+        printf '%s\n' 'add_drivers+=" erofs "' | \
+            sudo tee -a "${root_fs_dir}/etc/dracut.conf.d/99-acl.conf" >/dev/null
+    fi
     sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/99-fips.conf" "${root_fs_dir}/etc/dracut.conf.d/99-fips.conf"
 
     # Create a wrapper script that sets up the environment properly for dracut
@@ -486,6 +503,15 @@ generate_initramfs_dracut() {
         rpm_umount_pseudofs "${root_fs_dir}"
         die "RPM mode: dracut initramfs generation failed"
       }
+
+    if [[ "${ACL_EXPERIMENTAL_USR_FS:-}" == "erofs" ]] &&
+       grep -qx 'CONFIG_EROFS_FS=m' "${root_fs_dir}/boot/config-${kernel_version}"; then
+        local initramfs_listing
+        initramfs_listing=$(sudo chroot "${root_fs_dir}" /usr/bin/lsinitrd "${initramfs_chroot_path}") || \
+            die "Cannot inspect generated EROFS initramfs"
+        grep -Eq '/erofs[.]ko([.](gz|xz|zst))?$' <<< "${initramfs_listing}" || \
+            die "Generated initramfs is missing the required EROFS module"
+    fi
 
     # Copy dracut log to build output for analysis
     if [[ -f "${dracut_log}" ]] && cp "${dracut_log}" "${BUILD_DIR}/dracut-verbose.log" 2>/dev/null; then

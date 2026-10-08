@@ -268,10 +268,11 @@ class FilesystemTests(unittest.TestCase):
                 with self.assertRaises(DISK.InvalidLayout):
                     DISK.Ext4Capacity("/dev/example")
 
-    def test_verity_report_and_commands_for_btrfs_and_ext4(self):
+    def test_verity_report_and_commands_for_supported_filesystems(self):
         for selector, layout_file in (("btrfs", "disk_layout.json"),
                                      ("btrfs", "disk_layout_uki.json"),
-                                     ("ext4", "disk_layout_uki.json")):
+                                     ("ext4", "disk_layout_uki.json"),
+                                     ("erofs", "disk_layout_uki.json")):
             with self.subTest(selector=selector, layout=layout_file), \
                  patch.dict(os.environ, {"ACL_EXPERIMENTAL_USR_FS": selector}), \
                  tempfile.TemporaryDirectory() as directory:
@@ -322,8 +323,11 @@ class FilesystemTests(unittest.TestCase):
                     ext4_seal.assert_called_once_with(options, data, disable_rw=True)
                     btrfs_seal.assert_not_called()
                     self.assertEqual(capacity["free_inodes"], 50)
-                else:
+                elif selector == "btrfs":
                     btrfs_seal.assert_called_once_with(options, data, disable_rw=True)
+                    ext4_seal.assert_not_called()
+                else:
+                    btrfs_seal.assert_not_called()
                     ext4_seal.assert_not_called()
 
     def test_probing_uses_actual_not_expanded_geometry(self):
@@ -366,8 +370,8 @@ class FilesystemTests(unittest.TestCase):
                 DISK.GetPartitionTableFromImage(SimpleNamespace(disk_image=str(image)),
                                                 {"metadata": {"block_size": 512}}, {})
 
-    def test_root_growth_preserves_btrfs_and_ext4_slots(self):
-        for selector in ("btrfs", "ext4"):
+    def test_root_growth_preserves_usr_slots(self):
+        for selector in ("btrfs", "ext4", "erofs"):
             with self.subTest(selector=selector), patch.dict(
                     os.environ, {"ACL_EXPERIMENTAL_USR_FS": selector}):
                 source_config, source = self.layout("base")
@@ -388,9 +392,10 @@ class FilesystemTests(unittest.TestCase):
                 for number in ("2", "3", "4", "5"):
                     self.assertEqual(target[number]["bytes"], source[number]["bytes"])
 
-    def test_metadata_legacy_btrfs_and_versioned_ext4(self):
+    def test_metadata_legacy_btrfs_and_versioned_optins(self):
         for fs, version, requested in (("", "", ""), ("btrfs", "", "btrfs"),
-                                       ("ext4", "1", ""), ("ext4", "1", "ext4")):
+                                       ("ext4", "1", ""), ("ext4", "1", "ext4"),
+                                       ("erofs", "1", ""), ("erofs", "1", "erofs")):
             result = self.shell('acl_restore_usr_filesystem "$REQUESTED" amd64-usr || exit 1\nacl_usr_filesystem',
                                 ACL_EXPERIMENTAL_USR_FS=fs,
                                 ACL_USR_FS_METADATA_VERSION=version, REQUESTED=requested,
@@ -401,6 +406,8 @@ class FilesystemTests(unittest.TestCase):
     def test_metadata_conflicts_and_unknown_versions_fail(self):
         for fs, version, requested in (("ext4", "", ""), ("ext4", "1", "btrfs"),
                                        ("btrfs", "", "ext4"), ("btrfs", "2", ""),
+                                       ("erofs", "1", "btrfs"), ("btrfs", "1", "erofs"),
+                                       ("erofs", "1", "ext4"), ("ext4", "1", "erofs"),
                                        ("invalid", "1", "")):
             result = self.shell('acl_restore_usr_filesystem "$REQUESTED" amd64-usr',
                                 ACL_EXPERIMENTAL_USR_FS=fs,
@@ -496,11 +503,22 @@ REUSE_IMAGE=false ACG_IMAGE_VERSION_ID='' VM_TYPE=qemu
 error() { printf '%s\\n' "$*" >&2; }
 """
         code = setup + parser + '\nparse_args "$@"\nacl_validate_usr_filesystem || exit 1\nacl_usr_filesystem'
-        for args in (("--usr-fs=ext4",), ("--usr-fs", "ext4"), ("--usr-fs=btrfs",)):
+        for args, expected in (
+                (("--usr-fs=ext4",), "ext4"), (("--usr-fs", "ext4"), "ext4"),
+                (("--usr-fs=btrfs",), "btrfs"), (("--usr-fs=erofs",), "erofs"),
+                (("--usr-fs", "erofs"), "erofs")):
             result = self.shell(code, args=args,
                                 IPE_HELPER=str(REPO / "build_library/rpm/ipe_artifact.sh"))
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "btrfs" if "btrfs" in args[0] else "ext4")
+            self.assertEqual(result.stdout.strip(), expected)
+        for vm_type in ("qemu", "azure"):
+            result = self.shell(
+                code + '\nprintf "%s:%s" "$BUILD_TEST_IMAGE" "$VM_TYPE"',
+                args=("--usr-fs=erofs", "--build-image", "--build-test-image",
+                      "--vm-type=" + vm_type),
+                IPE_HELPER=str(REPO / "build_library/rpm/ipe_artifact.sh"))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), ["erofs", "true:" + vm_type])
         for args in (("--usr-fs=",), ("--usr-fs",), ("--usr-fs=invalid",)):
             result = self.shell(code, args=args,
                                 IPE_HELPER=str(REPO / "build_library/rpm/ipe_artifact.sh"))
@@ -521,7 +539,7 @@ FLAGS_enable_rootfs_verification="$VERIFIED"
 FLAGS_board=amd64-usr
 die() { printf '%s\\n' "$*" >&2; exit 1; }
 """ + gate
-            for selector in ("ext4",):
+            for selector in ("ext4", "erofs"):
                 for image_type, verified, accepted in (
                         ("prod", "0", True), ("prod", "1", False),
                         ("container", "0", False), ("prodtar", "0", False)):
@@ -536,6 +554,95 @@ die() { printf '%s\\n' "$*" >&2; exit 1; }
                 BUILD_LIBRARY_DIR=Path(directory).as_posix(), VERIFIED="1")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertNotIn("LAYOUT_CHECK", result.stdout)
+
+    def test_test_and_prod_vm_dispatch_keep_selector_and_separate_injection(self):
+        source = (REPO / "acl/build_rpm_image.sh").read_text()
+        branches = source[source.index("    # Step 5a:"):source.index("    # Step 6:")]
+        code = """
+BUILD_TEST_IMAGE=true BUILD_VM_IMAGE=true IMG_NAME=acl_production
+section() { :; }
+info() { :; }
+build_vm_image() {
+    printf 'BUILD|%s|%s|%s|%s\\n' "$1" "$2" "$ACL_EXPERIMENTAL_USR_FS" "$INJECT_DOCKER_SYSEXT"
+}
+mv() { printf 'MOVE|%s|%s\\n' "$1" "$2"; }
+cp() { :; }
+exercise() {
+""" + branches + "\n}\nexercise\n"
+        for selector in ("btrfs", "ext4", "erofs"):
+            for board in ("amd64-usr", "arm64-usr"):
+                for vm_type, basename, suffix in (
+                        ("qemu", "qemu_uefi", "img"), ("azure", "azure", "vhd")):
+                    with self.subTest(selector=selector, board=board, vm=vm_type):
+                        result = self.shell(code, ACL_EXPERIMENTAL_USR_FS=selector,
+                                            BOARD=board, VM_TYPE=vm_type)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        prefix = f"__build__/images/images/{board}/latest/acl_production_{basename}"
+                        image = f"{prefix}_image.{suffix}"
+                        test_image = f"{prefix}_test_image.{suffix}"
+                        self.assertEqual(result.stdout.splitlines(), [
+                            f"BUILD|{vm_type}|{image}|{selector}|true",
+                            f"MOVE|{image}|{test_image}",
+                            f"BUILD|{vm_type}|{image}|{selector}|false",
+                        ])
+
+    def test_vm_conversion_dispatches_image_to_vm_not_a_test_root_build(self):
+        source = (REPO / "acl/build_rpm_image.sh").read_text()
+        start = source.index("build_vm_image() {")
+        function = source[start:source.index("\n}\n", start) + 3]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdk = root / "run_sdk_container"
+            sdk.write_text(
+                "#!/bin/bash\n"
+                "printf 'FS=%s\\nINJECT=%s\\n' \"$ACL_EXPERIMENTAL_USR_FS\" \"$INJECT_DOCKER_SYSEXT\"\n"
+                "printf '%s\\n' \"$@\"\n")
+            sdk.chmod(0o755)
+            output = root / "stub.img"
+            output.write_text("dispatch fixture, not an image")
+            code = """
+set -eu
+BOARD=amd64-usr IMG_NAME=acl_production NO_TTY=false
+export INJECT_DOCKER_SYSEXT=true
+get_sdk_image() { printf '%s' 'fixture-sdk'; }
+get_tty_flag() { :; }
+load_artifact_ipe_signing_mode() { [[ "$1" == "$SCRIPT_DIR/__build__/images/images/$BOARD/latest" ]]; }
+validate_ipe_boot_path() { [[ "$1" == "$VM_TYPE" ]]; }
+info() { :; }
+error() { printf '%s\\n' "$*" >&2; }
+""" + function + '\nbuild_vm_image "$VM_TYPE" "$TEST_OUTPUT"\n'
+            for vm_type, format_name in (("qemu", "qemu_uefi"), ("azure", "azure")):
+                result = self.shell(
+                    code, ACL_EXPERIMENTAL_USR_FS="erofs", VM_TYPE=vm_type,
+                    SCRIPT_DIR=root.as_posix(), TEST_OUTPUT=output.as_posix())
+                self.assertEqual(result.returncode, 0, result.stderr)
+                arguments = result.stdout.splitlines()
+                self.assertIn("FS=erofs", arguments)
+                self.assertIn("INJECT=true", arguments)
+                self.assertIn("./image_to_vm.sh", arguments)
+                self.assertIn("--format=" + format_name, arguments)
+                self.assertNotIn("./build_image", arguments)
+
+    def test_pipeline_default_is_not_an_explicit_btrfs_conversion_request(self):
+        source = (REPO / "image_to_vm.sh").read_text()
+        block = source[source.index('requested_usr_fs="${ACL_EXPERIMENTAL_USR_FS:-}"'):
+                       source.index("\nset_vm_paths ")]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for recorded in ("btrfs", "erofs"):
+                (root / "version.txt").write_text(
+                    "FLATCAR_VERSION=fixture\nACL_USR_FS_METADATA_VERSION=1\n"
+                    f"ACL_EXPERIMENTAL_USR_FS={recorded}\n"
+                    "ACL_USR_BOARD=amd64-usr\nACL_USR_BOOTLOADER=uki\n")
+                for requested in ("", "btrfs", "erofs"):
+                    with self.subTest(recorded=recorded, requested=requested):
+                        result = self.shell(
+                            'set -eu\nFLAGS_board=amd64-usr\n' + block + "\nacl_usr_filesystem\n",
+                            ACL_EXPERIMENTAL_USR_FS=requested, FLAGS_from=root.as_posix())
+                        accepted = not requested or requested == recorded
+                        self.assertEqual(result.returncode == 0, accepted, result.stderr)
+                        if accepted:
+                            self.assertEqual(result.stdout.strip(), recorded)
 
     def test_mount_flags_are_slot_specific(self):
         for fs, flags in (("btrfs", "ro"), ("ext4", "ro,noload")):

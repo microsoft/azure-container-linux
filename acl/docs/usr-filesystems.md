@@ -1,6 +1,6 @@
 # Opt-in `/usr` filesystems
 
-Btrfs remains the default. EXT4 is an opt-in **qualification path**, not a
+Btrfs remains the default. EXT4 and [EROFS](erofs-usr.md) are opt-in **qualification paths**, not a
 production-support or existing-machine migration claim. It currently accepts
 RPM/UKI, AMD64/ARM64, and base/QEMU/Azure disk layouts. Official builds, GRUB,
 container layouts and legacy update-engine payload generation reject the opt-in.
@@ -11,6 +11,10 @@ and verity generation, so unverified outputs are rejected before layout checks.
 ./acl/build_rpm_image.sh --usr-fs=ext4 --build-image --build-vm-image
 # Equivalent pipeline variable: ACL_EXPERIMENTAL_USR_FS=ext4
 ```
+
+Use `--usr-fs=erofs` for immutable, single-device compressed EROFS. Its writable
+build staging, SDK/kernel requirements and consumer dependencies are described
+in [EROFS /usr](erofs-usr.md). The EXT4 geometry below does not apply to EROFS.
 
 Unset/empty or explicit `btrfs` keeps the existing layout and formatter. The CLI
 overrides the environment. Existing pipeline artifact names remain unchanged.

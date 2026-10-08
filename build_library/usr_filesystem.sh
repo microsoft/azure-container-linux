@@ -7,9 +7,9 @@ acl_usr_filesystem() {
 acl_validate_usr_filesystem() {
     case "$(acl_usr_filesystem)" in
         btrfs) return 0 ;;
-        ext4) ;;
+        ext4|erofs) ;;
         *)
-            echo "Unsupported ACL_EXPERIMENTAL_USR_FS (expected btrfs or ext4)" >&2
+            echo "Unsupported ACL_EXPERIMENTAL_USR_FS (expected btrfs, ext4 or erofs)" >&2
             return 1
             ;;
     esac
@@ -26,7 +26,7 @@ acl_validate_usr_filesystem() {
 acl_usr_mount_options() {
     acl_validate_usr_filesystem || return 1
     case "$(acl_usr_filesystem)" in
-        btrfs) printf '%s\n' ro ;;
+        btrfs|erofs) printf '%s\n' ro ;;
         ext4) printf '%s\n' ro,noload ;;
     esac
 }

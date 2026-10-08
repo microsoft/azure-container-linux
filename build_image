@@ -146,6 +146,12 @@ for arg in "$@"; do
   esac
 done
 
+if [[ "$(acl_usr_filesystem)" == erofs ]]; then
+  for tool in mkfs.erofs fsck.erofs; do
+    command -v "${tool}" >/dev/null || die "Experimental EROFS requires erofs-utils in the SDK (${tool} missing)"
+  done
+fi
+
 # Check that the build root is sane.
 # Skip in RPM mode: the Portage sysroot has scripts with /bin/sh shebangs but
 # no RPM-provided interpreters. The image rootfs is checked in prod_image_util.sh.

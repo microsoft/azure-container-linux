@@ -97,13 +97,16 @@ test_enforcing_mode_rejected() {
 }
 
 test_filesystem_and_mode_forwarded() {
-    local log="${TEST_DIR}/filesystem-mode.log"
-    PACKAGE_SOURCE_MODE=RPM ACL_EXPERIMENTAL_USR_FS=ext4 \
-        run_container audit ephemeral "${log}"
-    for setting in PACKAGE_SOURCE_MODE=RPM ACL_EXPERIMENTAL_USR_FS=ext4 \
-        ACL_IPE_MODE=audit ACL_IPE_SIGNING_MODE=ephemeral; do
-        grep -Fq $'\t-e\t'"${setting}"$'\t' "${log}" ||
-            { echo "${setting} was not forwarded" >&2; return 1; }
+    local filesystem log setting
+    for filesystem in ext4 erofs; do
+        log="${TEST_DIR}/filesystem-mode-${filesystem}.log"
+        PACKAGE_SOURCE_MODE=RPM ACL_EXPERIMENTAL_USR_FS="${filesystem}" \
+            run_container audit ephemeral "${log}"
+        for setting in PACKAGE_SOURCE_MODE=RPM "ACL_EXPERIMENTAL_USR_FS=${filesystem}" \
+            ACL_IPE_MODE=audit ACL_IPE_SIGNING_MODE=ephemeral; do
+            grep -Fq $'\t-e\t'"${setting}"$'\t' "${log}" ||
+                { echo "${setting} was not forwarded" >&2; return 1; }
+        done
     done
 }
 

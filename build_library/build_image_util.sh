@@ -581,13 +581,17 @@ start_image() {
       "${BUILD_DIR}"/configroot/etc/portage/
 
   info "Using image type ${disk_layout}"
+  local format_args=()
+  if [[ "${ACL_EXPERIMENTAL_USR_FS:-}" == "erofs" ]]; then
+    format_args+=(--erofs-staging)
+  fi
   "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" \
-      format "${disk_img}"
+      format "${format_args[@]}" "${disk_img}"
 
   assert_image_size "${disk_img}" raw
 
   "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" \
-      mount --writable_verity "${disk_img}" "${root_fs_dir}"
+      mount --writable_verity "${format_args[@]}" "${disk_img}" "${root_fs_dir}"
   trap "cleanup_mounts '${root_fs_dir}' && delete_prompt" EXIT
 
   # First thing first, install baselayout to create a working filesystem.
@@ -890,8 +894,12 @@ EOF
 
   # Make the filesystem un-mountable as read-write and setup verity.
   if [[ ${disable_read_write} -eq ${FLAGS_TRUE} ]]; then
-    # Unmount /usr partition
-    sudo umount --recursive "${root_fs_dir}/usr" || exit 1
+    if [[ "${ACL_EXPERIMENTAL_USR_FS:-}" == "erofs" ]]; then
+      "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" \
+          seal_erofs "${disk_img}" "${root_fs_dir}/usr"
+    else
+      sudo umount --recursive "${root_fs_dir}/usr" || exit 1
+    fi
 
     "${BUILD_LIBRARY_DIR}/disk_util" --disk_layout="${disk_layout}" --arch="${BOARD}" verity \
         --root_hash="${BUILD_DIR}/${image_name%.bin}_verity.txt" \

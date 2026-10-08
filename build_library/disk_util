@@ -9,6 +9,8 @@ import json
 import os
 import platform
 import re
+import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -75,27 +77,28 @@ def ExperimentalUsrFilesystem():
   requested = os.environ.get('ACL_EXPERIMENTAL_USR_FS', '')
   if not requested or requested == 'btrfs':
     return None
-  if requested != 'ext4':
-    raise InvalidLayout('ACL_EXPERIMENTAL_USR_FS only supports btrfs or ext4')
+  if requested not in ('ext4', 'erofs'):
+    raise InvalidLayout('ACL_EXPERIMENTAL_USR_FS only supports btrfs, ext4 or erofs')
   if (os.environ.get('PACKAGE_SOURCE_MODE') != 'RPM' or
       os.environ.get('BOOTLOADER_MODE') != 'uki'):
-    raise InvalidLayout('Experimental EXT4 /usr requires RPM and UKI mode')
+    raise InvalidLayout('Opt-in /usr filesystems require RPM and UKI mode')
   if os.environ.get('COREOS_OFFICIAL', '0') == '1':
-    raise InvalidLayout('Experimental EXT4 /usr is not supported for official builds')
+    raise InvalidLayout('Opt-in /usr filesystems are not supported for official builds')
   return requested
 
 
 def ApplyExperimentalUsrLayout(config):
-  if ExperimentalUsrFilesystem() is None:
+  filesystem = ExperimentalUsrFilesystem()
+  if filesystem is None:
     return
   base = config['layouts']['base']
   by_label = {p.get('label'): p for p in base.values()}
   labels = [p.get('label') for p in base.values()]
   if not all(labels.count(label) == 1 for label in USR_VERITY_LABELS):
-    raise InvalidLayout('Experimental EXT4 /usr requires separate A/B data/hash partitions')
+    raise InvalidLayout('Opt-in /usr requires separate A/B data/hash partitions')
   if (by_label['USR-A'].get('mount') != '/usr' or
       by_label['USR-A'].get('verity_hash') is None):
-    raise InvalidLayout('Experimental EXT4 /usr requires verity on /usr')
+    raise InvalidLayout('Opt-in /usr requires verity on /usr')
   block = int(config['metadata']['block_size'])
   fs_block = int(config['metadata']['fs_block_size'])
   if block != 512 or fs_block != 4096:
@@ -104,6 +107,14 @@ def ApplyExperimentalUsrLayout(config):
     data = by_label['USR-' + slot]
     if base.get(str(data.get('verity_hash'))) is not by_label['HASH-' + slot]:
       raise InvalidLayout('Each USR slot must reference its corresponding HASH partition')
+  if filesystem == 'erofs':
+    for layout in config['layouts'].values():
+      for part in layout.values():
+        if part.get('label') == 'USR-A':
+          part['fs_type'] = 'erofs'
+          part.pop('fs_compression', None)
+          part.pop('fs_subvolume', None)
+    return
   for layout in config['layouts'].values():
     for part in layout.values():
       if part.get('label') in ('USR-A', 'USR-B'):
@@ -208,7 +219,7 @@ def LoadPartitionConfig(options):
           raise InvalidLayout('Invalid uuid %r: %s' % (part['uuid'], e))
 
       if 'fs_type' in part:
-        if part['fs_type'] not in ('btrfs', 'ext2', 'ext4', 'vfat'):
+        if part['fs_type'] not in ('btrfs', 'ext2', 'ext4', 'vfat', 'erofs'):
           raise InvalidLayout('Invalid fs_type: %r' % part['fs_type'])
 
       if 'fs_subvolume' in part:
@@ -363,7 +374,9 @@ def GetPartitionTableFromImage(options, config, partitions):
       try:
         part['image_fs_type'] = subprocess.check_output(
           ['sudo', 'blkid', '-o', 'value', '-s', 'TYPE', loop_dev]).strip().decode('utf8')
-      except subprocess.CalledProcessError:
+      except subprocess.CalledProcessError as error:
+        if error.returncode != 2:
+          raise
         part['image_fs_type'] = None
 
   # Set compat flags for any partition not in the image
@@ -375,7 +388,7 @@ def GetPartitionTableFromImage(options, config, partitions):
       part.setdefault('image_compat', False)
 
 
-def ValidateUsrPartitions(partitions):
+def ValidateUsrPartitions(partitions, allow_erofs_staging=False):
   """Reject implicit slot migration before modifying an existing image."""
   for part in partitions.values():
     if part.get('label') not in USR_VERITY_LABELS or part.get('type') == 'blank':
@@ -386,6 +399,9 @@ def ValidateUsrPartitions(partitions):
           % part['label'])
     expected = part.get('fs_type')
     if expected and part.get('image_fs_type') != expected:
+      if (allow_erofs_staging and part['label'] == 'USR-A' and
+          expected == 'erofs' and part.get('image_fs_type') is None):
+        continue
       raise InvalidLayout(
           '%s filesystem is %r, expected %r; conversion is not filesystem migration'
           % (part['label'], part.get('image_fs_type'), expected))
@@ -617,6 +633,8 @@ def PartitionLoop(options, partition):
 
 
 def FormatPartition(options, part):
+  if part['fs_type'] == 'erofs':
+    raise InvalidLayout('EROFS must be packed from a finalized staging tree, not formatted in place')
   print("Formatting partition %s (%s) as %s" % (
           part['num'], part['label'], part['fs_type']))
 
@@ -643,13 +661,167 @@ def Format(options):
   # arbitrary offsets but using loop devices makes that possible.
 
   config, partitions = LoadPartitionConfig(options)
+  erofs_parts = [p for p in partitions.values() if p.get('fs_type') == 'erofs']
+  if erofs_parts:
+    if (not options.create or not getattr(options, 'erofs_staging', False) or
+        len(erofs_parts) != 1 or erofs_parts[0].get('label') != 'USR-A' or
+        erofs_parts[0].get('mount') != '/usr'):
+      raise InvalidLayout('EROFS format requires a new image, one USR-A /usr and --erofs-staging')
+    ErofsVolumeLabel(erofs_parts[0])
+    CheckErofsTools()
+    if os.path.lexists(ErofsStagingPath(options.disk_image)):
+      raise InvalidLayout('EROFS staging already exists; clean the failed build before rebuilding')
   WritePartitionTable(options, config, partitions)
 
   for part in partitions.values():
     if part['type'] == 'blank' or 'fs_type' not in part:
       continue
+    if part['fs_type'] == 'erofs':
+      with PartitionLoop(options, part) as device:
+        Sudo(['wipefs', '--all', device])
+      staging = ErofsStagingPath(options.disk_image)
+      os.mkdir(staging, 0o755)
+      Sudo(['chown', '0:0', staging])
+      print('EROFS writable staging: %s (%d host bytes available)' %
+            (staging, shutil.disk_usage(staging).free))
+      continue
 
     FormatPartition(options, part)
+
+
+def ErofsStagingPath(image):
+  return os.path.abspath(image) + '.usr-staging'
+
+
+def ErofsVolumeLabel(partition):
+  label = partition.get('fs_label', '')
+  if not isinstance(label, str) or '\0' in label or len(label.encode('utf-8')) > 16:
+    raise InvalidLayout('EROFS fs_label must be a string of at most 16 UTF-8 bytes without NUL')
+  return label
+
+
+def CheckErofsTools():
+  # mkfs.erofs 1.7.1 does not support -V. Its no-argument usage failure prints
+  # the version; do not mistake that expected failure for a successful build.
+  mkfs = subprocess.run(['mkfs.erofs'], stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True)
+  fsck = subprocess.check_output(['fsck.erofs', '-V'], text=True).strip()
+  if mkfs.returncode != 1 or mkfs.stdout.strip() != 'mkfs.erofs 1.7.1' or fsck != 'fsck.erofs 1.7.1':
+    raise InvalidLayout('EROFS requires the SDK-pinned erofs-utils 1.7.1; rebuild the SDK')
+  return fsck
+
+
+def ValidateErofsImage(path, capacity, block_size=4096, expected_label=None):
+  """Accept only the kernel-6.6-compatible, single-device format we emit."""
+  size = os.stat(path).st_size
+  if size == 0 or size > capacity or size % block_size:
+    raise InvalidLayout('Packed EROFS size %d does not fit the %d-byte data area' %
+                        (size, capacity))
+  with open(path, 'rb') as image:
+    image.seek(1024)
+    sb = image.read(128)
+  if len(sb) != 128 or struct.unpack_from('<I', sb)[0] != 0xe0f5e1e2:
+    raise InvalidLayout('Invalid EROFS superblock')
+  if sb[12] != 12 or block_size != 4096:
+    raise InvalidLayout('EROFS requires 4096-byte blocks on both supported architectures')
+  if struct.unpack_from('<H', sb, 86)[0] != 0:
+    raise InvalidLayout('External-device EROFS is not supported')
+  # legacy-compress emits no incompat features; never silently accept newer
+  # formatter defaults such as fragments, external blobs or large pclusters.
+  if struct.unpack_from('<I', sb, 80)[0] != 0:
+    raise InvalidLayout('EROFS has features outside the validated legacy LZ4 profile')
+  if struct.unpack_from('<I', sb, 36)[0] * block_size != size:
+    raise InvalidLayout('EROFS superblock size differs from the packed image size')
+  if expected_label is not None and sb[64:80].rstrip(b'\0') != expected_label.encode('utf-8'):
+    raise InvalidLayout('EROFS filesystem label differs from the configured label')
+  return size
+
+
+def CopyErofsPartition(packed, image, offset, capacity):
+  """Write a checked image and zero padding without touching adjacent bytes."""
+  size = ValidateErofsImage(packed, capacity)
+  if os.path.samefile(packed, image):
+    raise InvalidLayout('Packed EROFS must not be the destination disk image')
+  if offset < 0 or offset % 4096 or capacity % 4096:
+    raise InvalidLayout('EROFS partition bounds must be nonnegative and block aligned')
+  with open(image, 'r+b') as target, open(packed, 'rb') as source:
+    target.seek(0, os.SEEK_END)
+    if offset + capacity > target.tell():
+      raise InvalidLayout('EROFS partition extends beyond the disk image')
+    target.seek(offset)
+    remaining = size
+    while remaining:
+      data = source.read(min(remaining, 1024 * 1024))
+      if not data:
+        raise InvalidLayout('EROFS image changed while copying')
+      target.write(data)
+      remaining -= len(data)
+    remaining = capacity - size
+    zeros = bytes(1024 * 1024)
+    while remaining:
+      count = min(remaining, len(zeros))
+      target.write(zeros[:count])
+      remaining -= count
+    target.flush()
+    os.fsync(target.fileno())
+
+
+def SealErofs(options):
+  """Pack a full writable tree only after every RPM/label/customization step."""
+  config, partitions = LoadPartitionConfig(options)
+  GetPartitionTableFromImage(options, config, partitions)
+  ValidateUsrPartitions(partitions, allow_erofs_staging=True)
+  VerityPlan(partitions)
+  tool_version = CheckErofsTools()
+  part = GetPartition(partitions, 'USR-A')
+  if (part.get('fs_type') != 'erofs' or not part['image_compat'] or
+      not part.get('verity_hash') or part.get('image_fs_type') is not None or
+      part['image_bytes'] != part['bytes']):
+    raise InvalidLayout('seal_erofs requires an empty, exactly matching UKI USR-A partition')
+  fs_label = ErofsVolumeLabel(part)
+  source = os.path.realpath(options.source)
+  staging = ErofsStagingPath(options.disk_image)
+  if os.path.islink(staging) or not os.path.samefile(source, staging):
+    raise InvalidLayout('EROFS source is not this image build staging tree')
+  mounts = json.loads(subprocess.check_output(
+      ['findmnt', '--json', '--mountpoint', source, '-o', 'TARGET']).decode())['filesystems']
+  if len(mounts) != 1 or os.path.realpath(mounts[0]['target']) != source:
+    raise InvalidLayout('EROFS staging must be mounted into the build root')
+  if part['fs_bytes'] > part['image_bytes']:
+    raise InvalidLayout('EROFS data area exceeds its partition')
+  fs_uuid = str(uuid.uuid4())
+  with tempfile.TemporaryDirectory(prefix='acl-erofs-',
+      dir=os.path.dirname(os.path.abspath(options.disk_image))) as temporary:
+    packed = os.path.join(temporary, 'usr.erofs')
+    Sudo(['mount', '-o', 'remount,bind,ro', source])
+    Sudo(['mkfs.erofs', '-b4096', '-zlz4hc,12', '-Elegacy-compress',
+          '--preserve-mtime', '-U', fs_uuid, '-L', fs_label, packed, source])
+    # No extraction directory: verify every compressed extent without losing
+    # capabilities/labels through the old fsck extractor's missing xattr support.
+    Sudo(['fsck.erofs', '--extract', packed])
+    size = ValidateErofsImage(packed, part['fs_bytes'], part['fs_block_size'],
+                              expected_label=fs_label)
+    Sudo(['umount', '--recursive', source])
+    CopyErofsPartition(packed, options.disk_image, part['image_first_byte'],
+                       part['image_bytes'])
+    with PartitionLoop(options, part) as device:
+      Sudo(['fsck.erofs', '--extract', device])
+      actual_uuid = SudoOutput(['blkid', '-p', '-s', 'UUID', '-o', 'value', device]).decode().strip()
+      if actual_uuid != fs_uuid:
+        raise InvalidLayout('EROFS filesystem UUID changed when writing the partition')
+  with open(os.path.abspath(options.disk_image) + '.erofs.json', 'w') as report:
+    json.dump({'filesystem': 'erofs', 'tools': tool_version, 'uuid': fs_uuid,
+               'label': fs_label,
+               'compression': 'lz4hc,12', 'profile': 'legacy-compress',
+               'blockSize': 4096, 'devices': 1, 'packedBytes': size,
+               'dataBytes': part['fs_bytes'],
+               'headroomBytes': part['fs_bytes'] - size}, report, indent=2)
+    report.write('\n')
+  # Keep failed staging trees for diagnosis; remove only this successful build's
+  # explicitly derived staging directory, never a caller-supplied directory.
+  Sudo(['rm', '-rf', '--', staging])
+  print('Sealed single-device LZ4 EROFS: %d bytes, %d bytes partition headroom' %
+        (size, part['fs_bytes'] - size))
 
 
 def ResizeExt(part, device):
@@ -688,6 +860,14 @@ def Update(options):
   """
 
   config, partitions = LoadPartitionConfig(options)
+  if any(p.get('fs_type') == 'erofs' for p in partitions.values()):
+    GetPartitionTableFromImage(options, config, partitions)
+    for part in partitions.values():
+      if part.get('fs_type') == 'erofs':
+        if (part.get('image_fs_type') != 'erofs' or
+            part['first_byte'] != part.get('image_first_byte') or
+            part['bytes'] != part.get('image_bytes')):
+          raise InvalidLayout('Cannot resize or migrate an EROFS /usr in place')
   WritePartitionTable(options, config, partitions)
 
   for part in partitions.values():
@@ -728,7 +908,7 @@ def Mount(options):
 
   config, partitions = LoadPartitionConfig(options)
   GetPartitionTableFromImage(options, config, partitions)
-  ValidateUsrPartitions(partitions)
+  ValidateUsrPartitions(partitions, allow_erofs_staging=getattr(options, 'erofs_staging', False))
   mounts = {}
 
   for part_num, part in partitions.items():
@@ -743,12 +923,29 @@ def Mount(options):
   if '/' not in mounts:
     raise InvalidLayout('No partition defined to mount on /')
 
+  for mount in mounts.values():
+    if mount.get('fs_type') == 'erofs':
+      if getattr(options, 'erofs_staging', False):
+        staging = ErofsStagingPath(options.disk_image)
+        if (options.read_only or not options.writable_verity or
+            mount.get('image_fs_type') is not None or
+            os.path.islink(staging) or not os.path.isdir(staging)):
+          raise InvalidLayout('EROFS staging requires a fresh image and explicit writable build mount')
+      elif mount.get('image_fs_type') != 'erofs':
+        raise InvalidLayout('EROFS /usr has not been sealed')
+      elif options.writable_verity and not options.read_only:
+        raise InvalidLayout('EROFS cannot be mounted writable; unpack/customize/repack instead')
+
   def DoMount(mount):
     full_path = os.path.realpath(options.mount_dir + mount['mount'])
+    if mount.get('fs_type') == 'erofs' and getattr(options, 'erofs_staging', False):
+      Sudo(['mkdir', '-p', full_path])
+      Sudo(['mount', '--bind', ErofsStagingPath(options.disk_image), full_path])
+      return
     mount_opts = ['loop',
                   'offset=%d' % mount['image_first_byte'],
                   'sizelimit=%d' % mount['image_bytes']]
-    if options.read_only or ('verity' in mount.get('features', []) and not options.writable_verity):
+    if options.read_only or mount.get('fs_type') == 'erofs' or ('verity' in mount.get('features', []) and not options.writable_verity):
       mount_opts.append('ro')
       if mount.get('fs_type', None) == 'btrfs':
         mount_opts.append('rescue=nologreplay')
@@ -1330,8 +1527,15 @@ def main(argv):
   a.set_defaults(func=WritePartitionTable)
 
   a = actions.add_parser('format', help='write gpt and filesystems to image')
+  a.add_argument('--erofs-staging', action='store_true',
+          help='build EROFS from a separate writable tree, sealed before verity')
   a.add_argument('disk_image', help='path to disk image file')
   a.set_defaults(func=Format, create=True)
+
+  a = actions.add_parser('seal_erofs', help='pack finalized /usr staging into EROFS')
+  a.add_argument('disk_image', help='path to disk image')
+  a.add_argument('source', help='mounted /usr build staging tree')
+  a.set_defaults(func=SealErofs)
 
   a = actions.add_parser('update',
           help='write gpt, resize filesystems, and format free partitions')
@@ -1339,6 +1543,8 @@ def main(argv):
   a.set_defaults(func=Update, create=False)
 
   a = actions.add_parser('mount', help='mount filesystems in image')
+  a.add_argument('--erofs-staging', action='store_true',
+          help='bind the separate writable /usr tree for a fresh EROFS build')
   a.add_argument('--writable_verity', '-w', action='store_true',
           help='mount verity-protected filesystems writable')
   a.add_argument('--read_only', '-r', action='store_true',
