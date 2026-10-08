@@ -17,6 +17,7 @@ import uuid
 
 # First sector we can use.
 GPT_RESERVED_SECTORS = 34
+USR_VERITY_LABELS = ('USR-A', 'USR-B', 'HASH-A', 'HASH-B')
 
 
 class ConfigNotFound(Exception):
@@ -70,6 +71,64 @@ def _resolve_dps_types(config, arch):
         part['type'] = guid
 
 
+def ExperimentalUsrFilesystem():
+  requested = os.environ.get('ACL_EXPERIMENTAL_USR_FS', '')
+  if not requested or requested == 'btrfs':
+    return None
+  if requested != 'ext4':
+    raise InvalidLayout('ACL_EXPERIMENTAL_USR_FS only supports btrfs or ext4')
+  if (os.environ.get('PACKAGE_SOURCE_MODE') != 'RPM' or
+      os.environ.get('BOOTLOADER_MODE') != 'uki'):
+    raise InvalidLayout('Experimental EXT4 /usr requires RPM and UKI mode')
+  if os.environ.get('COREOS_OFFICIAL', '0') == '1':
+    raise InvalidLayout('Experimental EXT4 /usr is not supported for official builds')
+  return requested
+
+
+def ApplyExperimentalUsrLayout(config):
+  if ExperimentalUsrFilesystem() is None:
+    return
+  base = config['layouts']['base']
+  by_label = {p.get('label'): p for p in base.values()}
+  labels = [p.get('label') for p in base.values()]
+  if not all(labels.count(label) == 1 for label in USR_VERITY_LABELS):
+    raise InvalidLayout('Experimental EXT4 /usr requires separate A/B data/hash partitions')
+  if (by_label['USR-A'].get('mount') != '/usr' or
+      by_label['USR-A'].get('verity_hash') is None):
+    raise InvalidLayout('Experimental EXT4 /usr requires verity on /usr')
+  block = int(config['metadata']['block_size'])
+  fs_block = int(config['metadata']['fs_block_size'])
+  if block != 512 or fs_block != 4096:
+    raise InvalidLayout('Opt-in /usr layouts require 512-byte sectors and 4096-byte filesystem blocks')
+  for slot in ('A', 'B'):
+    data = by_label['USR-' + slot]
+    if base.get(str(data.get('verity_hash'))) is not by_label['HASH-' + slot]:
+      raise InvalidLayout('Each USR slot must reference its corresponding HASH partition')
+  for layout in config['layouts'].values():
+    for part in layout.values():
+      if part.get('label') in ('USR-A', 'USR-B'):
+        part['blocks'] = 4 * 1024**3 // block
+        part['fs_blocks'] = 4 * 1024**3 // fs_block
+        part.pop('fs_compression', None)
+        if part.get('label') == 'USR-A':
+          part['fs_type'] = 'ext4'
+      elif part.get('label') in ('HASH-A', 'HASH-B'):
+        part['blocks'] = 64 * 1024**2 // block
+
+
+def NativeExt4Readonly(partition):
+  return (ExperimentalUsrFilesystem() == 'ext4' and
+          partition.get('label') in ('USR-A', 'USR-B') and
+          partition.get('fs_type') == 'ext4')
+
+
+def SetNativeExt4Readonly(device, disable_rw):
+  """Change the supported feature through e2fsprogs, including its checksums."""
+  Sudo(['e2fsck', '-fn', device])
+  Sudo(['tune2fs', '-O', 'read-only' if disable_rw else '^read-only', device])
+  Sudo(['e2fsck', '-fn', device])
+
+
 def LoadPartitionConfig(options):
   """Loads a partition tables configuration file into a Python object.
 
@@ -96,6 +155,12 @@ def LoadPartitionConfig(options):
   with open(filename) as f:
     config = json.load(f)
 
+  ApplyExperimentalUsrLayout(config)
+  if ExperimentalUsrFilesystem() is not None:
+    if options.disk_layout not in ('base', 'vm', 'azure'):
+      raise InvalidLayout('Opt-in /usr filesystems support base, vm and azure disk layouts only')
+    if BOARD_TO_ARCH.get(options.arch, options.arch) not in DPS_ROOT_GUIDS:
+      raise InvalidLayout('Opt-in /usr filesystems require AMD64 or ARM64')
   _resolve_dps_types(config, options.arch)
 
   unknown_keys = set(config.keys()) - valid_keys
@@ -245,6 +310,8 @@ def GetPartitionTableFromImage(options, config, partitions):
   block_size = config['metadata']['block_size']
   cgpt_show = subprocess.check_output(
           ['cgpt', 'show', '-q', options.disk_image]).decode('utf8')
+  image_size = os.path.getsize(options.disk_image) if os.path.isfile(options.disk_image) else None
+  extents = []
   for line in cgpt_show.split('\n'):
     if not line.strip():
       continue
@@ -257,6 +324,13 @@ def GetPartitionTableFromImage(options, config, partitions):
     part['image_first_byte'] = int(fields[0]) * block_size
     part['image_blocks'] = int(fields[1])
     part['image_bytes'] = int(fields[1]) * block_size
+    start, end = part['image_first_byte'], part['image_first_byte'] + part['image_bytes']
+    if start < GPT_RESERVED_SECTORS * block_size or end <= start:
+      raise InvalidLayout('Invalid partition extent in image: %s' % fields[2])
+    # The backup GPT has no protective MBR, unlike the primary GPT.
+    if image_size is not None and end > image_size - (GPT_RESERVED_SECTORS - 1) * block_size:
+      raise InvalidLayout('Partition %s exceeds image bounds' % fields[2])
+    extents.append((start, end))
 
     # Pre-compute whether the image and config are compatible.
     # The image is compatible with the config if each partition:
@@ -268,8 +342,14 @@ def GetPartitionTableFromImage(options, config, partitions):
       part['image_compat'] = False
     elif part['first_block'] == part['image_first_block']:
       part['image_compat'] = part['blocks'] >= part['image_blocks']
+      if part.get('label') in USR_VERITY_LABELS:
+        part['image_compat'] = part['blocks'] == part['image_blocks']
     else:
       part['image_compat'] = False
+
+  for previous, following in zip(sorted(extents), sorted(extents)[1:]):
+    if previous[1] > following[0]:
+      raise InvalidLayout('Overlapping partitions in image')
 
   for part in partitions.values():
     if part.get('type', 'blank') == 'blank':
@@ -278,7 +358,8 @@ def GetPartitionTableFromImage(options, config, partitions):
       continue
     if not part.get('fs_type', None):
       continue
-    with PartitionLoop(options, part) as loop_dev:
+    image_part = dict(part, first_byte=part['image_first_byte'], bytes=part['image_bytes'])
+    with PartitionLoop(options, image_part) as loop_dev:
       try:
         part['image_fs_type'] = subprocess.check_output(
           ['sudo', 'blkid', '-o', 'value', '-s', 'TYPE', loop_dev]).strip().decode('utf8')
@@ -292,6 +373,22 @@ def GetPartitionTableFromImage(options, config, partitions):
       part.setdefault('image_compat', True)
     else:
       part.setdefault('image_compat', False)
+
+
+def ValidateUsrPartitions(partitions):
+  """Reject implicit slot migration before modifying an existing image."""
+  for part in partitions.values():
+    if part.get('label') not in USR_VERITY_LABELS or part.get('type') == 'blank':
+      continue
+    if not part.get('image_compat'):
+      raise InvalidLayout(
+          '%s slot geometry is incompatible; reimage or use a qualified migration'
+          % part['label'])
+    expected = part.get('fs_type')
+    if expected and part.get('image_fs_type') != expected:
+      raise InvalidLayout(
+          '%s filesystem is %r, expected %r; conversion is not filesystem migration'
+          % (part['label'], part.get('image_fs_type'), expected))
 
 
 def WritePartitionTable(options, config=None, partitions=None):
@@ -315,6 +412,7 @@ def WritePartitionTable(options, config=None, partitions=None):
   else:
     # If we are not creating a fresh image all partitions must be compatible.
     GetPartitionTableFromImage(options, config, partitions)
+    ValidateUsrPartitions(partitions)
     if not all(p['image_compat'] for p in partitions.values()):
       raise InvalidLayout("New disk layout is incompatible existing image")
 
@@ -445,13 +543,14 @@ def FormatExt(part, device):
     part: dict defining the partition
     device: name of the block device to format
   """
-  Sudo(['mke2fs', '-q',
+  command = ['mke2fs', '-q',
                   '-t', part['fs_type'],
                   '-b', part['fs_block_size'],
                   '-i', part.get('fs_bytes_per_inode', part['fs_block_size']),
-                  '-I', part.get('fs_inode_size', 256),
-                  device,
-                  part['fs_blocks']])
+                  '-I', part.get('fs_inode_size', 256)]
+  if NativeExt4Readonly(part):
+    command += ['-O', '^has_journal,metadata_csum', '-E', 'lazy_itable_init=0']
+  Sudo(command + [device, part['fs_blocks']])
 
   tune_cmd = ['tune2fs', '-e', 'remount-ro']
 
@@ -463,6 +562,8 @@ def FormatExt(part, device):
                  '-T', '20091119110000',
                  '-c', '0', '-i', '0', # Disable auto fsck
                  '-m', '0', '-r', '0'] # Disable reserve blocks
+  elif NativeExt4Readonly(part):
+    tune_cmd += ['-c', '0', '-i', '0', '-m', '0', '-r', '0']
 
   Sudo(tune_cmd + [device], stdout_null=True)
 
@@ -627,6 +728,7 @@ def Mount(options):
 
   config, partitions = LoadPartitionConfig(options)
   GetPartitionTableFromImage(options, config, partitions)
+  ValidateUsrPartitions(partitions)
   mounts = {}
 
   for part_num, part in partitions.items():
@@ -650,6 +752,8 @@ def Mount(options):
       mount_opts.append('ro')
       if mount.get('fs_type', None) == 'btrfs':
         mount_opts.append('rescue=nologreplay')
+      elif NativeExt4Readonly(mount):
+        mount_opts.append('noload')
 
     if mount.get('fs_subvolume', None):
       mount_opts.append('subvol=%s' % mount['fs_subvolume'])
@@ -747,6 +851,11 @@ def Tune2fsReadWrite(options, partition, disable_rw):
     disable_rw: Set to true to disable read-write access
   """
 
+  if NativeExt4Readonly(partition):
+    with PartitionLoop(options, partition) as device:
+      SetNativeExt4Readonly(device, disable_rw)
+    return
+
   if disable_rw:
     print("Disabling read-write mounting of partition %s (%s)" % (
             partition['num'], partition['label']))
@@ -770,6 +879,14 @@ def IsE2fsReadWrite(options, partition):
     partition: Config for partition to query
   """
 
+  if NativeExt4Readonly(partition):
+    with open(options.disk_image, 'rb') as image:
+      image.seek(partition['first_byte'] + 0x464)
+      flags = image.read(4)
+    if len(flags) != 4:
+      raise InvalidLayout('Truncated EXT4 superblock')
+    return not (int.from_bytes(flags, 'little') & 0x1000)
+
   # offset of ro_compat, highest order byte (le 32 bit field)
   flag_offset = 0x464 + 3
   with open(options.disk_image, 'r') as image:
@@ -788,6 +905,7 @@ def Tune(options):
 
   config, partitions = LoadPartitionConfig(options)
   GetPartitionTableFromImage(options, config, partitions)
+  ValidateUsrPartitions(partitions)
   part = GetPartition(partitions, options.partition)
   action_done = False
 
@@ -815,6 +933,72 @@ def Tune(options):
     raise Exception("No options specified!")
 
 
+def VerityHashBytes(data_blocks, block_size):
+  """SHA-256 format-1 hash levels plus the verity superblock."""
+  if data_blocks <= 0 or block_size < 512 or block_size & (block_size - 1):
+    raise InvalidLayout('Invalid verity data/block geometry')
+  hashes_per_block = block_size // 32
+  blocks = 1
+  while data_blocks > 1:
+    data_blocks = (data_blocks + hashes_per_block - 1) // hashes_per_block
+    blocks += data_blocks
+  return blocks * block_size
+
+
+def VerityPlan(partitions):
+  """Validate every hash destination before sealing any filesystem."""
+  plan = []
+  for part_num, part in partitions.items():
+    reference = part.get('verity_hash')
+    if reference is not None:
+      reference = str(reference).strip()
+      if not reference:
+        raise InvalidLayout('partition %s has an empty verity_hash' % part_num)
+    if not reference and 'verity' not in part.get('features', []):
+      continue
+    if not part.get('fs_type'):
+      continue
+    if not part.get('image_compat'):
+      raise InvalidLayout('Data partition is incompatible with existing image')
+    hash_part = None
+    if reference:
+      if reference not in partitions:
+        raise InvalidLayout('verity_hash references missing partition %r' % reference)
+      hash_part = partitions[reference]
+      if (not hash_part.get('image_compat') or hash_part is part or
+          hash_part.get('fs_type') or hash_part.get('mount')):
+        raise InvalidLayout('Invalid or incompatible verity hash destination')
+      if part.get('label') in ('USR-A', 'USR-B'):
+        if hash_part.get('label') != 'HASH-' + part['label'][-1]:
+          raise InvalidLayout('USR slot must reference its corresponding HASH slot')
+    required = VerityHashBytes(part['fs_blocks'], part['fs_block_size'])
+    available = hash_part['bytes'] if hash_part else part['bytes'] - part['fs_bytes']
+    if required > available:
+      raise InvalidLayout(
+          'Verity tree requires %d bytes, hash capacity is %d' % (required, available))
+    plan.append((part, hash_part, required, available))
+  return plan
+
+
+def Ext4Capacity(device):
+  output = SudoOutput(['env', 'LC_ALL=C', 'dumpe2fs', '-h', device]).decode('utf8')
+  values = {}
+  for name in ('Block count', 'Free blocks', 'Block size', 'Inode count', 'Free inodes'):
+    match = re.search(r'^%s:\s+(\d+)\s*$' % name, output, re.MULTILINE)
+    if not match:
+      raise InvalidLayout('Missing %s in ext4 capacity report' % name)
+    values[name] = int(match.group(1))
+  if (not (0 <= values['Free blocks'] <= values['Block count']) or
+      not (0 <= values['Free inodes'] <= values['Inode count']) or not values['Block size']):
+    raise InvalidLayout('Invalid ext4 capacity report')
+  return {
+      'filesystem_bytes': values['Block count'] * values['Block size'],
+      'free_bytes': values['Free blocks'] * values['Block size'],
+      'used_bytes': (values['Block count'] - values['Free blocks']) * values['Block size'],
+      'inode_count': values['Inode count'], 'free_inodes': values['Free inodes'],
+  }
+
+
 def Verity(options):
   """Hash verity protected filesystems.
 
@@ -830,48 +1014,28 @@ def Verity(options):
 
   config, partitions = LoadPartitionConfig(options)
   GetPartitionTableFromImage(options, config, partitions)
+  ValidateUsrPartitions(partitions)
+  plan = VerityPlan(partitions)
+  report = {'schema_version': 1, 'partitions': []}
+  for part, hash_part, required, available in plan:
+    capacity = {
+        'label': part['label'], 'filesystem': part['fs_type'],
+        'partition_bytes': part['bytes'], 'data_bytes': part['fs_bytes'],
+        'hash_required_bytes': required, 'hash_capacity_bytes': available,
+        'hash_free_bytes': available - required,
+    }
+    if NativeExt4Readonly(part):
+      with PartitionLoop(options, part) as device:
+        capacity.update(Ext4Capacity(device))
+      if capacity['filesystem_bytes'] != part['fs_bytes']:
+        raise InvalidLayout('EXT4 size does not match the selected verity data geometry')
+    report['partitions'].append(capacity)
 
-  for part_num, part in partitions.items():
-    hash_part_num = part.get('verity_hash')
-    if hash_part_num is not None:
-      # partitions is keyed by string partition numbers (JSON object keys);
-      # normalize so a numeric verity_hash value still resolves correctly.
-      hash_part_num = str(hash_part_num).strip()
-      # A present-but-empty verity_hash is a malformed layout, not a request
-      # for legacy inline mode: silently falling back would produce an
-      # invalid verity layout that is hard to debug. Fail fast instead.
-      if not hash_part_num:
-        raise InvalidLayout(
-            "partition %r has an empty verity_hash; name a hash partition "
-            "number or omit the key" % part_num)
-    has_verity_feature = 'verity' in part.get('features', [])
-
-    if not hash_part_num and not has_verity_feature:
-      continue
-
-    # Skip partitions without a filesystem — at build time only the active
-    # slot (USR-A with 'prioritize') is formatted; USR-B is empty.
-    if not part.get('fs_type'):
-      continue
-
-    if not part['image_compat']:
-      raise InvalidLayout("Disk layout is incompatible with existing image")
-
+  for part, hash_part, required, available in plan:
     if part.get('fs_type', None) in ('ext2', 'ext4'):
       Tune2fsReadWrite(options, part, disable_rw=True)
     elif part.get('fs_type', None) == 'btrfs':
       ReadWriteSubvol(options, part, disable_rw=True)
-
-    if hash_part_num:
-      if hash_part_num not in partitions:
-        raise InvalidLayout(
-            "verity_hash references partition %r which is not in the layout"
-            % hash_part_num)
-      hash_part = partitions[hash_part_num]
-      if not hash_part['image_compat']:
-        raise InvalidLayout("Hash partition is incompatible with existing image")
-    else:
-      hash_part = None
 
     with contextlib.ExitStack() as loops:
       data_loop = loops.enter_context(PartitionLoop(options, part))
@@ -920,6 +1084,11 @@ def Verity(options):
         f.write(m_uuid.group(1))
         f.write("\n")
 
+  if getattr(options, 'capacity_report', None):
+    with open(options.capacity_report, 'w') as stream:
+      json.dump(report, stream, indent=2)
+      stream.write('\n')
+
 
 def Extract(options):
   """Write a single partition out to its own image file.
@@ -930,6 +1099,7 @@ def Extract(options):
 
   config, partitions = LoadPartitionConfig(options)
   GetPartitionTableFromImage(options, config, partitions)
+  ValidateUsrPartitions(partitions)
   part = GetPartition(partitions, options.partition)
 
   if not part['image_compat']:
@@ -1197,6 +1367,7 @@ def main(argv):
   a.add_argument('--root_hash', help='name of file to contain root hash')
   a.add_argument('--verity_uuid', help='name of file to contain verity superblock UUID')
   a.add_argument('--fs_uuid', help='name of file to contain data partition filesystem UUID')
+  a.add_argument('--capacity_report', help='write measured data and hash capacity as JSON')
   a.set_defaults(func=Verity)
 
   a = actions.add_parser('extract', help='extract a single partition')

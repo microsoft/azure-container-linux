@@ -35,6 +35,7 @@
 #   --download-rpms                      [no-op] Kept for pipeline compatibility
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
 #   --help                               Show this help message
+#   --usr-fs=TYPE                        /usr filesystem: btrfs (default) or opt-in ext4
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
@@ -91,6 +92,8 @@
 # Environment Variables:
 #   ACL_SDK_IMAGE           Override SDK container image (e.g., <your-registry>/sdk:<release>)
 #                           Bypasses auto-detection from version.txt when set
+#   ACL_EXPERIMENTAL_USR_FS Set to ext4 for the non-shipping UKI experiment.
+#                           See acl/docs/usr-filesystems.md for qualification limits.
 #   NO_TTY                  Set to "true" to disable TTY allocation (for CI pipelines)
 #   RPM_REPO_URL            Azure Linux repository URL
 #   RPM_ARCH                Target architecture (default: x86_64)
@@ -116,6 +119,7 @@ fi
 # shellcheck source=../build_library/retry_with_backoff.sh
 source "${SCRIPT_DIR}/build_library/retry_with_backoff.sh"
 source "${SCRIPT_DIR}/build_library/standalone_sysext_util.sh"
+source "${SCRIPT_DIR}/build_library/usr_filesystem.sh"
 cd "${SCRIPT_DIR}"
 
 # Default configuration
@@ -316,6 +320,16 @@ parse_args() {
             --build-image)
                 BUILD_IMAGE=true
                 shift
+                ;;
+            --usr-fs=*)
+                export ACL_EXPERIMENTAL_USR_FS="${1#*=}"
+                [[ -n "${ACL_EXPERIMENTAL_USR_FS}" ]] || { error "--usr-fs requires a value"; exit 1; }
+                shift
+                ;;
+            --usr-fs)
+                [[ $# -ge 2 && -n "$2" ]] || { error "--usr-fs requires a value"; exit 1; }
+                export ACL_EXPERIMENTAL_USR_FS="$2"
+                shift 2
                 ;;
             --build-vm-image)
                 BUILD_VM_IMAGE=true
@@ -1258,6 +1272,14 @@ run_with_retry() {
 # Main entry point
 main() {
     parse_args "$@"
+
+    acl_validate_usr_filesystem || exit 1
+    if [[ "$(acl_usr_filesystem)" != btrfs ]]; then
+        if [[ "${IMG_NAME}" == "acl_production" ]]; then
+            warn "Using pipeline-standard filenames for an opt-in /usr filesystem; inspect version.txt before consuming artifacts"
+        fi
+        warn "Opt-in /usr filesystem: production boot, customization and servicing qualification is pending"
+    fi
 
     section "Azure Container Linux Image Builder"
     info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"

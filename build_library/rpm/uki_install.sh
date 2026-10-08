@@ -498,6 +498,12 @@ _uki_build_debug_addon() {
 _uki_build_verity_addons() {
     local esp_dir="$1"
     local uki_name="$2"
+    local usr_options=""
+    source "${BUILD_LIBRARY_DIR}/usr_filesystem.sh" || return 1
+    acl_validate_usr_filesystem || return 1
+    if [[ "$(acl_usr_filesystem)" != btrfs ]]; then
+        usr_options="$(acl_usr_mount_options)" || return 1
+    fi
 
     info "UKI/RPM: Building verity slot addons"
 
@@ -576,6 +582,9 @@ _uki_build_verity_addons() {
         cmdline+=" systemd.verity_usr_options=panic-on-corruption"
         cmdline+=" usrhash=${usr_hash}"
         cmdline+=" acl.slot=${slot}"
+        if [[ -n "${usr_options}" ]]; then
+            cmdline+=" mount.usrflags=${usr_options}"
+        fi
 
         info "UKI/RPM: Slot ${slot_label} cmdline = ${cmdline}"
 

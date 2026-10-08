@@ -11,6 +11,7 @@
 
 SCRIPT_ROOT=$(dirname $(readlink -f "$0"))
 . "${SCRIPT_ROOT}/common.sh" || exit 1
+. "${SCRIPT_ROOT}/build_library/usr_filesystem.sh" || exit 1
 
 # Script must run inside the chroot
 assert_inside_chroot
@@ -88,6 +89,20 @@ eval set -- "${FLAGS_ARGV:-prod}"
 # Only now can we die on error.  shflags functions leak non-zero error codes,
 # so will die prematurely if 'switch_to_strict_mode' is specified before now.
 switch_to_strict_mode
+
+acl_validate_usr_filesystem || exit 1
+if [[ "$(acl_usr_filesystem)" != btrfs ]]; then
+  for image_type in "$@"; do
+    [[ "${image_type}" == prod ]] || die "Opt-in /usr filesystems support only the prod disk image, not ${image_type}"
+  done
+  [[ ${FLAGS_generate_update} -eq ${FLAGS_FALSE} ]] ||
+    die "Opt-in /usr filesystems require --nogenerate_update; legacy update payloads cannot migrate slot layouts"
+  [[ ${FLAGS_enable_rootfs_verification} -eq ${FLAGS_TRUE} ]] ||
+    die "Opt-in /usr filesystems require rootfs verification; unverified/debug images are unsupported"
+  "${BUILD_LIBRARY_DIR}/disk_util" \
+      --disk_layout_file="${BUILD_LIBRARY_DIR}/disk_layout_uki.json" \
+      --disk_layout="${FLAGS_disk_layout:-base}" --arch="${FLAGS_board}" parseonly
+fi
 
 # If downloading packages is enabled ensure the board is configured properly.
 if [[ ${FLAGS_getbinpkg} -eq ${FLAGS_TRUE} ]]; then
@@ -230,6 +245,10 @@ FLATCAR_VERSION=${FLATCAR_VERSION}
 FLATCAR_VERSION_ID=${FLATCAR_VERSION_ID}
 FLATCAR_BUILD_ID="${FLATCAR_BUILD_ID}"
 FLATCAR_SDK_VERSION=${FLATCAR_SDK_VERSION}
+ACL_USR_FS_METADATA_VERSION=1
+ACL_EXPERIMENTAL_USR_FS="$(acl_usr_filesystem)"
+ACL_USR_BOARD="${FLAGS_board}"
+ACL_USR_BOOTLOADER="${BOOTLOADER_MODE:-grub}"
 EOF
 
 # Create a named symlink.

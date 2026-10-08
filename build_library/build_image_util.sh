@@ -896,6 +896,7 @@ EOF
         --root_hash="${BUILD_DIR}/${image_name%.bin}_verity.txt" \
         --verity_uuid="${BUILD_DIR}/${image_name%.bin}_verity_uuid.txt" \
         --fs_uuid="${BUILD_DIR}/${image_name%.bin}_fs_uuid.txt" \
+        --capacity_report="${BUILD_DIR}/${image_name%.bin}_verity-capacity.json" \
         "${BUILD_DIR}/${image_name}"
 
     # Magic alert!  Root hash injection works by writing the hash value to a

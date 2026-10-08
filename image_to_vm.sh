@@ -11,6 +11,7 @@
 # Helper scripts should be run from the same location as this script.
 SCRIPT_ROOT=$(dirname "$(readlink -f "$0")")
 . "${SCRIPT_ROOT}/common.sh" || exit 1
+. "${SCRIPT_ROOT}/build_library/usr_filesystem.sh" || exit 1
 
 # Script must run inside the chroot
 assert_inside_chroot
@@ -115,10 +116,13 @@ FLAGS_from=`eval readlink -f $FLAGS_from`
 FLAGS_to=`eval readlink -f $FLAGS_to`
 
 # If source includes version.txt switch to its version information
+requested_usr_fs="${ACL_EXPERIMENTAL_USR_FS:-}"
+unset ACL_EXPERIMENTAL_USR_FS ACL_USR_FS_METADATA_VERSION ACL_USR_BOARD ACL_USR_BOOTLOADER
 if [ -f "${FLAGS_from}/version.txt" ]; then
     source "${FLAGS_from}/version.txt"
     FLATCAR_VERSION_STRING="${FLATCAR_VERSION}"
 fi
+acl_restore_usr_filesystem "${requested_usr_fs}" "${FLAGS_board}" || exit 1
 
 set_vm_paths "${FLAGS_from}" "${FLAGS_to}" "${FLATCAR_PRODUCTION_IMAGE_NAME}" "${FLATCAR_PRODUCTION_IMAGE_SYSEXT_BASE}"
 

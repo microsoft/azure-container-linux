@@ -1,5 +1,8 @@
 #!/bin/bash
 
+source "$(dirname "${BASH_SOURCE[0]}")/../build_library/usr_filesystem.sh" || exit 1
+acl_validate_usr_filesystem || exit 1
+
 if [ -n "${SDK_USER_ID:-}" ] ; then
     # If the "core" user from /usr/share/baselayout/passwd has the same ID, allow to take it instead
     usermod --non-unique -u $SDK_USER_ID sdk
@@ -76,9 +79,10 @@ grep -q 'export MODULE_SIGNING_KEY_DIR' /home/sdk/.bashrc || {
 #    our quotes for su -c "<cmd>" already.
 
 # Preserve HYBRID mode environment variables for RPM builds
+sed -i -e '/export PACKAGE_SOURCE_MODE=/d' -e '/export BOOTLOADER_MODE=/d' /home/sdk/.bashrc || exit 1
 if [[ -n "${PACKAGE_SOURCE_MODE:-}" ]]; then
     # Remove any existing entries first
-    sed -i -e '/export PACKAGE_SOURCE_MODE=/d' -e '/export RPM_STAGING_DIR=/d' -e '/export SYSEXT_COMPRESSION=/d' -e '/export BOOTLOADER_MODE=/d' /home/sdk/.bashrc 2>/dev/null || true
+    sed -i -e '/export RPM_STAGING_DIR=/d' -e '/export SYSEXT_COMPRESSION=/d' /home/sdk/.bashrc 2>/dev/null || true
     # Add current values
     echo "export PACKAGE_SOURCE_MODE='${PACKAGE_SOURCE_MODE}'" >> /home/sdk/.bashrc
     if [[ -n "${RPM_STAGING_DIR:-}" ]]; then
@@ -93,6 +97,9 @@ if [[ -n "${STANDALONE_SYSEXTS_SPEC:-}" ]]; then
     sed -i -e '/export STANDALONE_SYSEXTS_SPEC=/d' /home/sdk/.bashrc 2>/dev/null || true
     echo "export STANDALONE_SYSEXTS_SPEC='${STANDALONE_SYSEXTS_SPEC}'" >> /home/sdk/.bashrc
 fi
+# Preserve an empty selector too: reused containers must not leak an old opt-in.
+acl_preserve_usr_filesystem /home/sdk/.bashrc || exit 1
+
 # Forward ACL version overrides so common.sh picks them up inside the container
 sed -i -e '/export IMAGE_VERSION=/d' -e '/export IMAGE_VERSION_ID=/d' -e '/export IMAGE_BUILD_ID=/d' /home/sdk/.bashrc 2>/dev/null || true
 if [[ -n "${IMAGE_VERSION:-}" ]]; then

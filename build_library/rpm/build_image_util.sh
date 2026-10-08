@@ -204,12 +204,19 @@ finish_image_rpm() {
     # /usr uses /dev/mapper/usr so that IC's verity detection recognizes it as a
     # dm-verity device.
     info "RPM mode: Generating /usr/share/ic/etc/fstab for Image Customizer"
+    source "${BUILD_LIBRARY_DIR}/usr_filesystem.sh" || return 1
+    local usr_fstype usr_options
+    usr_fstype="$(acl_usr_filesystem)"
+    usr_options="$(acl_usr_mount_options)" || return 1
+    if [[ "${usr_fstype}" == btrfs ]]; then
+        usr_options+=,compress=zstd
+    fi
     sudo mkdir -p "${root_fs_dir}/usr/share/ic/etc"
-    sudo tee "${root_fs_dir}/usr/share/ic/etc/fstab" > /dev/null <<'FSTAB'
+    sudo tee "${root_fs_dir}/usr/share/ic/etc/fstab" > /dev/null <<FSTAB
 # ACL partition table — consumed by Image Customizer for offline customization.
 # This file is NOT visible at runtime (/etc/fstab does not exist).
 # It lives at /usr/share/ic/etc/fstab on the USR-A partition.
-/dev/mapper/usr                                /usr   btrfs  ro,compress=zstd   0  0
+/dev/mapper/usr                                /usr   ${usr_fstype}  ${usr_options}   0  0
 LABEL=ROOT                                     /      ext4   rw                 0  1
 LABEL=EFI-SYSTEM                               /boot  vfat   rw                 0  2
 LABEL=OEM                                      /oem   btrfs  rw,compress=zlib   0  0
