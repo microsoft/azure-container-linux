@@ -228,6 +228,7 @@ Available tags (see `acl/sysexts.yaml` for the full list):
 | `kola` | docker                                                                       |
 | `gpu`  | nvidia-driver-cuda-open, nvidia-driver-cuda, nvidia-driver-vgpu, nvidia-container-toolkit, nvidia-fabric-manager |
 | `lisa` | lisa-testing                                                                 |
+| `artifact-streaming` | ACR Mirror, OverlayBD, and overlaybd-snapshotter |
 
 #### VM Image Output
 
