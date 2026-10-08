@@ -721,6 +721,14 @@ install_oem_sysext() {
             die "Could not install docker sysext into OEM partition"
     fi
 
+    if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${oem_sysext}" == "oem-azure" ]]; then
+        source "${BUILD_LIBRARY_DIR}/standalone_sysext_util.sh" ||
+            die "Could not load standalone sysext helpers"
+        info "Preloading artifact-streaming for AgentBaker without activating it"
+        preload_artifact_streaming_sysext "${upload_dir}" "${VM_TMP_ROOT}" ||
+            die "Could not preload artifact-streaming into the Azure image"
+    fi
+
     # Mark the installed sysext as active.
     sudo touch "${VM_TMP_ROOT}${installed_sysext_oem_dir}/active-${oem_sysext}"
 }

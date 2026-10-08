@@ -29,11 +29,21 @@ Built and shipped alongside the disk image:
     Build with `--build-standalone-sysexts=artifact-streaming`. The ACR Mirror
     1.0.0 vendor RPM is fetched by a pinned checksum; OverlayBD dependencies
     come from the normal signed RPM repositories. Mirror remains in the RPM
-    database for SBOM generation. The resulting extension must be signed and
-    published through the normal artifact-signing gate before consumption.
+    database for SBOM generation. Release distribution through a registry still
+    requires the normal artifact-signing gate.
     AgentBaker activates it only when streaming is enabled, creates writable
     compatibility/configuration paths, and starts the services. This does not
-    add streaming binaries to the base OS image or enable streaming by default.
+    merge streaming binaries into the base `/usr` or enable streaming by default.
+
+For the test-only BYOI handoff on this branch, Azure VM image conversion caches
+the built raw extension at
+`/opt/artifact-streaming/downloads/artifact-streaming.raw`. AgentBaker already
+supports this cache location, so the `aclmain` -> `aks-image-build` path does not
+need release publication or registry credentials on the node. The raw must be
+built before Azure VM conversion; a missing payload fails the build. Caching
+does not add an activation link or start services. The existing development
+image flow carries its build-time Secure Boot certificate; this is test-image
+validation, not a claim of release signing or release qualification.
 
 The streaming packaging regression tests run with
 `python3 acl/tests/test_artifact_streaming_sysext.py` from the repository root.

@@ -231,3 +231,28 @@ build_standalone_sysext_images() {
         info "Built standalone sysext: ${output_dir}/${name}.raw"
     done
 }
+
+preload_artifact_streaming_sysext() {
+    local source_dir="${1:?sysext source directory is required}"
+    local rootfs
+    rootfs=$(realpath -e -- "${2:?staged root filesystem is required}") || return 1
+    if [[ "${rootfs}" == "/" || ! -d "${rootfs}/usr" ]]; then
+        echo "Expected a staged image root for artifact-streaming preload" >&2
+        return 1
+    fi
+    local payload="${source_dir}/artifact-streaming.raw"
+    if [[ ! -f "${payload}" || ! -s "${payload}" ]]; then
+        echo "Missing artifact-streaming.raw; build the standalone extension before the Azure VM image" >&2
+        return 1
+    fi
+    local destination
+    destination=$(realpath -m -- "${rootfs}/opt/artifact-streaming/downloads/artifact-streaming.raw") || return 1
+    case "${destination}" in
+        "${rootfs}/"*) ;;
+        *)
+            echo "Artifact-streaming cache path escapes the staged image root" >&2
+            return 1
+            ;;
+    esac
+    sudo install -Dpm 0644 "${payload}" "${destination}"
+}

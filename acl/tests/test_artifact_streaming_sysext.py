@@ -76,6 +76,50 @@ class ArtifactStreamingLayoutTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Refusing to overwrite", result.stderr)
 
+    def preload(self, root=None):
+        helper = SCRIPT.parents[2] / "standalone_sysext_util.sh"
+        return subprocess.run(
+            ["bash", "-c",
+             'sudo() { "$@"; }; source "$1"; preload_artifact_streaming_sysext "$2" "$3"',
+             "test", str(helper), str(self.root / "build"), str(root or self.root)],
+            capture_output=True, text=True,
+        )
+
+    def test_azure_preload_preserves_bytes_without_activating_services(self):
+        source = self.root / "build/artifact-streaming.raw"
+        source.parent.mkdir()
+        source.write_bytes(b"built-extension-bytes")
+        result = self.preload()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cached = self.root / "opt/artifact-streaming/downloads/artifact-streaming.raw"
+        self.assertEqual(cached.read_bytes(), source.read_bytes())
+        self.assertEqual(cached.stat().st_mode & 0o777, 0o644)
+        self.assertFalse((self.root / "etc/extensions/artifact-streaming.raw").exists())
+        self.assertFalse((self.root / "oem/sysext/active-artifact-streaming").exists())
+        self.assertFalse((self.root / "etc/systemd/system/multi-user.target.wants/acr-mirror.service").exists())
+
+    def test_azure_preload_rejects_a_missing_extension(self):
+        result = self.preload()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Missing artifact-streaming.raw", result.stderr)
+        self.assertFalse((self.root / "opt/artifact-streaming").exists())
+
+    def test_azure_preload_rejects_the_host_root(self):
+        result = self.preload("/")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Expected a staged image root", result.stderr)
+
+    def test_azure_preload_rejects_a_cache_symlink_outside_the_image(self):
+        source = self.root / "build/artifact-streaming.raw"
+        source.parent.mkdir()
+        source.write_bytes(b"built-extension-bytes")
+        with tempfile.TemporaryDirectory() as outside:
+            (self.root / "opt/artifact-streaming").symlink_to(outside, target_is_directory=True)
+            result = self.preload()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("escapes the staged image root", result.stderr)
+            self.assertFalse((pathlib.Path(outside) / "downloads").exists())
+
     def test_vendor_checksum_failure_prevents_rpm_install(self):
         result = subprocess.run(
             ["bash", "-c", r'''

@@ -230,6 +230,12 @@ Available tags (see `acl/sysexts.yaml` for the full list):
 | `lisa` | lisa-testing                                                                 |
 | `artifact-streaming` | ACR Mirror, OverlayBD, and overlaybd-snapshotter |
 
+On the artifact-streaming BYOI branch, build the `artifact-streaming` standalone
+extension before converting an Azure VM image. Azure conversion preloads its
+raw file into AgentBaker's `/opt/artifact-streaming/downloads/` cache and fails if
+the payload is absent. This does not activate streaming; CSE still enables it
+only when requested. QEMU and other non-Azure image conversion is unchanged.
+
 #### VM Image Output
 
 - QEMU:
