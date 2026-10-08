@@ -37,8 +37,11 @@ Built and shipped alongside the disk image:
 
 For the test-only BYOI handoff on this branch, Azure VM image conversion caches
 the built raw extension at
-`/opt/artifact-streaming/downloads/artifact-streaming.raw`. AgentBaker already
-supports this cache location, so the `aclmain` -> `aks-image-build` path does not
+`/oem/aks-sysext-cache/artifact-streaming.raw`. The root filesystem is read-only
+during conversion, while the OEM partition is writable. This cache is separate
+from `/oem/sysext`, so it is not automatically activated. The matching AgentBaker
+branch reads the OEM cache after its normal `/opt` cache, so the
+`aclmain` -> `aks-image-build` path does not
 need release publication or registry credentials on the node. The raw must be
 built before Azure VM conversion; a missing payload fails the build. Caching
 does not add an activation link or start services. The existing development

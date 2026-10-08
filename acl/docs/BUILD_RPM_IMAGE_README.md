@@ -232,9 +232,11 @@ Available tags (see `acl/sysexts.yaml` for the full list):
 
 On the artifact-streaming BYOI branch, build the `artifact-streaming` standalone
 extension before converting an Azure VM image. Azure conversion preloads its
-raw file into AgentBaker's `/opt/artifact-streaming/downloads/` cache and fails if
+raw file into the writable OEM partition's `/oem/aks-sysext-cache/` and fails if
 the payload is absent. This does not activate streaming; CSE still enables it
-only when requested. QEMU and other non-Azure image conversion is unchanged.
+only when requested. The matching AgentBaker branch supports this cache;
+the image root does not need to be remounted writable. QEMU and other
+non-Azure image conversion is unchanged.
 
 #### VM Image Output
 

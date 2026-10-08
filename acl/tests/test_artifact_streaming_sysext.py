@@ -13,6 +13,7 @@ class ArtifactStreamingLayoutTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = pathlib.Path(self.directory.name)
+        (self.root / "oem").mkdir()
         for name in ("bin/acr", "bin/acr-config", "tools/overlaybd/install.sh", "tools/mirror/setup.sh"):
             path = self.root / "opt/acr" / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -91,10 +92,12 @@ class ArtifactStreamingLayoutTests(unittest.TestCase):
         source.write_bytes(b"built-extension-bytes")
         result = self.preload()
         self.assertEqual(result.returncode, 0, result.stderr)
-        cached = self.root / "opt/artifact-streaming/downloads/artifact-streaming.raw"
+        cached = self.root / "oem/aks-sysext-cache/artifact-streaming.raw"
         self.assertEqual(cached.read_bytes(), source.read_bytes())
         self.assertEqual(cached.stat().st_mode & 0o777, 0o644)
         self.assertFalse((self.root / "etc/extensions/artifact-streaming.raw").exists())
+        self.assertFalse((self.root / "opt/artifact-streaming").exists())
+        self.assertFalse((self.root / "oem/sysext/artifact-streaming.raw").exists())
         self.assertFalse((self.root / "oem/sysext/active-artifact-streaming").exists())
         self.assertFalse((self.root / "etc/systemd/system/multi-user.target.wants/acr-mirror.service").exists())
 
@@ -102,7 +105,7 @@ class ArtifactStreamingLayoutTests(unittest.TestCase):
         result = self.preload()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Missing artifact-streaming.raw", result.stderr)
-        self.assertFalse((self.root / "opt/artifact-streaming").exists())
+        self.assertFalse((self.root / "oem/aks-sysext-cache").exists())
 
     def test_azure_preload_rejects_the_host_root(self):
         result = self.preload("/")
@@ -114,7 +117,7 @@ class ArtifactStreamingLayoutTests(unittest.TestCase):
         source.parent.mkdir()
         source.write_bytes(b"built-extension-bytes")
         with tempfile.TemporaryDirectory() as outside:
-            (self.root / "opt/artifact-streaming").symlink_to(outside, target_is_directory=True)
+            (self.root / "oem/aks-sysext-cache").symlink_to(outside, target_is_directory=True)
             result = self.preload()
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("escapes the staged image root", result.stderr)

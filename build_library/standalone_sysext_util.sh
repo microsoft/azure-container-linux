@@ -236,7 +236,7 @@ preload_artifact_streaming_sysext() {
     local source_dir="${1:?sysext source directory is required}"
     local rootfs
     rootfs=$(realpath -e -- "${2:?staged root filesystem is required}") || return 1
-    if [[ "${rootfs}" == "/" || ! -d "${rootfs}/usr" ]]; then
+    if [[ "${rootfs}" == "/" || ! -d "${rootfs}/usr" || ! -d "${rootfs}/oem" ]]; then
         echo "Expected a staged image root for artifact-streaming preload" >&2
         return 1
     fi
@@ -246,7 +246,7 @@ preload_artifact_streaming_sysext() {
         return 1
     fi
     local destination
-    destination=$(realpath -m -- "${rootfs}/opt/artifact-streaming/downloads/artifact-streaming.raw") || return 1
+    destination=$(realpath -m -- "${rootfs}/oem/aks-sysext-cache/artifact-streaming.raw") || return 1
     case "${destination}" in
         "${rootfs}/"*) ;;
         *)
