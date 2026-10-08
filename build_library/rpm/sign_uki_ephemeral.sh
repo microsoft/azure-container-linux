@@ -8,16 +8,18 @@
 # second stage) and the UKI + addons (EFI/Linux/*.efi, acl/uki-addons/*).
 # Shim itself (EFI/BOOT/BOOT<ARCH>.EFI) is Microsoft-signed and left alone.
 #
-# This script generates a one-time RSA 2048-bit certificate and signs all
-# applicable EFI binaries on the mounted ESP. The public certificate
+# This script signs applicable EFI binaries using a newly generated certificate
+# or the supplied per-build signing pair. The public certificate
 # (ca.pem) is written to the output directory so it can be enrolled in:
 #   - OVMF Secure Boot db  (for QEMU testing via virt-fw-vars)
 #   - Azure gallery image  (for Azure VM testing via securityProfile)
 #
-# The private key is deleted after signing.
+# A standalone private key is deleted after signing. When an existing per-build
+# key is supplied, it is retained for other image formats built from the same
+# source image.
 #
 # Usage:
-#   sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir>
+#   sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir> [ephemeral-cert-dir]
 #
 # Requirements (all available in the SDK container):
 #   - openssl   (key and certificate generation)
@@ -25,8 +27,11 @@
 
 set -euo pipefail
 
-ESP_DIR="${1:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir>}"
-CERT_OUTPUT_DIR="${2:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir>}"
+ESP_DIR="${1:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir> [ephemeral-cert-dir]}"
+CERT_OUTPUT_DIR="${2:?Usage: sign_uki_ephemeral.sh <esp-mount-dir> <cert-output-dir> [ephemeral-cert-dir]}"
+# Optional directory holding the per-build certificate shared by the UKI
+# and IPE policy candidate.
+EPHEMERAL_CERT_DIR="${3:-}"
 
 CERT_NAME="uki-signing-ca.pem"
 
@@ -64,25 +69,37 @@ fi
 
 mkdir -p "${CERT_OUTPUT_DIR}"
 
-# Generate ephemeral key + certificate
+# Scratch dir for intermediate EFI signing artifacts.
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
-KEY_FILE="${WORK_DIR}/ca.key"
 CERT_FILE="${CERT_OUTPUT_DIR}/${CERT_NAME}"
 
-info "Generating ephemeral signing certificate..."
-openssl req -x509 \
-    -newkey rsa:2048 \
-    -days 1 \
-    -noenc \
-    -keyout "${KEY_FILE}" \
-    -out "${CERT_FILE}" \
-    -subj "/CN=ACL Ephemeral Signing $(date +%Y%m%d%H%M%S)" \
-    -sha256 \
-    -addext "basicConstraints=CA:FALSE" \
-    -addext "extendedKeyUsage=codeSigning" \
-    2>&1
+if [[ -n "${EPHEMERAL_CERT_DIR}" ]]; then
+    # Reuse the policy candidate's cert so test VMs need one enrolled signer.
+    if [[ ! -s "${EPHEMERAL_CERT_DIR}/ca.key" || ! -s "${EPHEMERAL_CERT_DIR}/${CERT_NAME}" ]]; then
+        error "Shared ephemeral cert not found in ${EPHEMERAL_CERT_DIR} (expected from the image build)"
+        exit 1
+    fi
+    KEY_FILE="${EPHEMERAL_CERT_DIR}/ca.key"
+    cp -f "${EPHEMERAL_CERT_DIR}/${CERT_NAME}" "${CERT_FILE}"
+    info "Reusing shared per-build ephemeral cert for UKI and IPE policy"
+else
+    # No shared cert (non-IPE build): generate a standalone throwaway cert.
+    KEY_FILE="${WORK_DIR}/ca.key"
+    info "Generating ephemeral signing certificate..."
+    openssl req -x509 \
+        -newkey rsa:2048 \
+        -days 1 \
+        -noenc \
+        -keyout "${KEY_FILE}" \
+        -out "${CERT_FILE}" \
+        -subj "/CN=ACL Ephemeral Signing $(date +%Y%m%d%H%M%S)" \
+        -sha256 \
+        -addext "basicConstraints=CA:FALSE" \
+        -addext "extendedKeyUsage=codeSigning" \
+        2>&1
+fi
 
 info "Certificate: ${CERT_FILE}"
 
@@ -124,6 +141,6 @@ for efi_file in "${efi_files[@]}"; do
     sign_efi_file "${efi_file}"
 done
 
-# Private key is in WORK_DIR which is cleaned up by the trap.
+# Any standalone private key is in WORK_DIR and is cleaned up by the trap.
 info "Signing complete. ${#efi_files[@]} file(s) signed."
 info "Public certificate: ${CERT_FILE}"

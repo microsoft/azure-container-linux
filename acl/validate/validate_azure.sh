@@ -19,6 +19,9 @@
 [[ -n "${_VALIDATE_AZURE_LOADED:-}" ]] && return 0
 _VALIDATE_AZURE_LOADED=1
 
+# shellcheck disable=SC1091 # Path is resolved from this sourced script at runtime.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../build_library/rpm/ipe_artifact.sh"
+
 # ── Azure-specific globals ─────────────────────────────────────────
 
 AZ_SUB_ID="${AZ_SUB_ID:?Must be set — Azure subscription ID}"
@@ -40,6 +43,11 @@ VM_RG=""
 AZ_VM_ARGS="${AZ_VM_ARGS:-}"
 _VM_CREATE_RESULT=""
 AZ_MAX_PROVISIONING_TIMEOUTS="${AZ_MAX_PROVISIONING_TIMEOUTS:-2}"
+_VM_IMAGE_DIR=""
+_LOCAL_IPE_ARTIFACT_PATH=""
+_LOCAL_IPE_SIGNING_MODE=disabled
+_LOCAL_IPE_SIGNING_CERT=""
+_LOCAL_IPE_SIGNING_CERT_B64=""
 
 validate_azure_configuration() {
     if ! [[ "$AZ_MAX_PROVISIONING_TIMEOUTS" =~ ^[1-9][0-9]*$ ]]; then
@@ -74,6 +82,67 @@ _enforce_arm_security_contract() {
         error "--az-vm-args cannot override size or Trusted Launch security settings for Azure ARM VMs"
         return 1
     fi
+}
+
+_enforce_ipe_image_contract() {
+    [[ "${ACL_IPE_CAPABLE:-false}" == "true" ]] || return 0
+    local -a az_vm_args=()
+
+    if [[ "${REUSE_IMAGE:-false}" == "true" ]]; then
+        error "--reuse-image is not supported for IPE-capable Azure images: latest gallery capability and signing provenance are not verified"
+        return 1
+    fi
+    ipe_split_argument_string az_vm_args "${AZ_VM_ARGS:-}"
+    if ! ipe_reject_azure_image_overrides "${az_vm_args[@]}"; then
+        error "--az-vm-args cannot override the image for IPE-capable Azure VMs"
+        return 1
+    fi
+}
+
+_prepare_local_ipe_artifact_contract() {
+    local vm_image_path="$1"
+    local canonical_image_path signing_mode certificate
+
+    _enforce_arm_security_contract || return 1
+    canonical_image_path="$(cd "$(dirname "${vm_image_path}")" && pwd)/$(basename "${vm_image_path}")"
+    signing_mode="$(
+        ipe_resolve_artifact_signing_mode "$(dirname "${canonical_image_path}")" "${ACL_IPE_CAPABLE:-}"
+    )" || return 1
+
+    _VM_IMAGE_DIR="$(dirname "${canonical_image_path}")"
+    _LOCAL_IPE_ARTIFACT_PATH=""
+    _LOCAL_IPE_SIGNING_MODE="${signing_mode}"
+    _LOCAL_IPE_SIGNING_CERT=""
+    _LOCAL_IPE_SIGNING_CERT_B64=""
+
+    # Non-IPE launches retain the existing upload and certificate handling.
+    if [[ "${signing_mode}" == "disabled" ]]; then
+        ACL_IPE_CAPABLE=false
+        _LOCAL_IPE_ARTIFACT_PATH="${canonical_image_path}"
+        export ACL_IPE_CAPABLE
+        return 0
+    fi
+
+    ipe_validate_local_vhd_contract "${canonical_image_path}" true >/dev/null ||
+        return 1
+    certificate="${_VM_IMAGE_DIR}/uki-signing-ca.pem"
+    if [[ -e "${certificate}" || -L "${certificate}" ||
+        "${SECURE_BOOT_ENABLED:-true}" == "true" ]]; then
+        ipe_validate_signing_certificate "${certificate}" || return 1
+        if ! _LOCAL_IPE_SIGNING_CERT_B64="$(
+            openssl x509 -in "${certificate}" -outform DER |
+                base64 |
+                tr -d '\r\n'
+        )" || [[ -z "${_LOCAL_IPE_SIGNING_CERT_B64}" ]]; then
+            echo "Failed to encode IPE signing certificate: ${certificate}" >&2
+            return 1
+        fi
+        _LOCAL_IPE_SIGNING_CERT="${certificate}"
+    fi
+
+    ACL_IPE_CAPABLE=true
+    _LOCAL_IPE_ARTIFACT_PATH="${canonical_image_path}"
+    export ACL_IPE_CAPABLE
 }
 
 # Resolve Azure VM size and image definition based on BOARD.
@@ -570,14 +639,26 @@ create_gallery_image_version() {
         replication_mode="Full"
     fi
 
-    # Check for ephemeral UKI signing cert next to the VHD. When present, we
-    # must use the REST API to enroll it in the image's Secure Boot db (az CLI
-    # does not expose securityProfile on image-version create).
-    local signing_cert="${_VM_IMAGE_DIR}/uki-signing-ca.pem"
-    if [[ -f "${signing_cert}" ]]; then
-        info "Found UKI signing cert: ${signing_cert} — using REST API with Secure Boot profile"
-        local cert_b64
-        cert_b64=$(grep -v '^-----' "${signing_cert}" | tr -d '\n\r')
+    # IPE uses the certificate captured at preflight; other images retain the
+    # existing adjacent-PEM handling, including symlinked certificates.
+    local signing_cert="${_LOCAL_IPE_SIGNING_CERT}"
+    local cert_b64="${_LOCAL_IPE_SIGNING_CERT_B64}"
+    if [[ "${_LOCAL_IPE_SIGNING_MODE}" == "disabled" ]]; then
+        signing_cert=""
+        cert_b64=""
+        if [[ -f "${_VM_IMAGE_DIR}/uki-signing-ca.pem" ]]; then
+            signing_cert="${_VM_IMAGE_DIR}/uki-signing-ca.pem"
+            cert_b64=$(grep -v '^-----' "${signing_cert}" | tr -d '\n\r') || {
+                error "Could not read UKI signing certificate: ${signing_cert}"
+                return 1
+            }
+        fi
+    elif [[ "${SECURE_BOOT_ENABLED:-true}" == "true" && -z "${cert_b64}" ]]; then
+        error "IPE-capable gallery publication is missing its validated signing certificate"
+        exit 1
+    fi
+    if [[ -n "${signing_cert}" ]]; then
+        info "Using UKI signing cert: ${signing_cert} - using REST API with Secure Boot profile"
         local version_resource_id="/subscriptions/$(az account show --query id -o tsv)/resourceGroups/${AZ_GALLERY_RG}/providers/Microsoft.Compute/galleries/${AZ_ACG}/images/${AZ_VM_IMAGE_DEF}/versions/${image_version}"
 
         # Build targetRegions JSON array from computed target_regions.
@@ -689,8 +770,11 @@ _try_vm_create() {
     local region="$5"
     shift 5
     local -a extra_tags=("$@")
+    local -a az_vm_args=()
     _VM_CREATE_RESULT=""
     _enforce_arm_security_contract || return 2
+    _enforce_ipe_image_contract || return 2
+    ipe_split_argument_string az_vm_args "${AZ_VM_ARGS:-}"
     local boot_diagnostics_storage_name
     boot_diagnostics_storage_name=$(get_boot_diagnostics_storage_name "$vm_rg_name")
 
@@ -712,8 +796,8 @@ _try_vm_create() {
 
     vm_create_args+=(--enable-secure-boot "${SECURE_BOOT_ENABLED:-true}")
 
-    if [[ -n "$AZ_VM_ARGS" ]]; then
-        vm_create_args+=($AZ_VM_ARGS)
+    if [[ ${#az_vm_args[@]} -gt 0 ]]; then
+        vm_create_args+=("${az_vm_args[@]}")
     fi
 
     local output output_file create_pid rc
@@ -1195,6 +1279,18 @@ get_vm_rg_name() {
 
 start_vm_azure() {
     local vm_image_path="$1"
+    if [[ -z "${ACG_IMAGE_VERSION_ID}" && "${REUSE_IMAGE}" != "true" ]]; then
+        local canonical_vm_image_path
+        canonical_vm_image_path="$(cd "$(dirname "${vm_image_path}")" && pwd)/$(basename "${vm_image_path}")"
+        if [[ "${_LOCAL_IPE_ARTIFACT_PATH}" != "${canonical_vm_image_path}" ]]; then
+            _prepare_local_ipe_artifact_contract "${canonical_vm_image_path}" ||
+                die "Local Azure image does not satisfy the IPE trust contract"
+        fi
+    fi
+
+    _enforce_ipe_image_contract ||
+        die "Azure image selection does not satisfy the IPE contract"
+
     section "Starting Azure VM for board '${BOARD}'"
 
     local vm_rg_name=$(get_vm_rg_name)
@@ -1229,13 +1325,15 @@ start_vm_azure() {
         create_vm_azure "$vm_rg_name" "$image_version"
     else
         check_azure_infra
-        _VM_IMAGE_DIR="$(cd "$(dirname "${vm_image_path}")" && pwd)"
         local image_version
         image_version=$(get_next_image_version)
 
         # When BUILD_ID is set the version is deterministic (1.0.<BUILD_ID>),
         # so the same image may already have been published by a prior run.
         if [[ -n "${BUILD_ID}" ]] && gallery_image_version_exists "$image_version"; then
+            if [[ "${_LOCAL_IPE_SIGNING_MODE}" != "disabled" ]]; then
+                die "Refusing to reuse gallery image version ${image_version} for an IPE-capable local VHD; use a new BUILD_ID or remove the stale version"
+            fi
             info "Gallery image version ${image_version} already exists and is ready — skipping VHD upload"
         else
             local blob_name="$(date +%y%m%d.%H%M%S)-${BUILD_ID:+${BUILD_ID}-}${IMG_NAME}.vhd"
