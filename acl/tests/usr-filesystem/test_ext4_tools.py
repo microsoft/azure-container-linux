@@ -24,8 +24,8 @@ class Ext4ToolsTests(unittest.TestCase):
             image, tree = Path(directory) / "usr.ext4", Path(directory) / "usr.hash"
             with image.open("wb") as stream:
                 stream.truncate(32 * 1024**2)
-            with tree.open("wb") as stream:
-                stream.truncate(1024**2)
+            # Do not preallocate: measure the hash tree actually produced by veritysetup.
+            tree.touch()
             part = {"label": "USR-A", "fs_type": "ext4", "type": "flatcar-rootfs",
                     "fs_block_size": 4096, "fs_blocks": 8192, "first_byte": 0}
             DISK.FormatExt(part, str(image))
@@ -44,9 +44,14 @@ class Ext4ToolsTests(unittest.TestCase):
                           "--hash-block-size=4096", "--data-blocks=8192", image, tree]).decode()
             root_hash = next(line.split()[-1] for line in output.splitlines() if line.startswith("Root hash:"))
             run(["veritysetup", "verify", image, tree, root_hash])
-            hash_blocks = int(next(line.split()[-1] for line in output.splitlines()
-                                   if line.startswith("Hash blocks:")))
-            self.assertEqual(DISK.VerityHashBytes(8192, 4096), (hash_blocks + 1) * 4096)
+            hash_bytes = tree.stat().st_size
+            self.assertEqual(DISK.VerityHashBytes(8192, 4096), hash_bytes)
+            short_tree = Path(directory) / "short.hash"
+            shutil.copyfile(tree, short_tree)
+            with short_tree.open("r+b") as stream:
+                stream.truncate(hash_bytes - 4096)
+            with self.assertRaises(subprocess.CalledProcessError):
+                run(["veritysetup", "verify", image, short_tree, root_hash])
             with image.open("r+b") as stream:
                 stream.seek(image.stat().st_size - 1)
                 original = stream.read(1)
