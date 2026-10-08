@@ -1,0 +1,76 @@
+#!/bin/bash
+
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+set -euo pipefail
+
+install_acr_mirror() (
+    local rootfs="$1" url checksum package arch
+    local -a arch_args=()
+    arch=$(rpm --root "${rootfs}" --query --queryformat '%{ARCH}' glibc)
+    case "${arch}" in
+        x86_64)
+            url="https://acrstreamingpackage.z5.web.core.windows.net/1.0.0/acr-mirror-azurelinux3.rpm"
+            checksum="93eb4367d9ee9660cfad6b50a432ad71d156bfab5a6f29f124a5fd99a6efd14c"
+            ;;
+        aarch64)
+            url="https://acrstreamingpackage.z5.web.core.windows.net/1.0.0/acr-mirror-azurelinux3-arm64.rpm"
+            checksum="f07d31455df32c0e1ec6c789d020b065a712e28fad848e80b99c0ceaaaa9f545"
+            arch_args+=(--ignorearch)
+            ;;
+        *)
+            echo "Unsupported artifact-streaming architecture: ${arch}" >&2
+            return 1
+            ;;
+    esac
+    package=$(mktemp --suffix=.rpm)
+    trap 'rm -f -- "${package}"' EXIT
+    curl --fail --silent --show-error --location "${url}" -o "${package}"
+    printf '%s  %s\n' "${checksum}" "${package}" | sha256sum -c -
+    # Mirror is a checksum-pinned vendor RPM, not a PMC repository package.
+    # Keep dependency checks and RPM metadata for the post-mangle SBOM.
+    rpm --root "${rootfs}" --install --noscripts "${arch_args[@]}" "${package}"
+)
+
+relocate_artifact_streaming() {
+    local rootfs="$1"
+    local payload="${rootfs}/opt/acr"
+    local destination="${rootfs}/usr/libexec/artifact-streaming/acr"
+    if [[ ! -x "${payload}/bin/acr" ||
+          ! -x "${payload}/bin/acr-config" ||
+          ! -x "${payload}/tools/overlaybd/install.sh" ||
+          ! -x "${payload}/tools/mirror/setup.sh" ]]; then
+        echo "Incomplete ACR Mirror payload in ${payload}" >&2
+        return 1
+    fi
+    for unit in acr-mirror overlaybd-tcmu overlaybd-snapshotter; do
+        if [[ ! -f "${rootfs}/usr/lib/systemd/system/${unit}.service" ]]; then
+            echo "Missing streaming service ${unit}.service" >&2
+            return 1
+        fi
+    done
+    if [[ -e "${destination}" ]]; then
+        echo "Refusing to overwrite existing streaming payload ${destination}" >&2
+        return 1
+    fi
+    mkdir -p "${rootfs}/usr/libexec/artifact-streaming" "${rootfs}/usr/lib/tmpfiles.d"
+    mv "${payload}" "${destination}"
+    printf 'L /opt/acr - - - - /usr/libexec/artifact-streaming/acr\n' \
+        > "${rootfs}/usr/lib/tmpfiles.d/artifact-streaming.conf"
+}
+
+main() {
+    local rootfs
+    rootfs=$(realpath -e -- "${1:?staged root filesystem is required}")
+    if [[ "${rootfs}" == "/" || ! -d "${rootfs}/usr" || ! -d "${rootfs}/var/lib/rpm" ]]; then
+        echo "Expected a staged RPM root filesystem, not ${rootfs}" >&2
+        return 1
+    fi
+    install_acr_mirror "${rootfs}"
+    relocate_artifact_streaming "${rootfs}"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

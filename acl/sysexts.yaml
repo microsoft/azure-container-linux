@@ -68,6 +68,15 @@ sysexts:
     tags:
       - kola
  # --- GPU / hardware sysexts -------------------------------------------
+  - name: artifact-streaming
+    mode: standalone
+    packages:
+      - containerd-overlaybd
+      - containerd-accelerated-container-image
+      - symcrypt
+    tags:
+      - artifact-streaming
+
   - name: nvidia-driver-cuda-open
     mode: standalone
     packages:
