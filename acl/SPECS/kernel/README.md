@@ -61,6 +61,13 @@ require zero kernel-reported audit loss using `/usr/sbin/auditctl -s`.
 The diagnostic kernel command line and auditd rules set an 8192-record backlog
 to retain the extra success events during boot and auditd startup.
 Stock images do not gain this test dependency.
+Diagnostic Azure Kola VMs must use Trusted Launch with Secure Boot to expose
+the enrolled ephemeral certificate through the kernel's platform keyring.
+The pipeline opts into those launch flags only for this experiment and uses
+an ARM v6 size (v5 does not support Trusted Launch). It requires the published
+gallery image rather than an unsigned-trust VHD fallback. This is an ephemeral
+lab-key requirement, not a claim that production IPE policy trust requires
+Trusted Launch.
 
 QEMU pipeline images, staging-bundle publication, ACL-T customization and
 A/B servicing are not qualified by this experiment. The development flag
@@ -74,8 +81,27 @@ The normal Azure smoke IPE-toggle test selects
 - Signed dm-verity backing Btrfs, with no explicit root-hash policy allow rule.
 - PID-correlated signature ALLOW events for executable loading and MMAP of
   `/usr/bin/true`, `/usr/bin/ls` and `/usr/bin/bash`.
-- No `/usr` or library-path denial in retained current-boot audit evidence,
-  zero kernel-reported audit loss, and a denial for a copied writable executable.
+- No base `/usr` or unclassified library-path denial in retained current-boot
+  evidence, and zero kernel-reported audit loss. Sysext denials are accepted only
+  after matching the first visible read-only extension layer, file bytes and
+  audit inode. An overlay pathname alone is not evidence of base-file provenance.
+- Expected denials for both containerd in a sysext and a copied writable executable.
+
+A normal AMD64 acldevel image from run 1220256 was also checked directly:
+1,893 base ELF executable mappings and 310 command executions produced signed
+ALLOW evidence with no base denials or new audit loss. Sysext and writable-copy
+controls produced DENY. That bounded post-boot result did not establish a
+lossless full boot or ARM64 qualification.
+
+The same exhaustive check was subsequently repeated on run 1220426's AMD64
+`acldevel-test` image and ARM64 `acldevel-arm64` image. Each passed all 1,893
+base ELF mappings and 310 executions (31 commands, four concurrent workers),
+with no missing positive evidence, skipped commands or base denials. Both
+reported zero lost audit events before and after the test; sysext and writable
+controls still denied. Both also passed the source-aware guest validator.
+The AMD64 test image booted with the enrolled ephemeral key in `.platform`
+under Trusted Launch, unlike the default non-Trusted-Launch Kola launch.
+Full pipeline qualification remains pending the diagnostic launch correction.
 
 Do not count a successful command exit in audit mode as proof. Preserve the
 guest logs, pipeline artifacts, RPM provenance manifest and source commits.
