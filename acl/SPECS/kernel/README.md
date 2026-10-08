@@ -56,6 +56,9 @@ The flag builds pinned Azure Linux kernel RPMs with release
 ephemeral signing, and signs the final `/usr` verity root using the existing
 shared lab certificate. The public signature is installed as a UKI companion
 credential. Positive IPE auditing is enabled.
+Diagnostic images also install the `audit` RPM so the guest validator can
+require zero kernel-reported audit loss using `/usr/sbin/auditctl -s`.
+Stock images do not gain this test dependency.
 
 QEMU pipeline images, staging-bundle publication, ACL-T customization and
 A/B servicing are not qualified by this experiment. The development flag

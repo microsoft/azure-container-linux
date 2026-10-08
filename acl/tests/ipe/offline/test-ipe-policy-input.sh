@@ -106,6 +106,36 @@ test_audit_esrp_stages_candidate() {
     [[ "$(<"${BUILD_DIR}/ipe-signing-mode")" == "esrp" ]]
 }
 
+test_btrfs_diagnostic_installs_audit_tools() (
+    export ACL_IPE_MODE=audit ACL_IPE_SIGNING_MODE=ephemeral
+    rpm_install_package() {
+        [[ "$#" == 2 && "$1" == "${CASE_ROOT}" && "$2" == audit ]]
+        printf '%s\n' "$2" >> "${BUILD_DIR}/installed-packages"
+        mkdir -p "${CASE_ROOT}/usr/sbin"
+        printf '#!/bin/sh\nexit 0\n' > "${CASE_ROOT}/usr/sbin/auditctl"
+        chmod +x "${CASE_ROOT}/usr/sbin/auditctl"
+    }
+    prepare_case btrfs-audit-tools
+    ACL_BTRFS_IPE_KERNEL=1 rpm_install_ipe_policy "${CASE_ROOT}"
+    [[ "$(<"${BUILD_DIR}/installed-packages")" == audit ]]
+
+    prepare_case stock-audit-tools
+    ACL_BTRFS_IPE_KERNEL=0 rpm_install_ipe_policy "${CASE_ROOT}"
+    [[ ! -e "${BUILD_DIR}/installed-packages" ]]
+
+    prepare_case btrfs-audit-tools-failed
+    rpm_install_package() { return 1; }
+    if (ACL_BTRFS_IPE_KERNEL=1 rpm_install_ipe_policy "${CASE_ROOT}") 2>/dev/null; then
+        echo "Diagnostic image accepted failed audit package installation" >&2
+        return 1
+    fi
+    rpm_install_package() { return 0; }
+    if (ACL_BTRFS_IPE_KERNEL=1 rpm_install_ipe_policy "${CASE_ROOT}") 2>/dev/null; then
+        echo "Diagnostic image accepted missing auditctl" >&2
+        return 1
+    fi
+)
+
 test_enforcing_mode_rejected() {
     prepare_case enforcing-rejected
     export ACL_IPE_MODE=enforcing
@@ -523,6 +553,7 @@ test_ipe_disabled_stages_nothing
 test_disabled_cleanup_removes_stale_assets
 test_audit_ephemeral_stages_candidate
 test_audit_esrp_stages_candidate
+test_btrfs_diagnostic_installs_audit_tools
 test_enforcing_mode_rejected
 test_uki_provision_preserves_unsigned_verity
 test_uki_binds_policy_before_writing_cmdline

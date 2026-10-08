@@ -5,6 +5,7 @@ set -euo pipefail
 fail() { echo "FAILED: $*" >&2; exit 1; }
 [[ "$(uname -r)" == "6.6.157.1-1.btrfsipe1.azl3" ]] || fail "wrong kernel"
 [[ "$(getenforce)" == Enforcing ]] || fail "SELinux must be enforcing"
+[[ -x /usr/sbin/auditctl ]] || fail "diagnostic image is missing /usr/sbin/auditctl"
 ipe=/sys/kernel/security/ipe
 policy="$ipe/policies/acl_ipe_boot_policy"
 [[ "$(cat "$ipe/enforce")" == 0 && "$(cat "$policy/active")" == 1 ]] ||
@@ -57,7 +58,7 @@ if [[ -r /var/log/audit/audit.log ]]; then
             if (stamp[1] >= boot) print
         }' /var/log/audit/audit.log)"
 fi
-status="$(auditctl -s)"
+status="$(/usr/sbin/auditctl -s)" || fail "cannot query kernel audit status"
 echo "$status"
 grep -qx 'lost 0' <<< "$status" || fail "audit records were lost"
 if grep -Ei 'audit.*(backlog limit exceeded|rate limit exceeded|lost=[1-9])' <<< "$logs"; then
