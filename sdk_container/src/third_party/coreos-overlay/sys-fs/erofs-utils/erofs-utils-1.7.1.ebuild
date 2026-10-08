@@ -7,7 +7,7 @@ inherit autotools
 
 DESCRIPTION="EROFS image creation and verification tools for the ACL SDK"
 HOMEPAGE="https://erofs.docs.kernel.org/"
-SRC_URI="https://archive.ubuntu.com/ubuntu/pool/universe/e/${PN}/${PN}_${PV}.orig.tar.gz -> ${P}.tar.gz"
+SRC_URI="https://git.kernel.org/pub/scm/linux/kernel/git/xiang/${PN}.git/snapshot/${P}.tar.gz"
 
 LICENSE="GPL-2+"
 SLOT="0"
