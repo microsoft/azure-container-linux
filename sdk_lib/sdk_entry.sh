@@ -107,6 +107,11 @@ fi
 # Forward docker sysext injection flag for test image builds
 sed -i -e '/export INJECT_DOCKER_SYSEXT=/d' /home/sdk/.bashrc 2>/dev/null || true
 echo "export INJECT_DOCKER_SYSEXT='${INJECT_DOCKER_SYSEXT:-false}'" >> /home/sdk/.bashrc
+# Forward fasttrack preview repo file for CVE RPM resolution
+sed -i -e '/export FASTTRACK_REPO_FILE=/d' /home/sdk/.bashrc 2>/dev/null || true
+if [[ -n "${FASTTRACK_REPO_FILE:-}" ]]; then
+    printf 'export FASTTRACK_REPO_FILE=%q\n' "${FASTTRACK_REPO_FILE}" >> /home/sdk/.bashrc
+fi
 
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"

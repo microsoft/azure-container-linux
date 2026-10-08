@@ -1,6 +1,11 @@
 %define upstream_version 2.1-29
 %global debug_package %{nil}
 
+# PMC rebase tracking - update these after incorporating upstream PMC changes.
+# check_pmc_staleness.sh compares these against the current PMC release.
+%define pmc_base_version 2.1
+%define pmc_base_release 41
+
 Summary:        Tool to transform and deploy CPU microcode update for x86
 Name:           microcode_ctl
 Version:        2.1

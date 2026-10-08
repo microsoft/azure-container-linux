@@ -171,6 +171,8 @@ export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
+# FastTrack preview repo file - forwarded into the SDK container for CVE RPM resolution
+export FASTTRACK_REPO_FILE="${FASTTRACK_REPO_FILE:-}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
