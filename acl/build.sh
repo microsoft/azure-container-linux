@@ -34,8 +34,7 @@ function cleanup() {
 function clone_azl3() {
     if [[ "${ACL_BTRFS_IPE_KERNEL:-0}" == "1" ]]; then
         local commit
-        commit=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["azurelinux_commit"])' \
-            "${ACL_DIR}/kernel/btrfs-ipe/source.json")
+        commit=$(jq -er '.azurelinux_commit' "${SPECS_DIR}/kernel/source.json")
         if [[ ! -d azurelinux ]]; then
             git init azurelinux
             git -C azurelinux remote add origin https://github.com/microsoft/azurelinux.git
@@ -189,24 +188,23 @@ if [[ ${#package_build_list[@]} -eq 0 ]]; then
     exit 1
 fi
 
+if [[ "${ACL_BTRFS_IPE_KERNEL:-0}" != "1" &&
+      " ${package_build_list[*]} " == *" kernel "* ]]; then
+    log "ERROR: The experimental kernel requires ACL_BTRFS_IPE_KERNEL=1"
+    exit 1
+fi
+
 clone_azl3
 
-case "${ACL_BTRFS_IPE_KERNEL:-0}" in
-    0) ;;
-    1)
-        base_specs="${SPECS_DIR}"
-        SPECS_DIR=$(mktemp -d "${BUILD_DIR}/btrfs-ipe-specs.XXXXXX")
-        python3 "${ACL_DIR}/kernel/btrfs-ipe/prepare-kernel.py" \
-            --azurelinux "${BUILD_DIR}/azurelinux" --base "${base_specs}" \
-            --output "${SPECS_DIR}" \
-            --manifest "${ARTIFACT_PUBLISH_DIR}/btrfs-ipe-kernel.json"
+if [[ "${ACL_BTRFS_IPE_KERNEL:-0}" == "1" ]]; then
+    patch_sha256="$(sha256sum "${SPECS_DIR}/kernel/btrfs-ipe.patch" | cut -d' ' -f1)"
+    jq --arg patch_sha256 "${patch_sha256}" \
+        '. + {patch_sha256: $patch_sha256}' "${SPECS_DIR}/kernel/source.json" \
+        > "${ARTIFACT_PUBLISH_DIR}/btrfs-ipe-kernel.json"
+    if [[ " ${package_build_list[*]} " != *" kernel "* ]]; then
         package_build_list+=(kernel)
-        ;;
-    *)
-        log "ACL_BTRFS_IPE_KERNEL must be 0 or 1"
-        exit 1
-        ;;
-esac
+    fi
+fi
 
 build_specs "$SPECS_DIR"
 

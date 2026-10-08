@@ -4,6 +4,11 @@ This is an opt-in diagnostic for ACL bug 24258, not a production kernel or
 servicing solution. Stock builds are unchanged. It requires the policy-only
 IPE implementation identified in `source.json`.
 
+The vendor spec, architecture configs, supporting sources and IPE patch are
+checked in here like the other ACL packages. There is no generated spec tree.
+`kernel` stays out of `acl/packages.yaml`; only `ACL_BTRFS_IPE_KERNEL=1`
+adds it to the build list and writes the staging provenance manifest.
+
 The patch preserves IPE's existing `s_bdev` lookup. For Btrfs it introduces a
 filesystem callback that returns a referenced device only for a read-only,
 single-device filesystem on a read-only block device. Degraded, missing,
@@ -29,12 +34,13 @@ SELinux-enforcing ACL VMs or ARM64.
 ## Build a diagnostic ACL image
 
 Use the corresponding acl-pipelines development branch and definition **5303
-(acldevel)**, not production definition 5304. Publish both branches first and
-pin `aclScriptsRef` to the candidate ACL commit. Parameters:
+(acldevel)**, not production definition 5304. Publish both branches first.
+Set `aclScriptsRef` to the candidate branch and pin the run's
+`azure_container_linux` repository resource `version` to its commit. Parameters:
 
 ```yaml
 btrfsIpeKernel: true
-aclScriptsRef: <candidate ACL commit>
+aclScriptsRef: aadagarwal/btrfs-ipe-kernel-proof
 arch: amd64
 bootloaderMode: uki
 rpmSource: default
@@ -79,7 +85,7 @@ QEMU, `busybox-static`, Btrfs tools, cryptsetup, audit tools and Python:
 
 ```sh
 sudo bash acl/tests/ipe/btrfs/build-vm-proof.sh \
-  /var/tmp/btrfs-ipe-new-proof acl/kernel/btrfs-ipe/btrfs-ipe.patch
+  /var/tmp/btrfs-ipe-new-proof acl/SPECS/kernel/btrfs-ipe.patch
 ```
 
 This builds the pinned stock and patched kernels and boots both under QEMU,
