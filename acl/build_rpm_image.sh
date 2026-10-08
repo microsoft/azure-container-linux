@@ -35,7 +35,7 @@
 #   --download-rpms                      [no-op] Kept for pipeline compatibility
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
 #   --help                               Show this help message
-#   --usr-fs=TYPE                        /usr filesystem: btrfs (default) or opt-in ext4
+#   --usr-fs=TYPE                        /usr filesystem: btrfs (default), ext4 or erofs
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
@@ -92,7 +92,7 @@
 # Environment Variables:
 #   ACL_SDK_IMAGE           Override SDK container image (e.g., <your-registry>/sdk:<release>)
 #                           Bypasses auto-detection from version.txt when set
-#   ACL_EXPERIMENTAL_USR_FS Set to ext4 for the non-shipping UKI experiment.
+#   ACL_EXPERIMENTAL_USR_FS Set to ext4 or erofs for the non-shipping UKI experiments.
 #                           See acl/docs/usr-filesystems.md for qualification limits.
 #   NO_TTY                  Set to "true" to disable TTY allocation (for CI pipelines)
 #   RPM_REPO_URL            Azure Linux repository URL
