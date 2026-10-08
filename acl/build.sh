@@ -12,6 +12,10 @@ ARTIFACT_PUBLISH_DIR="${ACL_DIR}/../__build__/rpm-staging"
 BUILD_DIR="${ACL_DIR}/../__build__/rpms_build_dir"
 OUT_DIR="${ACL_DIR}/../__build__/rpms_out_dir"
 REUSE_SOURCES="${REUSE_SOURCES:-true}"
+case "${ACL_BTRFS_IPE_KERNEL:-0}" in
+    0|1) ;;
+    *) echo "ACL_BTRFS_IPE_KERNEL must be 0 or 1" >&2; exit 1 ;;
+esac
 
 function log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
@@ -28,6 +32,22 @@ function cleanup() {
 }
 
 function clone_azl3() {
+    if [[ "${ACL_BTRFS_IPE_KERNEL:-0}" == "1" ]]; then
+        local commit
+        commit=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["azurelinux_commit"])' \
+            "${ACL_DIR}/kernel/btrfs-ipe/source.json")
+        if [[ ! -d azurelinux ]]; then
+            git init azurelinux
+            git -C azurelinux remote add origin https://github.com/microsoft/azurelinux.git
+            git -C azurelinux fetch --depth 1 origin "${commit}"
+            git -C azurelinux checkout --detach FETCH_HEAD
+        fi
+        [[ "$(git -C azurelinux rev-parse HEAD)" == "${commit}" ]] || {
+            log "Experimental kernel requires a fresh build directory with toolkit ${commit}"
+            exit 1
+        }
+        return
+    fi
     if [[ -d "azurelinux" && "$REUSE_SOURCES" == "false" ]]; then
         sudo rm -rf azurelinux
     fi
@@ -170,6 +190,23 @@ if [[ ${#package_build_list[@]} -eq 0 ]]; then
 fi
 
 clone_azl3
+
+case "${ACL_BTRFS_IPE_KERNEL:-0}" in
+    0) ;;
+    1)
+        base_specs="${SPECS_DIR}"
+        SPECS_DIR=$(mktemp -d "${BUILD_DIR}/btrfs-ipe-specs.XXXXXX")
+        python3 "${ACL_DIR}/kernel/btrfs-ipe/prepare-kernel.py" \
+            --azurelinux "${BUILD_DIR}/azurelinux" --base "${base_specs}" \
+            --output "${SPECS_DIR}" \
+            --manifest "${ARTIFACT_PUBLISH_DIR}/btrfs-ipe-kernel.json"
+        package_build_list+=(kernel)
+        ;;
+    *)
+        log "ACL_BTRFS_IPE_KERNEL must be 0 or 1"
+        exit 1
+        ;;
+esac
 
 build_specs "$SPECS_DIR"
 

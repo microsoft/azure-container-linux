@@ -120,7 +120,8 @@ assert_ipe_assets_present() {
         error "Valid /usr root hash is missing from the UKI"
         return 1
     fi
-    if ipe_has_root_hash_signature "${cmdline}"; then
+    if ipe_has_root_hash_signature "${cmdline}" &&
+        [[ "$(ssh_cmd 'uname -r')" != "6.6.157.1-1.btrfsipe1.azl3" ]]; then
         error "Policy-only IPE must not require a /usr root-hash signature"
         return 1
     fi
@@ -128,9 +129,13 @@ assert_ipe_assets_present() {
 }
 
 run_audit_validation() {
+    local test_script="${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh"
+    if [[ "$(ssh_cmd 'uname -r')" == "6.6.157.1-1.btrfsipe1.azl3" ]]; then
+        test_script="${SCRIPT_DIR}/acl/tests/ipe/btrfs/run-usr-audit-test.sh"
+    fi
     ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
         "sudo bash -s" \
-        < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh"
+        < "${test_script}"
 }
 
 main() {

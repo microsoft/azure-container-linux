@@ -351,6 +351,16 @@ rpm_install_package() {
     fi
     local root_fs_dir="$1"; shift
     local packages=("$@")
+    if [[ "${ACL_BTRFS_IPE_KERNEL:-0}" == 1 ]]; then
+        local i
+        for i in "${!packages[@]}"; do
+            case "${packages[i]}" in
+                kernel|kernel-devel|kernel-drivers-accessibility|kernel-drivers-gpu|kernel-drivers-intree-amdgpu|kernel-drivers-sound|kernel-tools)
+                    packages[i]="${packages[i]}-6.6.157.1-1.btrfsipe1.azl3"
+                    ;;
+            esac
+        done
+    fi
 
     if [[ ${#packages[@]} -eq 0 ]]; then
         return 0
@@ -509,6 +519,14 @@ rpm_install_init() {
     local rpm_staging
     rpm_staging=$(rpm_get_staging_dir 2>/dev/null || echo "")
     local local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
+    if [[ -f "${local_cache}/btrfs-ipe-kernel.json" &&
+          "${ACL_BTRFS_IPE_KERNEL:-0}" != "1" ]]; then
+        die "Experimental Btrfs kernel RPMs require ACL_BTRFS_IPE_KERNEL=1"
+    fi
+    if [[ "${ACL_BTRFS_IPE_KERNEL:-0}" == "1" &&
+          ! -f "${local_cache}/btrfs-ipe-kernel.json" ]]; then
+        die "Experimental Btrfs kernel provenance is missing from RPM staging"
+    fi
     rpm_setup_repos "${root_fs_dir}" "3.0" "${local_cache}"
 }
 
