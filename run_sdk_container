@@ -82,6 +82,28 @@ while [[ $# -gt 0 ]] ; do
     esac
 done
 
+ACL_IPE_MODE="${ACL_IPE_MODE:-disabled}"
+case "${ACL_IPE_MODE}" in
+    disabled|audit) ;;
+    enforcing)
+        echo "IPE mode 'enforcing' is reserved and not supported by this build" >&2
+        exit 1
+        ;;
+    *)
+        echo "Invalid ACL_IPE_MODE: ${ACL_IPE_MODE}" >&2
+        exit 1
+        ;;
+esac
+
+ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE:-ephemeral}"
+case "${ACL_IPE_SIGNING_MODE}" in
+    ephemeral|esrp) ;;
+    *)
+        echo "Invalid ACL_IPE_SIGNING_MODE: ${ACL_IPE_SIGNING_MODE}" >&2
+        exit 1
+        ;;
+esac
+
 if [[ -n ${custom_image} ]] ; then
     container_image_name=${custom_image}
 else
@@ -193,4 +215,6 @@ call_docker exec "${tty[@]}" -i \
     -e BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}" \
     -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" \
     -e ACL_EXPERIMENTAL_USR_FS="${ACL_EXPERIMENTAL_USR_FS:-}" \
+    -e ACL_IPE_MODE="${ACL_IPE_MODE}" \
+    -e ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE}" \
     "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"

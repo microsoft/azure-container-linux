@@ -484,20 +484,26 @@ class FilesystemTests(unittest.TestCase):
 
     def test_wrapper_cli_selector_and_empty_value(self):
         source = (REPO / "acl/build_rpm_image.sh").read_text()
-        start = source.index("parse_args() {")
-        parser = source[start:source.index("\n}\n", start) + 3]
+        start = source.index("validate_ipe_boot_path() {")
+        parser_start = source.index("parse_args() {")
+        parser = source[start:source.index("\n}\n", parser_start) + 3]
         setup = """
+source "$IPE_HELPER"
+ACL_IPE_MODE=disabled ACL_IPE_SIGNING_MODE=ephemeral
 RETRY_ATTEMPTS=0 GROUP=production BUILD_VM_IMAGE=false START_VM=false
+REUSE_VM=false BUILD_IMAGE=false BUILD_TEST_IMAGE=false RUN_KOLA_TESTS=false
 REUSE_IMAGE=false ACG_IMAGE_VERSION_ID='' VM_TYPE=qemu
 error() { printf '%s\\n' "$*" >&2; }
 """
         code = setup + parser + '\nparse_args "$@"\nacl_validate_usr_filesystem || exit 1\nacl_usr_filesystem'
         for args in (("--usr-fs=ext4",), ("--usr-fs", "ext4"), ("--usr-fs=btrfs",)):
-            result = self.shell(code, args=args)
+            result = self.shell(code, args=args,
+                                IPE_HELPER=str(REPO / "build_library/rpm/ipe_artifact.sh"))
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "btrfs" if "btrfs" in args[0] else "ext4")
         for args in (("--usr-fs=",), ("--usr-fs",), ("--usr-fs=invalid",)):
-            result = self.shell(code, args=args)
+            result = self.shell(code, args=args,
+                                IPE_HELPER=str(REPO / "build_library/rpm/ipe_artifact.sh"))
             self.assertNotEqual(result.returncode, 0)
 
     def test_optin_image_gate_rejects_unverified_and_nonprod_before_layout_checks(self):
