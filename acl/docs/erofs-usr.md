@@ -53,8 +53,10 @@ override verity/trust settings.
 
 `sdk-depends` revision 58 installs pinned `erofs-utils-1.7.1`. Rebuild the SDK;
 an older `ACL_SDK_IMAGE` override is not repaired by installing tools during an
-image build. The package source has a checked Portage Manifest and an LZ4
-round-trip package test. `mkfs.erofs` 1.7.1 has no `-V` option: its no-argument
+image build. The package uses the upstream kernel.org snapshot, a checked
+Portage Manifest and an LZ4 round-trip package test. Its bytes match the former
+Ubuntu source archive; the SDK does not require access to Ubuntu's archive.
+`mkfs.erofs` 1.7.1 has no `-V` option: its no-argument
 usage failure prints the version; `fsck.erofs -V` supplies the checker version.
 Unexpected versions fail explicitly both in the SDK update image's smoke check
 and when building an EROFS image.
