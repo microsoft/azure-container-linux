@@ -35,4 +35,8 @@ Built and shipped alongside the disk image:
     compatibility/configuration paths, and starts the services. This does not
     add streaming binaries to the base OS image or enable streaming by default.
 
+The streaming packaging regression tests run with
+`python3 acl/tests/test_artifact_streaming_sysext.py` from the repository root.
+They use the production manifest selector, so `yq` v4 must be on `PATH`.
+
 Sysexts are defined in `sysexts.yaml` with a required `mode` field. **Embedded** sysexts (e.g. `containerd`) are placed directly in the image and activated at boot. **Standalone** sysexts are built separately and downloaded on demand. Package names can be RPM names (e.g. `cuda-open`) or portage-style names (e.g. `app-containers/docker`) — the build system tries direct RPM installation first and falls back to the catalog. The `archs` field controls which architectures to build for; omitting it builds for all. An optional mangle script (`build_library/sysext_mangle_<name>` or `build_library/rpm/sysexts/sysext_mangle_<name>`) can relocate files that RPMs install outside `/usr`.

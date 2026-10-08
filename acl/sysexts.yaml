@@ -67,16 +67,16 @@ sysexts:
       - app-containers/docker-buildx
     tags:
       - kola
- # --- GPU / hardware sysexts -------------------------------------------
   - name: artifact-streaming
     mode: standalone
     packages:
       - containerd-overlaybd
       - containerd-accelerated-container-image
-      - symcrypt
+      - SymCrypt
     tags:
       - artifact-streaming
 
+  # --- GPU / hardware sysexts -------------------------------------------
   - name: nvidia-driver-cuda-open
     mode: standalone
     packages:

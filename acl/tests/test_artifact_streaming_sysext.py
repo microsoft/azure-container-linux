@@ -40,6 +40,23 @@ class ArtifactStreamingLayoutTests(unittest.TestCase):
         )
         self.assertFalse((self.root / "etc/systemd/system/multi-user.target.wants/acr-mirror.service").exists())
 
+    def test_manifest_selects_the_complete_payload_for_both_architectures(self):
+        repo = pathlib.Path(__file__).resolve().parents[2]
+        for board in ("amd64-usr", "arm64-usr"):
+            with self.subTest(board=board):
+                result = subprocess.run(
+                    ["bash", "-c",
+                     'source "$1"; parse_standalone_sysexts_yaml "$2" "$3" artifact-streaming',
+                     "test", str(repo / "build_library/standalone_sysext_util.sh"),
+                     str(repo / "acl/sysexts.yaml"), board],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    result.stdout.strip(),
+                    "artifact-streaming|containerd-overlaybd&containerd-accelerated-container-image&SymCrypt",
+                )
+
     def test_missing_dependency_does_not_make_a_partial_extension(self):
         (self.root / "usr/lib/systemd/system/overlaybd-tcmu.service").unlink()
         result = self.relocate()
