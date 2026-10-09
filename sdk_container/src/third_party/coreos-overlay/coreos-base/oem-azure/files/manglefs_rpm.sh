@@ -25,6 +25,16 @@ if [[ -f "${rootfs}/usr/lib/systemd/system/waagent.service" ]]; then
     sed -i \
         '/^\[Service\]$/a ExecStartPre=/bin/bash -c '\''if [[ ! -e /oem/waagent.conf ]]; then ln -sf /etc/waagent.conf /oem/waagent.conf; fi'\''' \
         "${rootfs}/usr/lib/systemd/system/waagent.service"
+
+    # SSH is socket-activated, so this Wants= revives sshd once a node disables SSH.
+    sed -i -E '/^Wants=/ s/[[:space:]]*\bsshd\.service\b//' \
+        "${rootfs}/usr/lib/systemd/system/waagent.service"
+
+    if grep -qE '^Wants=.*\bsshd\.service\b' "${rootfs}/usr/lib/systemd/system/waagent.service" ||
+       ! grep -qE '^Wants=.*sshd-keygen\.service' "${rootfs}/usr/lib/systemd/system/waagent.service"; then
+        echo "ERROR: unexpected waagent.service Wants= after mangle" >&2
+        exit 1
+    fi
 fi
 
 # Create chrony sub-dir if it doesn't exist
