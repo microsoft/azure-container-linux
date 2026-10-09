@@ -129,6 +129,33 @@ grep -q 'export SYSEXT_SIGNING_KEY_DIR' /home/sdk/.bashrc || {
     popd > /dev/null
 }
 
+ACL_IPE_MODE="${ACL_IPE_MODE:-disabled}"
+case "${ACL_IPE_MODE}" in
+    disabled)
+        ACL_IPE_CAPABLE=false
+        ;;
+    audit)
+        ACL_IPE_CAPABLE=true
+        ;;
+    enforcing)
+        echo "ERROR: ACL_IPE_MODE=enforcing is reserved and not supported by this build" >&2
+        exit 1
+        ;;
+    *)
+        echo "ERROR: ACL_IPE_MODE must be disabled, audit, or enforcing (got: ${ACL_IPE_MODE})" >&2
+        exit 1
+        ;;
+esac
+ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE:-ephemeral}"
+case "${ACL_IPE_SIGNING_MODE}" in
+    ephemeral|esrp) ;;
+    *)
+        echo "ERROR: ACL_IPE_SIGNING_MODE must be ephemeral or esrp (got: ${ACL_IPE_SIGNING_MODE})" >&2
+        exit 1
+        ;;
+esac
+export ACL_IPE_MODE ACL_IPE_SIGNING_MODE ACL_IPE_CAPABLE
+
 # We need to sudo -u sdk with bash -l so that the SDK user gets a fresh login.
 # sudo has an -i option to get a login shell, but that cannot be combined with
 # -E to preserve the environment. We already have a relatively clean environment
