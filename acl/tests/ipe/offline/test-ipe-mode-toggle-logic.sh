@@ -277,6 +277,33 @@ test_streamed_guest_selects_btrfs_validator() (
     cmp "${payload}" "${SCRIPT_DIR}/acl/tests/ipe/btrfs/run-usr-audit-test.sh"
 )
 
+test_initial_btrfs_audit_isolates_container_history() (
+    local calls="${TMPDIR:-/tmp}/ipe-boot-order.$$" result
+    trap 'rm -f "${calls}"' EXIT
+    ssh_cmd() { printf '%s\n' "${kernel}"; }
+    assert_ipe_assets_present() { echo "assets:$1" >> "${calls}"; }
+    reboot_and_wait() { echo reboot >> "${calls}"; }
+    assert_ipe_mode() { echo "mode:$1" >> "${calls}"; }
+    run_audit_validation() { echo audit >> "${calls}"; }
+    info() { :; }
+    kernel=6.6.157.1-1.btrfsipe1.azl3
+    validate_initial_audit_boot
+    [[ "$(cat "${calls}")" == $'assets:1\nreboot\nmode:audit\nassets:1\naudit' ]]
+    : > "${calls}"
+    kernel=6.6.157.1-stock
+    validate_initial_audit_boot
+    [[ "$(cat "${calls}")" == $'assets:1\naudit' ]]
+    : > "${calls}"
+    kernel=6.6.157.1-1.btrfsipe1.azl3
+    reboot_and_wait() { return 1; }
+    # Invoke normally in a child shell so errexit remains active.
+    set +e
+    (set -e; validate_initial_audit_boot)
+    result=$?
+    set -e
+    [[ "$result" != 0 && "$(cat "${calls}")" == "assets:1" ]]
+)
+
 test_copied_guest_script_needs_no_sibling_file() (
     local test_dir script output_log
     test_dir="$(mktemp -d)"
@@ -379,6 +406,7 @@ test_probe_denial_correlation
 test_host_imds_matches_guest_parser
 test_streamed_guest_contains_cmdline_parser
 test_streamed_guest_selects_btrfs_validator
+test_initial_btrfs_audit_isolates_container_history
 test_copied_guest_script_needs_no_sibling_file
 test_cleanup_preserves_primary_failure
 test_cleanup_reboots_after_any_mutation

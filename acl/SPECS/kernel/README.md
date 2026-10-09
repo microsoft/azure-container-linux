@@ -87,6 +87,14 @@ The normal Azure smoke IPE-toggle test selects
   audit inode. An overlay pathname alone is not evidence of base-file provenance.
 - Expected denials for both containerd in a sysext and a copied writable executable.
 
+Before the initial diagnostic audit scan, the host toggle test verifies the
+existing mode/assets and reboots with the same profile. Earlier smoke tests
+launch an nginx container: its `/usr/sbin/nginx` denial names the container's
+filesystem, not host `/usr`. Audit paths alone cannot reconstruct a departed
+mount namespace. A fresh boot isolates host evidence without whitelisting
+nginx or silently discarding unclassified denials. Stock tests do not gain
+this extra reboot.
+
 A normal AMD64 acldevel image from run 1220256 was also checked directly:
 1,893 base ELF executable mappings and 310 command executions produced signed
 ALLOW evidence with no base denials or new audit loss. Sysext and writable-copy
