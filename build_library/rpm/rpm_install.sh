@@ -896,20 +896,9 @@ rpm_validate_ipe_policy_source() {
 
 rpm_prepare_ipe_policy_artifact() {
     local policy_src="$1" policy_sig="$2" cert_dir="$3"
-    local key="${cert_dir}/ca.key"
-    local cert="${cert_dir}/uki-signing-ca.pem"
-
-    "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" ||
-        die "RPM mode: IPE could not ensure ephemeral signing cert"
-    if ! openssl smime -sign -binary \
-            -in "${policy_src}" \
-            -signer "${cert}" \
-            -inkey "${key}" \
-            -noattr -nodetach -nosmimecap \
-            -outform der \
-            -out "${policy_sig}" 2>/dev/null || [[ ! -s "${policy_sig}" ]]; then
+    "${BUILD_LIBRARY_DIR}/rpm/sign_ipe_policy_ephemeral.sh" \
+        "${policy_src}" "${policy_sig}" "${cert_dir}" ||
         die "RPM mode: IPE failed to sign policy"
-    fi
 }
 
 rpm_verify_ipe_policy_artifact() {

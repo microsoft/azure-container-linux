@@ -27,6 +27,18 @@ POLICY_NAME="acl_ipe_boot_policy"
 IPE_DIR="/sys/kernel/security/ipe"
 POLICY_DIR="${IPE_DIR}/policies/${POLICY_NAME}"
 
+ipe_diagnostics_on_exit() {
+    local status=$?
+    if [[ "${status}" -ne 0 ]]; then
+        # Capture before restoring the tag/rebooting; initrd credentials need
+        # not survive switch-root, so use the retained journal and kernel state.
+        ssh_cmd "cat /proc/cmdline; sudo journalctl -b --no-pager -u acl-ipe-load.service; sudo journalctl -b -k --no-pager | grep -iE 'ipe|integrity|verification|keyring'; sudo find '${IPE_DIR}' -maxdepth 3 -type f -name active -print -exec cat {} \;; sudo cat '${IPE_DIR}/enforce'" || true
+    fi
+    set +e
+    (exit "${status}")
+    restore_security_profile_on_exit
+}
+
 get_ipe_mode() {
     local active enforce
     if ! ssh_cmd "sudo test -r '${POLICY_DIR}/active'"; then
@@ -152,7 +164,7 @@ main() {
         exit 1
     fi
     capture_security_profile_state || exit 1
-    trap restore_security_profile_on_exit EXIT
+    trap ipe_diagnostics_on_exit EXIT
 
     section "Step 0: Accept the VM's initial acl-node-security-profile state"
     # Read whatever tag the VM was already created/booted with (e.g. a smoke

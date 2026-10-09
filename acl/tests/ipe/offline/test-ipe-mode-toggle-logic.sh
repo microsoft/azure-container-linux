@@ -337,6 +337,25 @@ test_cleanup_reboots_after_any_mutation() {
     rm -f "${reboot_log}"
 }
 
+test_diagnostics_preserve_failure_before_cleanup() {
+    local output status
+    set +e
+    output="$(
+        set -e
+        ssh_cmd() { printf 'DIAGNOSTICS: %s\n' "$*"; return 9; }
+        restore_security_profile_on_exit() { local status=$?; echo "RESTORE ${status}"; exit "${status}"; }
+        trap ipe_diagnostics_on_exit EXIT
+        exit 7
+    )"
+    status=$?
+    set -e
+    [[ "${status}" -eq 7 ]]
+    [[ "${output}" == *"journalctl -b --no-pager -u acl-ipe-load.service"* ]]
+    [[ "${output}" == *"/proc/cmdline"* ]]
+    [[ "${output}" == *"RESTORE 7" ]]
+}
+
+test_diagnostics_preserve_failure_before_cleanup
 test_expected_mode_for_tag
 test_get_ipe_mode_reports_audit
 test_assert_ipe_mode_matches
