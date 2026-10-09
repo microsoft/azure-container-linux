@@ -109,7 +109,14 @@ reported zero lost audit events before and after the test; sysext and writable
 controls still denied. Both also passed the source-aware guest validator.
 The AMD64 test image booted with the enrolled ephemeral key in `.platform`
 under Trusted Launch, unlike the default non-Trusted-Launch Kola launch.
-Full pipeline qualification remains pending the diagnostic launch correction.
+Run 1220675 subsequently passed all 49 required AMD64 Azure Kola tests.
+ARM64 recorded 64 passes, but AMD64's build-wide cleanup deleted five active
+ARM64 resource groups; its five required-test failures do not qualify ARM64.
+Standard Azure Kola now tags resource groups with `kolaArch`, and the matching
+pipeline cleanup must require both build ID and architecture. Older untagged
+groups are left to the janitor rather than risking another active test.
+Full pipeline qualification remains pending the smoke-isolation and cleanup
+corrections.
 
 Do not count a successful command exit in audit mode as proof. Preserve the
 guest logs, pipeline artifacts, RPM provenance manifest and source commits.
