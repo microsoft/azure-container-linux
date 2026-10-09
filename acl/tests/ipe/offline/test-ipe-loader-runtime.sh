@@ -6,6 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 LOADER="${SCRIPT_DIR}/build_library/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.sh"
 PROFILE_HELPER="${SCRIPT_DIR}/build_library/rpm/additional_files/acl-node-security-profile.sh"
+CONTAINERD_PROFILE="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-profile.conf"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
@@ -31,8 +32,7 @@ prepare_case() {
     mkdir -p "${IPE_DIR}"
     : > "${IPE_DIR}/new_policy"
     printf '9\n' > "${IPE_DIR}/enforce"
-    cp "${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-profile.conf" \
-        "${CASE_DIR}/containerd-profile.conf"
+    cp "${CONTAINERD_PROFILE}" "${CASE_DIR}/containerd-erofs-profile.conf"
 
     command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
 acl_security_profile() {
@@ -50,9 +50,14 @@ run_loader() {
     ACL_IPE_CMDLINE_FILE="${CASE_DIR}/cmdline" \
     ACL_IPE_CREDENTIAL_PATH="${credential}" \
     ACL_IPE_SECURITY_PROFILE_HELPER="${CASE_DIR}/security-profile.sh" \
-    ACL_IPE_CONTAINERD_PROFILE="${CASE_DIR}/containerd-profile.conf" \
+    ACL_IPE_CONTAINERD_PROFILE="${CASE_DIR}/containerd-erofs-profile.conf" \
     ACL_IPE_CONTAINERD_DROPIN="${CASE_DIR}/dropins/90-acl-profile.conf" \
         bash "${LOADER}" 2>&1
+}
+
+assert_no_containerd_dropin() {
+    [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]] ||
+        { echo "inactive or failed activation installed the containerd profile" >&2; return 1; }
 }
 
 assert_best_effort_skip() {
@@ -65,6 +70,7 @@ assert_best_effort_skip() {
         { echo "missing best-effort warning: ${expected}" >&2; return 1; }
     grep -Fq 'continuing boot without activating IPE' <<< "${output}" ||
         { echo "loader did not report that boot would continue" >&2; return 1; }
+    assert_no_containerd_dropin
 }
 
 # ---- Test: absent token → succeed as disabled ----
@@ -72,6 +78,7 @@ test_absent_token() {
     prepare_case absent-token
     printf 'root=/dev/sda1\n' > "${CASE_DIR}/cmdline"
     run_loader
+    assert_no_containerd_dropin
 }
 
 # ---- Test: unreadable/missing cmdline → skip IPE and continue boot ----
@@ -109,6 +116,7 @@ EOF
     [[ -s "${IPE_DIR}/new_policy" ]]
     # enforce should remain unchanged (not set to 0)
     [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
+    assert_no_containerd_dropin
 }
 
 # ---- Test: the removed runtime alias must not activate IPE ----
@@ -125,7 +133,8 @@ test_valid_audit_active() {
 }
 
 run_active_case() (
-    local name="$1" imds_mode="$2"
+    local name="$1" imds_mode="$2" fault="${3:-}"
+    local -x TEST_ACTIVATION_FAILURE=false
     prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
     write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
@@ -142,18 +151,52 @@ EOF
         command cat "$@" || return 1
         if [[ "$#" -eq 1 && "$1" == "${ACL_IPE_CREDENTIAL_PATH:-}" ]]; then
             mkdir -p "${ACL_IPE_DIR}/policies/acl_ipe_boot_policy"
-            printf '0\n' > "${ACL_IPE_DIR}/policies/acl_ipe_boot_policy/active"
+            if [[ "${TEST_ACTIVATION_FAILURE}" != true ]]; then
+                printf '0\n' > "${ACL_IPE_DIR}/policies/acl_ipe_boot_policy/active"
+            fi
         fi
     }
     export -f cat
 
     local output
+    case "${fault}" in
+        activation) TEST_ACTIVATION_FAILURE=true ;;
+        missing-profile) rm "${CASE_DIR}/containerd-erofs-profile.conf" ;;
+        directory) printf 'not a directory\n' > "${CASE_DIR}/dropins" ;;
+        write) mkdir -p "${CASE_DIR}/dropins/90-acl-profile.conf" ;;
+    esac
+    if [[ "${fault}" == missing-profile || "${fault}" == directory || "${fault}" == write ]]; then
+        if output="$(run_loader "${CASE_DIR}/credential.p7b.cred")"; then
+            echo "loader accepted ${fault} failure" >&2
+            return 1
+        fi
+        [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
+        [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
+        if [[ "${fault}" == missing-profile ]]; then
+            grep -Fq 'ERROR: active IPE policy has no containerd profile' <<< "${output}"
+        else
+            grep -Fq 'ERROR: failed to install the containerd profile' <<< "${output}"
+        fi
+        if [[ "${fault}" == write ]]; then
+            [[ -d "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
+        else
+            assert_no_containerd_dropin
+        fi
+        return
+    fi
     output="$(run_loader "${CASE_DIR}/credential.p7b.cred")"
+    if [[ "${fault}" == activation ]]; then
+        grep -Fq 'WARNING: failed to activate acl_ipe_boot_policy' <<< "${output}"
+        assert_no_containerd_dropin
+        return
+    fi
     grep -Fq "Using IPE mode '${imds_mode}'." <<< "${output}" ||
         { echo "loader did not report requested mode '${imds_mode}'" >&2; return 1; }
     [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
     [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
-    cmp "${CASE_DIR}/containerd-profile.conf" "${CASE_DIR}/dropins/90-acl-profile.conf"
+    cmp "${CASE_DIR}/containerd-erofs-profile.conf" "${CASE_DIR}/dropins/90-acl-profile.conf"
+    grep -Fq "Enabled the EROFS containerd profile at ${CASE_DIR}/dropins/90-acl-profile.conf." \
+        <<< "${output}"
 )
 
 # ---- Test: 'enforcing' is reserved; loader logs an explicit unsupported
@@ -177,6 +220,7 @@ EOF
     # Verify policy was loaded but not activated, and boot was not blocked.
     [[ -s "${IPE_DIR}/new_policy" ]]
     [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
+    assert_no_containerd_dropin
 }
 
 
@@ -375,6 +419,10 @@ test_valid_inactive_load
 test_valid_disabled_alias_inactive
 test_removed_alias_inactive
 test_valid_audit_active
+run_active_case failed-activation audit activation
+run_active_case missing-containerd-profile audit missing-profile
+run_active_case failed-containerd-directory audit directory
+run_active_case failed-containerd-write audit write
 test_enforcing_mode_safe_fallback
 test_duplicate_token
 test_malformed_hash
