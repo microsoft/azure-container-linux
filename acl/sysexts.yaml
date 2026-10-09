@@ -57,6 +57,7 @@ sysexts:
     mode: embedded
     packages:
       - app-containers/containerd
+      - erofs-utils
 
  # --- scenario-specific sysexts -----------------------------------------
   - name: docker
