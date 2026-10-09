@@ -1036,29 +1036,6 @@ EOF
     sudo chmod 0644 "${root_fs_dir}/etc/systemd/system/ldconfig.service"
 }
 
-# ── etcd: keep etcdctl, remove the unused native server ───────────────────────
-_remove_etcd_server_rpm() {
-    local root_fs_dir="$1"
-
-    # Remove etcd server and etcdutl binaries - we only need etcdctl from the etcd RPM.
-    if [[ -f "${root_fs_dir}/usr/bin/etcd" ]]; then
-        info "RPM mode: Removing unused /usr/bin/etcd"
-        sudo rm -f "${root_fs_dir}/usr/bin/etcd"
-    fi
-    if [[ -f "${root_fs_dir}/usr/bin/etcdutl" ]]; then
-        info "RPM mode: Removing /usr/bin/etcdutl (not needed)"
-        sudo rm -f "${root_fs_dir}/usr/bin/etcdutl"
-    fi
-    # The etcd package is retained only for etcdctl; do not ship an unused server unit.
-    if [[ -f "${root_fs_dir}/usr/lib/systemd/system/etcd.service" ]]; then
-        info "RPM mode: Removing unused etcd.service"
-        sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/etcd.service"
-    fi
-    # Remove the native service's preset and configuration as well.
-    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system-preset/50-etcd.preset"
-    sudo rm -f "${root_fs_dir}/etc/etcd/etcd-default-conf.yml"
-}
-
 # CIS Level 1 hardening
 # Addresses CIS Azure Container Linux 4 Level 1 failures without affecting
 # network connectivity or core system operation. All settings are safe for
@@ -1336,7 +1313,6 @@ finish_image_post_tmpfiles_rpm() {
     _configure_disk_autogrow_rpm "${root_fs_dir}"
     _remove_unused_systemd_components_rpm "${root_fs_dir}"
     _configure_pcrlock_rpm "${root_fs_dir}"
-    _remove_etcd_server_rpm "${root_fs_dir}"
     _configure_kdump_rpm "${root_fs_dir}"
     _configure_misc_rpm "${root_fs_dir}"
     _configure_cis_hardening_rpm "${root_fs_dir}"
