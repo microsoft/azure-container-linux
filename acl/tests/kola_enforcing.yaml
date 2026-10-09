@@ -194,6 +194,18 @@ tests:
       - platforms: [azure]
         reason: Test expects installer-written cloud-config to own hostname, which conflicts with Azure hostname handling
 
+  - name: cl.metadata.azure
+    exceptions:
+      - platforms: [qemu]
+        reason: Azure-only test; kola registers it only for the azure platform, so QEMU runs never select it
+      - platforms: [azure]
+        imageVariants: [acl-t]
+        reason: |
+          TEMPORARY (AB#18833): acl-t removes the oem-azure sysext, which
+          carries azure-metadata-ipv4, so COREOS_AZURE_IPV4_DYNAMIC keeps the
+          unassigned WireServer address there. Revert once acl-t installs the
+          correction.
+
   - name: acl.network.initramfs.second-boot
     exceptions:
       - platforms: [azure]
