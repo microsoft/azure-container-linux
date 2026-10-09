@@ -98,9 +98,7 @@ packages:
   sys-block/open-iscsi: iscsi-initiator-utils
 
   # Container runtime
-  app-containers/docker:
-    - moby-engine
-    - sdnotify-proxy
+  app-containers/docker: moby-engine
   app-emulation/docker: moby-engine  # Alternative package name
   app-containers/docker-cli: docker-cli
   app-containers/docker-buildx: docker-buildx
@@ -710,4 +708,3 @@ packages:
   sys-libs/nss-usrfiles: SKIP
   sys-libs/tevent: SKIP
   sys-power/acpid: SKIP
-
