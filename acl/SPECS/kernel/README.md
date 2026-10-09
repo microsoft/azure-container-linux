@@ -115,8 +115,35 @@ ARM64 resource groups; its five required-test failures do not qualify ARM64.
 Standard Azure Kola now tags resource groups with `kolaArch`, and the matching
 pipeline cleanup must require both build ID and architecture. Older untagged
 groups are left to the janitor rather than risking another active test.
-Full pipeline qualification remains pending the smoke-isolation and cleanup
-corrections.
+
+### Both-architecture development qualification (2026-10-09)
+
+[acldevel run 1220805](https://dev.azure.com/mariner-org/ACL/_build/results?buildId=1220805)
+completed successfully using these exact source versions:
+
+- ACL: `96f209f5cc050776439175f1fcbf236272723d24`.
+- acl-pipelines: `1c768f9ca661ee500f75b7ab9cd451572e812198`.
+- Mantle: `4d40d4650289105028671f259bd6941d42ba4ffe`.
+
+Both architectures built fresh kernel RPMs, normal/test Azure images and COSI
+artifacts, and published their gallery versions. Each passed all eight Azure
+smoke checks and all 49 selected required Kola tests. Each Kola evaluation
+reported 69 passes, one skip and two existing context-exempt `acl.internet`
+failures; no exemptions were added. Evaluation logs are 710 (AMD64) and 744
+(ARM64).
+
+Smoke logs 611 (AMD64) and 792 (ARM64 retry) confirm zero base `/usr` denials,
+zero lost audit records, signed BPRM/MMAP allows, and expected sysext and
+writable-copy denials. IPE and SELinux reboot toggles passed, including
+restoration of the original profile.
+
+ARM64 smoke required one retry with the same source and gallery image. Its
+first attempt passed the IPE checks and both SELinux mode assertions, but the
+VM stopped during the final profile-restoration reboot (log 678). Serial-log
+collection also failed, so the stop's cause remains undiagnosed. The complete
+retry passed without code changes; this is not proof that the reboot issue
+was fixed. This result qualifies the opt-in development experiment, not
+production deployment or general reboot reliability.
 
 Do not count a successful command exit in audit mode as proof. Preserve the
 guest logs, pipeline artifacts, RPM provenance manifest and source commits.
