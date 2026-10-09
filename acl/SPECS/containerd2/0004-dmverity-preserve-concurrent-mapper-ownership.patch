@@ -1,0 +1,188 @@
+diff --git a/vendor/github.com/containerd/go-dmverity/pkg/verity/activation_test.go b/vendor/github.com/containerd/go-dmverity/pkg/verity/activation_test.go
+new file mode 100644
+index 0000000000..e8b3a11b69
+--- /dev/null
++++ b/vendor/github.com/containerd/go-dmverity/pkg/verity/activation_test.go
+@@ -0,0 +1,102 @@
++package verity
++
++import (
++	"errors"
++	"sync"
++	"testing"
++
++	"github.com/containerd/go-dmverity/pkg/dm"
++	"golang.org/x/sys/unix"
++)
++
++type activationControl struct {
++	mu        sync.Mutex
++	exists    bool
++	loadErr   error
++	resumeErr error
++	removeErr error
++	removes   int
++}
++
++func (c *activationControl) CreateDevice(string) (uint64, error) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if c.exists {
++		return 0, unix.EBUSY
++	}
++	c.exists = true
++	return 1, nil
++}
++
++func (c *activationControl) LoadTable(string, []dm.Target) error { return c.loadErr }
++func (c *activationControl) SuspendDevice(string, bool) error    { return c.resumeErr }
++func (c *activationControl) RemoveDevice(string) error {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	c.removes++
++	if c.removeErr == nil {
++		c.exists = false
++	}
++	return c.removeErr
++}
++
++func TestActivationCleanupOwnership(t *testing.T) {
++	sentinel := errors.New("activation failure")
++	for _, tc := range []struct {
++		name    string
++		control *activationControl
++		wantErr error
++		removes int
++		exists  bool
++	}{
++		{name: "duplicate", control: &activationControl{exists: true}, wantErr: unix.EBUSY, exists: true},
++		{name: "load failure", control: &activationControl{loadErr: sentinel}, wantErr: sentinel, removes: 1},
++		{name: "resume failure", control: &activationControl{resumeErr: unix.EKEYREJECTED}, wantErr: unix.EKEYREJECTED, removes: 1},
++		{name: "success", control: &activationControl{}, exists: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			c := tc.control
++			err := activateDevice(c, "test", dm.Target{})
++			if !errors.Is(err, tc.wantErr) || c.removes != tc.removes || c.exists != tc.exists {
++				t.Fatalf("err=%v removes=%d exists=%v", err, c.removes, c.exists)
++			}
++		})
++	}
++}
++
++func TestActivationCleanupErrorPreserved(t *testing.T) {
++	c := &activationControl{loadErr: unix.EIO, removeErr: unix.EBUSY}
++	err := activateDevice(c, "test", dm.Target{})
++	if !errors.Is(err, unix.EIO) || !errors.Is(err, unix.EBUSY) || c.removes != 1 {
++		t.Fatalf("cleanup error lost or repeated: %v removes=%d", err, c.removes)
++	}
++}
++
++func TestConcurrentActivationLoserPreservesWinner(t *testing.T) {
++	c := &activationControl{}
++	results := make(chan error, 2)
++	var wg sync.WaitGroup
++	for i := 0; i < 2; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			results <- activateDevice(c, "test", dm.Target{})
++		}()
++	}
++	wg.Wait()
++	close(results)
++	successes, collisions := 0, 0
++	for err := range results {
++		switch {
++		case err == nil:
++			successes++
++		case errors.Is(err, unix.EBUSY):
++			collisions++
++		default:
++			t.Fatalf("unexpected error: %v", err)
++		}
++	}
++	if successes != 1 || collisions != 1 || !c.exists || c.removes != 0 {
++		t.Fatalf("winner lost: successes=%d collisions=%d exists=%v removes=%d", successes, collisions, c.exists, c.removes)
++	}
++}
+diff --git a/vendor/github.com/containerd/go-dmverity/pkg/verity/verity.go b/vendor/github.com/containerd/go-dmverity/pkg/verity/verity.go
+index eaf80d8ede..17b7d778e2 100644
+--- a/vendor/github.com/containerd/go-dmverity/pkg/verity/verity.go
++++ b/vendor/github.com/containerd/go-dmverity/pkg/verity/verity.go
+@@ -415,17 +415,6 @@ func Open(params *Params, name, dataDevice, hashDevice string, rootHash []byte,
+ 	}
+ 	defer c.Close()
+ 
+-	created := false
+-	defer func() {
+-		if !created {
+-			_ = c.RemoveDevice(name)
+-		}
+-	}()
+-
+-	if _, err := c.CreateDevice(name); err != nil {
+-		return "", err
+-	}
+-
+ 	target := dm.Target{
+ 		SectorStart: 0,
+ 		Length:      lengthSectors,
+@@ -433,20 +422,13 @@ func Open(params *Params, name, dataDevice, hashDevice string, rootHash []byte,
+ 		Params:      targetParams,
+ 	}
+ 
+-	if err := c.LoadTable(name, []dm.Target{target}); err != nil {
+-		_ = c.RemoveDevice(name)
+-		return "", fmt.Errorf("load table: %w", err)
+-	}
+-
+-	if err := c.SuspendDevice(name, false); err != nil {
+-		_ = c.RemoveDevice(name)
++	if err := activateDevice(c, name, target); err != nil {
+ 		if signatureFile != "" && errors.Is(err, unix.EKEYREJECTED) {
+-			return "", fmt.Errorf("signature verification failed: key rejected by kernel (check trusted keyring)")
++			return "", fmt.Errorf("signature verification failed: key rejected by kernel (check trusted keyring): %w", err)
+ 		}
+-		return "", fmt.Errorf("resume device: %w", err)
++		return "", err
+ 	}
+ 
+-	created = true
+ 	devPath := "/dev/mapper/" + name
+ 
+ 	for i := 0; i < 50; i++ {
+@@ -459,6 +441,33 @@ func Open(params *Params, name, dataDevice, hashDevice string, rootHash []byte,
+ 	return devPath, nil
+ }
+ 
++type deviceActivator interface {
++	CreateDevice(string) (uint64, error)
++	LoadTable(string, []dm.Target) error
++	SuspendDevice(string, bool) error
++	RemoveDevice(string) error
++}
++
++func activateDevice(c deviceActivator, name string, target dm.Target) (retErr error) {
++	if _, err := c.CreateDevice(name); err != nil {
++		return err
++	}
++	defer func() {
++		if retErr != nil {
++			if err := c.RemoveDevice(name); err != nil {
++				retErr = errors.Join(retErr, fmt.Errorf("remove failed activation %q: %w", name, err))
++			}
++		}
++	}()
++	if err := c.LoadTable(name, []dm.Target{target}); err != nil {
++		return fmt.Errorf("load table: %w", err)
++	}
++	if err := c.SuspendDevice(name, false); err != nil {
++		return fmt.Errorf("resume device: %w", err)
++	}
++	return nil
++}
++
+ func Close(name string) error {
+ 	c, err := dm.Open()
+ 	if err != nil {

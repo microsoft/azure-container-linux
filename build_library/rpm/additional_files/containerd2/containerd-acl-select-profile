@@ -1,0 +1,78 @@
+#!/bin/bash
+
+set -euo pipefail
+
+base_config="${1:-}"
+merged_config_path="${ACL_CONTAINERD_CONFIG_PATH:-/run/containerd/acl-config.toml}"
+erofs_config="${ACL_CONTAINERD_EROFS_CONFIG:-/usr/share/containerd/acl-erofs.toml}"
+
+fail() { echo "ERROR: $*" >&2; exit 1; }
+
+[[ -n "${base_config}" && -r "${base_config}" ]] ||
+    fail "containerd base config is not readable: ${base_config}"
+[[ -r "${erofs_config}" ]] ||
+    fail "containerd EROFS profile is not readable: ${erofs_config}"
+
+# Convert a given path to an absolute path and escape it for use in a TOML file.
+get_absolute_path() {
+    local path="$1"
+    [[ "${path}" == /* ]] || path="$(pwd)/${path}"
+    path="${path//\\/\\\\}"
+    path="${path//\"/\\\"}"
+    printf '"%s"' "${path}"
+}
+
+# Merge the base containerd config with the EROFS profile.
+mkdir -p "$(dirname "${merged_config_path}")"
+temporary_merged_config="${merged_config_path}.tmp.$$"
+trap 'rm -f -- "${temporary_merged_config}"' EXIT
+cat > "${temporary_merged_config}" <<EOF
+version = 4
+imports = [
+    $(get_absolute_path "${base_config}"),
+    $(get_absolute_path "${erofs_config}")
+]
+EOF
+
+# Nested imports can override the profile; verify the effective settings.
+if ! containerd --config "${temporary_merged_config}" config dump |
+    awk '
+        {
+            # Normalize TOML quotes and whitespace for exact comparisons.
+            gsub(/\047/, "\"")
+            sub(/^[[:space:]]+/, "")
+            sub(/[[:space:]]+$/, "")
+        }
+
+        /^\[/ {
+            section = $0
+        }
+
+        section == "[plugins.\"io.containerd.snapshotter.v1.erofs\"]" &&
+            /^enable_dmverity_referrers =/ {
+                referrers_enabled = ($0 == "enable_dmverity_referrers = true")
+            }
+
+        section == "[plugins.\"io.containerd.cri.v1.images\"]" &&
+            /^snapshotter =/ {
+                erofs_snapshotter_selected = ($0 == "snapshotter = \"erofs\"")
+            }
+
+        section == "[plugins.\"io.containerd.service.v1.diff-service\"]" &&
+            /^default =/ {
+                erofs_differ_selected = ($0 == "default = [\"erofs\", \"walking\"]")
+            }
+
+        END {
+            if (!referrers_enabled ||
+                !erofs_snapshotter_selected ||
+                !erofs_differ_selected) {
+                exit 1
+            }
+        }
+    '; then
+    fail "Cannot select EROFS profile. Check for config errors or conflicting nested imports in ${base_config}"
+fi
+mv -Tf "${temporary_merged_config}" "${merged_config_path}"
+
+echo "Selected EROFS containerd runtime profile (base: ${base_config})"

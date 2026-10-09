@@ -31,6 +31,8 @@ prepare_case() {
     mkdir -p "${IPE_DIR}"
     : > "${IPE_DIR}/new_policy"
     printf '9\n' > "${IPE_DIR}/enforce"
+    cp "${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-profile.conf" \
+        "${CASE_DIR}/containerd-profile.conf"
 
     command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
 acl_security_profile() {
@@ -48,6 +50,8 @@ run_loader() {
     ACL_IPE_CMDLINE_FILE="${CASE_DIR}/cmdline" \
     ACL_IPE_CREDENTIAL_PATH="${credential}" \
     ACL_IPE_SECURITY_PROFILE_HELPER="${CASE_DIR}/security-profile.sh" \
+    ACL_IPE_CONTAINERD_PROFILE="${CASE_DIR}/containerd-profile.conf" \
+    ACL_IPE_CONTAINERD_DROPIN="${CASE_DIR}/dropins/90-acl-profile.conf" \
         bash "${LOADER}" 2>&1
 }
 
@@ -149,6 +153,7 @@ EOF
         { echo "loader did not report requested mode '${imds_mode}'" >&2; return 1; }
     [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
     [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
+    cmp "${CASE_DIR}/containerd-profile.conf" "${CASE_DIR}/dropins/90-acl-profile.conf"
 )
 
 # ---- Test: 'enforcing' is reserved; loader logs an explicit unsupported
