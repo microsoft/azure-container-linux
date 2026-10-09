@@ -9,6 +9,8 @@ IPE_DIR="${ACL_IPE_DIR:-/sys/kernel/security/ipe}"
 CREDENTIAL_PATH="${ACL_IPE_CREDENTIAL_PATH:-/.extra/credentials/acl-ipe-policy.p7b.cred}"
 CMDLINE_FILE="${ACL_IPE_CMDLINE_FILE:-/proc/cmdline}"
 SECURITY_PROFILE_HELPER="${ACL_IPE_SECURITY_PROFILE_HELPER:-/usr/lib/acl/acl-node-security-profile.sh}"
+CONTAINERD_PROFILE_SRC="${ACL_IPE_CONTAINERD_PROFILE:-/usr/lib/acl/containerd-erofs-profile.conf}"
+CONTAINERD_PROFILE_DEST="${ACL_IPE_CONTAINERD_DROPIN:-/run/systemd/system/containerd.service.d/90-acl-profile.conf}"
 
 log()  { echo "acl-ipe-load: $*" >&2; }
 skip() { log "WARNING: $*; continuing boot without activating IPE."; exit 0; }
@@ -110,3 +112,14 @@ log "Activated policy ${POLICY_NAME}."
 policy_active="$(cat "${active_file}" 2>/dev/null || true)"
 [[ "${policy_active}" == "1" ]] ||
     skip "policy ${POLICY_NAME} activation verification failed"
+
+if [[ ! -r "${CONTAINERD_PROFILE_SRC}" ]]; then
+    log "ERROR: active IPE policy has no containerd profile at ${CONTAINERD_PROFILE_SRC}."
+    exit 1
+fi
+if ! mkdir -p "${CONTAINERD_PROFILE_DEST%/*}" ||
+    ! cat "${CONTAINERD_PROFILE_SRC}" > "${CONTAINERD_PROFILE_DEST}"; then
+    log "ERROR: failed to install the containerd profile at ${CONTAINERD_PROFILE_DEST}."
+    exit 1
+fi
+log "Enabled the EROFS containerd profile at ${CONTAINERD_PROFILE_DEST}."

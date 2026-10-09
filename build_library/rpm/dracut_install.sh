@@ -323,6 +323,8 @@ SETUP_EOF
                 "${ipe_load_module}/acl-ipe-load.sh"
             sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.service" \
                 "${ipe_load_module}/acl-ipe-load.service"
+            sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/containerd2/containerd-acl-profile.conf" \
+                "${ipe_load_module}/containerd-erofs-profile.conf"
             sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/acl-node-security-profile.sh" \
                 "${ipe_load_module}/acl-node-security-profile.sh"
             sudo chmod +x "${ipe_load_module}/module-setup.sh"
