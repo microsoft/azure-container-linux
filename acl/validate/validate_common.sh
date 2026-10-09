@@ -180,19 +180,26 @@ is_azure_linux_3() {
 wait_for_ssh() {
     local ip="$1"
     local timeout="$2"
-    local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes"
-    ssh_opts+=" -i $VM_SSH_KEY"
+    local ssh_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes)
+    [[ -z "$VM_SSH_KEY" ]] || ssh_opts+=(-i "$VM_SSH_KEY")
     info "Waiting for SSH to become available on $ip (timeout: ${timeout}s)..."
     local start_time=$(date +%s)
     local end_time=$((start_time + timeout))
+    local attempts=0 last_status="not attempted"
     while [[ $(date +%s) -lt $end_time ]]; do
-        if ssh $ssh_opts "${VM_SSH_USER}@${ip}" "echo 'SSH ready'" &>/dev/null; then
+        attempts=$((attempts + 1))
+        if ssh "${ssh_opts[@]}" "${VM_SSH_USER}@${ip}" "echo 'SSH ready'" &>/dev/null; then
             info "SSH connection established!"
             return 0
+        else
+            last_status=$?
         fi
         sleep 5
     done
     error "Timeout waiting for SSH on $ip"
+    # Do not print raw SSH stderr: remote banners and authentication diagnostics
+    # can contain sensitive data. Report the existing probes, without retrying.
+    error "SSH readiness probes: attempts=${attempts}, last exit status=${last_status}; guest scripts were not executed"
     return 1
 }
 
@@ -931,6 +938,7 @@ validate_main() {
                     else
                         warn "  az vm run-command invoke --command-id RunShellScript --name ${VM_NAME} --resource-group ${VM_RG} --scripts 'echo Hello'"
                     fi
+                    exit 1
                 fi
             fi
             # Nginx curl test for container test (QEMU only)

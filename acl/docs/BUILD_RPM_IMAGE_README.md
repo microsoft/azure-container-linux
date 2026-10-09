@@ -368,6 +368,17 @@ You can also use the `--run-script` flag to run tests on the Azure VM, just like
 - SSH user: `azureuser` (default) - customize with `--ssh-user=USER`
 - Ignition runs on first boot only
 
+With `--run-script`, an SSH readiness timeout is a validation failure even
+when no guest script ran. The validator returns nonzero through
+`build_rpm_image.sh`; recovery hints are not a successful test result.
+Timeout diagnostics report probe count and last exit status without dumping
+SSH banners or authentication output. They do not establish why boot or SSH
+failed. Offline status-propagation regressions (no VM or Azure access):
+
+```bash
+bash acl/validate/test_validate_common.sh
+```
+
 #### GPU Smoke Testing (Azure Only)
 
 Test NVIDIA GPU sysexts on an Azure GPU VM. The script parameterizes the
