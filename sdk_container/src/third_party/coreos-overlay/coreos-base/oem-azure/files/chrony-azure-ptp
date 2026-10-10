@@ -1,0 +1,18 @@
+#!/bin/bash
+
+set -euo pipefail
+
+config_dir="/run/chrony-azure/conf.d"
+config_file="${config_dir}/azure-ptp.conf"
+
+install -d -m 0755 "${config_dir}"
+
+if [[ -e /dev/ptp_hyperv ]]; then
+    # trust keeps the host clock authoritative: without it a disagreement with the
+    # public NTP fallback marks both sources falsetickers and chronyd loses sync.
+    printf '%s\n' \
+        'refclock PHC /dev/ptp_hyperv poll 3 dpoll -2 offset 0 stratum 2 prefer trust' \
+        > "${config_file}"
+else
+    rm -f "${config_file}"
+fi
