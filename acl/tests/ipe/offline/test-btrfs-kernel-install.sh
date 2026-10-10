@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../../../.." && pwd)"
-work="${TMPDIR:?Set TMPDIR to a project-local scratch directory}/btrfs-install-$$"
+work="${TMPDIR:-${root}/.test-scratch}/btrfs-install-$$"
 mkdir -p "$work"
 trap 'rm -rf "$work"' EXIT
 source "$root/acl/tests/ipe/offline/function-extraction.sh"
