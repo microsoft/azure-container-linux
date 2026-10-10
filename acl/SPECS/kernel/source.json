@@ -1,0 +1,7 @@
+{
+  "azurelinux_commit": "9819d91c536ed18f31ff1b860fc97f84e62cd2b0",
+  "kernel_commit": "05f2698e41ebb5e78abf40749f797a687e15df73",
+  "version": "6.6.157.1",
+  "release": "1.btrfsipe1",
+  "ipe_dependency": "4736a5161439bc517b67ca7eb83650f1c1f5d928"
+}

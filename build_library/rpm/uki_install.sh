@@ -117,6 +117,10 @@ uki_provision_rpm() {
     if [[ ! -f "${kernel}" ]]; then
         die "UKI/RPM: Kernel not found on ESP (tried ${ESP_DIR}/vmlinuz-* and ${ESP_DIR}/flatcar/vmlinuz-a)"
     fi
+    if [[ "${ACL_BTRFS_IPE_KERNEL:-0}" == "1" ]]; then
+        [[ "$(basename "${kernel}")" == "vmlinuz-6.6.157.1-1.btrfsipe1.azl3" ]] ||
+            die "UKI/RPM: experimental image selected a stock or unexpected kernel"
+    fi
 
     local initrd="${ESP_DIR}/flatcar/initramfs-a.img"
     if [[ ! -f "${initrd}" ]]; then

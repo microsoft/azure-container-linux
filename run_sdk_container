@@ -208,6 +208,7 @@ call_docker exec "${name}" sh -c 'cp /etc/hosts /etc/hosts2; umount /etc/hosts ;
 
 call_docker exec "${tty[@]}" -i \
     -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" \
+    -e ACL_BTRFS_IPE_KERNEL="${ACL_BTRFS_IPE_KERNEL:-0}" \
     -e ACL_IPE_MODE="${ACL_IPE_MODE}" \
     -e ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE}" \
     "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"

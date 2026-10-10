@@ -12,6 +12,10 @@ ARTIFACT_PUBLISH_DIR="${ACL_DIR}/../__build__/rpm-staging"
 BUILD_DIR="${ACL_DIR}/../__build__/rpms_build_dir"
 OUT_DIR="${ACL_DIR}/../__build__/rpms_out_dir"
 REUSE_SOURCES="${REUSE_SOURCES:-true}"
+case "${ACL_BTRFS_IPE_KERNEL:-0}" in
+    0|1) ;;
+    *) echo "ACL_BTRFS_IPE_KERNEL must be 0 or 1" >&2; exit 1 ;;
+esac
 
 function log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
@@ -28,6 +32,21 @@ function cleanup() {
 }
 
 function clone_azl3() {
+    if [[ "${ACL_BTRFS_IPE_KERNEL:-0}" == "1" ]]; then
+        local commit
+        commit=$(jq -er '.azurelinux_commit' "${SPECS_DIR}/kernel/source.json")
+        if [[ ! -d azurelinux ]]; then
+            git init azurelinux
+            git -C azurelinux remote add origin https://github.com/microsoft/azurelinux.git
+            git -C azurelinux fetch --depth 1 origin "${commit}"
+            git -C azurelinux checkout --detach FETCH_HEAD
+        fi
+        [[ "$(git -C azurelinux rev-parse HEAD)" == "${commit}" ]] || {
+            log "Experimental kernel requires a fresh build directory with toolkit ${commit}"
+            exit 1
+        }
+        return
+    fi
     if [[ -d "azurelinux" && "$REUSE_SOURCES" == "false" ]]; then
         sudo rm -rf azurelinux
     fi
@@ -169,7 +188,23 @@ if [[ ${#package_build_list[@]} -eq 0 ]]; then
     exit 1
 fi
 
+if [[ "${ACL_BTRFS_IPE_KERNEL:-0}" != "1" &&
+      " ${package_build_list[*]} " == *" kernel "* ]]; then
+    log "ERROR: The experimental kernel requires ACL_BTRFS_IPE_KERNEL=1"
+    exit 1
+fi
+
 clone_azl3
+
+if [[ "${ACL_BTRFS_IPE_KERNEL:-0}" == "1" ]]; then
+    patch_sha256="$(sha256sum "${SPECS_DIR}/kernel/btrfs-ipe.patch" | cut -d' ' -f1)"
+    jq --arg patch_sha256 "${patch_sha256}" \
+        '. + {patch_sha256: $patch_sha256}' "${SPECS_DIR}/kernel/source.json" \
+        > "${ARTIFACT_PUBLISH_DIR}/btrfs-ipe-kernel.json"
+    if [[ " ${package_build_list[*]} " != *" kernel "* ]]; then
+        package_build_list+=(kernel)
+    fi
+fi
 
 build_specs "$SPECS_DIR"
 
