@@ -13,6 +13,8 @@
 # validates that initial state without forcing a reset first, then Steps
 # 1-4 exercise the canonical disabled/audit reboot toggle, and Step 5
 # exercises the 'off' alias.
+# The Btrfs diagnostic isolates its boot audit from earlier container smoke
+# workloads by rebooting after verifying the initial mode and assets.
 
 set -euo pipefail
 
@@ -120,17 +122,37 @@ assert_ipe_assets_present() {
         error "Valid /usr root hash is missing from the UKI"
         return 1
     fi
-    if ipe_has_root_hash_signature "${cmdline}"; then
+    if ipe_has_root_hash_signature "${cmdline}" && ! is_btrfs_diagnostic; then
         error "Policy-only IPE must not require a /usr root-hash signature"
         return 1
     fi
     info "IPE assets are present and policy active state is '${policy_active}'"
 }
 
+is_btrfs_diagnostic() {
+    [[ "$(ssh_cmd 'uname -r')" == "6.6.157.1-1.btrfsipe1.azl3" ]] &&
+        [[ " $(ssh_cmd 'cat /proc/cmdline') " == *" ipe.success_audit=1 "* ]]
+}
+
 run_audit_validation() {
+    local test_script="${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh"
+    if is_btrfs_diagnostic; then
+        test_script="${SCRIPT_DIR}/acl/tests/ipe/btrfs/run-usr-audit-test.sh"
+    fi
     ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
         "sudo bash -s" \
-        < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh"
+        < "${test_script}"
+}
+
+validate_initial_audit_boot() {
+    assert_ipe_assets_present 1
+    if is_btrfs_diagnostic; then
+        info "Rebooting Btrfs diagnostic to isolate host /usr audit from earlier container workloads"
+        reboot_and_wait
+        assert_ipe_mode audit
+        assert_ipe_assets_present 1
+    fi
+    run_audit_validation
 }
 
 main() {
@@ -180,8 +202,7 @@ main() {
     info "Initial acl-node-security-profile: '${initial_profile:-<absent>}' (ipe='${initial_ipe_value:-<absent>}') -> expected IPE mode '${initial_expected}'"
     assert_ipe_mode "${initial_expected}"
     if [[ "${initial_expected}" == "audit" ]]; then
-        assert_ipe_assets_present 1
-        run_audit_validation
+        validate_initial_audit_boot
     else
         assert_ipe_assets_present 0
     fi

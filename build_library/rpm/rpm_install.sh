@@ -968,6 +968,18 @@ rpm_install_ipe_policy() {
     [[ -n "${BUILD_DIR:-}" ]] ||
         die "RPM mode: BUILD_DIR is not set; cannot create IPE signing assets"
 
+    if [[ "${ACL_BTRFS_IPE_DIAGNOSTIC:-0}" == "1" ]]; then
+        # The diagnostic guest must query kernel audit loss, not infer it from logs.
+        rpm_install_package "${root_fs_dir}" audit ||
+            die "RPM mode: failed to install Btrfs IPE audit validation tools"
+        sudo test -x "${root_fs_dir}/usr/sbin/auditctl" ||
+            die "RPM mode: diagnostic image is missing auditctl"
+        sudo mkdir -p "${root_fs_dir}/etc/audit/rules.d"
+        printf '%s\n' '-b 8192' |
+            sudo tee "${root_fs_dir}/etc/audit/rules.d/99-btrfs-ipe.rules" >/dev/null ||
+            die "RPM mode: failed to configure diagnostic audit backlog"
+    fi
+
     local policy_src="${BUILD_LIBRARY_DIR}/rpm/additional_files/ipe/acl-ipe-boot-policy.pol"
 
     rpm_validate_ipe_policy_source "${policy_src}"

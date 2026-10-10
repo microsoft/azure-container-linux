@@ -121,6 +121,11 @@ uki_provision_rpm() {
         [[ "$(basename "${kernel}")" == "vmlinuz-6.6.157.1-1.btrfsipe1.azl3" ]] ||
             die "UKI/RPM: experimental image selected a stock or unexpected kernel"
     fi
+    if [[ "${ACL_BTRFS_IPE_DIAGNOSTIC:-0}" == "1" ]]; then
+        [[ "${ACL_BTRFS_IPE_KERNEL:-0}" == "1" && "${IPE_CAPABLE}" == "true" &&
+           "${ACL_IPE_SIGNING_MODE:-ephemeral}" == "ephemeral" ]] ||
+            die "UKI/RPM: Btrfs diagnostic kernel requires IPE assets and ephemeral signing"
+    fi
 
     local initrd="${ESP_DIR}/flatcar/initramfs-a.img"
     if [[ ! -f "${initrd}" ]]; then
@@ -208,6 +213,9 @@ OSREL
     cmdline+=" consoleblank=0"
     if [[ -n "${ipe_policy_hash_token}" ]]; then
         cmdline+=" ${ipe_policy_hash_token}"
+    fi
+    if [[ "${ACL_BTRFS_IPE_DIAGNOSTIC:-0}" == "1" ]]; then
+        cmdline+=" ipe.success_audit=1 audit_backlog_limit=8192"
     fi
     # NOTE: The main UKI cmdline contains only slot-independent args.
     # Slot-specific args are delivered via UKI addons:
@@ -555,6 +563,19 @@ _uki_build_verity_addons() {
         die "UKI/RPM: Verity enabled but no hash file at ${FLAGS_verity_hash}"
     fi
 
+    local test_signature_option=""
+    if [[ "${ACL_BTRFS_IPE_DIAGNOSTIC:-0}" == "1" ]]; then
+        local signature_name="verity-usr-${usr_hash}.p7s.cred"
+        local signature_dir="${esp_dir}/EFI/Linux/${uki_name}.extra.d"
+        local cert_dir
+        cert_dir="$(readlink -f "$(dirname "${FLAGS_disk_image}")")/acl-ipe-ephemeral"
+        sudo mkdir -p "${signature_dir}"
+        sudo bash "${BUILD_LIBRARY_DIR}/rpm/sign_btrfs_ipe_test_root.sh" \
+            "${FLAGS_verity_hash}" "${cert_dir}" "${signature_dir}/${signature_name}" ||
+            die "UKI/RPM: diagnostic root-hash signing failed"
+        test_signature_option=",root-hash-signature=/.extra/credentials/${signature_name}"
+    fi
+
     # Read partition UUIDs from the disk layout
     local disk_layout_file="${BUILD_LIBRARY_DIR}/disk_layout_uki.json"
     if [[ ! -f "${disk_layout_file}" ]]; then
@@ -618,7 +639,7 @@ _uki_build_verity_addons() {
         # mount.usr is in the main UKI; addon carries only slot-specific args
         cmdline="systemd.verity_usr_data=PARTUUID=${data_uuid}"
         cmdline+=" systemd.verity_usr_hash=PARTUUID=${hash_uuid}"
-        cmdline+=" systemd.verity_usr_options=panic-on-corruption"
+        cmdline+=" systemd.verity_usr_options=panic-on-corruption${test_signature_option}"
         cmdline+=" usrhash=${usr_hash}"
         cmdline+=" acl.slot=${slot}"
 

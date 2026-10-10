@@ -76,6 +76,19 @@ grep -q 'export MODULE_SIGNING_KEY_DIR' /home/sdk/.bashrc || {
 #    our quotes for su -c "<cmd>" already.
 
 # Preserve HYBRID mode environment variables for RPM builds
+case "${ACL_BTRFS_IPE_DIAGNOSTIC:-0}" in
+    0) ;;
+    1)
+        [[ "${ACL_BTRFS_IPE_KERNEL:-0}" == "1" ]] || {
+            echo "Btrfs IPE diagnostics require ACL_BTRFS_IPE_KERNEL=1" >&2
+            exit 1
+        }
+        ;;
+    *) echo "ACL_BTRFS_IPE_DIAGNOSTIC must be 0 or 1" >&2; exit 1 ;;
+esac
+sed -i '/^export ACL_BTRFS_IPE_DIAGNOSTIC=/d' /home/sdk/.bashrc
+printf "export ACL_BTRFS_IPE_DIAGNOSTIC='%s'\n" "${ACL_BTRFS_IPE_DIAGNOSTIC:-0}" >> /home/sdk/.bashrc
+
 case "${ACL_BTRFS_IPE_KERNEL:-0}" in
     0|1) ;;
     *) echo "ACL_BTRFS_IPE_KERNEL must be 0 or 1" >&2; exit 1 ;;

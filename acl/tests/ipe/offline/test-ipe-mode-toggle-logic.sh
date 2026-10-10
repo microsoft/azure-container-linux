@@ -236,6 +236,13 @@ test_streamed_guest_contains_cmdline_parser() (
     trap 'rm -f "${payload}" "${payload}.out"' EXIT
     VM_SSH_USER=tester
     VM_IP=test-vm
+    ssh_cmd() {
+        [[ "$*" == "uname -r" ]] || {
+            echo "Unexpected guest command: $*" >&2
+            return 1
+        }
+        printf '%s\n' '6.6.157.1-stock'
+    }
     ssh() { cat > "${payload}"; }
 
     run_audit_validation
@@ -249,6 +256,64 @@ test_streamed_guest_contains_cmdline_parser() (
     fi
     grep -Fq 'FAILED: could not read the /usr dm-verity SHA-256 root hash from the command line' \
         "${payload}.out"
+)
+
+test_streamed_guest_selects_btrfs_validator() (
+    local payload="${TMPDIR:-/tmp}/ipe-btrfs-guest-payload.$$"
+    trap 'rm -f "${payload}"' EXIT
+    VM_SSH_USER=tester
+    VM_IP=test-vm
+    ssh_cmd() {
+        case "$*" in
+            "uname -r") printf '%s\n' '6.6.157.1-1.btrfsipe1.azl3' ;;
+            "cat /proc/cmdline") printf '%s\n' 'ipe.success_audit=1 audit_backlog_limit=8192' ;;
+            *) echo "Unexpected guest command: $*" >&2; return 1 ;;
+        esac
+    }
+    ssh() { cat > "${payload}"; }
+
+    run_audit_validation
+    bash -n "${payload}"
+    cmp "${payload}" "${SCRIPT_DIR}/acl/tests/ipe/btrfs/run-usr-audit-test.sh"
+)
+
+test_initial_btrfs_audit_isolates_container_history() (
+    local calls="${TMPDIR:-/tmp}/ipe-boot-order.$$" result
+    trap 'rm -f "${calls}"' EXIT
+    ssh_cmd() {
+        case "$*" in
+            "uname -r") printf '%s\n' "${kernel}" ;;
+            "cat /proc/cmdline") printf '%s\n' "${cmdline}" ;;
+            *) return 1 ;;
+        esac
+    }
+    assert_ipe_assets_present() { echo "assets:$1" >> "${calls}"; }
+    reboot_and_wait() { echo reboot >> "${calls}"; }
+    assert_ipe_mode() { echo "mode:$1" >> "${calls}"; }
+    run_audit_validation() { echo audit >> "${calls}"; }
+    info() { :; }
+    kernel=6.6.157.1-1.btrfsipe1.azl3
+    cmdline='ipe.success_audit=1 audit_backlog_limit=8192'
+    validate_initial_audit_boot
+    [[ "$(cat "${calls}")" == $'assets:1\nreboot\nmode:audit\nassets:1\naudit' ]]
+    : > "${calls}"
+    kernel=6.6.157.1-stock
+    validate_initial_audit_boot
+    [[ "$(cat "${calls}")" == $'assets:1\naudit' ]]
+    : > "${calls}"
+    kernel=6.6.157.1-1.btrfsipe1.azl3
+    cmdline=''
+    validate_initial_audit_boot
+    [[ "$(cat "${calls}")" == $'assets:1\naudit' ]]
+    : > "${calls}"
+    cmdline='ipe.success_audit=1 audit_backlog_limit=8192'
+    reboot_and_wait() { return 1; }
+    # Invoke normally in a child shell so errexit remains active.
+    set +e
+    (set -e; validate_initial_audit_boot)
+    result=$?
+    set -e
+    [[ "$result" != 0 && "$(cat "${calls}")" == "assets:1" ]]
 )
 
 test_copied_guest_script_needs_no_sibling_file() (
@@ -352,6 +417,8 @@ test_policy_only_cmdline_contract
 test_probe_denial_correlation
 test_host_imds_matches_guest_parser
 test_streamed_guest_contains_cmdline_parser
+test_streamed_guest_selects_btrfs_validator
+test_initial_btrfs_audit_isolates_container_history
 test_copied_guest_script_needs_no_sibling_file
 test_cleanup_preserves_primary_failure
 test_cleanup_reboots_after_any_mutation
