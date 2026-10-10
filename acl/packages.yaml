@@ -25,5 +25,6 @@ packages:
 
   # --- ACL-patched system packages ----------------------------------------
   - bootengine          # Flatcar bootengine (glob-based firstboot addon removal for UAPI UKI naming)
+  - containerd2         # Signed EROFS support not yet available from PMC
   - selinux-policy      # SELinux reference policy (ACL-specific modules)
   - trident             # Declarative OS lifecycle agent; built here for the acl-pipelines tridentRpmSource=sdk option
