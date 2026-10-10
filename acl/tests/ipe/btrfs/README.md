@@ -36,6 +36,28 @@ denials and audit loss, and expected sysext/writable-copy DENY controls.
 It rejects unclassified paths rather than assuming overlay means sysext.
 Fresh boot isolates prior container smoke namespaces from host audit evidence.
 
+## Split-branch qualification (2026-10-10)
+
+[Run 1221655](https://dev.azure.com/mariner-org/ACL/_build/results?buildId=1221655)
+completed successfully with ACL `3f65f63629f7458b691a004102faba245601c8fc`,
+pipelines `8e47a9f2000d3cb002882349524cacbe12a4d5e1` and Mantle
+`4d40d4650289105028671f259bd6941d42ba4ffe`.
+Both architectures built fresh kernel RPMs, normal/test Azure images and COSI
+artifacts, and published gallery versions.
+
+AMD64 and ARM64 each passed all eight smoke checks on the first attempt,
+including IPE/SELinux toggles and original-profile restoration. Smoke logs
+485/714 confirm zero base `/usr` denials and zero lost audit records, signed
+BPRM/MMAP allows, and expected sysext/writable-copy denials.
+Kola evaluation logs 681/746 each report all 49 required tests passing:
+69 total passes, one skip and the same two existing exempt `acl.internet`
+failures. No exemptions were added.
+
+This run validates the composed diagnostic branches containing the focused
+kernel changes and independent CI fix. Diagnostics-off behavior is covered
+by local regression tests, not by a separate live kernel-only run. This
+successful run does not establish the cause of the older reboot failure.
+
 ## Previous qualification, before branch separation
 
 [Run 1220805](https://dev.azure.com/mariner-org/ACL/_build/results?buildId=1220805)
@@ -51,7 +73,7 @@ ARM64 smoke needed one unchanged retry: the first VM stopped during the final
 profile-restoration reboot after IPE checks and SELinux assertions passed.
 Serial collection failed and the cause remains undiagnosed. The retry is not
 evidence that reboot reliability was fixed. These results qualify only the old
-source composition; a new pinned both-architecture run is required for this split.
+source composition; the split is qualified separately above.
 
 Kernel release remains `6.6.157.1-1.btrfsipe1.azl3`, patch SHA-256
 `945a28dafcd2a26022ef7a1277ff31ba4f616f58d15da7e0fbd9aef43401068f`.
