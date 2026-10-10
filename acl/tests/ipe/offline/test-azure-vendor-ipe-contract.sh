@@ -94,6 +94,7 @@ test_ipe_does_not_select_kola_security() (
         assert_single_arg "--board=${arch}-usr" "${KOLA_ARGS_LOG}"
         assert_single_arg "--azure-size=${size}" "${KOLA_ARGS_LOG}"
         assert_single_arg "--azure-hyper-v-generation=V2" "${KOLA_ARGS_LOG}"
+        assert_single_arg "--azure-resource-group-tag=kolaArch=${arch}" "${KOLA_ARGS_LOG}"
         if [[ "${source}" == gallery ]]; then
             assert_single_arg "--azure-disk-uri=${AZURE_DISK_URI}" "${KOLA_ARGS_LOG}"
             if grep -Fq -- '--azure-use-gallery' "${KOLA_ARGS_LOG}"; then
