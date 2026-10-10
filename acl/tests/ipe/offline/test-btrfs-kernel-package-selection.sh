@@ -8,7 +8,7 @@ AZL_PIN="$(jq -r .azurelinux_commit "$root/acl/SPECS/kernel/source.json")"
 
 git() {
     if [[ "$*" == "-C azurelinux rev-parse HEAD" ]]; then
-        printf '%s\n' "$AZL_PIN"
+        printf '%s\n' "${GIT_HEAD:-$AZL_PIN}"
     else
         echo "Unexpected git command: $*" >&2
         return 1
@@ -55,4 +55,5 @@ run_case opted-in 1 coreos-init "coreos-init kernel"
 run_case explicit-kernel 1 kernel kernel
 run_case missing-opt-in 0 kernel reject
 run_case invalid-opt-in 2 coreos-init reject
+GIT_HEAD=wrong-toolkit run_case stale-toolkit 1 coreos-init reject
 echo "Btrfs kernel package selection tests passed"
