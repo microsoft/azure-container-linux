@@ -31,6 +31,8 @@ src_install() {
 	systemd_enable_service multi-user.target chronyd.service
 	insinto "$(systemd_get_systemunitdir)"/chronyd.service.d
 	doins "${FILESDIR}"/chrony-hyperv.conf
+	exeinto /usr/libexec
+	doexe "${FILESDIR}"/chrony-azure-ptp
 	dotmpfiles "${FILESDIR}"/var-chrony.conf
 	dotmpfiles "${FILESDIR}"/etc-chrony.conf
 	insinto /usr/share/${PN}
