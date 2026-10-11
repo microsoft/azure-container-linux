@@ -29,6 +29,14 @@ switch_to_strict_mode
 . "${BUILD_LIBRARY_DIR}/toolchain_util.sh" || exit 1
 . "${BUILD_LIBRARY_DIR}/board_options.sh"  || exit 1
 
+IPE_CAPABLE="${ACL_IPE_CAPABLE:-false}"
+case "${IPE_CAPABLE}" in
+    true|false) ;;
+    *)
+        die_notrace "ACL_IPE_CAPABLE must be true or false (got: ${IPE_CAPABLE})"
+        ;;
+esac
+
 # Determine EFI architecture suffix
 case "${FLAGS_target}" in
     x86_64-efi)
@@ -151,6 +159,28 @@ OSREL
 
     info "UKI/RPM: USR-A uuid=${usr_a_uuid}  verity hash-offset=${verity_hash_offset}"
 
+    if [[ "${IPE_CAPABLE}" == "true" && ${FLAGS_verity} -ne ${FLAGS_TRUE} ]]; then
+        die "UKI/RPM: IPE assets require a /usr dm-verity root hash"
+    fi
+
+    # Bind the policy credential to the signed UKI command line.
+    local ipe_policy_cred=""
+    local ipe_policy_hash_token=""
+    if [[ "${IPE_CAPABLE}" == "true" ]]; then
+        local staged_cred
+        staged_cred="$(readlink -f "$(dirname "${FLAGS_disk_image}")")/acl-ipe-policy/acl-ipe-policy.p7b.cred"
+        [[ -s "${staged_cred}" ]] ||
+            die "UKI/RPM: staged IPE policy candidate not found at ${staged_cred}"
+        local policy_sha256
+        policy_sha256="$(sha256sum "${staged_cred}" | cut -d' ' -f1)"
+        policy_sha256="${policy_sha256,,}"
+        [[ "${policy_sha256}" =~ ^[0-9a-f]{64}$ ]] ||
+            die "UKI/RPM: invalid SHA-256 of staged IPE policy"
+        ipe_policy_cred="${staged_cred}"
+        ipe_policy_hash_token="acl.ipe.policy_sha256=${policy_sha256}"
+        info "UKI/RPM: IPE policy SHA-256 = ${policy_sha256}"
+    fi
+
     local cmdline=""
     if [[ ${FLAGS_verity} -eq ${FLAGS_TRUE} ]]; then
         local usr_hash=""
@@ -171,6 +201,9 @@ OSREL
     # Common base args — platform-agnostic, same for all image types.
     cmdline+=" root=LABEL=ROOT rootflags=rw"
     cmdline+=" consoleblank=0"
+    if [[ -n "${ipe_policy_hash_token}" ]]; then
+        cmdline+=" ${ipe_policy_hash_token}"
+    fi
     # NOTE: crashkernel=256M is delivered via a UKI addon (kdump.addon.efi)
     # rather than baked into the main UKI cmdline.  This allows disabling
     # kdump by removing the addon from the ESP without rebuilding the UKI.
@@ -277,6 +310,14 @@ OSREL
     sudo mkdir -p "${ESP_DIR}/EFI/Linux"
     sudo cp "${uki_output}" "${ESP_DIR}/EFI/Linux/${uki_name}"
     info "UKI/RPM: Installed UKI → EFI/Linux/${uki_name}"
+
+    local cred_dir="${ESP_DIR}/EFI/Linux/${uki_name}.extra.d"
+    sudo rm -f "${cred_dir}"/acl-ipe-policy*.cred
+    if [[ -n "${ipe_policy_cred}" ]]; then
+        sudo mkdir -p "${cred_dir}"
+        sudo cp "${ipe_policy_cred}" "${cred_dir}/acl-ipe-policy.p7b.cred"
+        info "UKI/RPM: Installed IPE policy credential → EFI/Linux/${uki_name}.extra.d/acl-ipe-policy.p7b.cred"
+    fi
 
     sudo mkdir -p "${ESP_DIR}/loader"
     sudo tee "${ESP_DIR}/loader/loader.conf" > /dev/null <<-EOF
