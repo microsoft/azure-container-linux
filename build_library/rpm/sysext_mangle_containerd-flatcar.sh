@@ -45,6 +45,22 @@ else
   exit 1
 fi
 
+# Test-only registry routing for AB baking and provisioned-node pulls.
+cat >> "${acl_config}" <<'EOF'
+
+[plugins."io.containerd.grpc.v1.cri".registry]
+  config_path = "/etc/containerd/certs.d"
+
+[plugins."io.containerd.transfer.v1.local"]
+  config_path = "/etc/containerd/certs.d"
+EOF
+install -Dpm 0644 "${profile_dir}/ab-e2e-mcr-hosts.toml" \
+  "${rootfs}/usr/share/containerd/ab-e2e-mcr-hosts.toml"
+mkdir -p "${rootfs}/usr/lib/tmpfiles.d"
+cat > "${rootfs}/usr/lib/tmpfiles.d/acl-ab-e2e-mirror.conf" <<'EOF'
+L /etc/containerd/certs.d/mcr.microsoft.com/hosts.toml - - - - /usr/share/containerd/ab-e2e-mcr-hosts.toml
+EOF
+
 # Variant selected by tests that need the cgroupfs driver instead of systemd.
 if ! grep -Eq '^[[:space:]]*SystemdCgroup[[:space:]]*=' "${acl_config}"; then
   echo ">>> ERROR: $0: SystemdCgroup setting not found in ${acl_config}" >&2

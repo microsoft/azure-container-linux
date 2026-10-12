@@ -1,0 +1,46 @@
+diff --git a/plugins/transfer/plugin.go b/plugins/transfer/plugin.go
+index 638811a89..1d00308a9 100644
+--- a/plugins/transfer/plugin.go
++++ b/plugins/transfer/plugin.go
+@@ -98,7 +98,7 @@ func init() {
+ 			if err := configureUnpackPlatforms(ic, ms, config, &lc); err != nil {
+ 				return nil, err
+ 			}
+-			configureDmverityFetchRetention(ic, ms, &lc)
++			configureDmverityFetchRetention(ic, &lc)
+ 			lc.RegistryConfigPath = config.RegistryConfigPath
+ 			lc.DuplicationSuppressor = kmutex.New()
+ 
+@@ -107,29 +107,19 @@ func init() {
+ 	})
+ }
+ 
+-func configureDmverityFetchRetention(ic *plugin.InitContext, ms *metadata.DB, lc *local.TransferConfig) {
+-	fetchRetention := false
+-	for name := range ms.Snapshotters() {
+-		if p := ic.Plugins().Get(plugins.SnapshotPlugin, name); p != nil &&
+-			slices.Contains(p.Meta.Capabilities, plugins.CapabilityDmverityReferrers) {
+-			fetchRetention = true
+-			break
+-		}
+-	}
++func configureDmverityFetchRetention(ic *plugin.InitContext, lc *local.TransferConfig) {
+ 	lc.PullHandlerWrapper = func(_ context.Context, fetcher remotes.Fetcher, store content.Store, requestHasUnpack bool, unpackPlatforms []unpack.Platform) (func(images.Handler) images.Handler, error) {
+ 		for _, up := range unpackPlatforms {
+ 			if slices.Contains(up.SnapshotterCapabilities, plugins.CapabilityDmverityReferrers) {
+ 				return snpkg.AppendSignatureHandlerWrapper(fetcher, store), nil
+ 			}
+ 		}
+-		if fetchRetention && !requestHasUnpack {
++		if !requestHasUnpack {
+ 			return snpkg.AppendSignatureHandlerWrapper(fetcher, store), nil
+ 		}
+ 		return nil, nil
+ 	}
+-	if fetchRetention {
+-		ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
+-	}
++	ic.Meta.Capabilities = append(ic.Meta.Capabilities, plugins.CapabilityDmverityReferrers)
+ }
+ 
+ func configureUnpackPlatforms(ic *plugin.InitContext, ms *metadata.DB, config *transferConfig, lc *local.TransferConfig) error {

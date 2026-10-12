@@ -6,6 +6,8 @@ version = 3
 
 [plugins."io.containerd.cri.v1.images"]
   snapshotter = "erofs"
+  [plugins."io.containerd.cri.v1.images".registry]
+    config_path = "/etc/containerd/certs.d"
 
 [plugins."io.containerd.service.v1.diff-service"]
   default = ["erofs", "walking"]

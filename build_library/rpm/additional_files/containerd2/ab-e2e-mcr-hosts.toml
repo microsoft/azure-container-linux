@@ -1,0 +1,7 @@
+# Test-only: signed AB inventory subset in ACR; other images remain on MCR.
+# Keep original MCR image names in containerd's image store.
+server = "https://mcr.microsoft.com"
+
+[host."https://notaryaksegistry.azurecr.io/v2/ab-precache-e2e"]
+  capabilities = ["pull", "resolve", "referrers"]
+  override_path = true

@@ -5,7 +5,7 @@
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.4
-Release: 4%{?dist}
+Release: 5%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -22,10 +22,8 @@ Patch2:	fix-TestCgroupNamespace-cgroupv1.patch
 Patch3:	CVE-2026-56852.patch
 Patch4:	CVE-2026-37236.patch
 Patch5:	fix-wrapped-enotsup-selinux-relabel.patch
-Patch6:	0001-erofs-add-signed-dm-verity-mapper-foundation.patch
-Patch7:	0002-erofs-plain-chainid-signed-foundation.patch
-Patch8:	0003-erofs-generic-signed-referrer-integration.patch
-Patch9:	0004-dmverity-preserve-concurrent-mapper-ownership.patch
+Patch6:	erofs-signed-dmverity.patch
+Patch7:	0005-transfer-fetch-referrers.patch
 
 %{?systemd_requires}
 
@@ -107,6 +105,9 @@ fi
 %dir /opt/containerd/lib
 
 %changelog
+* Mon Oct 12 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-5
+- Retain dm-verity referrers during fetch-only Transfer without EROFS configuration.
+
 * Tue Oct 06 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-4
 - Add signed EROFS mount, preparation, transfer, and cached CRI support.
 - Retain compatible layer roots and preserve concurrent mapper ownership.

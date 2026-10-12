@@ -34,7 +34,7 @@ imports = [
 ]
 EOF
 
-# Nested imports can override the profile; verify the effective settings.
+# Nested imports may override the profile. Verify the EROFS settings carried over.
 if ! containerd --config "${temporary_merged_config}" config dump |
     awk '
         {
