@@ -77,7 +77,7 @@ We welcome documentation improvements. See [acl/docs](acl/docs) for the latest d
 
 ## Pull Request Guidelines
 
-Please direct pull requests to the `main` development branch.
+Please direct pull requests to the `aclmain` development branch.
 
 ### Branch structure
 
@@ -85,7 +85,7 @@ An overview of how the branches are structured can be seen below
 
 | Git Ref      | Branch / Tag | For PRs | Published | Notes
 |:-------------|:-------------|:--------|:----------|:------------
-|main          |Branch        |Yes      |No         | **Primary development branch**
+|aclmain       |Branch        |Yes      |No         | **Primary development branch**
 |release/3.0   |Branch        |No       |Yes        | Staging branch for publishing
 
 ### PR Titles
