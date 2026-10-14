@@ -121,7 +121,7 @@ if ! /usr/bin/containerd --config /run/containerd/acl-config.toml config dump |
             /^default =/ { differ = ($0 == "default = [\"erofs\", \"walking\"]") }
         END { if (!referrers || !snapshotter || !differ) exit 1 }
     '; then
-    fail "effective containerd config does not enable the expected EROFS profile"
+    fail "effective containerd config does not enable the expected EROFS profile."
 fi
 
 policy="$(cat "${POLICY_DIR}/policy")"

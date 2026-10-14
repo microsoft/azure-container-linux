@@ -370,6 +370,129 @@ test_hashed_cmdline_helper() {
     [[ "$(<"${CASE_DIR}/cmdline")" == "acl.ipe.policy_sha256=${expected_hash}" ]]
 }
 
+test_containerd_profile_selection() (
+    prepare_case containerd-profile
+
+    local selector="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-select-profile"
+    local erofs="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-erofs.toml"
+    local base="${CASE_DIR}/base \"quoted\" config.toml"
+    local original="${CASE_DIR}/original.toml"
+    local final="${CASE_DIR}/run/acl-config.toml"
+    local scenario local_pull fallback extra
+
+    mkdir -p "${CASE_DIR}/bin"
+    printf '0\n' > "${IPE_DIR}/enforce"
+
+    if [[ -n "${CONTAINERD_BIN:-}" ]]; then
+        ln -s "$(command -v "${CONTAINERD_BIN}")" "${CASE_DIR}/bin/containerd"
+    else
+        command cat > "${CASE_DIR}/bin/containerd" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+if [[ "$#" == 2 && "$1" == config && "$2" == default ]]; then
+    printf '[plugins."io.containerd.cri.v1.images"]\nmax_concurrent_downloads = 7\n'
+    exit 0
+fi
+
+[[ "$#" == 4 && "$1" == --config && "$3" == config && "$4" == dump ]]
+grep -Fq "${ACL_CONTAINERD_EROFS_CONFIG}" "$2" || {
+    echo "Unexpected base-only config dump" >&2
+    exit 1
+}
+
+cat <<TOML
+[plugins."io.containerd.snapshotter.v1.erofs"]
+enable_dmverity_referrers = true
+[plugins."io.containerd.cri.v1.images"]
+snapshotter = "erofs"
+max_concurrent_downloads = ${TEST_CRI_DOWNLOADS}
+use_local_image_pull = ${TEST_LOCAL_PULL}
+[plugins."io.containerd.service.v1.diff-service"]
+default = ["erofs", "walking"]
+TOML
+EOF
+        chmod +x "${CASE_DIR}/bin/containerd"
+    fi
+
+    export PATH="${CASE_DIR}/bin:${PATH}"
+    export ACL_IPE_DIR="${IPE_DIR}"
+    export ACL_CONTAINERD_CONFIG_PATH="${final}"
+    export ACL_CONTAINERD_EROFS_CONFIG="${erofs}"
+
+    printf 'version = 2\nroot = "/var/lib/containerd-provider"\n' > "${CASE_DIR}/relative.toml"
+    for scenario in compatible transfer-concurrency cri-concurrency local-pull; do
+        local_pull=false
+        fallback=false
+        extra=""
+        export TEST_CRI_DOWNLOADS=7
+
+        case "${scenario}" in
+            transfer-concurrency)
+                extra=$'[plugins."io.containerd.transfer.v1.local"]\nmax_concurrent_downloads = 4'
+                ;;
+            cri-concurrency)
+                extra='max_concurrent_downloads = 4'
+                TEST_CRI_DOWNLOADS=4
+                fallback=true
+                ;;
+            local-pull)
+                local_pull=true
+                fallback=true
+                ;;
+        esac
+
+        export TEST_LOCAL_PULL="${local_pull}"
+        command cat > "${base}" <<EOF
+version = 2
+imports = ["relative.toml"]
+[plugins."io.containerd.cri.v1.images"]
+use_local_image_pull = ${local_pull}
+${extra}
+EOF
+
+        cp "${base}" "${original}"
+        bash "${selector}" "${base}"
+
+        python3 - "${final}" "${base}" "${erofs}" "${fallback}" <<'PY'
+import sys, tomllib
+path, base, erofs, fallback = sys.argv[1:]
+with open(path, "rb") as config:
+    wrapper = tomllib.load(config)
+assert wrapper == {"version": 4, "imports": [base] if fallback == "true" else [base, erofs]}
+PY
+
+        cmp "${base}" "${original}"
+        [[ ! -e "${CASE_DIR}/run/acl-config.env" ]]
+        [[ -z "$(find "${CASE_DIR}/run" -name '*.tmp.*' -print)" ]]
+
+        if [[ -n "${CONTAINERD_BIN:-}" ]]; then
+            containerd --config "${final}" config dump |
+                python3 -c 'import sys, tomllib; assert tomllib.loads(sys.stdin.read())["root"] == "/var/lib/containerd-provider"'
+        fi
+    done
+
+    cp "${final}" "${CASE_DIR}/selected.toml"
+    printf '1\n' > "${IPE_DIR}/enforce"
+    if bash "${selector}" "${base}" > "${CASE_DIR}/failure.log" 2>&1; then
+        echo "Selector allowed unsigned fallback with enforcement enabled" >&2
+        return 1
+    fi
+    grep -Fq 'IPE enforcement is not confirmed off' "${CASE_DIR}/failure.log"
+
+    rm "${IPE_DIR}/enforce"
+    if bash "${selector}" "${base}" > "${CASE_DIR}/failure.log" 2>&1; then
+        echo "Selector allowed unsigned fallback without enforcement state" >&2
+        return 1
+    fi
+    grep -Fq 'IPE enforcement is not confirmed off' "${CASE_DIR}/failure.log"
+
+    cmp "${final}" "${CASE_DIR}/selected.toml"
+    [[ -z "$(find "${CASE_DIR}/run" -name '*.tmp.*' -print)" ]]
+    cmp "${base}" "${original}"
+    echo "containerd audit profile wrapper tests passed"
+)
+
 test_hashed_cmdline_helper
 test_absent_token
 test_missing_cmdline
@@ -392,5 +515,6 @@ test_missing_security_profile_helper
 test_incomplete_security_profile_helper
 test_imds_failure_after_validation
 test_best_effort_service_wiring
+test_containerd_profile_selection
 
 echo "IPE loader runtime mode tests passed"

@@ -3,15 +3,14 @@
 set -euo pipefail
 
 base_config="${1:-}"
-merged_config_path="${ACL_CONTAINERD_CONFIG_PATH:-/run/containerd/acl-config.toml}"
 erofs_config="${ACL_CONTAINERD_EROFS_CONFIG:-/usr/share/containerd/acl-erofs.toml}"
+final_config="${ACL_CONTAINERD_CONFIG_PATH:-/run/containerd/acl-config.toml}"
+ipe_dir="${ACL_IPE_DIR:-/sys/kernel/security/ipe}"
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 [[ -n "${base_config}" && -r "${base_config}" ]] ||
     fail "containerd base config is not readable: ${base_config}"
-[[ -r "${erofs_config}" ]] ||
-    fail "containerd EROFS profile is not readable: ${erofs_config}"
 
 # Convert a given path to an absolute path and escape it for use in a TOML file.
 get_absolute_path() {
@@ -22,23 +21,57 @@ get_absolute_path() {
     printf '"%s"' "${path}"
 }
 
-# Merge the base containerd config with the EROFS profile.
-mkdir -p "$(dirname "${merged_config_path}")"
-temporary_merged_config="${merged_config_path}.tmp.$$"
-trap 'rm -f -- "${temporary_merged_config}"' EXIT
-cat > "${temporary_merged_config}" <<EOF
-version = 4
-imports = [
-    $(get_absolute_path "${base_config}"),
-    $(get_absolute_path "${erofs_config}")
-]
-EOF
+write_config() {
+    {
+        printf 'version = 4\nimports = ['
+        get_absolute_path "${base_config}"
+        if [[ "$1" == "erofs" ]]; then
+            printf ', '
+            get_absolute_path "${erofs_config}"
+        fi
+        printf ']\n'
+    } > "${temporary_merged_config}"
+}
 
-# Nested imports may override the profile. Verify the EROFS settings carried over.
-if ! containerd --config "${temporary_merged_config}" config dump |
-    awk '
+validate_erofs_profile() {
+    local effective_config default_max_concurrent_downloads
+
+    if ! effective_config="$(containerd --config "${temporary_merged_config}" config dump)"; then
+        echo "WARNING: cannot load the merged EROFS containerd configuration" >&2
+        return 1
+    fi
+
+    # The containerd default value determines whether the Transfer service is chosen for image pulls
+    if ! default_max_concurrent_downloads="$(containerd config default |
+        awk '
+            {
+                gsub(/\047/, "\"")
+                sub(/^[[:space:]]+/, "")
+                sub(/[[:space:]]+$/, "")
+            }
+            /^\[/ { section = $0 }
+            section == "[plugins.\"io.containerd.cri.v1.images\"]" &&
+                /^max_concurrent_downloads =/ && $3 ~ /^-?[0-9]+$/ {
+                    value = $3
+                    found = 1
+                }
+            END {
+                if (!found) exit 1
+                print value
+            }
+        ')"; then
+        echo "WARNING: cannot determine the daemon's CRI download compatibility default" >&2
+        return 1
+    fi
+
+    # Check signed EROFS settings and Transfer service compatibility.
+    awk -v default_downloads="${default_max_concurrent_downloads}" '
+        function referrer_config_conflict(setting) {
+            print "WARNING: " setting " prevents use of the Transfer service required by signed EROFS image pulls" > "/dev/stderr"
+            config_conflict = 1
+        }
+
         {
-            # Normalize TOML quotes and whitespace for exact comparisons.
             gsub(/\047/, "\"")
             sub(/^[[:space:]]+/, "")
             sub(/[[:space:]]+$/, "")
@@ -48,6 +81,7 @@ if ! containerd --config "${temporary_merged_config}" config dump |
             section = $0
         }
 
+        # Required signed EROFS settings.
         section == "[plugins.\"io.containerd.snapshotter.v1.erofs\"]" &&
             /^enable_dmverity_referrers =/ {
                 referrers_enabled = ($0 == "enable_dmverity_referrers = true")
@@ -63,16 +97,56 @@ if ! containerd --config "${temporary_merged_config}" config dump |
                 erofs_differ_selected = ($0 == "default = [\"erofs\", \"walking\"]")
             }
 
+        # CRI settings that are incompatible with signed EROFS image pulls.
+        section == "[plugins.\"io.containerd.cri.v1.images\"]" &&
+            ($0 == "use_local_image_pull = true" ||
+             $0 == "disable_snapshot_annotations = false" ||
+             $0 == "discard_unpacked_layers = true" ||
+             $0 == "image_pull_with_sync_fs = true") {
+                referrer_config_conflict($0)
+            }
+
+        # A non-default value in containerd here prevents use of the Transfer service required by signed EROFS image pulls.
+        section == "[plugins.\"io.containerd.cri.v1.images\"]" &&
+            /^max_concurrent_downloads =/ &&
+            $0 != "max_concurrent_downloads = " default_downloads {
+                referrer_config_conflict($0)
+            }
+
+        # Empty legacy registry tables are harmless, but entries force local pulls.
+        /^\[plugins\."io\.containerd\.cri\.v1\.images"\.registry\.(mirrors|configs|auths)\./ {
+            referrer_config_conflict($0)
+        }
+
         END {
             if (!referrers_enabled ||
                 !erofs_snapshotter_selected ||
                 !erofs_differ_selected) {
+                print "WARNING: merged config does not retain the required EROFS settings." > "/dev/stderr"
                 exit 1
             }
+            if (config_conflict) exit 1
         }
-    '; then
-    fail "Cannot select EROFS profile. Check for config errors or conflicting nested imports in ${base_config}"
-fi
-mv -Tf "${temporary_merged_config}" "${merged_config_path}"
+    ' <<< "${effective_config}"
+}
 
-echo "Selected EROFS containerd runtime profile (base: ${base_config})"
+mkdir -p "$(dirname "${final_config}")"
+temporary_merged_config="${final_config}.tmp.$$"
+trap 'rm -f -- "${temporary_merged_config}"' EXIT
+
+write_config erofs
+selected_profile="EROFS"
+if ! validate_erofs_profile; then
+    if ! enforcement="$(tr -d '[:space:]' < "${ipe_dir}/enforce")" ||
+        [[ "${enforcement}" != "0" ]]; then
+        fail "IPE enforcement is not confirmed off; refusing base-profile fallback."
+    fi
+
+    selected_profile="base"
+    write_config base
+    echo "WARNING: selected the base containerd config without dmverity referrer support for IPE audit mode due to conflicting settings. The signed EROFS profile was not activated" >&2
+fi
+
+mv -Tf "${temporary_merged_config}" "${final_config}"
+echo "Selected ${selected_profile} containerd runtime profile. (base: ${base_config})" >&2
+echo "Final config: ${final_config}" >&2
