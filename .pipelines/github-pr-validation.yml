@@ -14,6 +14,15 @@
 
 trigger: none
 
+parameters:
+  - name: ipeMode
+    displayName: '[IPE] Runtime mode'
+    type: string
+    default: 'audit'
+    values:
+      - 'disabled'
+      - 'audit'
+
 pr:
   branches:
     include:
@@ -46,4 +55,6 @@ extends:
   parameters:
     aclRef: $(Build.SourceBranch)
     mantleRef: 'aclmain'
+    ipeMode: ${{ parameters.ipeMode }}
+    ipeSigningMode: 'ephemeral'
     testGeneratePackageManifest: true
