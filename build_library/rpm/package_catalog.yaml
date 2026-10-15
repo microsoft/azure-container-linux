@@ -106,9 +106,7 @@ packages:
   sys-block/open-iscsi: iscsi-initiator-utils
 
   # Container runtime
-  app-containers/docker:
-    - moby-engine
-    - sdnotify-proxy
+  app-containers/docker: moby-engine
   app-emulation/docker: moby-engine  # Alternative package name
   app-containers/docker-cli: docker-cli
   app-containers/docker-buildx: docker-buildx
@@ -340,9 +338,7 @@ packages:
 
   # Kernel headers and firmware
   sys-kernel/linux-headers: SKIP
-  sys-firmware/intel-microcode:
-    rpm: microcode_ctl
-    arch: amd64
+  sys-firmware/intel-microcode: SKIP
   sys-kernel/coreos-firmware: SKIP
 
   # Alternatives system (Azure Linux provides alternatives)
@@ -586,9 +582,7 @@ packages:
   app-misc/c_rehash: SKIP
   app-misc/pax-utils: SKIP
   dev-cpp/glog: SKIP
-  # TODO: we should create a new client package for etcdctl instead of using
-  # the full package
-  dev-db/etcdctl: etcd
+  dev-db/etcdctl: SKIP  # No etcd server or client needed in RPM mode
   dev-libs/jose: SKIP  # not used, skipping to not bring "jose" from extended
   dev-libs/libbsd: SKIP
   dev-libs/libverto: SKIP
@@ -718,4 +712,3 @@ packages:
   sys-libs/nss-usrfiles: SKIP
   sys-libs/tevent: SKIP
   sys-power/acpid: SKIP
-

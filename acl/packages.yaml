@@ -13,13 +13,9 @@
 # This file is part of the pipeline cache key — changes here invalidate
 # the RPM staging cache even when SPECS/ content is unchanged.
 #
-# NOTE: qemu is not listed here — it is built separately via --build-rpms-qemu
-# for arm64 cross-compilation and has its own pipeline cache key.
-
 packages:
   # --- Ported from Flatcar ------------------------------------------------
   - coreos-init         # Init scripts, systemd units, generators (autologin fix)
-  - sdnotify-proxy      # sd_notify proxy for containerized services
 
   # --- LISA testing dependencies ------------------------------------------
   - stress-ng           # Stress test tool
@@ -29,5 +25,5 @@ packages:
 
   # --- ACL-patched system packages ----------------------------------------
   - bootengine          # Flatcar bootengine (glob-based firstboot addon removal for UAPI UKI naming)
-  - microcode_ctl       # CPU microcode updater (Fedora import)
   - selinux-policy      # SELinux reference policy (ACL-specific modules)
+  - trident             # Declarative OS lifecycle agent; built here for the acl-pipelines tridentRpmSource=sdk option

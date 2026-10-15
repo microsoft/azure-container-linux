@@ -752,6 +752,7 @@ EOF
       sudo chroot "${root_fs_dir}" bash -c "cd /usr/share/selinux/mcs && semodule -s mcs -i *.pp"
   elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
       rpm_configure_selinux "${root_fs_dir}"
+      rpm_install_ipe_policy "${root_fs_dir}"
   fi
 
   # Run tmpfiles once to make sure that /etc has everything in place before
@@ -944,6 +945,7 @@ EOF
   fi
 
   rm -rf "${BUILD_DIR}"/configroot
+  rm -f "${BUILD_DIR}"/.*_manifest_packages.tmp
   cleanup_mounts "${root_fs_dir}"
   trap - EXIT
 

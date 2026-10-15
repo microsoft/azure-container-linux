@@ -1067,61 +1067,6 @@ EOF
     sudo chmod 0644 "${root_fs_dir}/etc/systemd/system/ldconfig.service"
 }
 
-# ── etcd: remove native server, keep etcdctl, prepare for Docker wrapper ─────
-_configure_etcd_rpm() {
-    local root_fs_dir="$1"
-
-    # Remove etcd server and etcdutl binaries - we only need etcdctl from the etcd RPM.
-    # The etcd server runs inside a Docker container via etcd-wrapper, not natively.
-    if [[ -f "${root_fs_dir}/usr/bin/etcd" ]]; then
-        info "RPM mode: Removing /usr/bin/etcd (etcd server runs in Docker via etcd-wrapper)"
-        sudo rm -f "${root_fs_dir}/usr/bin/etcd"
-    fi
-    if [[ -f "${root_fs_dir}/usr/bin/etcdutl" ]]; then
-        info "RPM mode: Removing /usr/bin/etcdutl (not needed)"
-        sudo rm -f "${root_fs_dir}/usr/bin/etcdutl"
-    fi
-    # Also remove the native etcd.service - etcd-member.service (Docker-based) is used instead
-    if [[ -f "${root_fs_dir}/usr/lib/systemd/system/etcd.service" ]]; then
-        info "RPM mode: Removing native etcd.service (using etcd-member.service instead)"
-        sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/etcd.service"
-    fi
-    # Remove the etcd preset file (refers to the native etcd.service we just removed)
-    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system-preset/50-etcd.preset"
-    # Remove etcd config file (native etcd.service config, not used with etcd-wrapper)
-    sudo rm -f "${root_fs_dir}/etc/etcd/etcd-default-conf.yml"
-
-    # sysusers.d config to create the etcd user/group (needed by etcd-wrapper).
-    # The etcd RPM doesn't create this user, but etcd-wrapper needs it for:
-    #   - chown etcd:etcd on the data directory
-    #   - id -u/-g to map the user into the Docker container
-    # This MUST be in the rootfs (not the sysext) so systemd-sysusers creates
-    # the user before the docker sysext is mounted.
-    cat <<'SYSUSERS_EOF' | sudo tee "${root_fs_dir}/usr/lib/sysusers.d/etcd.conf" > /dev/null
-u etcd - "etcd user" /var/lib/etcd
-SYSUSERS_EOF
-
-    # CLC transpiler generates ExecStart=/usr/lib/coreos/etcd-wrapper
-    # Create compat symlink so /usr/lib/coreos -> flatcar resolves
-    sudo ln -sfT flatcar "${root_fs_dir}/usr/lib/coreos"
-
-    # etcd-member.service and etcd-wrapper.conf MUST be in the rootfs (not the
-    # sysext) because Ignition runs before sysext merge. If the unit file only
-    # exists in the sysext, Ignition cannot read its [Install] WantedBy= section
-    # to create the multi-user.target.wants symlink, so the service never starts.
-    local etcd_wrapper_src="${SCRIPT_ROOT}/sdk_container/src/third_party/coreos-overlay/app-admin/etcd-wrapper/files"
-    local etcd_version="3.5.16"
-    if [[ ! -d "${etcd_wrapper_src}" ]]; then
-        die "etcd-wrapper source not found at ${etcd_wrapper_src}"
-    fi
-    # etcd-member.service (substitute image tag)
-    sed "s|@ETCD_IMAGE_TAG@|v${etcd_version}|g" \
-        "${etcd_wrapper_src}/etcd-member.service" \
-        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/etcd-member.service" > /dev/null
-    # etcd-wrapper.conf -> /usr/lib/tmpfiles.d/ (creates /var/lib/etcd 0700 etcd:etcd)
-    sudo cp "${etcd_wrapper_src}/etcd-wrapper.conf" "${root_fs_dir}/usr/lib/tmpfiles.d/etcd-wrapper.conf"
-}
-
 # CIS Level 1 hardening
 # Addresses CIS Azure Container Linux 4 Level 1 failures without affecting
 # network connectivity or core system operation. All settings are safe for
@@ -1399,7 +1344,6 @@ finish_image_post_tmpfiles_rpm() {
     _configure_disk_autogrow_rpm "${root_fs_dir}"
     _remove_unused_systemd_components_rpm "${root_fs_dir}"
     _configure_pcrlock_rpm "${root_fs_dir}"
-    _configure_etcd_rpm "${root_fs_dir}"
     _configure_kdump_rpm "${root_fs_dir}"
     _configure_misc_rpm "${root_fs_dir}"
     _configure_cis_hardening_rpm "${root_fs_dir}"
@@ -1457,7 +1401,7 @@ finish_image_backup_etc_rpm() {
     sudo cp -a "${root_fs_dir}/etc" "${ETC_FULL_PATH}"
 }
 
-# Write the image's package list and SPDX manifest from the final rpmdb.
+# Write the image's package list and SPDX 2.2 package manifest from the final rpmdb.
 finish_image_package_manifest_rpm() {
     local root_fs_dir="$1"
     local image_base_name="$2"
@@ -1474,15 +1418,29 @@ finish_image_package_manifest_rpm() {
         die "RPM mode: No packages in ${root_fs_dir}"
     fi
 
+    # A second listing for the SPDX 2.2 package manifest, in container-manifest-2
+    # layout. packages_file is a published artifact with a NEVRA on each line
+    # but no vendor, which is needed to determine package supplier.
+    # This second listing is kept out of the published set by the leading dot.
+    #
+    # Sorted in place rather than through a pipe, so an rpm failure isn't masked
+    # by sort's exit status. build_image does not set pipefail.
+    local manifest_packages_file="${BUILD_DIR}/.${image_base_name}_manifest_packages.tmp"
+    rpm_query_manifest "${root_fs_dir}" > "${manifest_packages_file}"
+    sort -o "${manifest_packages_file}" "${manifest_packages_file}"
+    if [[ ! -s "${manifest_packages_file}" ]]; then
+        die "RPM mode: No packages in the container-manifest-2 listing of ${root_fs_dir}"
+    fi
+
     local created_epoch
     created_epoch=$(stat -c '%Y' "${root_fs_dir}/usr/lib/os-release")
 
     write_package_manifest \
         image \
         "${root_fs_dir}" \
-        "${image_base_name}" \
+        "azurecontainerlinux" \
         "${IMAGE_VERSION_ID}${IMAGE_BUILD_ID:++${IMAGE_BUILD_ID}}" \
-        "${packages_file}" \
+        "${manifest_packages_file}" \
         "${created_epoch}"
 }
 
