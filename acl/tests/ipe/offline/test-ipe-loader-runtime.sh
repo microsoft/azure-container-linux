@@ -378,7 +378,7 @@ test_containerd_profile_selection() (
     local base="${CASE_DIR}/base \"quoted\" config.toml"
     local original="${CASE_DIR}/original.toml"
     local final="${CASE_DIR}/run/acl-config.toml"
-    local scenario local_pull fallback extra
+    local scenario local_pull fallback extra unpack_differ overlay_differ
 
     mkdir -p "${CASE_DIR}/bin"
     printf '0\n' > "${IPE_DIR}/enforce"
@@ -391,6 +391,7 @@ test_containerd_profile_selection() (
 set -euo pipefail
 
 if [[ "$#" == 2 && "$1" == config && "$2" == default ]]; then
+    printf '[plugins."io.containerd.snapshotter.v1.erofs"]\nenable_dmverity_referrers = false\n'
     printf '[plugins."io.containerd.cri.v1.images"]\nmax_concurrent_downloads = 7\n'
     exit 0
 fi
@@ -404,12 +405,14 @@ grep -Fq "${ACL_CONTAINERD_EROFS_CONFIG}" "$2" || {
 cat <<TOML
 [plugins."io.containerd.snapshotter.v1.erofs"]
 enable_dmverity_referrers = true
+dmverity_mode = "${TEST_DMVERITY_MODE}"
 [plugins."io.containerd.cri.v1.images"]
 snapshotter = "erofs"
 max_concurrent_downloads = ${TEST_CRI_DOWNLOADS}
 use_local_image_pull = ${TEST_LOCAL_PULL}
 [plugins."io.containerd.service.v1.diff-service"]
 default = ["erofs", "walking"]
+${TEST_UNPACK_CONFIG}
 TOML
 EOF
         chmod +x "${CASE_DIR}/bin/containerd"
@@ -421,11 +424,14 @@ EOF
     export ACL_CONTAINERD_EROFS_CONFIG="${erofs}"
 
     printf 'version = 2\nroot = "/var/lib/containerd-provider"\n' > "${CASE_DIR}/relative.toml"
-    for scenario in compatible transfer-concurrency cri-concurrency local-pull; do
+    for scenario in compatible transfer-concurrency cri-concurrency local-pull dmverity-off \
+        unpack-compatible unpack-overlayfs unpack-split-entries; do
         local_pull=false
         fallback=false
         extra=""
         export TEST_CRI_DOWNLOADS=7
+        export TEST_DMVERITY_MODE=auto
+        export TEST_UNPACK_CONFIG=""
 
         case "${scenario}" in
             transfer-concurrency)
@@ -439,6 +445,33 @@ EOF
             local-pull)
                 local_pull=true
                 fallback=true
+                ;;
+            dmverity-off)
+                TEST_DMVERITY_MODE=off
+                extra=$'[plugins."io.containerd.snapshotter.v1.erofs"]\ndmverity_mode = "off"'
+                fallback=true
+                ;;
+            unpack-*)
+                unpack_differ=erofs
+                overlay_differ=walking
+                if [[ "${scenario}" == unpack-split-entries ]]; then
+                    unpack_differ=walking
+                    overlay_differ=erofs
+                fi
+                if [[ "${scenario}" != unpack-overlayfs ]]; then
+                    extra+="
+[[plugins.\"io.containerd.transfer.v1.local\".unpack_config]]
+platform = \"linux(+erofs)/amd64\"
+snapshotter = \"erofs\"
+differ = \"${unpack_differ}\""
+                fi
+                extra+="
+[[plugins.\"io.containerd.transfer.v1.local\".unpack_config]]
+platform = \"linux/amd64\"
+snapshotter = \"overlayfs\"
+differ = \"${overlay_differ}\""
+                [[ "${scenario}" == unpack-compatible ]] || fallback=true
+                TEST_UNPACK_CONFIG="${extra}"
                 ;;
         esac
 
@@ -478,14 +511,16 @@ PY
         echo "Selector allowed unsigned fallback with enforcement enabled" >&2
         return 1
     fi
-    grep -Fq 'IPE enforcement is not confirmed off' "${CASE_DIR}/failure.log"
+    grep -Fq 'IPE enforcement is not in audit mode' "${CASE_DIR}/failure.log" ||
+        { echo "missing IPE enforcement rejection diagnostic" >&2; return 1; }
 
     rm "${IPE_DIR}/enforce"
     if bash "${selector}" "${base}" > "${CASE_DIR}/failure.log" 2>&1; then
         echo "Selector allowed unsigned fallback without enforcement state" >&2
         return 1
     fi
-    grep -Fq 'IPE enforcement is not confirmed off' "${CASE_DIR}/failure.log"
+    grep -Fq 'IPE enforcement is not in audit mode' "${CASE_DIR}/failure.log" ||
+        { echo "missing IPE enforcement rejection diagnostic" >&2; return 1; }
 
     cmp "${final}" "${CASE_DIR}/selected.toml"
     [[ -z "$(find "${CASE_DIR}/run" -name '*.tmp.*' -print)" ]]

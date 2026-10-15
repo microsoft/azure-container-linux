@@ -105,23 +105,29 @@ containerd_cmdline="$(tr '\0' ' ' < "/proc/${containerd_pid}/cmdline")" ||
     fail "could not read containerd's command line"
 [[ " ${containerd_cmdline} " == *" --config /run/containerd/acl-config.toml "* ]] ||
     fail "containerd is not using the IPE-selected config"
-if ! /usr/bin/containerd --config /run/containerd/acl-config.toml config dump |
-    awk '
-        {
-            gsub(/\047/, "\"")
-            sub(/^[[:space:]]+/, "")
-            sub(/[[:space:]]+$/, "")
-        }
-        /^\[/ { section = $0 }
-        section == "[plugins.\"io.containerd.snapshotter.v1.erofs\"]" &&
-            /^enable_dmverity_referrers =/ { referrers = ($0 == "enable_dmverity_referrers = true") }
-        section == "[plugins.\"io.containerd.cri.v1.images\"]" &&
-            /^snapshotter =/ { snapshotter = ($0 == "snapshotter = \"erofs\"") }
-        section == "[plugins.\"io.containerd.service.v1.diff-service\"]" &&
-            /^default =/ { differ = ($0 == "default = [\"erofs\", \"walking\"]") }
-        END { if (!referrers || !snapshotter || !differ) exit 1 }
-    '; then
-    fail "effective containerd config does not enable the expected EROFS profile."
+containerd_defaults="$(/usr/bin/containerd config default)" ||
+    fail "could not read containerd's default configuration"
+if grep -Eq '^[[:space:]]*enable_dmverity_referrers[[:space:]]*=' <<< "${containerd_defaults}"; then
+    if ! /usr/bin/containerd --config /run/containerd/acl-config.toml config dump |
+        awk '
+            {
+                gsub(/\047/, "\"")
+                sub(/^[[:space:]]+/, "")
+                sub(/[[:space:]]+$/, "")
+            }
+            /^\[/ { section = $0 }
+            section == "[plugins.\"io.containerd.snapshotter.v1.erofs\"]" &&
+                /^enable_dmverity_referrers =/ { referrers = ($0 == "enable_dmverity_referrers = true") }
+            section == "[plugins.\"io.containerd.cri.v1.images\"]" &&
+                /^snapshotter =/ { snapshotter = ($0 == "snapshotter = \"erofs\"") }
+            section == "[plugins.\"io.containerd.service.v1.diff-service\"]" &&
+                /^default =/ { differ = ($0 == "default = [\"erofs\", \"walking\"]") }
+            END { if (!referrers || !snapshotter || !differ) exit 1 }
+        '; then
+        fail "effective containerd config does not enable the expected EROFS profile."
+    fi
+else
+    echo "Containerd lacks dm-verity referrer support. Skipping EROFS config assertion."
 fi
 
 policy="$(cat "${POLICY_DIR}/policy")"
