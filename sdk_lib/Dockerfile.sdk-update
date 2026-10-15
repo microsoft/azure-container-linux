@@ -41,10 +41,11 @@ RUN test -f /etc/dnf/libdnf5-plugins/repo_snapshot.conf && \
     /usr/bin/dnf5 --help | grep -- '--snapshot-exclude-repos' >/dev/null && \
     /usr/bin/dnf5 --snapshot-time=1735689600 --snapshot-exclude-repos=azurelinux-local-cache install --help >/dev/null && \
     /usr/bin/dnf5 --snapshot-time=1735689600 --snapshot-exclude-repos=azurelinux-local-cache download --help >/dev/null && \
-    /usr/bin/dnf5 --snapshot-time=1735689600 --snapshot-exclude-repos=azurelinux-local-cache --disable-repo='*' repoquery --available >/dev/null && \
-    if DNF5_SNAPSHOT_TIME=invalid /usr/bin/dnf5 --disable-repo='*' repoquery --available >/dev/null 2>&1; then \
+    /usr/bin/dnf5 --snapshot-time=1735689600 --snapshot-exclude-repos=azurelinux-local-cache repoquery --available >/dev/null && \
+    if output=$(DNF5_SNAPSHOT_TIME=invalid /usr/bin/dnf5 repoquery --available 2>&1); then \
         echo "ERROR: snapshot plugin did not reject an invalid time"; exit 1; \
-    fi
+    fi && \
+    printf '%s\n' "$output" | grep -q 'invalid DNF5_SNAPSHOT_TIME'
 
 # Remove problematic compatibility alias that references missing builddep plugin
 RUN sudo rm -f /usr/share/dnf5/aliases.d/compatibility-plugins.conf
