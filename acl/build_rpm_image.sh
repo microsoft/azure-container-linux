@@ -15,6 +15,7 @@
 #   --acg-image-version-id=ID            Azure Compute Gallery image version resource ID. When set,
 #                                        skip VHD upload and image creation; use this image directly
 #                                        (for start-vm --vm-type=azure)
+#   --az-backup-regions=REGIONS          Azure regions where the gallery image should be replicated
 #   --az-gallery-rg=NAME                 Resource group containing the Azure Compute Gallery (for start-vm --vm-type=azure)
 #   --az-region=REGION                   Azure region to override default (for start-vm --vm-type=azure)
 #   --az-storage-account=NAME            Azure storage account name to override default (for start-vm --vm-type=azure)
@@ -27,24 +28,28 @@
 #   --az-vm-size=SIZE                    Azure VM size (default: Standard_D2s_v5)
 #   --board=BOARD                        Target board (default: amd64-usr)
 #   --boot-timeout=SECS                  Timeout waiting for VM boot (default: arch-based — amd64 100s, arm64 300s)
+#   --build-image                        Build the base image
 #   --build-rpms                         Build custom RPM packages using Azure Linux toolkit (runs acl/build.sh)
 #   --build-sdk-container                Update/rebuild SDK container with RPM tools (can run standalone)
-#   --build-standalone-sysexts[=TAG,...]  Build standalone sysexts (all, or only those matching any given tag)
+#   --build-standalone-sysexts[=TAG,...] Build standalone sysexts (all, or only those matching any given tag)
 #   --build-test-image                   Build a test VM image (includes docker sysext) for kola testing
 #   --build-vm-image                     Build VM images after creating base image (no docker sysext)
 #   --clean                              Clean staging and build RPM directories before download
 #   --console-password=PASS              Serial console login password (empty for passwordless)
 #   --console-user=USER                  Serial console login user (default: root)
+#   --debug                              Enable debug output
+#   --disk-layout=LAYOUT                 Disk layout to use (default: vm)
 #   --download-rpms                      [no-op] Kept for pipeline compatibility
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
 #   --help                               Show this help message
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
-#   --ipe-mode=MODE                       IPE runtime mode: disabled|audit|enforcing (default: disabled)
+#   --ipe-mode=MODE                      IPE runtime mode: disabled|audit|enforcing (default: disabled)
 #                                        'enforcing' is reserved and rejected at build time.
 #   --ipe-signing-mode=MODE              IPE signing mode: ephemeral|esrp (default: ephemeral)
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
+#   --no-secure-boot                     Disable secure boot for the VM
 #   --output=DIR                         Output directory for images
 #   --rebuild                            Force rebuild even if image exists
 #   --rebuild-and-test                   Rebuild image and run smoke tests (equivalent to
@@ -53,7 +58,9 @@
 #                                        (default backoff: 15s initial, 5min max). Clears intermediate
 #                                        build caches between retries but preserves toolchain, azurelinux
 #                                        clone, and rpm-staging.
+#   --reuse-image                        Reuse the latest published gallery image (skip VHD upload)
 #   --reuse-vm                           Reuse an already-running VM (reads IP/RG from .vm-state.env)
+#   --run-host-script=PATH               Run script on the host (can specify multiple times). Implies --start-vm
 #   --run-kola-tests                     Run kola tests after building (qemu or azure, based on --vm-type)
 #   --run-script=PATH                    Run script on VM after boot (can specify multiple times)
 #                                        Can be a file path or inline command. Implies --start-vm
@@ -73,6 +80,7 @@
 #   --use-ssh                            Use SSH for script execution (default, requires working ignition/SSH keys)
 #   --use-test-image                     Boot the test VM image (with docker sysext) instead of the regular image
 #   --vm-name=NAME                       Name for the VM (default: acl)
+#   --vm-password=PASSWORD               Password for the VM user (optional)
 #   --vm-type=TYPE                       VM type when building VM images: azure|qemu (default: qemu)
 #
 # Examples:
