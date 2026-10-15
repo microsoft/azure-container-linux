@@ -35,6 +35,16 @@ rpm_get_staging_dir() {
 
 RPM_MANIFEST_QUERY_FORMAT='%|ARCH?{%{NAME}\t%{VERSION}-%{RELEASE}\t%{INSTALLTIME}\t%{BUILDTIME}\t%{VENDOR}\t%{EPOCH}\t%{SIZE}\t%{ARCH}\t%{EPOCHNUM}\t%{SOURCERPM}\n}:{}|'
 
+rpm_snapshot_args() {
+    local -n args="$1"
+    [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" ]] || return 0
+    [[ "${PACKAGE_SNAPSHOT_TIME}" =~ ^[1-9][0-9]{9}$ ]] ||
+        die "PACKAGE_SNAPSHOT_TIME must be a ten-digit Unix UTC timestamp"
+    /usr/bin/dnf5 --help | grep -- '--snapshot-time' >/dev/null ||
+        die "SDK DNF5 does not support --snapshot-time; rebuild the SDK with the snapshot plugin"
+    args+=(--snapshot-time="${PACKAGE_SNAPSHOT_TIME}" --snapshot-exclude-repos=azurelinux-local-cache)
+}
+
 # Emit a Syft-compatible RPM manifest for the installed packages in a rootfs.
 # The ARCH guard drops non-package entries for the same reason as in
 # rpm_query_packages. This is so both producers agree on what a package is.
@@ -334,10 +344,12 @@ _rpm_package_exists() {
     if [[ ${BOARD:-} == "arm64-usr" ]]; then
         dnf_args+=(--forcearch="aarch64")
     fi
+    local -a snapshot_args=()
+    rpm_snapshot_args snapshot_args
 
     # repoquery exits 0 with output if package exists, 0 with no output if not
     local result
-    result=$(sudo /usr/bin/dnf5 repoquery "${dnf_args[@]}" "${pkg_name}" 2>/dev/null)
+    result=$(sudo /usr/bin/dnf5 "${snapshot_args[@]}" repoquery "${dnf_args[@]}" "${pkg_name}" 2>/dev/null)
     [[ -n "${result}" ]]
 }
 
@@ -373,14 +385,16 @@ rpm_install_package() {
     if [[ "${nogpgcheck}" == "true" ]]; then
         dnf_args+=(--nogpgcheck)
     fi
+    local -a snapshot_args=()
+    rpm_snapshot_args snapshot_args
 
     # Mount pseudo-filesystems for scriptlets
     rpm_mount_pseudofs "${root_fs_dir}"
 
     # Disable errexit around dnf5 + unmount to guarantee pseudofs cleanup
     set +e
-    info "Running: dnf5 install ${dnf_args[*]} ${packages[*]}"
-    sudo /usr/bin/dnf5 install "${dnf_args[@]}" "${packages[@]}" 2>&1 | sudo tee /tmp/rpm-install.log
+    info "Running: dnf5 ${snapshot_args[*]} install ${dnf_args[*]} ${packages[*]}"
+    sudo /usr/bin/dnf5 "${snapshot_args[@]}" install "${dnf_args[@]}" "${packages[@]}" 2>&1 | sudo tee /tmp/rpm-install.log
     local dnf_exit_code=${PIPESTATUS[0]}
 
     # Always unmount pseudo-filesystems after dnf5 finishes
@@ -502,6 +516,8 @@ rpm_install_local_packages() {
 rpm_install_init() {
     local root_fs_dir="$1"; shift
 
+    local -a snapshot_check_args=()
+    rpm_snapshot_args snapshot_check_args
     # Initialize RPM database if needed
     rpm_init_database "${root_fs_dir}" || return 1
 
@@ -838,8 +854,10 @@ rpm_download_packages() {
     if [[ ${BOARD:-} == "arm64-usr" ]]; then
         download_args+=(--forcearch="aarch64")
     fi
+    local -a snapshot_args=()
+    rpm_snapshot_args snapshot_args
 
-    dnf5 download "${download_args[@]}" "${packages[@]}"
+    dnf5 "${snapshot_args[@]}" download "${download_args[@]}" "${packages[@]}"
 }
 
 # Remove the bootstrap repo after azurelinux-repos has been installed,
@@ -1158,6 +1176,7 @@ rpm_cleanup_build_dir() {
 }
 
 # Export functions
+export -f rpm_snapshot_args
 export -f rpm_install_package_using_portage_name
 export -f rpm_get_staging_dir
 export -f rpm_install_init
