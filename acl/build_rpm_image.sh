@@ -15,7 +15,8 @@
 #   --acg-image-version-id=ID            Azure Compute Gallery image version resource ID. When set,
 #                                        skip VHD upload and image creation; use this image directly
 #                                        (for start-vm --vm-type=azure)
-#   --az-backup-regions=REGIONS          Azure regions where the gallery image should be replicated
+#   --az-backup-regions=REGIONS          Space-separated fallback regions for Azure VM provisioning
+#                                        Image must already be replicated to each region
 #   --az-gallery-rg=NAME                 Resource group containing the Azure Compute Gallery (for start-vm --vm-type=azure)
 #   --az-region=REGION                   Azure region to override default (for start-vm --vm-type=azure)
 #   --az-storage-account=NAME            Azure storage account name to override default (for start-vm --vm-type=azure)
@@ -37,7 +38,6 @@
 #   --clean                              Clean staging and build RPM directories before download
 #   --console-password=PASS              Serial console login password (empty for passwordless)
 #   --console-user=USER                  Serial console login user (default: root)
-#   --debug                              Enable debug output
 #   --disk-layout=LAYOUT                 Disk layout to use (default: vm)
 #   --download-rpms                      [no-op] Kept for pipeline compatibility
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
@@ -49,7 +49,7 @@
 #   --ipe-signing-mode=MODE              IPE signing mode: ephemeral|esrp (default: ephemeral)
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
-#   --no-secure-boot                     Disable secure boot for the VM
+#   --no-secure-boot                     Disable Secure Boot where supported (not Azure arm64 VMs)
 #   --output=DIR                         Output directory for images
 #   --rebuild                            Force rebuild even if image exists
 #   --rebuild-and-test                   Rebuild image and run smoke tests (equivalent to
@@ -58,7 +58,8 @@
 #                                        (default backoff: 15s initial, 5min max). Clears intermediate
 #                                        build caches between retries but preserves toolchain, azurelinux
 #                                        clone, and rpm-staging.
-#   --reuse-image                        Reuse the latest published gallery image (skip VHD upload)
+#   --reuse-image                        Reuse the latest Azure gallery image and start a VM (skip VHD upload)
+#                                        Requires --vm-type=azure; not with --acg-image-version-id
 #   --reuse-vm                           Reuse an already-running VM (reads IP/RG from .vm-state.env)
 #   --run-host-script=PATH               Run script on the host (can specify multiple times). Implies --start-vm
 #   --run-kola-tests                     Run kola tests after building (qemu or azure, based on --vm-type)
