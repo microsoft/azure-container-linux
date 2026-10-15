@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Validate the golden document against SPDX 2.2 and the NTIA minimum elements.
+# Validate the golden document against SPDX 2.2.
 #
 # Deliberately not in CI because it requires third-party Python packages, and
 # test_generate_package_manifest.sh, which is in CI, already validates that the
@@ -8,9 +8,11 @@
 # nothing about whether that document is a valid one, so this script is run
 # whenever it is regenerated.
 #
-# The NTIA minimum elements are the published floor for identifying a component
-# well enough to map it to a vulnerability database.
-# -- https://www.ntia.gov/sites/default/files/publications/sbom_minimum_elements_report_0.pdf
+# The NTIA minimum elements are deliberately not checked. The document is built
+# for parity with Image Customizer, which sets the root package's supplier to
+# NOASSERTION and states that vendorless packages leave NTIA conformance
+# unguaranteed. Re-adding ntia-checker would fail on both counts.
+# -- https://github.com/microsoft/azure-linux-image-tools/blob/main/toolkit/tools/internal/spdxmanifest/spdxmanifest.go
 #
 # Usage: validate_golden_manifest.sh [workdir]
 
@@ -44,16 +46,8 @@ python3 -m venv "${VENV}"
     --disable-pip-version-check \
     --requirement "${REQUIREMENTS}"
 
-# pyspdxtools prints the individual validation messages. ntia-checker re-runs
-# the same spdx-tools validation internally but reports only a pass/fail
-# verdict, so running pyspdxtools first is what makes a failure diagnosable.
+# pyspdxtools prints the individual validation messages.
 echo "=== SPDX 2.2 validation ==="
 "${VENV}/bin/pyspdxtools" --infile="${MANIFEST}"
-
-# Both flags are already the defaults, pinned so a new release cannot move
-# them: --comply cannot be fsct3-min since that needs per-package licences we
-# do not have, and --sbom-spec must be spdx2 since that is what was built.
-echo "=== NTIA minimum elements ==="
-"${VENV}/bin/ntia-checker" --comply=ntia --sbom-spec=spdx2 "${MANIFEST}"
 
 echo "=== PASS ==="
