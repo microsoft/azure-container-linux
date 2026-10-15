@@ -2064,6 +2064,218 @@ assert_final_candidate_moves_directly_to_backup_region() {
     printf 'PASS: final candidate moves directly to a clean backup-region resource group\n'
 }
 
+private_network_fixture() {
+    info() { :; }
+    warn() { :; }
+    section() { :; }
+    error() { printf '%s\n' "$*" >&2; }
+    AZ_PRIVATE_SUBNET_ID="/subscriptions/${AZ_SUB_ID}/resourceGroups/shared-network/providers/Microsoft.Network/virtualNetworks/acl-vnet-swedencentral/subnets/kola-runners"
+    AZ_REGION=swedencentral AZ_BACKUP_REGIONS="" AZ_VM_ARGS=""
+    ACG_IMAGE_VERSION_ID=fixture-image AZ_VM_IMAGE_DEF=fixture-definition
+    AZ_BACKUP_VM_SIZES_AMD64="" AZ_BACKUP_VM_SIZES_ARM64=""
+    VM_NAME=fixture-vm VM_TYPE=azure REUSE_IMAGE=false
+    PRIVATE_EVENTS="${TEST_TMPDIR}/private-events"
+    PRIVATE_ARGS="${TEST_TMPDIR}/private-args"
+    : >"$PRIVATE_EVENTS"
+    get_vm_rg_name() { echo owned-vm-rg; }
+    az() {
+        printf '%s\n' "$*" >>"$PRIVATE_EVENTS"
+        case "$1 $2" in
+            "account set"|"group create"|"storage account") ;;
+            "sig image-version")
+                [[ " $* " == *" --expand ReplicationStatus "* ]]
+                jq -cn --arg state "${IMAGE_REGION_STATE:-Completed}" \
+                    --arg region "${IMAGE_REGION_NAME:-Sweden Central}" \
+                    '[{region:$region,state:$state}]'
+                ;;
+            "network vnet")
+                [[ "$3" == show ]]
+                jq -cn --arg region "${VNET_REGION:-swedencentral}" \
+                    --arg id "${VNET_SUBNET_ID:-$AZ_PRIVATE_SUBNET_ID}" \
+                    '{location:$region,subnets:[{id:$id}]}'
+                ;;
+            "vm list-skus")
+                printf 'CpuArchitectureType\tArm64\nHyperVGenerations\tV2\nTrustedLaunchDisabled\tFalse\n'
+                ;;
+            "vm create")
+                printf '%s\n' "$@" >"$PRIVATE_ARGS"
+                printf '{"id":"fixture-vm"}\n'
+                ;;
+            "vm show")
+                case "$*" in
+                    *"--query privateIps"*) printf '%s\n' "${PRIVATE_ADDRESS-10.100.6.10}" ;;
+                    *"--query provisioningState"*) printf 'Succeeded\n' ;;
+                    *) return 99 ;;
+                esac
+                ;;
+            *) printf 'Unexpected Azure mutation/read: %s\n' "$*" >&2; return 99 ;;
+        esac
+    }
+}
+
+assert_private_network_vm_and_persistent_address() {
+    private_network_fixture
+    BOARD="$1"
+    AZ_VM_SIZE=Standard_D2s_v5
+    [[ "$BOARD" != arm64-usr ]] || AZ_VM_SIZE=Standard_D2ps_v6
+    start_vm_azure "" >/dev/null
+    [[ "$VM_IP" == 10.100.6.10 && "$VM_RG" == owned-vm-rg ]]
+    ! grep -q 'network public-ip\|network nic\|network vnet create\|network vnet update' "$PRIVATE_EVENTS"
+    local -a args
+    mapfile -t args <"$PRIVATE_ARGS"
+    local i subnet=false public_disabled=false nsg_disabled=false
+    for ((i=0; i<${#args[@]}-1; i++)); do
+        case "${args[i]}" in
+            --subnet) [[ "${args[i+1]}" == "$AZ_PRIVATE_SUBNET_ID" ]]; subnet=true ;;
+            --public-ip-address) [[ -z "${args[i+1]}" ]]; public_disabled=true ;;
+            --nsg) [[ -z "${args[i+1]}" ]]; nsg_disabled=true ;;
+        esac
+    done
+    [[ "$subnet" == true && "$public_disabled" == true && "$nsg_disabled" == true ]]
+
+    local private_ip="$VM_IP"
+    source "${SCRIPT_DIR}/validate_common.sh"
+    VM_IP="$private_ip" VM_TYPE=azure
+    VM_STATE_FILE="${TEST_TMPDIR}/private-vm-state"
+    write_vm_state
+    VM_IP="" VM_RG=""
+    read_vm_state
+    [[ "$VM_IP" == 10.100.6.10 && "$VM_RG" == owned-vm-rg ]]
+
+    # Host helpers consume the same persisted address; they must not rediscover publicIps.
+    SCRIPT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+    source "${SCRIPT_DIR}/acl/tests/azure-security-profile-test-common.sh"
+    ACL_SECURITY_PROFILE_DIAGNOSTICS=0
+    setup_ssh_opts
+    printf 'boot-1\n' >"${TEST_TMPDIR}/private-boot"
+    ssh() {
+        [[ " $* " == *" ${VM_SSH_USER}@10.100.6.10 "* ]] || return 97
+        case "${*: -1}" in
+            "cat /proc/sys/kernel/random/boot_id") cat "${TEST_TMPDIR}/private-boot" ;;
+            "sudo reboot") printf 'boot-2\n' >"${TEST_TMPDIR}/private-boot" ;;
+            *) return 98 ;;
+        esac
+    }
+    timeout() { shift 3; "$@"; }
+    VM_SSH_TIMEOUT=120
+    reboot_and_wait
+    [[ "$VM_IP" == 10.100.6.10 ]]
+    printf 'PASS: %s private-only provisioning, persisted address and reboot SSH\n' "$BOARD"
+}
+
+assert_private_network_rejects_invalid_configuration() {
+    private_network_fixture
+    local subnet="$AZ_PRIVATE_SUBNET_ID" option
+    for option in "--subnet other" "--sub=other" "--nics other" "--nsg other" \
+        "--public-ip-address other" "--public=other" "--private-ip-address other" \
+        "--vnet-name other" "--location elsewhere" "--resource-group shared-network" \
+        "--subscription other" "-lwestus2" "-gshared-network"; do
+        AZ_VM_ARGS="$option"
+        ! validate_azure_configuration >/dev/null 2>&1
+    done
+    AZ_VM_ARGS=""
+    AZ_PRIVATE_SUBNET_ID=short-name
+    ! validate_azure_configuration >/dev/null 2>&1
+    AZ_PRIVATE_SUBNET_ID="${subnet/test-subscription/other-subscription}"
+    ! validate_azure_configuration >/dev/null 2>&1
+    AZ_PRIVATE_SUBNET_ID="$subnet" AZ_BACKUP_REGIONS=westus2
+    ! validate_azure_configuration >/dev/null 2>&1
+    AZ_BACKUP_REGIONS=""
+    ! create_vm_resource_group SHARED-NETWORK swedencentral unused >/dev/null 2>&1
+    [[ ! -s "$PRIVATE_EVENTS" ]]
+    printf 'PASS: private-network overrides, invalid IDs, fallback and shared RG reuse fail before Azure writes\n'
+}
+
+assert_private_network_preflight_and_address_fail_closed() {
+    private_network_fixture
+    BOARD=amd64-usr AZ_VM_SIZE=Standard_D2s_v5
+    local failure
+    for failure in region subnet replica replica-failed replica-missing; do
+        VNET_REGION=swedencentral VNET_SUBNET_ID="$AZ_PRIVATE_SUBNET_ID"
+        IMAGE_REGION_STATE=Completed IMAGE_REGION_NAME=swedencentral
+        case "$failure" in
+            region) VNET_REGION=westus2 ;;
+            subnet) VNET_SUBNET_ID="${AZ_PRIVATE_SUBNET_ID}-other" ;;
+            replica) IMAGE_REGION_STATE=Replicating ;;
+            replica-failed) IMAGE_REGION_STATE=Failed ;;
+            replica-missing) IMAGE_REGION_NAME=westus2 ;;
+        esac
+        : >"$PRIVATE_EVENTS"
+        ! create_vm_azure owned-vm-rg fixture-image >/dev/null 2>&1
+        ! grep -q 'group create\|vm create\|public-ip' "$PRIVATE_EVENTS"
+    done
+    VNET_REGION=swedencentral VNET_SUBNET_ID="$AZ_PRIVATE_SUBNET_ID"
+    IMAGE_REGION_STATE=Completed IMAGE_REGION_NAME=swedencentral
+    local PRIVATE_ADDRESS
+    for PRIVATE_ADDRESS in "" null "10.100.6.10,10.100.6.11"; do
+        ! start_vm_azure "" >/dev/null 2>&1
+        ! grep -q publicIps "$PRIVATE_EVENTS"
+    done
+    printf 'PASS: wrong/missing subnet, missing image replica and missing/ambiguous private address fail closed\n'
+}
+
+assert_private_subnet_argument_parsing() {
+    source "${SCRIPT_DIR}/validate_common.sh"
+    START_VM=false
+    AZ_PRIVATE_SUBNET_ID=""
+    parse_validate_args --az-private-subnet-id=/fixture/subnet
+    [[ "$AZ_PRIVATE_SUBNET_ID" == /fixture/subnet ]]
+    # build_rpm_image.sh is the public entrypoint and must forward, not just parse, the flag.
+    grep -Fq 'validate_args+=("--az-private-subnet-id=${AZ_PRIVATE_SUBNET_ID}")' "${SCRIPT_DIR}/../build_rpm_image.sh"
+    printf 'PASS: private subnet option is accepted and forwarded through both entrypoints\n'
+}
+
+assert_private_start_preserves_shared_network() {
+    source "${SCRIPT_DIR}/validate_common.sh"
+    private_network_fixture
+    BOARD=amd64-usr NO_CLEANUP=false
+    RESOURCE_TAGS=("createdBy=fixture-user")
+    VM_STATE_FILE="${TEST_TMPDIR}/private-cleanup-state"
+    start_vm_azure() {
+        validate_azure_configuration || return 1
+        printf 'provision\n' >>"$PRIVATE_EVENTS"
+    }
+    az() {
+        case "$1 $2" in
+            "group list")
+                [[ "$*" == *"tags.createdBy=='fixture-user'"* ]] || return 99
+                printf 'list\n' >>"$PRIVATE_EVENTS"
+                printf 'owned-stale-vm\n%s\n' "$shared_match"
+                ;;
+            "group delete") printf 'delete:%s\n' "$4" >>"$PRIVATE_EVENTS" ;;
+            *) return 99 ;;
+        esac
+    }
+    local shared_match private_subnet="$AZ_PRIVATE_SUBNET_ID"
+    for shared_match in shared-network SHARED-NETWORK; do
+        : >"$PRIVATE_EVENTS"
+        start_vm "" "$BOARD" >/dev/null
+        if [[ "$(<"$PRIVATE_EVENTS")" != $'list\ndelete:owned-stale-vm\nprovision' ]]; then
+            printf 'FAIL: start_vm pre-provisioning cleanup selected the shared network RG\n' >&2
+            cat "$PRIVATE_EVENTS" >&2
+            return 1
+        fi
+    done
+    for AZ_PRIVATE_SUBNET_ID in short-name "${private_subnet/test-subscription/other-subscription}"; do
+        : >"$PRIVATE_EVENTS"
+        : >"$VM_STATE_FILE"
+        ! start_vm "" "$BOARD" >/dev/null 2>&1
+        [[ ! -s "$PRIVATE_EVENTS" && -f "$VM_STATE_FILE" ]]
+    done
+
+    AZ_PRIVATE_SUBNET_ID=""
+    : >"$PRIVATE_EVENTS"
+    start_vm "" "$BOARD" >/dev/null
+    [[ "$(<"$PRIVATE_EVENTS")" == $'list\ndelete:owned-stale-vm\ndelete:SHARED-NETWORK\nprovision' ]]
+    printf 'PASS: real start_vm cleanup preserves shared network case-insensitively, rejects invalid subnet IDs and retains non-private behavior\n'
+}
+
+( assert_private_network_vm_and_persistent_address amd64-usr )
+( assert_private_network_vm_and_persistent_address arm64-usr )
+( assert_private_network_rejects_invalid_configuration )
+( assert_private_network_preflight_and_address_fail_closed )
+( assert_private_subnet_argument_parsing )
+( assert_private_start_preserves_shared_network )
 ( assert_failed_vm_boot_diagnostics )
 ( assert_vm_size_family_parsing )
 ( assert_resource_group_name_generation )

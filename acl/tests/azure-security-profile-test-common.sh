@@ -8,8 +8,78 @@ SSH_OPTS=()
 SECURITY_PROFILE_TAG_NAME="acl-node-security-profile"
 ORIGINAL_SECURITY_PROFILE_STATE=""
 SECURITY_PROFILE_MUTATED=false
+SECURITY_PROFILE_DIAGNOSTICS_PREFIX=""
+SECURITY_PROFILE_DIAGNOSTICS_CAPTURED=false
+
+security_profile_diagnostics_enabled() {
+    [[ -n "${SECURITY_PROFILE_DIAGNOSTICS_PREFIX}" ]]
+}
+
+security_profile_diag() {
+    security_profile_diagnostics_enabled || return 0
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" "$*" \
+        >> "${SECURITY_PROFILE_DIAGNOSTICS_PREFIX}-events.log"
+}
+
+security_profile_diagnostic_read() {
+    local name="$1" status=0
+    shift
+    timeout --signal=TERM --kill-after=5s 20s "$@" \
+        > "${SECURITY_PROFILE_DIAGNOSTICS_PREFIX}-${name}.stdout" \
+        2> "${SECURITY_PROFILE_DIAGNOSTICS_PREFIX}-${name}.stderr" || status=$?
+    security_profile_diag "snapshot=${name} status=${status}"
+}
+
+capture_security_profile_diagnostics() {
+    security_profile_diagnostics_enabled || return 0
+    [[ "${SECURITY_PROFILE_DIAGNOSTICS_CAPTURED}" == "false" ]] || return 0
+    SECURITY_PROFILE_DIAGNOSTICS_CAPTURED=true
+    security_profile_diag "snapshot-start reason=$1"
+
+    security_profile_diagnostic_read vm az vm show -g "$VM_RG" -n "$VM_NAME" \
+        --query '{id:id,tags:tags,networkProfile:networkProfile,provisioningState:provisioningState}' -o json
+    security_profile_diagnostic_read instance az vm get-instance-view -g "$VM_RG" -n "$VM_NAME" -o json
+    security_profile_diagnostic_read activity az monitor activity-log list \
+        --resource-group "$VM_RG" --offset 30m --max-events 200 -o json
+
+    local nic_id uri status=0
+    nic_id="$(jq -r '.networkProfile.networkInterfaces[0].id // empty' \
+        "${SECURITY_PROFILE_DIAGNOSTICS_PREFIX}-vm.stdout" 2>/dev/null)" || true
+    if [[ -n "${nic_id}" ]]; then
+        security_profile_diagnostic_read nic az network nic show --ids "${nic_id}" -o json
+        security_profile_diagnostic_read effective-nsg az network nic list-effective-nsg \
+            --ids "${nic_id}" -o json
+    fi
+
+    # Resolve the SAS URL in memory only; never publish it in diagnostics.
+    uri="$(timeout --signal=TERM --kill-after=5s 20s \
+        az vm boot-diagnostics get-boot-log-uris -g "$VM_RG" -n "$VM_NAME" \
+        --query serialConsoleLogBlobUri -o tsv \
+        2> "${SECURITY_PROFILE_DIAGNOSTICS_PREFIX}-serial-uri.stderr")" || status=$?
+    security_profile_diag "snapshot=serial-uri status=${status}"
+    if [[ "${status}" -eq 0 && -n "${uri}" ]]; then
+        status=0
+        curl -fsS --connect-timeout 10 --max-time 30 "${uri}" \
+            > "${SECURITY_PROFILE_DIAGNOSTICS_PREFIX}-serial.log" \
+            2> "${SECURITY_PROFILE_DIAGNOSTICS_PREFIX}-serial.stderr" || status=$?
+        security_profile_diag "snapshot=serial status=${status}"
+    fi
+
+    security_profile_diagnostic_read guest ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" '
+        date -u; cat /proc/sys/kernel/random/boot_id; cat /proc/cmdline
+        sudo getenforce; sudo cat /sys/kernel/security/ipe/enforce
+        sudo cat /sys/kernel/security/ipe/policies/acl_ipe_boot_policy/active
+        systemctl show sshd.socket -p ActiveState -p SubState -p Result \
+            -p NAccepted -p NConnections -p MaxConnections \
+            -p TriggerLimitBurst -p TriggerLimitIntervalUSec
+        ip route get 169.254.169.254
+        sudo journalctl -b --no-pager -o short-precise -n 4000
+    '
+    security_profile_diag "snapshot-end"
+}
 
 setup_ssh_opts() {
+    SECURITY_PROFILE_DIAGNOSTICS_PREFIX=""
     SSH_OPTS=(
         -o StrictHostKeyChecking=no
         -o UserKnownHostsFile=/dev/null
@@ -19,6 +89,11 @@ setup_ssh_opts() {
         -o ServerAliveCountMax=2
         -i "$VM_SSH_KEY"
     )
+    if [[ "${ACL_SECURITY_PROFILE_DIAGNOSTICS:-0}" == "1" && -n "${DIAGNOSTICS_DIR:-}" ]]; then
+        mkdir -p "${DIAGNOSTICS_DIR}"
+        SECURITY_PROFILE_DIAGNOSTICS_PREFIX="${DIAGNOSTICS_DIR}/security-profile-${BASHPID}"
+        SSH_OPTS+=(-vv -E "${SECURITY_PROFILE_DIAGNOSTICS_PREFIX}-ssh.log")
+    fi
 }
 
 ssh_cmd() {
@@ -26,12 +101,40 @@ ssh_cmd() {
 }
 
 imds_security_profile_state() {
-    local raw
-    raw=$(ssh_cmd "curl -sf -H Metadata:true --noproxy '*' \
-        'http://169.254.169.254/metadata/instance/compute/tagsList?api-version=2021-02-01'" \
-        2>/dev/null) || return 1
-    jq -sce --arg tag "${SECURITY_PROFILE_TAG_NAME}" \
-        "$(acl_security_profile_jq_filter)" <<<"${raw}"
+    local raw state status=0
+    if security_profile_diagnostics_enabled; then
+        security_profile_diag "probe-start"
+        raw=$(ssh_cmd "printf 'ACL_SSH_CONNECTION=%s\n' \"\${SSH_CONNECTION:-}\" >&2; \
+            curl -sfS -H Metadata:true --noproxy '*' \
+            -w '%{stderr}ACL_IMDS_HTTP_STATUS=%{http_code}\n' \
+            'http://169.254.169.254/metadata/instance/compute/tagsList?api-version=2021-02-01'" \
+            2>> "${SECURITY_PROFILE_DIAGNOSTICS_PREFIX}-imds.stderr") || status=$?
+    else
+        raw=$(ssh_cmd "curl -sfS -H Metadata:true --noproxy '*' \
+            'http://169.254.169.254/metadata/instance/compute/tagsList?api-version=2021-02-01'") || status=$?
+    fi
+    security_profile_diag "probe-ssh-or-remote-exit=${status}"
+    if [[ "${status}" -eq 255 ]]; then
+        error "SSH transport/session failure reading IMDS from ${VM_IP} (exit 255)"
+        return 255
+    elif [[ "${status}" -ne 0 ]]; then
+        error "Remote IMDS request failed on ${VM_IP} (exit ${status})"
+        return 69
+    fi
+    if security_profile_diagnostics_enabled; then
+        state="$(jq -sce --arg tag "${SECURITY_PROFILE_TAG_NAME}" \
+            "$(acl_security_profile_jq_filter)" <<< "${raw}" \
+            2>> "${SECURITY_PROFILE_DIAGNOSTICS_PREFIX}-parse.stderr")" || status=$?
+    else
+        state="$(jq -sce --arg tag "${SECURITY_PROFILE_TAG_NAME}" \
+            "$(acl_security_profile_jq_filter)" <<< "${raw}")" || status=$?
+    fi
+    security_profile_diag "probe-parser-exit=${status} observed=${state}"
+    if [[ "${status}" -ne 0 ]]; then
+        error "Invalid IMDS security-profile response from ${VM_IP} (parser exit ${status})"
+        return 65
+    fi
+    printf '%s\n' "${state}"
 }
 
 imds_security_profile() {
@@ -82,6 +185,7 @@ boot_id() {
 set_security_profile_tag_state() {
     local state="$1"
     local present value vm_id
+    security_profile_diag "requested=${state}"
 
     # Use the generic ARM tag endpoint to avoid round-tripping unrelated VM
     # properties through the Compute RP.
@@ -127,15 +231,39 @@ set_security_profile_tag_state() {
     fi
 
     info "Waiting for in-guest IMDS to report the updated security profile..."
-    local deadline seen_state
+    local deadline seen_state attempts=0 status last_observed=unavailable
+    local ssh_failures=0 request_failures=0 parse_failures=0 reads=0 reason=imds-timeout
     deadline=$(( $(date +%s) + 60 ))
     while (( $(date +%s) < deadline )); do
-        seen_state="$(imds_security_profile_state)" &&
-            [[ "${seen_state}" == "${state}" ]] &&
-            return 0
+        attempts=$((attempts + 1))
+        security_profile_diag "poll-attempt=${attempts}"
+        status=0
+        seen_state="$(imds_security_profile_state)" || status=$?
+        case "$status" in
+            0)
+                reads=$((reads + 1))
+                last_observed="$seen_state"
+                [[ "${seen_state}" != "${state}" ]] || return 0
+                ;;
+            255) ssh_failures=$((ssh_failures + 1)) ;;
+            65) parse_failures=$((parse_failures + 1)) ;;
+            *) request_failures=$((request_failures + 1)) ;;
+        esac
         sleep 2
     done
-    error "IMDS did not converge to the requested security profile within 60s"
+    security_profile_diag "poll-timeout attempts=${attempts}"
+    if ((ssh_failures > 0)); then
+        reason=ssh-failure
+    elif ((request_failures + parse_failures > 0)); then
+        reason=imds-read-failure
+    fi
+    capture_security_profile_diagnostics "$reason" || true
+    if [[ "$reason" == imds-timeout ]]; then
+        error "IMDS did not converge to the requested security profile within 60s"
+    else
+        error "Could not verify IMDS convergence within 60s: SSH failures=${ssh_failures}, remote request failures=${request_failures}, invalid responses=${parse_failures}, successful reads=${reads}"
+    fi
+    error "Requested security profile: ${state}; last observed: ${last_observed}"
     return 1
 }
 
@@ -176,6 +304,11 @@ reboot_and_wait() {
         sleep 2
     done
     warn "VM did not come back after reboot within ${reboot_timeout}s - capturing VM diagnostics"
+    if security_profile_diagnostics_enabled && [[ "${SECURITY_PROFILE_DIAGNOSTICS_CAPTURED}" == "false" ]]; then
+        capture_security_profile_diagnostics "reboot-timeout" || true
+        error "VM did not come back after reboot"
+        return 1
+    fi
 
     local diag_dir prefix
     diag_dir="${DIAGNOSTICS_DIR:-/tmp}"
@@ -204,6 +337,9 @@ restore_security_profile_on_exit() {
     local final_status="${primary_status}"
 
     trap - EXIT
+    if [[ "${primary_status}" -ne 0 ]]; then
+        capture_security_profile_diagnostics "exit-${primary_status}" || true
+    fi
     if [[ "${SECURITY_PROFILE_MUTATED}" == "true" ]] &&
         [[ -n "${ORIGINAL_SECURITY_PROFILE_STATE}" ]]; then
         section "Restoring original acl-node-security-profile tag"

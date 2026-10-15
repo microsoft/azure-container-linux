@@ -37,6 +37,7 @@
 #   --run-script=PATH                    Run script on VM after boot (can specify multiple)
 #   --ssh-authorized-keys=KEYS           SSH public keys for VM access
 #   --ssh-key=PATH                       SSH private key for VM access
+#   --az-private-subnet-id=ID            Existing subnet ARM ID; private SSH with no public IP or cross-region fallback
 #   --ssh-timeout=SECS                   Timeout waiting for SSH (default: 120)
 #   --ssh-user=USER                      SSH user for VM scripts (default: core)
 #   --start-vm                           Start the VM (implied by --run-script)

@@ -21,6 +21,7 @@
 #   --az-gallery-rg=NAME                 Resource group containing the Azure Compute Gallery (for start-vm --vm-type=azure)
 #   --az-sub-id=ID                       Azure subscription ID to override default (for start-vm --vm-type=azure)
 #   --az-region=REGION                   Azure region to override default (for start-vm --vm-type=azure)
+#   --az-private-subnet-id=ID            Existing subnet ARM ID; provision without a public IP and use private SSH
 #   --az-vm-size=SIZE                    Azure VM size (default: Standard_D2s_v5)
 #   --board=BOARD                        Target board (default: amd64-usr)
 #   --boot-timeout=SECS                  Timeout waiting for VM boot (default: arch-based — amd64 100s, arm64 300s)
@@ -635,6 +636,14 @@ parse_args() {
                 ;;
             --az-region)
                 AZ_REGION="$2"
+                shift 2
+                ;;
+            --az-private-subnet-id=*)
+                AZ_PRIVATE_SUBNET_ID="${1#*=}"
+                shift
+                ;;
+            --az-private-subnet-id)
+                AZ_PRIVATE_SUBNET_ID="$2"
                 shift 2
                 ;;
             --az-storage-account=*)
@@ -1563,6 +1572,7 @@ main() {
         validate_args+=("--console-user=${VM_CONSOLE_USER}")
         [[ -n "${AZ_SUB_ID:-}" ]] && validate_args+=("--az-sub-id=${AZ_SUB_ID}")
         [[ -n "${AZ_REGION:-}" ]] && validate_args+=("--az-region=${AZ_REGION}")
+        [[ -n "${AZ_PRIVATE_SUBNET_ID:-}" ]] && validate_args+=("--az-private-subnet-id=${AZ_PRIVATE_SUBNET_ID}")
         [[ -n "${AZ_STORAGE_ACC:-}" ]] && validate_args+=("--az-storage-account=${AZ_STORAGE_ACC}")
         [[ -n "${AZ_STORAGE_RG:-}" ]] && validate_args+=("--az-storage-rg=${AZ_STORAGE_RG}")
         [[ -n "${AZ_STORAGE_CONTAINER:-}" ]] && validate_args+=("--az-storage-container=${AZ_STORAGE_CONTAINER}")

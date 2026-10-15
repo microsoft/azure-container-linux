@@ -41,6 +41,7 @@ fi
 VM_RG_PREFIX="${VM_RG_PREFIX:-$(whoami)-acl-test-vm-rg}"
 VM_RG=""
 AZ_VM_ARGS="${AZ_VM_ARGS:-}"
+AZ_PRIVATE_SUBNET_ID="${AZ_PRIVATE_SUBNET_ID:-}"
 _VM_CREATE_RESULT=""
 AZ_MAX_PROVISIONING_TIMEOUTS="${AZ_MAX_PROVISIONING_TIMEOUTS:-2}"
 _VM_IMAGE_DIR=""
@@ -54,6 +55,61 @@ validate_azure_configuration() {
         error "AZ_MAX_PROVISIONING_TIMEOUTS must be a positive integer"
         return 1
     fi
+    _enforce_private_network_contract
+}
+
+_enforce_private_network_contract() {
+    [[ -n "${AZ_PRIVATE_SUBNET_ID}" ]] || return 0
+    local subnet_pattern='^/subscriptions/([^/[:space:]]+)/resourcegroups/([^/[:space:]]+)/providers/microsoft.network/virtualnetworks/([^/[:space:]]+)/subnets/([^/[:space:]]+)$'
+    if ! [[ "${AZ_PRIVATE_SUBNET_ID,,}" =~ $subnet_pattern ]] ||
+        [[ "${BASH_REMATCH[1]}" != "${AZ_SUB_ID,,}" ]]; then
+        error "AZ_PRIVATE_SUBNET_ID must be a full subnet resource ID in AZ_SUB_ID"
+        return 1
+    fi
+    if [[ -n "${AZ_BACKUP_REGIONS:-}" ]]; then
+        error "Private subnets are regional: --az-private-subnet-id requires empty AZ_BACKUP_REGIONS"
+        return 1
+    fi
+    local -a arguments=()
+    local argument option forbidden
+    ipe_split_argument_string arguments "${AZ_VM_ARGS:-}"
+    for argument in "${arguments[@]}"; do
+        case "$argument" in
+            -g*|-l*)
+                error "--az-vm-args cannot override private-network placement: ${argument}"
+                return 1
+                ;;
+        esac
+        [[ "$argument" == --* ]] || continue
+        option="$(ipe_option_name "$argument")"
+        for forbidden in --subnet --vnet-name --nics --nsg --public-ip-address \
+            --private-ip-address --location --resource-group --subscription; do
+            if ipe_option_is_abbreviation "$option" "$forbidden" --; then
+                error "--az-vm-args cannot override private-network placement: ${option}"
+                return 1
+            fi
+        done
+    done
+    return 0
+}
+
+validate_private_subnet() {
+    [[ -n "${AZ_PRIVATE_SUBNET_ID}" ]] || return 0
+    local vnet_id="${AZ_PRIVATE_SUBNET_ID%/*/*}" vnet region="${AZ_REGION,,}"
+    region="${region// /}"
+    if ! vnet="$(az network vnet show --subscription "$AZ_SUB_ID" \
+        --ids "$vnet_id" -o json)"; then
+        error "Cannot read the existing private VNet: ${vnet_id}"
+        return 1
+    fi
+    if ! jq -e --arg region "$region" --arg subnet "${AZ_PRIVATE_SUBNET_ID,,}" '
+        (.location | ascii_downcase | gsub(" "; "")) == $region and
+        any(.subnets[]?; (.id | ascii_downcase) == $subnet)
+    ' <<< "$vnet" >/dev/null; then
+        error "Private subnet must already exist in VM region ${AZ_REGION}: ${AZ_PRIVATE_SUBNET_ID}"
+        return 1
+    fi
+    AZ_REGION="$region"
 }
 
 # Backup VM SKUs to try when the primary SKU cannot be provisioned.
@@ -262,6 +318,16 @@ create_vm_resource_group() {
     shift 3
     local -a tags=("$@")
 
+    if [[ -n "${AZ_PRIVATE_SUBNET_ID}" ]]; then
+        # Compare case-insensitively without depending on ARM ID capitalization.
+        local subnet_lower="${AZ_PRIVATE_SUBNET_ID,,}" network_rg
+        network_rg="${subnet_lower#*/resourcegroups/}"
+        network_rg="${network_rg%%/*}"
+        if [[ "${vm_rg_name,,}" == "$network_rg" ]]; then
+            error "Refusing to create or tag a VM resource group that owns the shared subnet"
+            return 1
+        fi
+    fi
     info "Creating VM RG: $vm_rg_name (location: $region)"
     if ! az group create \
         --name "$vm_rg_name" \
@@ -272,21 +338,23 @@ create_vm_resource_group() {
     fi
     VM_RG="$vm_rg_name"
 
-    info "Creating public IP with policy-compliant tags: $public_ip_name"
-    if ! az network public-ip create \
-        --name "$public_ip_name" \
-        --subscription "$AZ_SUB_ID" \
-        --resource-group "$vm_rg_name" \
-        --location "$region" \
-        --allocation-method Static \
-        --sku Standard \
-        --ip-tags FirstPartyUsage=/NonProd \
-        --tags "${tags[@]}"; then
-        if schedule_failed_vm_rg_cleanup \
-            "$vm_rg_name" "public IP creation failure"; then
-            VM_RG=""
+    if [[ -z "${AZ_PRIVATE_SUBNET_ID}" ]]; then
+        info "Creating public IP with policy-compliant tags: $public_ip_name"
+        if ! az network public-ip create \
+            --name "$public_ip_name" \
+            --subscription "$AZ_SUB_ID" \
+            --resource-group "$vm_rg_name" \
+            --location "$region" \
+            --allocation-method Static \
+            --sku Standard \
+            --ip-tags FirstPartyUsage=/NonProd \
+            --tags "${tags[@]}"; then
+            if schedule_failed_vm_rg_cleanup \
+                "$vm_rg_name" "public IP creation failure"; then
+                VM_RG=""
+            fi
+            return 1
         fi
-        return 1
     fi
 
     # azure-cli 2.88 cannot request managed diagnostics during `az vm create`
@@ -790,6 +858,7 @@ _try_vm_create() {
     _VM_CREATE_RESULT=""
     _enforce_arm_security_contract || return 2
     _enforce_ipe_image_contract || return 2
+    _enforce_private_network_contract || return 2
     ipe_split_argument_string az_vm_args "${AZ_VM_ARGS:-}"
     local boot_diagnostics_storage_name
     boot_diagnostics_storage_name=$(get_boot_diagnostics_storage_name "$vm_rg_name")
@@ -811,6 +880,10 @@ _try_vm_create() {
     )
 
     vm_create_args+=(--enable-secure-boot "${SECURE_BOOT_ENABLED:-true}")
+    if [[ -n "${AZ_PRIVATE_SUBNET_ID}" ]]; then
+        # Reuse the existing subnet's policy-managed NSG; never modify shared networking.
+        vm_create_args+=(--subnet "$AZ_PRIVATE_SUBNET_ID" --nsg "")
+    fi
 
     if [[ ${#az_vm_args[@]} -gt 0 ]]; then
         vm_create_args+=("${az_vm_args[@]}")
@@ -1136,6 +1209,18 @@ create_vm_azure() {
     else
         image_id="/subscriptions/$AZ_SUB_ID/resourceGroups/$AZ_GALLERY_RG/providers/Microsoft.Compute/galleries/$AZ_ACG/images/$AZ_VM_IMAGE_DEF/versions/$image_version_or_id"
     fi
+    validate_private_subnet || return 1
+    if [[ -n "${AZ_PRIVATE_SUBNET_ID}" ]]; then
+        local replica_summary
+        if ! replica_summary="$(az sig image-version show --ids "$image_id" \
+            --expand ReplicationStatus --query replicationStatus.summary -o json)" ||
+            ! jq -e --arg region "$AZ_REGION" '
+                any(.[]?; (.region | ascii_downcase | gsub(" "; "")) == $region and .state == "Completed")
+            ' <<< "$replica_summary" >/dev/null; then
+            error "Gallery image replica must be Completed in private subnet region ${AZ_REGION}"
+            return 1
+        fi
+    fi
 
     # Build ordered list of SKUs to try: primary first, then backups
     local backup_skus
@@ -1239,10 +1324,12 @@ create_vm_azure() {
                 AZ_VM_SIZE="$sku"
                 AZ_REGION="$region"
 
-                info "Attaching public IP to VM NIC..."
-                if ! _attach_vm_public_ip \
-                    "$vm_rg_name" "$VM_NAME" "$public_ip_name"; then
-                    return 1
+                if [[ -z "${AZ_PRIVATE_SUBNET_ID}" ]]; then
+                    info "Attaching public IP to VM NIC..."
+                    if ! _attach_vm_public_ip \
+                        "$vm_rg_name" "$VM_NAME" "$public_ip_name"; then
+                        return 1
+                    fi
                 fi
                 return 0
             elif [[ $rc -eq 1 && ( "$result" == "RETRYABLE_VM_CREATE_ERROR" || "$result" == "PROVISIONING_TIMEOUT" ) ]]; then
@@ -1367,7 +1454,14 @@ start_vm_azure() {
     # create_vm_azure may have changed VM_RG if it switched regions
     vm_rg_name="$VM_RG"
 
-    export VM_IP=$(az vm show -d -g "$vm_rg_name" -n "$VM_NAME" --query "publicIps" -o tsv)
+    local ip_query=publicIps
+    [[ -z "${AZ_PRIVATE_SUBNET_ID}" ]] || ip_query=privateIps
+    if ! VM_IP=$(az vm show -d -g "$vm_rg_name" -n "$VM_NAME" --query "$ip_query" -o tsv) ||
+        [[ -z "${VM_IP}" || "${VM_IP}" == null || "${VM_IP}" == *[[:space:],]* ]]; then
+        error "Could not resolve a single ${ip_query} address for ${VM_NAME}; no address fallback is allowed"
+        return 1
+    fi
+    export VM_IP
     while [ "$(az vm show -d -g "$vm_rg_name" -n "$VM_NAME" --query provisioningState -o tsv)" != "Succeeded" ]; do sleep 1; done
 
     info "✓ Azure VM '${VM_NAME}' started successfully!"
@@ -1380,6 +1474,13 @@ remove_vm_azure() {
     if [[ "$NO_CLEANUP" == "true" ]]; then
         info "--no-cleanup specified, so skipping cleanup of VM resources"
         return 0
+    fi
+    local network_rg=""
+    if [[ -n "${AZ_PRIVATE_SUBNET_ID}" ]]; then
+        _enforce_private_network_contract || return 1
+        network_rg="${AZ_PRIVATE_SUBNET_ID,,}"
+        network_rg="${network_rg#*/resourcegroups/}"
+        network_rg="${network_rg%%/*}"
     fi
     remove_vm_state
     info "Scheduling deletion of VM resources matching tags: ${RESOURCE_TAGS[*]}"
@@ -1402,6 +1503,10 @@ remove_vm_azure() {
     local failed_count=0
     while IFS= read -r rg_name; do
         [[ -z "$rg_name" ]] && continue
+        if [[ -n "$network_rg" && "${rg_name,,}" == "$network_rg" ]]; then
+            warn "Skipping shared network resource group: $rg_name"
+            continue
+        fi
         info "Scheduling deletion of RG: $rg_name"
         local err
         set +e

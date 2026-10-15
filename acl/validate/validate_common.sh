@@ -707,6 +707,9 @@ parse_validate_args() {
             --az-region=*)
                 AZ_REGION="${1#*=}"
                 shift ;;
+            --az-private-subnet-id=*)
+                AZ_PRIVATE_SUBNET_ID="${1#*=}"
+                shift ;;
             --az-vm-size=*)
                 AZ_VM_SIZE="${1#*=}"
                 shift ;;
@@ -764,6 +767,7 @@ parse_validate_args() {
                 echo "  --use-test-image           Boot the test VM image (with docker sysext)"
                 echo "  --vm-image-path=PATH       Path to VM image"
                 echo "  --az-vm-args=ARGS          Additional arguments to pass when starting Azure VMs"
+                echo "  --az-private-subnet-id=ID Existing subnet ARM ID; private SSH, no public IP (same region, no region fallback)"
                 echo "  --vm-name=NAME             VM name (default: acl)"
                 echo "  --vm-type=TYPE             VM type: azure|qemu (default: qemu)"
                 exit 0
