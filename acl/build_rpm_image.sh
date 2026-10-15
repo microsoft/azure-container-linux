@@ -80,7 +80,6 @@
 #   --use-ssh                            Use SSH for script execution (default, requires working ignition/SSH keys)
 #   --use-test-image                     Boot the test VM image (with docker sysext) instead of the regular image
 #   --vm-name=NAME                       Name for the VM (default: acl)
-#   --vm-password=PASSWORD               Password for the VM user (optional)
 #   --vm-type=TYPE                       VM type when building VM images: azure|qemu (default: qemu)
 #
 # Examples:
@@ -106,7 +105,7 @@
 #   NO_TTY                  Set to "true" to disable TTY allocation (for CI pipelines)
 #   RPM_REPO_URL            Azure Linux repository URL
 #   RPM_ARCH                Target architecture (default: x86_64)
-#   USE_SERIAL_CONSOLE      Use serial console (true) or SSH (false) - default: true
+#   USE_SERIAL_CONSOLE      Use serial console (true) or SSH (false) - default: false
 #   VM_CONSOLE_USER         Serial console login user (default: root)
 #   VM_CONSOLE_PASSWORD     Serial console login password
 #   VM_BOOT_TIMEOUT         Boot timeout in seconds (default: arch-based — amd64 100s, arm64 300s)
