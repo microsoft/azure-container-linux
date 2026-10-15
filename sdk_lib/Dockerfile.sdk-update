@@ -18,9 +18,9 @@ RUN sudo bash -c 'cd /mnt/host/source/src/third_party/coreos-overlay/coreos-deve
 
 RUN /home/sdk/sdk_entry.sh ./update_chroot --toolchain_boards="amd64-usr arm64-usr"
 
-# Force rebuild of packages that need new USE flags
-# The base SDK may have these installed without the correct USE flags
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n --changed-use --deep dev-cpp/toml11 dev-libs/libcomps dev-libs/libsolv app-arch/rpm app-arch/dnf5 sys-apps/systemd'
+# Rebuild libsolv and DNF5 even when an earlier SDK already installed the same
+# versions: the snapshot-time patches change libsolv's rpm-md data and DNF5's plugins.
+RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n --changed-use --deep dev-cpp/toml11 dev-libs/libcomps app-arch/rpm sys-apps/systemd && sudo emerge --ask=n --oneshot =dev-libs/libsolv-0.7.30-r1 =app-arch/dnf5-5.2.6.0'
 
 RUN /home/sdk/sdk_entry.sh ./setup_board --board="arm64-usr" --regen_configs
 RUN /home/sdk/sdk_entry.sh ./setup_board --board="amd64-usr" --regen_configs
@@ -34,6 +34,17 @@ RUN test -x /usr/bin/dnf5 || (echo "ERROR: dnf5 not found at /usr/bin/dnf5" && e
 RUN echo "Found DNF5 at: /usr/bin/dnf5"
 RUN echo "=== Testing DNF5 ===" && \
     /usr/bin/dnf5 --version || (echo "ERROR: dnf5 failed to run" && exit 1)
+RUN test -f /etc/dnf/libdnf5-plugins/repo_snapshot.conf && \
+    test -n "$(find /usr/lib /usr/lib64 -path '*/dnf5/plugins/repo_snapshot_cmd_plugin.so' -print -quit 2>/dev/null)" && \
+    test -n "$(find /usr/lib /usr/lib64 -path '*/libdnf5/plugins/repo_snapshot.so' -print -quit 2>/dev/null)" && \
+    /usr/bin/dnf5 --help | grep -- '--snapshot-time' >/dev/null && \
+    /usr/bin/dnf5 --help | grep -- '--snapshot-exclude-repos' >/dev/null && \
+    /usr/bin/dnf5 --snapshot-time=1735689600 --snapshot-exclude-repos=azurelinux-local-cache install --help >/dev/null && \
+    /usr/bin/dnf5 --snapshot-time=1735689600 --snapshot-exclude-repos=azurelinux-local-cache download --help >/dev/null && \
+    /usr/bin/dnf5 --snapshot-time=1735689600 --snapshot-exclude-repos=azurelinux-local-cache --disable-repo='*' repoquery --available >/dev/null && \
+    if DNF5_SNAPSHOT_TIME=invalid /usr/bin/dnf5 --disable-repo='*' repoquery --available >/dev/null 2>&1; then \
+        echo "ERROR: snapshot plugin did not reject an invalid time"; exit 1; \
+    fi
 
 # Remove problematic compatibility alias that references missing builddep plugin
 RUN sudo rm -f /usr/share/dnf5/aliases.d/compatibility-plugins.conf
