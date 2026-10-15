@@ -94,10 +94,10 @@
 # Environment Variables:
 #   ACL_SDK_IMAGE           Override SDK container image (e.g., <your-registry>/sdk:<release>)
 #                           Bypasses auto-detection from version.txt when set
+#   BUILD_ID                Build identifier for versioning
 #   NO_TTY                  Set to "true" to disable TTY allocation (for CI pipelines)
 #   RPM_REPO_URL            Azure Linux repository URL
 #   RPM_ARCH                Target architecture (default: x86_64)
-#   BUILD_ID                Build identifier for versioning
 #   USE_SERIAL_CONSOLE      Use serial console (true) or SSH (false) - default: true
 #   VM_CONSOLE_USER         Serial console login user (default: root)
 #   VM_CONSOLE_PASSWORD     Serial console login password
