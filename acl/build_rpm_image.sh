@@ -2,7 +2,7 @@
 
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-
+#
 # Build Azure Container Linux (ACL) Image - Complete workflow
 #
 # This script builds an Azure Container Linux (ACL) image using Azure Linux RPMs and Flatcar SDK container.
@@ -15,12 +15,15 @@
 #   --acg-image-version-id=ID            Azure Compute Gallery image version resource ID. When set,
 #                                        skip VHD upload and image creation; use this image directly
 #                                        (for start-vm --vm-type=azure)
+#   --az-gallery-rg=NAME                 Resource group containing the Azure Compute Gallery (for start-vm --vm-type=azure)
+#   --az-region=REGION                   Azure region to override default (for start-vm --vm-type=azure)
 #   --az-storage-account=NAME            Azure storage account name to override default (for start-vm --vm-type=azure)
 #   --az-storage-container=NAME          Azure storage container name for VHDs (for start-vm --vm-type=azure)
 #   --az-storage-rg=NAME                 Resource group containing the storage account (for start-vm --vm-type=azure)
-#   --az-gallery-rg=NAME                 Resource group containing the Azure Compute Gallery (for start-vm --vm-type=azure)
 #   --az-sub-id=ID                       Azure subscription ID to override default (for start-vm --vm-type=azure)
-#   --az-region=REGION                   Azure region to override default (for start-vm --vm-type=azure)
+#   --az-vm-args=ARGS                    Additional arguments to pass to vm start command, esp azure vms
+#                                        Space separated list ('--az-vm-args="<key><space><value><space>"')
+#                                        ex: --az-vm-args="--user-data <path-to-ignition-file> --enable-vtpm true"
 #   --az-vm-size=SIZE                    Azure VM size (default: Standard_D2s_v5)
 #   --board=BOARD                        Target board (default: amd64-usr)
 #   --boot-timeout=SECS                  Timeout waiting for VM boot (default: arch-based — amd64 100s, arm64 300s)
@@ -35,45 +38,42 @@
 #   --download-rpms                      [no-op] Kept for pipeline compatibility
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
 #   --help                               Show this help message
+#   --img-name=NAME                      Base image name prefix (default: acl_production)
+#                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --ipe-mode=MODE                       IPE runtime mode: disabled|audit|enforcing (default: disabled)
 #                                        'enforcing' is reserved and rejected at build time.
 #   --ipe-signing-mode=MODE              IPE signing mode: ephemeral|esrp (default: ephemeral)
-#   --img-name=NAME                      Base image name prefix (default: acl_production)
-#                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
 #   --output=DIR                         Output directory for images
-#   --reuse-vm                           Reuse an already-running VM (reads IP/RG from .vm-state.env)
-#   --tag=KEY=VALUE                      Add a resource tag to Azure VMs/RGs (can specify multiple times)
-#                                        Default tag: createdBy=<current user>
 #   --rebuild                            Force rebuild even if image exists
+#   --rebuild-and-test                   Rebuild image and run smoke tests (equivalent to
+#                                        --rebuild --build-vm-image --run-tests)
 #   --retry=N                            Retry build steps up to N times with exponential backoff
 #                                        (default backoff: 15s initial, 5min max). Clears intermediate
 #                                        build caches between retries but preserves toolchain, azurelinux
 #                                        clone, and rpm-staging.
-#   --rebuild-and-test                   Rebuild image and run smoke tests (equivalent to
-#                                        --rebuild --build-vm-image --run-tests)
+#   --reuse-vm                           Reuse an already-running VM (reads IP/RG from .vm-state.env)
+#   --run-kola-tests                     Run kola tests after building (qemu or azure, based on --vm-type)
+#   --run-script=PATH                    Run script on VM after boot (can specify multiple times)
+#                                        Can be a file path or inline command. Implies --start-vm
 #   --run-tests                          Start a VM and run a series of predefined tests on the VM after boot
 #                                        (includes run-secureboot-test.sh, run-container-test.sh,
 #                                        run-systemd-health-test.sh, run-dmesg-io-error-test.sh,
 #                                        run-selinux-avc-test.sh)
-#   --run-script=PATH                    Run script on VM after boot (can specify multiple times)
-#                                        Can be a file path or inline command. Implies --start-vm
-#   --run-kola-tests                     Run kola tests after building (qemu or azure, based on --vm-type)
-#   --ssh-authorized-keys=KEYS           SSH public keys for VM access (file path or key string)
 #   --skip-standalone-sysexts            Skip building standalone sysexts (to speed up rebuilds)
+#   --ssh-authorized-keys=KEYS           SSH public keys for VM access (file path or key string)
 #   --ssh-key=PATH                       SSH private key for VM access
 #   --ssh-timeout=SECS                   Timeout waiting for SSH (default: 120)
 #   --ssh-user=USER                      SSH user for VM scripts (default: core)
 #   --start-vm                           Start the VM after building (implies --build-vm-image)
+#   --tag=KEY=VALUE                      Add a resource tag to Azure VMs/RGs (can specify multiple times)
+#                                        Default tag: createdBy=<current user>
 #   --use-serial                         Use serial console for script execution (no SSH/ignition needed)
 #   --use-ssh                            Use SSH for script execution (default, requires working ignition/SSH keys)
 #   --use-test-image                     Boot the test VM image (with docker sysext) instead of the regular image
 #   --vm-name=NAME                       Name for the VM (default: acl)
 #   --vm-type=TYPE                       VM type when building VM images: azure|qemu (default: qemu)
-#   --az-vm-args=ARGS                    Additional arguments to pass to vm start command, esp azure vms
-#                                        Space separated list ('--az-vm-args="<key><space><value><space>"')
-#                                        ex: --az-vm-args="--user-data <path-to-ignition-file> --enable-vtpm true"
 #
 # Examples:
 #   # Build and run a test script on the VM via serial console
@@ -244,7 +244,16 @@ is_azure_linux_3() {
 
 # Show usage information
 show_help() {
-    head -30 "$0" | grep -E "^#" | sed 's/^# *//'
+    awk '
+        /^#!/ { next }
+        /^#/ {
+            found = 1
+            sub(/^# ?/, "")
+            print
+            next
+        }
+        found { exit }
+    ' "$0"
     exit 0
 }
 
