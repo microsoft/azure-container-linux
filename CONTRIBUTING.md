@@ -88,6 +88,12 @@ An overview of how the branches are structured can be seen below
 |main          |Branch        |Yes      |No         | **Primary development branch**
 |release/3.0   |Branch        |No       |Yes        | Staging branch for publishing
 
+### Pull Request Validation
+
+The `github-acl-pr-validation` Azure pipeline builds and tests both architectures.
+PRs targeting `aclmain` or `release/3.0` default to IPE audit with ephemeral signing.
+Set `ipeMode=disabled` to opt out. QEMU remains IPE-disabled.
+
 ### PR Titles
 
 PR titles should start with an action
