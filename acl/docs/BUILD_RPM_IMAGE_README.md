@@ -47,6 +47,9 @@ curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
 **Note**: `docker.io` is used because it is available from the default Ubuntu repositories on all LTS versions. `docker-ce` requires adding Docker's third-party apt source. The `qemu-system-x86` package is preferred over the `qemu-kvm` transitional package for forward compatibility.
 
+**yq v4 (Ubuntu/Debian):** Install [Mike Farah's yq v4](https://github.com/mikefarah/yq/#install) separately on the build host for RPM and standalone sysext builds.
+The `yq` package currently provided by the default apt repositories is a different implementation and does not work.
+
 Install on Azure Linux:
 
 ```bash
