@@ -106,6 +106,7 @@
 #   NO_TTY                  Set to "true" to disable TTY allocation (for CI pipelines)
 #   RPM_REPO_URL            Azure Linux repository URL
 #   RPM_ARCH                Target architecture (default: x86_64)
+#   SYSEXT_COMPRESSION      Sysext compression algorithm (default: zstd)
 #   USE_SERIAL_CONSOLE      Use serial console (true) or SSH (false) - default: false
 #   VM_CONSOLE_USER         Serial console login user (default: root)
 #   VM_CONSOLE_PASSWORD     Serial console login password
