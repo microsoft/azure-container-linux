@@ -756,7 +756,7 @@ parse_validate_args() {
                 echo "  --run-host-script=PATH     Run script on the host with VM state (can specify multiple)"
                 echo "  --ssh-key=PATH             SSH private key for VM access"
                 echo "  --ssh-timeout=SECS         Timeout waiting for SSH (default: 120)"
-                echo "  --ssh-user=USER            SSH user (default: core)"
+                echo "  --ssh-user=USER            SSH user (default: azureuser)"
                 echo "  --start-vm                 Start the VM"
                 echo "  --tag=KEY=VALUE            Add a resource tag"
                 echo "  --use-serial               Use serial console"
