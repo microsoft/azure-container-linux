@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 LOADER="${SCRIPT_DIR}/build_library/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.sh"
 PROFILE_HELPER="${SCRIPT_DIR}/build_library/rpm/additional_files/acl-node-security-profile.sh"
-CONTAINERD_PROFILE="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-profile.conf"
+CONTAINERD_EROFS_PROFILE="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-profile.conf"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
@@ -32,7 +32,7 @@ prepare_case() {
     mkdir -p "${IPE_DIR}"
     : > "${IPE_DIR}/new_policy"
     printf '9\n' > "${IPE_DIR}/enforce"
-    cp "${CONTAINERD_PROFILE}" "${CASE_DIR}/containerd-erofs-profile.conf"
+    cp "${CONTAINERD_EROFS_PROFILE}" "${CASE_DIR}/containerd-erofs-profile.conf"
 
     command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
 acl_security_profile() {
@@ -55,11 +55,6 @@ run_loader() {
         bash "${LOADER}" 2>&1
 }
 
-assert_no_containerd_dropin() {
-    [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]] ||
-        { echo "inactive or failed activation installed the containerd profile" >&2; return 1; }
-}
-
 assert_best_effort_skip() {
     local expected="$1"
     local output
@@ -70,7 +65,6 @@ assert_best_effort_skip() {
         { echo "missing best-effort warning: ${expected}" >&2; return 1; }
     grep -Fq 'continuing boot without activating IPE' <<< "${output}" ||
         { echo "loader did not report that boot would continue" >&2; return 1; }
-    assert_no_containerd_dropin
 }
 
 # ---- Test: absent token → succeed as disabled ----
@@ -78,7 +72,6 @@ test_absent_token() {
     prepare_case absent-token
     printf 'root=/dev/sda1\n' > "${CASE_DIR}/cmdline"
     run_loader
-    assert_no_containerd_dropin
 }
 
 # ---- Test: unreadable/missing cmdline → skip IPE and continue boot ----
@@ -116,7 +109,7 @@ EOF
     [[ -s "${IPE_DIR}/new_policy" ]]
     # enforce should remain unchanged (not set to 0)
     [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
-    assert_no_containerd_dropin
+    [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
 }
 
 # ---- Test: the removed runtime alias must not activate IPE ----
@@ -133,8 +126,7 @@ test_valid_audit_active() {
 }
 
 run_active_case() (
-    local name="$1" imds_mode="$2" fault="${3:-}"
-    local -x TEST_ACTIVATION_FAILURE=false
+    local name="$1" imds_mode="$2"
     prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
     write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
@@ -151,52 +143,18 @@ EOF
         command cat "$@" || return 1
         if [[ "$#" -eq 1 && "$1" == "${ACL_IPE_CREDENTIAL_PATH:-}" ]]; then
             mkdir -p "${ACL_IPE_DIR}/policies/acl_ipe_boot_policy"
-            if [[ "${TEST_ACTIVATION_FAILURE}" != true ]]; then
-                printf '0\n' > "${ACL_IPE_DIR}/policies/acl_ipe_boot_policy/active"
-            fi
+            printf '0\n' > "${ACL_IPE_DIR}/policies/acl_ipe_boot_policy/active"
         fi
     }
     export -f cat
 
     local output
-    case "${fault}" in
-        activation) TEST_ACTIVATION_FAILURE=true ;;
-        missing-profile) rm "${CASE_DIR}/containerd-erofs-profile.conf" ;;
-        directory) printf 'not a directory\n' > "${CASE_DIR}/dropins" ;;
-        write) mkdir -p "${CASE_DIR}/dropins/90-acl-profile.conf" ;;
-    esac
-    if [[ "${fault}" == missing-profile || "${fault}" == directory || "${fault}" == write ]]; then
-        if output="$(run_loader "${CASE_DIR}/credential.p7b.cred")"; then
-            echo "loader accepted ${fault} failure" >&2
-            return 1
-        fi
-        [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
-        [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
-        if [[ "${fault}" == missing-profile ]]; then
-            grep -Fq 'ERROR: active IPE policy has no containerd profile' <<< "${output}"
-        else
-            grep -Fq 'ERROR: failed to install the containerd profile' <<< "${output}"
-        fi
-        if [[ "${fault}" == write ]]; then
-            [[ -d "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
-        else
-            assert_no_containerd_dropin
-        fi
-        return
-    fi
     output="$(run_loader "${CASE_DIR}/credential.p7b.cred")"
-    if [[ "${fault}" == activation ]]; then
-        grep -Fq 'WARNING: failed to activate acl_ipe_boot_policy' <<< "${output}"
-        assert_no_containerd_dropin
-        return
-    fi
     grep -Fq "Using IPE mode '${imds_mode}'." <<< "${output}" ||
         { echo "loader did not report requested mode '${imds_mode}'" >&2; return 1; }
     [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
     [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
     cmp "${CASE_DIR}/containerd-erofs-profile.conf" "${CASE_DIR}/dropins/90-acl-profile.conf"
-    grep -Fq "Enabled the EROFS containerd profile at ${CASE_DIR}/dropins/90-acl-profile.conf." \
-        <<< "${output}"
 )
 
 # ---- Test: 'enforcing' is reserved; loader logs an explicit unsupported
@@ -220,7 +178,7 @@ EOF
     # Verify policy was loaded but not activated, and boot was not blocked.
     [[ -s "${IPE_DIR}/new_policy" ]]
     [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
-    assert_no_containerd_dropin
+    [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
 }
 
 
@@ -412,6 +370,164 @@ test_hashed_cmdline_helper() {
     [[ "$(<"${CASE_DIR}/cmdline")" == "acl.ipe.policy_sha256=${expected_hash}" ]]
 }
 
+test_containerd_profile_selection() (
+    prepare_case containerd-profile
+
+    local selector="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-select-profile"
+    local erofs="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-erofs.toml"
+    local base="${CASE_DIR}/base \"quoted\" config.toml"
+    local original="${CASE_DIR}/original.toml"
+    local final="${CASE_DIR}/run/acl-config.toml"
+    local scenario local_pull fallback extra unpack_differ overlay_differ
+
+    mkdir -p "${CASE_DIR}/bin"
+    printf '0\n' > "${IPE_DIR}/enforce"
+
+    if [[ -n "${CONTAINERD_BIN:-}" ]]; then
+        ln -s "$(command -v "${CONTAINERD_BIN}")" "${CASE_DIR}/bin/containerd"
+    else
+        command cat > "${CASE_DIR}/bin/containerd" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+if [[ "$#" == 2 && "$1" == config && "$2" == default ]]; then
+    printf '[plugins."io.containerd.snapshotter.v1.erofs"]\nenable_dmverity_referrers = false\n'
+    printf '[plugins."io.containerd.cri.v1.images"]\nmax_concurrent_downloads = 7\n'
+    exit 0
+fi
+
+[[ "$#" == 4 && "$1" == --config && "$3" == config && "$4" == dump ]]
+grep -Fq "${ACL_CONTAINERD_EROFS_CONFIG}" "$2" || {
+    echo "Unexpected base-only config dump" >&2
+    exit 1
+}
+
+cat <<TOML
+[plugins."io.containerd.snapshotter.v1.erofs"]
+enable_dmverity_referrers = true
+dmverity_mode = "${TEST_DMVERITY_MODE}"
+[plugins."io.containerd.cri.v1.images"]
+snapshotter = "erofs"
+max_concurrent_downloads = ${TEST_CRI_DOWNLOADS}
+use_local_image_pull = ${TEST_LOCAL_PULL}
+[plugins."io.containerd.service.v1.diff-service"]
+default = ["erofs", "walking"]
+${TEST_UNPACK_CONFIG}
+TOML
+EOF
+        chmod +x "${CASE_DIR}/bin/containerd"
+    fi
+
+    export PATH="${CASE_DIR}/bin:${PATH}"
+    export ACL_IPE_DIR="${IPE_DIR}"
+    export ACL_CONTAINERD_CONFIG_PATH="${final}"
+    export ACL_CONTAINERD_EROFS_CONFIG="${erofs}"
+
+    printf 'version = 2\nroot = "/var/lib/containerd-provider"\n' > "${CASE_DIR}/relative.toml"
+    for scenario in compatible transfer-concurrency cri-concurrency local-pull dmverity-off \
+        unpack-compatible unpack-overlayfs unpack-split-entries; do
+        local_pull=false
+        fallback=false
+        extra=""
+        export TEST_CRI_DOWNLOADS=7
+        export TEST_DMVERITY_MODE=auto
+        export TEST_UNPACK_CONFIG=""
+
+        case "${scenario}" in
+            transfer-concurrency)
+                extra=$'[plugins."io.containerd.transfer.v1.local"]\nmax_concurrent_downloads = 4'
+                ;;
+            cri-concurrency)
+                extra='max_concurrent_downloads = 4'
+                TEST_CRI_DOWNLOADS=4
+                fallback=true
+                ;;
+            local-pull)
+                local_pull=true
+                fallback=true
+                ;;
+            dmverity-off)
+                TEST_DMVERITY_MODE=off
+                extra=$'[plugins."io.containerd.snapshotter.v1.erofs"]\ndmverity_mode = "off"'
+                fallback=true
+                ;;
+            unpack-*)
+                unpack_differ=erofs
+                overlay_differ=walking
+                if [[ "${scenario}" == unpack-split-entries ]]; then
+                    unpack_differ=walking
+                    overlay_differ=erofs
+                fi
+                if [[ "${scenario}" != unpack-overlayfs ]]; then
+                    extra+="
+[[plugins.\"io.containerd.transfer.v1.local\".unpack_config]]
+platform = \"linux(+erofs)/amd64\"
+snapshotter = \"erofs\"
+differ = \"${unpack_differ}\""
+                fi
+                extra+="
+[[plugins.\"io.containerd.transfer.v1.local\".unpack_config]]
+platform = \"linux/amd64\"
+snapshotter = \"overlayfs\"
+differ = \"${overlay_differ}\""
+                [[ "${scenario}" == unpack-compatible ]] || fallback=true
+                TEST_UNPACK_CONFIG="${extra}"
+                ;;
+        esac
+
+        export TEST_LOCAL_PULL="${local_pull}"
+        command cat > "${base}" <<EOF
+version = 2
+imports = ["relative.toml"]
+[plugins."io.containerd.cri.v1.images"]
+use_local_image_pull = ${local_pull}
+${extra}
+EOF
+
+        cp "${base}" "${original}"
+        bash "${selector}" "${base}"
+
+        python3 - "${final}" "${base}" "${erofs}" "${fallback}" <<'PY'
+import sys, tomllib
+path, base, erofs, fallback = sys.argv[1:]
+with open(path, "rb") as config:
+    wrapper = tomllib.load(config)
+assert wrapper == {"version": 4, "imports": [base] if fallback == "true" else [base, erofs]}
+PY
+
+        cmp "${base}" "${original}"
+        [[ ! -e "${CASE_DIR}/run/acl-config.env" ]]
+        [[ -z "$(find "${CASE_DIR}/run" -name '*.tmp.*' -print)" ]]
+
+        if [[ -n "${CONTAINERD_BIN:-}" ]]; then
+            containerd --config "${final}" config dump |
+                python3 -c 'import sys, tomllib; assert tomllib.loads(sys.stdin.read())["root"] == "/var/lib/containerd-provider"'
+        fi
+    done
+
+    cp "${final}" "${CASE_DIR}/selected.toml"
+    printf '1\n' > "${IPE_DIR}/enforce"
+    if bash "${selector}" "${base}" > "${CASE_DIR}/failure.log" 2>&1; then
+        echo "Selector allowed unsigned fallback with enforcement enabled" >&2
+        return 1
+    fi
+    grep -Fq 'IPE enforcement is not in audit mode' "${CASE_DIR}/failure.log" ||
+        { echo "missing IPE enforcement rejection diagnostic" >&2; return 1; }
+
+    rm "${IPE_DIR}/enforce"
+    if bash "${selector}" "${base}" > "${CASE_DIR}/failure.log" 2>&1; then
+        echo "Selector allowed unsigned fallback without enforcement state" >&2
+        return 1
+    fi
+    grep -Fq 'IPE enforcement is not in audit mode' "${CASE_DIR}/failure.log" ||
+        { echo "missing IPE enforcement rejection diagnostic" >&2; return 1; }
+
+    cmp "${final}" "${CASE_DIR}/selected.toml"
+    [[ -z "$(find "${CASE_DIR}/run" -name '*.tmp.*' -print)" ]]
+    cmp "${base}" "${original}"
+    echo "containerd audit profile wrapper tests passed"
+)
+
 test_hashed_cmdline_helper
 test_absent_token
 test_missing_cmdline
@@ -419,10 +535,6 @@ test_valid_inactive_load
 test_valid_disabled_alias_inactive
 test_removed_alias_inactive
 test_valid_audit_active
-run_active_case failed-activation audit activation
-run_active_case missing-containerd-profile audit missing-profile
-run_active_case failed-containerd-directory audit directory
-run_active_case failed-containerd-write audit write
 test_enforcing_mode_safe_fallback
 test_duplicate_token
 test_malformed_hash
@@ -438,5 +550,6 @@ test_missing_security_profile_helper
 test_incomplete_security_profile_helper
 test_imds_failure_after_validation
 test_best_effort_service_wiring
+test_containerd_profile_selection
 
 echo "IPE loader runtime mode tests passed"

@@ -122,4 +122,4 @@ if ! mkdir -p "${CONTAINERD_PROFILE_DEST%/*}" ||
     log "ERROR: failed to install the containerd profile at ${CONTAINERD_PROFILE_DEST}."
     exit 1
 fi
-log "Enabled the EROFS containerd profile at ${CONTAINERD_PROFILE_DEST}."
+log "Installed the containerd IPE profile at ${CONTAINERD_PROFILE_DEST}."

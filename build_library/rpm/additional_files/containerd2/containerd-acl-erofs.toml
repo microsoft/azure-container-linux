@@ -1,5 +1,5 @@
-# Imported for boot-activated IPE
-version = 3
+# Imported when IPE is activated at boot
+version = 4
 
 [plugins."io.containerd.snapshotter.v1.erofs"]
   enable_dmverity_referrers = true

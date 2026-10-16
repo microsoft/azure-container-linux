@@ -8,6 +8,27 @@ Currently targeting `stable-4459.2.2` of Flatcar Linux upstream. Upstream build 
 
 ## Overview
 
+### Signed EROFS integration test branches
+
+`dadelan/ipe-erofs-e2e-20261009` combines the latest containerd signed EROFS
+candidate (including root/parent-aware snapshot identities) with the containerd
+profile selector. Runtime IPE activation remains opt-in on this branch.
+`dadelan/ipe-erofs-e2e-20261009-audit` adds a test-only runtime audit default.
+Neither branch changes the production PR branches.
+
+Build with `ipeMode=audit` (`ACL_IPE_MODE=audit`), `bootloaderMode=uki`, and the
+appropriate policy-signing mode so the image includes a signed IPE credential.
+For the existing ESRP pipeline, use `ipeSigningMode=esrp`. Do not reuse older
+containerd RPMs: this candidate is `containerd2-2.3.4-6`.
+
+The audit-default image must retain a loaded and active IPE policy with
+`/sys/kernel/security/ipe/enforce` equal to `0`, and its effective containerd
+configuration must select EROFS and enable dm-verity referrers. A passing generic
+workload test alone does not prove those settings were active. Run
+`acl/tests/ipe/run-ipe-audit-test.sh` on the booted VM to check them.
+The authenticated, network-isolated pause-image bootstrap readiness issue is
+not fixed by these branches.
+
 The build system has been extended to support package source modes:
 
 - **PORTAGE**: (default) Traditional Flatcar build using only Portage packages
@@ -175,6 +196,17 @@ The policy hash is reserved for the main UKI command line; IPE image
 conversion rejects active UKI addons (including the optional
 `EXTRA_KERNEL_CMDLINE` debug addon) that supply another
 `acl.ipe.policy_sha256` token.
+
+IPE activation triggers a containerd systemd drop-in that imports
+a base config (AgentBaker's on AKS nodes) merged with
+`/usr/share/containerd/acl-erofs.toml`, which selects EROFS as the CRI
+and snapshotter plugins and enables the flag to discover dm-verity OCI
+referrers. This requires a matching containerd RPM with signed EROFS referrer
+support. Disabled IPE leaves the base config selected. If the merged profile is incompatible with signed EROFS, confirmed IPE
+`enforce=0` selects the base config as a fallback, without signed-referrer support.
+The selector checks flag support in `containerd config default` before validating
+the merged configuration and reports unsupported binaries separately from
+configuration-read failures.
 
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
 

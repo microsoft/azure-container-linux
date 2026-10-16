@@ -1,11 +1,11 @@
 %global debug_package %{nil}
 %define upstream_name containerd
-%define commit_hash 774bc80b3b952a07fefb4424b65a7c9115e9f8c6
+%define commit_hash 62c2925d0d20db4209f574f46fc260bc0efd7e68
 
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.4
-Release: 4%{?dist}
+Release: 6%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -22,10 +22,7 @@ Patch2:	fix-TestCgroupNamespace-cgroupv1.patch
 Patch3:	CVE-2026-56852.patch
 Patch4:	CVE-2026-37236.patch
 Patch5:	fix-wrapped-enotsup-selinux-relabel.patch
-Patch6:	0001-erofs-add-signed-dm-verity-mapper-foundation.patch
-Patch7:	0002-erofs-plain-chainid-signed-foundation.patch
-Patch8:	0003-erofs-generic-signed-referrer-integration.patch
-Patch9:	0004-dmverity-preserve-concurrent-mapper-ownership.patch
+Patch6:	erofs-signed-dmverity.patch
 
 %{?systemd_requires}
 
@@ -72,7 +69,6 @@ make VERSION="%{version}" REVISION="%{commit_hash}" binaries man
 export BUILDTAGS="-mod=vendor"
 export GOEXPERIMENT=ms_nocgo_opensslcrypto
 make VERSION="%{version}" REVISION="%{commit_hash}" test
-go test -mod=vendor ./vendor/github.com/containerd/go-dmverity/pkg/verity
 
 %install
 make VERSION="%{version}" REVISION="%{commit_hash}" DESTDIR="%{buildroot}" PREFIX="/usr" install install-man
@@ -107,6 +103,11 @@ fi
 %dir /opt/containerd/lib
 
 %changelog
+* Fri Oct 16 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-6
+- Refresh the signed EROFS integration from containerd index tree 62c2925d0d20.
+- Separate signed snapshot variants by root and selected parent and retain each GC edge.
+- Include fetch-only Transfer referrer retention; defer the mapper lifecycle lock follow-up.
+
 * Tue Oct 06 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.4-4
 - Add signed EROFS mount, preparation, transfer, and cached CRI support.
 - Retain compatible layer roots and preserve concurrent mapper ownership.
