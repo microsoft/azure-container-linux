@@ -56,6 +56,12 @@ check_erofs_settings() {
             section = $0
         }
 
+        # Check if the EROFS snapshotter is explicitly disabled in the configuration.
+        !section && /^disabled_plugins =/ && /"io\.containerd\.snapshotter\.v1\.erofs"/ {
+            print "WARNING: the EROFS snapshotter is explicitly disabled" > "/dev/stderr"
+            config_conflict = 1
+        }
+
         # Required dmverity referrer and EROFS settings.
         section == "[plugins.\"io.containerd.snapshotter.v1.erofs\"]" &&
             /^enable_dmverity_referrers =/ {
