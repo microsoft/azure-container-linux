@@ -120,7 +120,7 @@ write_disk_space_usage() {
     write_disk_space_usage_in_paths "${1}" "${2}" ./boot ./usr ./
 }
 
-# Where the SPDX package manifests are written to in a rootfs.
+# Where the SPDX 2.2 package manifests are written to in a rootfs.
 # systemd-sysext merges every sysext's copy of this directory over the image's,
 # so a booted machine sees one directory holding the image's manifest and one
 # per merged sysext.
@@ -134,6 +134,8 @@ OS_MANIFESTS_DIR="/usr/share/os-manifests"
 # The kind picks the filename. An image writes package-manifest.spdx.json and a
 # sysext writes package-manifest.<name>.spdx.json, so the copies merged into one
 # /usr safely.
+#
+# packages_file must be a container-manifest-2 listing.
 #
 # The document is not validated here. Its shape is a property of the generator,
 # not of any one rootfs, so it is checked against a fixture and a golden SPDX
