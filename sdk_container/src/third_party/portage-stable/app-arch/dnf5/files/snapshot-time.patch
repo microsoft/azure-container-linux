@@ -15,12 +15,13 @@ Subject: [PATCH] Add a plugin to support virtual snapshots using package file
  .../repo_snapshot/repo_snapshot.conf          |   3 +
  .../repo_snapshot/repo_snapshot.cpp           | 175 ++++++++++++++++++
  .../repo_snapshot/repo_snapshot_filter.hpp    |  98 ++++++++++
+ libdnf5/repo/solv_repo.hpp                    |   2 +-
  libdnf5/rpm/package.cpp                       |   4 +
  .../test_repo_snapshot_filter.cpp             | 100 ++++++++++
  .../test_repo_snapshot_filter.hpp             |  32 ++++
  test/libdnf5/rpm/test_package.cpp             |   9 +
  test/libdnf5/rpm/test_package.hpp             |   2 +
- 15 files changed, 607 insertions(+)
+ 16 files changed, 608 insertions(+), 1 deletion(-)
  create mode 100644 dnf5-plugins/repo_snapshot_plugin/CMakeLists.txt
  create mode 100644 dnf5-plugins/repo_snapshot_plugin/repo_snapshot_cmd_plugin.cpp
  create mode 100644 libdnf5-plugins/repo_snapshot/CMakeLists.txt
@@ -571,6 +572,15 @@ index 0000000..536839d
 +}  // namespace repo_snapshot
 +
 +#endif  // LIBDNF5_PLUGINS_REPO_SNAPSHOT_FILTER_HPP
+diff --git a/libdnf5/repo/solv_repo.hpp b/libdnf5/repo/solv_repo.hpp
+--- a/libdnf5/repo/solv_repo.hpp
++++ b/libdnf5/repo/solv_repo.hpp
+@@ -38,4 +38,4 @@
+ static const constexpr size_t SOLV_USERDATA_SOLV_TOOLVERSION_SIZE{8};
+ static const constexpr std::array<char, 4> SOLV_USERDATA_MAGIC{'\0', 'd', 'n', 'f'};
+-static const constexpr std::array<char, 4> SOLV_USERDATA_DNF_VERSION{'\0', '1', '.', '0'};
++static const constexpr std::array<char, 4> SOLV_USERDATA_DNF_VERSION{'\0', '1', '.', '1'};
+ 
 diff --git a/libdnf5/rpm/package.cpp b/libdnf5/rpm/package.cpp
 index bb7a7a3..89f0fc2 100644
 --- a/libdnf5/rpm/package.cpp

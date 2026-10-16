@@ -3,6 +3,8 @@ ARG BASE
 FROM ${BASE}
 COPY --chown=sdk:sdk sdk_container/ /mnt/host/source
 COPY --chown=sdk:sdk . /mnt/host/source/src/scripts
+COPY sdk_lib/90_env_keep /etc/sudoers.d/90_env_keep
+RUN chmod 0440 /etc/sudoers.d/90_env_keep
 
 # Disable all sandboxing for SDK updates since some core packages
 #  (like GO) fail to build from a permission error otherwise.
@@ -32,6 +34,7 @@ RUN echo "=== Checking for DNF5 installation ===" && \
     find /usr -name 'dnf5*' -type f 2>/dev/null | grep -E '(bin|sbin)' || echo "No dnf5 files found"
 RUN test -x /usr/bin/dnf5 || (echo "ERROR: dnf5 not found at /usr/bin/dnf5" && exit 1)
 RUN echo "Found DNF5 at: /usr/bin/dnf5"
+RUN su - sdk -c 'PACKAGE_SNAPSHOT_TIME=1735689600 sudo env | grep -qx PACKAGE_SNAPSHOT_TIME=1735689600'
 RUN echo "=== Testing DNF5 ===" && \
     /usr/bin/dnf5 --version || (echo "ERROR: dnf5 failed to run" && exit 1)
 RUN test -f /etc/dnf/libdnf5-plugins/repo_snapshot.conf && \
