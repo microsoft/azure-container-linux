@@ -126,15 +126,22 @@ test_valid_audit_active() {
 }
 
 run_active_case() (
-    local name="$1" imds_mode="$2"
+    local name="$1" imds_mode="$2" scenario="${3:-azure}" prefix="flatcar.oem.id=azure"
     prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
-    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
+    [[ "${scenario}" != nonazure ]] || prefix=""
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "${prefix}"
 
     command cat > "${CASE_DIR}/security-profile.sh" <<EOF
 acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
 acl_security_profile_value() { printf '%s\n' '${imds_mode}'; }
 EOF
+    if [[ "${scenario}" == imds-failure ]]; then
+        command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
+acl_security_profile() { return 1; }
+acl_security_profile_value() { return 1; }
+EOF
+    fi
 
     # Simulate the kernel creating the policy interface when the credential
     # is written, after the loader's preexisting-policy check.
@@ -150,12 +157,18 @@ EOF
 
     local output
     output="$(run_loader "${CASE_DIR}/credential.p7b.cred")"
-    grep -Fq "Using IPE mode '${imds_mode}'." <<< "${output}" ||
-        { echo "loader did not report requested mode '${imds_mode}'" >&2; return 1; }
+    grep -Fq "Using IPE mode '${imds_mode:-audit}'." <<< "${output}" ||
+        { echo "loader did not report expected audit mode" >&2; return 1; }
     [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
     [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
     cmp "${CASE_DIR}/containerd-erofs-profile.conf" "${CASE_DIR}/dropins/90-acl-profile.conf"
 )
+
+test_default_audit_active() {
+    run_active_case audit-without-tag "" azure
+    run_active_case audit-without-imds "" imds-failure
+    run_active_case audit-on-nonazure "" nonazure
+}
 
 # ---- Test: 'enforcing' is reserved; loader logs an explicit unsupported
 # diagnostic and falls back safely to inactive without failing boot ----
@@ -535,6 +548,7 @@ test_valid_inactive_load
 test_valid_disabled_alias_inactive
 test_removed_alias_inactive
 test_valid_audit_active
+test_default_audit_active
 test_enforcing_mode_safe_fallback
 test_duplicate_token
 test_malformed_hash

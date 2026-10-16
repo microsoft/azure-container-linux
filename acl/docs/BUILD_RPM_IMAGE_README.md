@@ -16,6 +16,13 @@ profile selector. Runtime IPE activation remains opt-in on this branch.
 `dadelan/ipe-erofs-e2e-20261009-audit` adds a test-only runtime audit default.
 Neither branch changes the production PR branches.
 
+On the `-audit` branch, runtime selection defaults to audit after the existing
+credential verification and kernel policy-load checks, including non-Azure VMs,
+missing metadata tags, and unavailable IMDS. Explicit Azure metadata
+`ipe=off`/`ipe=disabled` keeps IPE inactive; unsupported `enforcing` and invalid
+values also remain inactive. The default does not bypass missing credentials,
+hash mismatches, or kernel signature rejection, and does not enable enforcement.
+
 Build with `ipeMode=audit` (`ACL_IPE_MODE=audit`), `bootloaderMode=uki`, and the
 appropriate policy-signing mode so the image includes a signed IPE credential.
 For the existing ESRP pipeline, use `ipeSigningMode=esrp`. Do not reuse older

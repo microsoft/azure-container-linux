@@ -75,7 +75,8 @@ declare -F acl_security_profile >/dev/null ||
 declare -F acl_security_profile_value >/dev/null ||
     skip "security profile helper is missing required functions"
 
-mode="off"
+# Test-branch default; the credential and kernel policy checks above still apply.
+mode="audit"
 if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
     if security_profile="$(acl_security_profile)"; then
         requested_mode="$(acl_security_profile_value "${security_profile}" "ipe")"
@@ -86,10 +87,13 @@ if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
                 mode="off"
                 ;;
             "") ;;
-            *) log "Ignoring unrecognized IPE mode '${requested_mode}' from IMDS." ;;
+            *)
+                log "Ignoring unrecognized IPE mode '${requested_mode}' from IMDS."
+                mode="off"
+                ;;
         esac
     else
-        log "IMDS unavailable; leaving IPE inactive (policy loaded but not activated)."
+        log "IMDS unavailable; using the test-image IPE audit default."
     fi
 fi
 log "Using IPE mode '${mode}'."
