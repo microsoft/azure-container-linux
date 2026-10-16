@@ -47,6 +47,9 @@ curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
 **Note**: `docker.io` is used because it is available from the default Ubuntu repositories on all LTS versions. `docker-ce` requires adding Docker's third-party apt source. The `qemu-system-x86` package is preferred over the `qemu-kvm` transitional package for forward compatibility.
 
+**yq v4:** Install [Mike Farah's yq v4](https://github.com/mikefarah/yq/#install) separately on the build host for RPM and standalone sysext builds.
+The `yq` package currently provided by the default apt repositories is a different implementation and does not work.
+
 Install on Azure Linux:
 
 ```bash
@@ -146,9 +149,22 @@ This step:
 
 **Build output:** Custom RPMs are added to `__build__/rpm-staging/`.
 
+**Compression Failure Tip**
+
+Some distros (including WSL) may not have the default `zstd` support causing
+the build to fail. This can be easily corrected with a `SYSEXT_COMPRESSION`
+override at the failing command:
+
+```bash
+SYSEXT_COMPRESSION=xz ./acl/build_rpm_image.sh {options}
+```
+
+See the [mksquashfs compression options](https://manpages.debian.org/trixie/squashfs-tools/mksquashfs.1.en.html#Filesystem_compression_options)
+for the full list of available compression tools.
+
 ### Phase 3: Build the Image
 
-Build the Flatcar production image using RPM package sources.
+Build the ACL production image using RPM package sources.
 
 ```bash
 # Build image
