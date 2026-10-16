@@ -13,8 +13,8 @@ install() {
     inst_script "${moddir}/acl-ipe-load.sh" \
                 "/usr/bin/acl-ipe-load"
 
-    inst_simple "${moddir}/containerd-erofs-profile.conf" \
-                "/usr/lib/acl/containerd-erofs-profile.conf"
+    inst_simple "${moddir}/containerd-acl-erofs-profile.conf" \
+                "/usr/lib/acl/containerd-acl-erofs-profile.conf"
 
     inst_simple "${moddir}/acl-ipe-load.service" \
                 "${systemdsystemunitdir}/acl-ipe-load.service"

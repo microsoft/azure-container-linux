@@ -56,9 +56,9 @@ check_erofs_settings() {
             section = $0
         }
 
-        # Check if the EROFS snapshotter is explicitly disabled in the configuration.
-        !section && /^disabled_plugins =/ && /"io\.containerd\.snapshotter\.v1\.erofs"/ {
-            print "WARNING: the EROFS snapshotter is explicitly disabled" > "/dev/stderr"
+        # Check if the EROFS snapshotter or differ is explicitly disabled in the configuration.
+        !section && /^disabled_plugins =/ && /"io\.containerd\.(snapshotter|differ)\.v1\.erofs"/ {
+            print "WARNING: the EROFS snapshotter or differ is explicitly disabled" > "/dev/stderr"
             config_conflict = 1
         }
 
