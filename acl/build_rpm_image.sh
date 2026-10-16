@@ -80,6 +80,7 @@
 #   --use-serial                         Use serial console for script execution (no SSH/ignition needed)
 #   --use-ssh                            Use SSH for script execution (default, requires working ignition/SSH keys)
 #   --use-test-image                     Boot the test VM image (with docker sysext) instead of the regular image
+#   --usr-fs=TYPE                        /usr filesystem: erofs (default) or btrfs
 #   --vm-name=NAME                       Name for the VM (default: acl)
 #   --vm-type=TYPE                       VM type when building VM images: azure|qemu (default: qemu)
 #
@@ -102,6 +103,8 @@
 # Environment Variables:
 #   ACL_SDK_IMAGE           Override SDK container image (e.g., <your-registry>/sdk:<release>)
 #                           Bypasses auto-detection from version.txt when set
+#   ACL_USR_FS /usr filesystem selector: erofs (default) or btrfs.
+#                           See acl/docs/erofs-usr.md for supported build modes.
 #   BUILD_ID                Build identifier for versioning
 #   NO_TTY                  Set to "true" to disable TTY allocation (for CI pipelines)
 #   RPM_REPO_URL            Azure Linux repository URL
@@ -127,6 +130,7 @@ fi
 # shellcheck source=../build_library/retry_with_backoff.sh
 source "${SCRIPT_DIR}/build_library/retry_with_backoff.sh"
 source "${SCRIPT_DIR}/build_library/standalone_sysext_util.sh"
+source "${SCRIPT_DIR}/build_library/usr_filesystem.sh"
 source "${SCRIPT_DIR}/build_library/rpm/ipe_artifact.sh"
 cd "${SCRIPT_DIR}"
 
@@ -505,6 +509,16 @@ parse_args() {
             --build-image)
                 BUILD_IMAGE=true
                 shift
+                ;;
+            --usr-fs=*)
+                export ACL_USR_FS="${1#*=}"
+                [[ -n "${ACL_USR_FS}" ]] || { error "--usr-fs requires a value"; exit 1; }
+                shift
+                ;;
+            --usr-fs)
+                [[ $# -ge 2 && -n "$2" ]] || { error "--usr-fs requires a value"; exit 1; }
+                export ACL_USR_FS="$2"
+                shift 2
                 ;;
             --build-vm-image)
                 BUILD_VM_IMAGE=true
@@ -1478,6 +1492,10 @@ run_with_retry() {
 # Main entry point
 main() {
     parse_args "$@"
+
+    if [[ "$BUILD_IMAGE" == "true" || -n "${ACL_USR_FS:-}" ]]; then
+        acl_validate_usr_filesystem || exit 1
+    fi
 
     section "Azure Container Linux Image Builder"
     info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"
