@@ -176,6 +176,17 @@ conversion rejects active UKI addons (including the optional
 `EXTRA_KERNEL_CMDLINE` debug addon) that supply another
 `acl.ipe.policy_sha256` token.
 
+IPE activation triggers a containerd systemd drop-in that imports
+a base config (AgentBaker's on AKS nodes) merged with
+`/usr/share/containerd/acl-erofs.toml`, which selects EROFS as the CRI
+and snapshotter plugins and enables the flag to discover dm-verity OCI
+referrers. This requires a matching containerd RPM with signed EROFS referrer
+support. Disabled IPE leaves the base config selected. If the merged profile is incompatible with signed EROFS, confirmed IPE
+`enforce=0` selects the base config as a fallback, without signed-referrer support.
+The selector checks flag support in `containerd config default` before validating
+the merged configuration and reports unsupported binaries separately from
+configuration-read failures.
+
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
 
 ### Phase 4: Build VM Image (Optional)
