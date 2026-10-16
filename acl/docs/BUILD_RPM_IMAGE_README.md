@@ -149,9 +149,22 @@ This step:
 
 **Build output:** Custom RPMs are added to `__build__/rpm-staging/`.
 
+**Compression Failure Tip**
+
+Some distros (including WSL) may not have the default `zstd` support causing
+the build to fail. This can be easily corrected with a `SYSEXT_COMPRESSION`
+override at the failing command:
+
+```bash
+SYSEXT_COMPRESSION=xz ./acl/build_rpm_image.sh {options}
+```
+
+See the [mksquashfs compression options](https://manpages.debian.org/trixie/squashfs-tools/mksquashfs.1.en.html#Filesystem_compression_options)
+for the full list of available compression tools.
+
 ### Phase 3: Build the Image
 
-Build the Flatcar production image using RPM package sources.
+Build the ACL production image using RPM package sources.
 
 ```bash
 # Build image
