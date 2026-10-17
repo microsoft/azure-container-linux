@@ -12,6 +12,7 @@
 #
 # REPOSITORY CONFIGURATION:
 #   - Local cache repository (if RPM_LOCAL_CACHE is set) - priority 1
+#     Snapshot builds exclude retained upstream bootloader RPMs from this cache.
 #   - Bootstrap base repo (used only to install filesystem + azurelinux-repos)
 #   - Azure Linux official repositories (installed via azurelinux-repos RPM)
 
@@ -31,6 +32,21 @@ rpm_get_staging_dir() {
         fi
     done
     echo "${rpm_staging}"
+}
+
+rpm_bootloader_package_file() {
+    local disk_image="$1" package="$2" arch="$3"
+    local download_dir
+    download_dir="$(dirname "${disk_image}")/bootloader-rpms"
+    [[ -d "${download_dir}" ]] ||
+        die "Bootloader RPM directory not found: ${download_dir}"
+
+    local -a matches=()
+    mapfile -t matches < <(find "${download_dir}" -maxdepth 1 -type f \
+        -name "${package}-[0-9]*.${arch}.rpm")
+    [[ ${#matches[@]} -eq 1 ]] ||
+        die "Expected one ${package} RPM for ${arch} in ${download_dir}, found ${#matches[@]}"
+    printf '%s\n' "${matches[0]}"
 }
 
 RPM_MANIFEST_QUERY_FORMAT='%|ARCH?{%{NAME}\t%{VERSION}-%{RELEASE}\t%{INSTALLTIME}\t%{BUILDTIME}\t%{VENDOR}\t%{EPOCH}\t%{SIZE}\t%{ARCH}\t%{EPOCHNUM}\t%{SOURCERPM}\n}:{}|'
@@ -99,6 +115,11 @@ rpm_setup_repos() {
     if [[ -n "${local_repo_dir}" ]] && [[ -d "${local_repo_dir}" ]]; then
         if [[ -f "${local_repo_dir}/repodata/repomd.xml" ]]; then
             info "  Adding local repository cache: ${local_repo_dir}"
+            local local_exclusions=""
+            if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" ]]; then
+                # Retained upstream bootloader RPMs are not locally built packages.
+                local_exclusions="excludepkgs=grub2 grub2-efi grub2-efi-binary shim systemd-boot"
+            fi
             sudo tee "${repo_dir}/azurelinux-local.repo" > /dev/null <<EOF
 [azurelinux-local-cache]
 name=Azure Linux Local Package Cache
@@ -107,6 +128,7 @@ enabled=1
 gpgcheck=0
 repo_gpgcheck=0
 priority=1
+${local_exclusions}
 EOF
         else
             warn "  Skipping local cache (no repository metadata): ${local_repo_dir}"
@@ -811,9 +833,7 @@ rpm_install_package_using_portage_name() {
 # =============================================================================
 # Download RPM packages to a local staging directory
 # =============================================================================
-# Downloads named packages (and their dependencies) from Azure Linux repos
-# into a local directory, then updates repository metadata so the directory
-# can be used as a local dnf/rpm cache.
+# Downloads named packages from Azure Linux repos into a local directory.
 #
 # Usage:  rpm_download_packages <dest_dir> <root_fs_dir> <package> [package ...]
 #
@@ -856,6 +876,9 @@ rpm_download_packages() {
     fi
     local -a snapshot_args=()
     rpm_snapshot_args snapshot_args
+    if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" ]]; then
+        snapshot_args+=(--disable-repo=azurelinux-local-cache)
+    fi
 
     dnf5 "${snapshot_args[@]}" download "${download_args[@]}" "${packages[@]}"
 }

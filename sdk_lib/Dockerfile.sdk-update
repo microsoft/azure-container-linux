@@ -58,6 +58,8 @@ RUN cp /etc/dnf/libdnf5-plugins/repo_snapshot.conf /tmp/repo_snapshot.conf.orig 
     fi && \
     printf '%s\n' "$output" | grep -q 'repo_snapshot plugin is not loaded' && \
     mv /tmp/repo_snapshot.conf.orig /etc/dnf/libdnf5-plugins/repo_snapshot.conf
+RUN /usr/bin/python3 /mnt/host/source/src/scripts/sdk_lib/test_snapshot_packages.py
+RUN bash /mnt/host/source/src/scripts/build_library/rpm/tests/test_bootloader_snapshot.sh
 
 # Remove problematic compatibility alias that references missing builddep plugin
 RUN sudo rm -f /usr/share/dnf5/aliases.d/compatibility-plugins.conf
