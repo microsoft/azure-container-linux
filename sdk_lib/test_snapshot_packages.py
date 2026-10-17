@@ -127,7 +127,7 @@ def main():
                 "--snapshot-exclude-repos=azurelinux-local-cache",
                 "repoquery",
                 "--available",
-                "--queryformat=%{name}-%{version}",
+                "--queryformat=%{name}-%{version}\n",
                 package,
             )
             return set(output.splitlines())
