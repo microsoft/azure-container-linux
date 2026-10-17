@@ -49,11 +49,12 @@ RUN test -f /etc/dnf/libdnf5-plugins/repo_snapshot.conf && \
         echo "ERROR: snapshot plugin did not reject an invalid time"; exit 1; \
     fi && \
     printf '%s\n' "$output" | grep -q 'invalid DNF5_SNAPSHOT_TIME'
+# No repositories are configured yet; --disable-repo='*' would fail before the plugin check.
 RUN cp /etc/dnf/libdnf5-plugins/repo_snapshot.conf /tmp/repo_snapshot.conf.orig && \
     sed -i 's/^enabled = 1$/enabled = 0/' /etc/dnf/libdnf5-plugins/repo_snapshot.conf && \
     grep -qx 'enabled = 0' /etc/dnf/libdnf5-plugins/repo_snapshot.conf && \
-    /usr/bin/dnf5 --disable-repo='*' repoquery --available >/dev/null && \
-    if output=$(/usr/bin/dnf5 --disable-repo='*' --snapshot-time=1735689600 repoquery --available 2>&1); then \
+    /usr/bin/dnf5 repoquery --available >/dev/null && \
+    if output=$(/usr/bin/dnf5 --snapshot-time=1735689600 repoquery --available 2>&1); then \
         echo "ERROR: DNF5 proceeded without the disabled snapshot filter"; exit 1; \
     fi && \
     printf '%s\n' "$output" | grep -q 'repo_snapshot plugin is not loaded' && \

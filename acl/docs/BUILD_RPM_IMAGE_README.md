@@ -121,6 +121,10 @@ The build system requires an extended Flatcar SDK container, which includes all 
 ./acl/build_rpm_image.sh --build-sdk-container
 ```
 
+The SDK build checks snapshot filtering before any RPM repositories are configured.
+Its disabled-plugin smoke check must accept an ordinary query against that empty
+repository list, but reject a snapshot query with the snapshot-specific error.
+
 **When to rebuild SDK:**
 
 - First time setup
