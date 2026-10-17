@@ -110,7 +110,15 @@ def main():
         ]
 
         def run(*args):
-            return subprocess.run([*base, *args], check=True, text=True, capture_output=True).stdout
+            try:
+                return subprocess.run(
+                    [*base, *args], check=True, text=True, capture_output=True
+                ).stdout
+            except subprocess.CalledProcessError as error:
+                raise RuntimeError(
+                    f"DNF5 failed: {error.cmd!r}\n"
+                    f"stdout:\n{error.stdout}\nstderr:\n{error.stderr}"
+                ) from error
 
         def versions(time, package):
             output = run(
