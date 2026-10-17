@@ -6,6 +6,7 @@ Subject: [PATCH] Add a plugin to support virtual snapshots using package file
 
 ---
  CMakeLists.txt                                |   1 +
+ dnf5/main.cpp                                |  15 ++
  dnf5-plugins/CMakeLists.txt                   |   4 +
  .../repo_snapshot_plugin/CMakeLists.txt       |  13 +
  .../repo_snapshot_cmd_plugin.cpp              | 142 +++++++++++++
@@ -21,7 +22,7 @@ Subject: [PATCH] Add a plugin to support virtual snapshots using package file
  .../test_repo_snapshot_filter.hpp             |  32 ++++
  test/libdnf5/rpm/test_package.cpp             |   9 +
  test/libdnf5/rpm/test_package.hpp             |   2 +
- 16 files changed, 608 insertions(+), 1 deletion(-)
+ 17 files changed, 626 insertions(+), 1 deletion(-)
  create mode 100644 dnf5-plugins/repo_snapshot_plugin/CMakeLists.txt
  create mode 100644 dnf5-plugins/repo_snapshot_plugin/repo_snapshot_cmd_plugin.cpp
  create mode 100644 libdnf5-plugins/repo_snapshot/CMakeLists.txt
@@ -43,6 +44,29 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  
  # build options - features
  option(WITH_COMPS "Build with comps groups and environments support" ON)
+diff --git a/dnf5/main.cpp b/dnf5/main.cpp
+--- a/dnf5/main.cpp
++++ b/dnf5/main.cpp
+@@ -1303,4 +1303,19 @@ int main(int argc, char * argv[]) {
+             base.setup();
+ 
++            // A requested cutoff must never proceed without the libdnf5 filter.
++            if (std::getenv("DNF5_SNAPSHOT_TIME")) {
++                bool snapshot_filter_loaded = false;
++                for (const auto & plugin_info : base.get_plugins_info()) {
++                    if (plugin_info.get_name() == "repo_snapshot" && plugin_info.is_loaded()) {
++                        snapshot_filter_loaded = true;
++                        break;
++                    }
++                }
++                if (!snapshot_filter_loaded) {
++                    throw std::runtime_error(
++                        "repo_snapshot plugin is not loaded; refusing to proceed without the snapshot filter");
++                }
++            }
++
+             print_no_match_libdnf_plugin_patterns(context);
+ 
 diff --git a/dnf5-plugins/CMakeLists.txt b/dnf5-plugins/CMakeLists.txt
 --- a/dnf5-plugins/CMakeLists.txt
 +++ b/dnf5-plugins/CMakeLists.txt
