@@ -13,7 +13,6 @@ CUTOFF = 1700000000
 COMMON = "http://linux.duke.edu/metadata/common"
 RPM = "http://linux.duke.edu/metadata/rpm"
 REPOMD = "http://linux.duke.edu/metadata/repo"
-ET.register_namespace("", COMMON)
 ET.register_namespace("rpm", RPM)
 
 
@@ -54,6 +53,7 @@ def write_repo(directory, packages):
         element(package, f"{{{COMMON}}}location", href=filename)
         element(package, f"{{{COMMON}}}format")
 
+    ET.register_namespace("", COMMON)
     raw = ET.tostring(metadata, encoding="utf-8", xml_declaration=True)
     compressed = gzip.compress(raw, mtime=0)
     repodata = directory / "repodata"
@@ -67,6 +67,7 @@ def write_repo(directory, packages):
     element(entry, f"{{{REPOMD}}}timestamp", str(CUTOFF))
     element(entry, f"{{{REPOMD}}}size", str(len(compressed)))
     element(entry, f"{{{REPOMD}}}open-size", str(len(raw)))
+    ET.register_namespace("", REPOMD)
     (repodata / "repomd.xml").write_bytes(ET.tostring(index, encoding="utf-8", xml_declaration=True))
 
 
