@@ -65,16 +65,14 @@ assert_contract "Mantle resource remains on aclmain" "$(cat <<'YAML'
 YAML
 )"
 
-assert_contract "both architectures run ephemeral IPE Azure smoke on PR sources" "$(cat <<'YAML'
+assert_contract "ephemeral IPE on PR sources with shared build and smoke defaults" "$(cat <<'YAML'
 extends:
   template: pipelines/ACL-GitHub-PR.yml@acl_pipelines
   parameters:
     aclRef: $(Build.SourceBranch)
     mantleRef: 'aclmain'
-    arch: 'both'
     ipeMode: ${{ parameters.ipeMode }}
     ipeSigningMode: 'ephemeral'
-    runSmokeAzure: true
     testGeneratePackageManifest: true
 YAML
 )"

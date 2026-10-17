@@ -58,8 +58,6 @@ extends:
   parameters:
     aclRef: $(Build.SourceBranch)
     mantleRef: 'aclmain'
-    arch: 'both'
     ipeMode: ${{ parameters.ipeMode }}
     ipeSigningMode: 'ephemeral'
-    runSmokeAzure: true
     testGeneratePackageManifest: true
