@@ -199,9 +199,10 @@ checks policy activation, execution-correlated audit events, and reboot-based
 mode changes. IPE validation failures fail the pipeline; QEMU remains
 IPE-disabled. This does not enable production signing or enforcing mode.
 
-For a manually queued diagnostic run, select `ipeMode=disabled` to retain normal
-build and smoke coverage without requesting IPE validation. This does not change
-future automatic PR runs; persistent rollback requires changing the entrypoint
+Manual runs also default to IPE audit. If needed for troubleshooting, select
+`ipeMode=disabled` to compare behavior with and without IPE while retaining
+normal build and non-IPE smoke coverage. This diagnostic override does not
+change future automatic PR runs; persistent rollback requires changing the entrypoint
 default or reverting its enablement on each affected source branch. Release
 branches need the entrypoint change too, since their PRs use their own YAML.
 
