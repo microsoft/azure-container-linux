@@ -73,8 +73,8 @@
 #   --ssh-authorized-keys=KEYS           SSH public keys for VM access (file path or key string)
 #   --ssh-key=PATH                       SSH private key for VM access
 #   --ssh-timeout=SECS                   Timeout waiting for SSH (default: 120)
-#   --ssh-user=USER                      SSH user for VM scripts (default: core)
-#   --start-vm                           Start the VM after building (implies --build-vm-image)
+#   --ssh-user=USER                      SSH user for VM scripts (default: azureuser)
+#   --start-vm                           Start a VM using an existing VM image; use --build-vm-image to create one
 #   --tag=KEY=VALUE                      Add a resource tag to Azure VMs/RGs (can specify multiple times)
 #                                        Default tag: createdBy=<current user>
 #   --use-serial                         Use serial console for script execution (no SSH/ignition needed)
@@ -84,20 +84,20 @@
 #   --vm-type=TYPE                       VM type when building VM images: azure|qemu (default: qemu)
 #
 # Examples:
-#   # Build and run a test script on the VM via serial console
-#   ./build_rpm_image.sh --run-script=./tests/smoke_test.sh
+#   # Run a test script on the VM via serial console
+#   ./build_rpm_image.sh --use-serial --run-script=./tests/smoke_test.sh
 #
 #   # Run inline command via serial console
-#   ./build_rpm_image.sh --run-script="cat /etc/os-release"
+#   ./build_rpm_image.sh --use-serial --run-script="cat /etc/os-release"
 #
 #   # Run multiple scripts
 #   ./build_rpm_image.sh --run-script=./setup.sh --run-script=./test.sh
 #
-#   # Use SSH instead of serial console (requires ignition/SSH setup)
+#   # Use SSH (default; requires ignition/SSH setup)
 #   ./build_rpm_image.sh --use-ssh --run-script="systemctl status docker"
 #
 #   # Run with specific console user
-#   ./build_rpm_image.sh --console-user=core --run-script="whoami"
+#   ./build_rpm_image.sh --use-serial --console-user=core --run-script="whoami"
 #
 # Environment Variables:
 #   ACL_SDK_IMAGE           Override SDK container image (e.g., <your-registry>/sdk:<release>)
