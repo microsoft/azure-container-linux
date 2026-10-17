@@ -1,6 +1,13 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+# Only Azure RPM images receive this metadata correction and its synchronous
+# service hook. Keep other providers and the upstream Afterburn RPM unchanged.
+install -Dm0755 "${script_dir}/azure-metadata-ipv4" \
+    "${rootfs}/usr/libexec/azure-metadata-ipv4"
+install -Dm0644 "${script_dir}/20-azure-ipv4.conf" \
+    "${rootfs}/usr/lib/systemd/system/coreos-metadata.service.d/20-azure-ipv4.conf"
+
 # Create waagent sub-dir if it doesn't exist
 mkdir -p "${rootfs}/usr/lib/waagent"
 # Move waagent.conf out of /etc to /usr/lib to preserve it in sysext

@@ -47,3 +47,4 @@ extends:
     aclRef: $(Build.SourceBranch)
     mantleRef: 'aclmain'
     testGeneratePackageManifest: true
+    testAzureMetadataIpv4: true
