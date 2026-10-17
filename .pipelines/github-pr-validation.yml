@@ -6,6 +6,9 @@
 # release branches, and extends the shared ACL-GitHub-PR.yml template in the    #
 # acl-pipelines ADO repo, which runs the actual build and test.                 #
 #                                                                               #
+# Azure builds run IPE audit validation with ephemeral signing on both         #
+# architectures. Manual runs can select ipeMode=disabled; QEMU is unchanged.   #
+#                                                                               #
 # Security:                                                                     #
 #   - Fork PRs do NOT get secrets by default (ADO default behavior)             #
 #   - Use "Require a team member's comment to run" in pipeline settings         #
@@ -13,6 +16,15 @@
 #################################################################################
 
 trigger: none
+
+parameters:
+  - name: ipeMode
+    displayName: '[IPE] Runtime mode'
+    type: string
+    default: 'audit'
+    values:
+      - 'disabled'
+      - 'audit'
 
 pr:
   branches:
@@ -46,4 +58,8 @@ extends:
   parameters:
     aclRef: $(Build.SourceBranch)
     mantleRef: 'aclmain'
+    arch: 'both'
+    ipeMode: ${{ parameters.ipeMode }}
+    ipeSigningMode: 'ephemeral'
+    runSmokeAzure: true
     testGeneratePackageManifest: true

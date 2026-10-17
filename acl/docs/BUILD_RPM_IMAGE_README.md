@@ -181,7 +181,7 @@ Use `ephemeral` for dev/test or `esrp` for later production signing by
 ./acl/build_rpm_image.sh --rebuild --ipe-mode=audit --ipe-signing-mode=esrp
 ```
 
-IPE defaults to disabled. On Azure, set the VM tag
+The build tool defaults to IPE disabled. On Azure, set the VM tag
 `acl-node-security-profile=ipe=audit` to log would-deny events without blocking
 execution. Policy-load failures are logged and leave IPE inactive without
 blocking boot. `enforcing` is unsupported; QEMU runtime testing requires
@@ -191,6 +191,19 @@ The policy hash is reserved for the main UKI command line; IPE image
 conversion rejects active UKI addons (including the optional
 `EXTRA_KERNEL_CMDLINE` debug addon) that supply another
 `acl.ipe.policy_sha256` token.
+
+The GitHub PR entrypoint (`.pipelines/github-pr-validation.yml`) opts into IPE
+audit with ephemeral signing for both AMD64 and ARM64 Azure builds. It runs the
+offline IPE checks and the existing `azure.smoke.ipe-mode-toggle` test, which
+checks policy activation, execution-correlated audit events, and reboot-based
+mode changes. IPE validation failures fail the pipeline; QEMU remains
+IPE-disabled. This does not enable production signing or enforcing mode.
+
+For a manually queued diagnostic run, select `ipeMode=disabled` to retain normal
+build and smoke coverage without requesting IPE validation. This does not change
+future automatic PR runs; persistent rollback requires changing the entrypoint
+default or reverting its enablement on each affected source branch. Release
+branches need the entrypoint change too, since their PRs use their own YAML.
 
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
 
