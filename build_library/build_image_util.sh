@@ -1017,6 +1017,10 @@ EOF
     fi
   fi
 
+  if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    rm -rf -- "${BUILD_DIR}/bootloader-rpms"
+  fi
+
   if [[ -n "${pcr_policy}" ]]; then
     mkdir -p "${BUILD_DIR}/pcrs"
     ${BUILD_LIBRARY_DIR}/generate_grub_hashes.py \

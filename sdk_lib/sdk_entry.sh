@@ -1,5 +1,16 @@
 #!/bin/bash
 
+# su starts a fresh SDK login shell, so forward the cutoff through .bashrc.
+# Clear it even when the current Docker invocation did not request a snapshot.
+sed -i '/^export PACKAGE_SNAPSHOT_TIME=/d' /home/sdk/.bashrc || exit 1
+if [[ -n ${PACKAGE_SNAPSHOT_TIME:-} ]]; then
+    if [[ ! ${PACKAGE_SNAPSHOT_TIME} =~ ^[1-9][0-9]{9}$ ]]; then
+        echo "PACKAGE_SNAPSHOT_TIME must be a 10-digit positive Unix timestamp" >&2
+        exit 2
+    fi
+    printf 'export PACKAGE_SNAPSHOT_TIME=%s\n' "$PACKAGE_SNAPSHOT_TIME" >> /home/sdk/.bashrc
+fi
+
 if [ -n "${SDK_USER_ID:-}" ] ; then
     # If the "core" user from /usr/share/baselayout/passwd has the same ID, allow to take it instead
     usermod --non-unique -u $SDK_USER_ID sdk

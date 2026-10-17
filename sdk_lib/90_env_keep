@@ -4,6 +4,6 @@ Defaults env_keep += "FLATCAR_BUILD_ID COREOS_OFFICIAL \
                       GIT_PROXY_COMMAND GIT_SSH RSYNC_PROXY \
                       GNUPGHOME GPG_AGENT_INFO SSH_AUTH_SOCK \
                       BOTO_PATH GOOGLE_APPLICATION_CREDENTIALS \
-                      USE FEATURES PORTAGE_USERNAME FORCE_STAGES \
+                      USE FEATURES PORTAGE_USERNAME FORCE_STAGES PACKAGE_SNAPSHOT_TIME \
                       SIGNER \
                       all_proxy ftp_proxy http_proxy https_proxy no_proxy"
