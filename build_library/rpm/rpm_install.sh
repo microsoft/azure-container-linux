@@ -876,7 +876,7 @@ rpm_download_packages() {
     fi
     local -a snapshot_args=()
     rpm_snapshot_args snapshot_args
-    if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" ]]; then
+    if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" && -f "${repo_dir}/azurelinux-local.repo" ]]; then
         snapshot_args+=(--disable-repo=azurelinux-local-cache)
     fi
 

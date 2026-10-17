@@ -28,6 +28,26 @@ if grep -q '^excludepkgs=' "${root_fs}/etc/yum.repos.d/azurelinux-local.repo"; t
     die "Bootloader exclusions must only apply to snapshot builds"
 fi
 
+rpm_snapshot_args() {
+    local -n args="$1"
+    args+=(--snapshot-time="${PACKAGE_SNAPSHOT_TIME}" --snapshot-exclude-repos=azurelinux-local-cache)
+}
+dnf5() {
+    printf '%s\n' "$@" > "${work_dir}/dnf-args"
+}
+
+PACKAGE_SNAPSHOT_TIME=1700000000
+remote_root="${work_dir}/remote-root"
+rpm_setup_repos "${remote_root}" 3.0
+rpm_download_packages "${work_dir}/remote-download" "${remote_root}" grub2
+grep -Fxq -- '--snapshot-time=1700000000' "${work_dir}/dnf-args"
+if grep -Fxq -- '--disable-repo=azurelinux-local-cache' "${work_dir}/dnf-args"; then
+    die "Cannot disable a local cache repository that is not configured"
+fi
+
+rpm_download_packages "${work_dir}/local-download" "${root_fs}" grub2
+grep -Fxq -- '--disable-repo=azurelinux-local-cache' "${work_dir}/dnf-args"
+
 download_dir="${work_dir}/bootloader-rpms"
 mkdir -p "${download_dir}"
 touch "${download_dir}/grub2-1-1.x86_64.rpm"
