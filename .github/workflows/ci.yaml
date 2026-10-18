@@ -86,6 +86,11 @@ jobs:
 
           git checkout ${{ github.event.pull_request.head.sha }}
 
+      - name: Test retry-cycle helpers
+        if: ${{ matrix.arch == 'amd64' }}
+        shell: bash
+        run: ./ci-automation/test_retest_cycle.sh
+
       - name: Set environment
         shell: bash
         run: |

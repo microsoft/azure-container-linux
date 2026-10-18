@@ -260,14 +260,18 @@ function docker_image_from_registry_or_buildcache() {
 }
 # --
 
-# Called by vendor test in case of complete failure not eligible for
-# reruns (like trying to run tests on unsupported architecture).
+# Called explicitly by a vendor test when a failure is not eligible for reruns
+# (for example, an unsupported architecture). Ordinary test failures never call
+# this helper and continue through the configured retry count.
 function break_retest_cycle() {
-    local work_dir=$(dirname "${PWD}")
-    local dir=$(basename "${work_dir}")
+    local work_dir
+    work_dir=$(dirname -- "${PWD}")
+    local test_work_dir="${TEST_WORK_DIR#/}"
+    test_work_dir="${test_work_dir%/}"
+    local work_dir_with_slashes="/${work_dir#/}/"
 
-    if [[ "${dir}" != "${TEST_WORK_DIR}" ]]; then
-        echo "Not breaking retest cycle, expected test work dir to be a parent directory" >&2
+    if [[ "${work_dir_with_slashes}" != *"/${test_work_dir}/"* ]]; then
+        echo "Not breaking retest cycle, expected the vendor work directory to be within ${TEST_WORK_DIR}" >&2
         return
     fi
     touch "${work_dir}/break_retests"
