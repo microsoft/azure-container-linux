@@ -379,6 +379,12 @@ test_containerd_profile_selection() (
     local original="${CASE_DIR}/original.toml"
     local final="${CASE_DIR}/run/acl-config.toml"
     local scenario local_pull fallback extra unpack_differ overlay_differ
+    local host_arch foreign_arch unpack_arch check_platform
+    case "$(uname -m)" in
+        x86_64) host_arch=amd64; foreign_arch=arm64 ;;
+        aarch64) host_arch=arm64; foreign_arch=amd64 ;;
+        *) echo "Unsupported test architecture" >&2; return 1 ;;
+    esac
 
     mkdir -p "${CASE_DIR}/bin"
     printf '0\n' > "${IPE_DIR}/enforce"
@@ -425,7 +431,8 @@ EOF
 
     printf 'version = 2\nroot = "/var/lib/containerd-provider"\n' > "${CASE_DIR}/relative.toml"
     for scenario in compatible transfer-concurrency cri-concurrency local-pull dmverity-off \
-        unpack-compatible unpack-overlayfs unpack-split-entries; do
+        unpack-compatible unpack-overlayfs unpack-wrong-arch unpack-platform-unchecked \
+        unpack-mixed-arch unpack-split-entries; do
         local_pull=false
         fallback=false
         extra=""
@@ -454,6 +461,16 @@ EOF
             unpack-*)
                 unpack_differ=erofs
                 overlay_differ=walking
+                unpack_arch="${host_arch}"
+                check_platform=true
+                case "${scenario}" in
+                    unpack-wrong-arch|unpack-platform-unchecked|unpack-mixed-arch)
+                        unpack_arch="${foreign_arch}"
+                        ;;
+                esac
+                [[ "${scenario}" != unpack-platform-unchecked ]] || check_platform=false
+                extra="[plugins.\"io.containerd.transfer.v1.local\"]
+check_platform_supported = ${check_platform}"
                 if [[ "${scenario}" == unpack-split-entries ]]; then
                     unpack_differ=walking
                     overlay_differ=erofs
@@ -461,16 +478,26 @@ EOF
                 if [[ "${scenario}" != unpack-overlayfs ]]; then
                     extra+="
 [[plugins.\"io.containerd.transfer.v1.local\".unpack_config]]
-platform = \"linux(+erofs)/amd64\"
+platform = \"linux(+erofs)/${unpack_arch}\"
 snapshotter = \"erofs\"
 differ = \"${unpack_differ}\""
                 fi
+                if [[ "${scenario}" == unpack-mixed-arch ]]; then
+                    extra+="
+[[plugins.\"io.containerd.transfer.v1.local\".unpack_config]]
+platform = \"linux/${host_arch}\"
+snapshotter = \"erofs\"
+differ = \"erofs\""
+                fi
                 extra+="
 [[plugins.\"io.containerd.transfer.v1.local\".unpack_config]]
-platform = \"linux/amd64\"
+platform = \"linux/${host_arch}\"
 snapshotter = \"overlayfs\"
 differ = \"${overlay_differ}\""
-                [[ "${scenario}" == unpack-compatible ]] || fallback=true
+                case "${scenario}" in
+                    unpack-compatible|unpack-platform-unchecked|unpack-mixed-arch) ;;
+                    *) fallback=true ;;
+                esac
                 TEST_UNPACK_CONFIG="${extra}"
                 ;;
         esac

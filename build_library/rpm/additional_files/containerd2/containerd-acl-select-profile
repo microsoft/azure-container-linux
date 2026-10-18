@@ -138,13 +138,20 @@ check_download_compatibility() {
     ' <<< "${config}"
 }
 
-# If there is an entry for the transfer service's unpack_config, make sure that there is one setting both the EROFS snapshotter and differ.
-# If not, the transfer service config is incompatible with EROFS profile we want to set it to. This does not account for multi-platform scenarios.
+# If there is an entry for the transfer service's unpack_config, there must be a section setting both the EROFS snapshotter and differ.
+# Additionally, if platform checks are enabled (check_platform_supported), that entry must also match the host architecture.
 check_unpack_config() {
-    local config="$1"
-    awk '
+    local config="$1" host_arch
+    host_arch="$(uname -m)" || return 1
+    case "${host_arch}" in
+        x86_64) host_arch=amd64 ;;
+        aarch64) host_arch=arm64 ;;
+    esac
+
+    awk -v host_arch="${host_arch}" '
         function check_entry() {
-            if (in_unpack_entry && snapshotter && differ) erofs_entry = 1
+            if (in_unpack_entry && snapshotter && differ &&
+                (!check_platform_supported || platform_arch == host_arch)) valid_erofs_entry = 1
         }
         {
             gsub(/\047/, "\"")
@@ -153,12 +160,27 @@ check_unpack_config() {
         }
         /^\[/ {
             check_entry()
+            section = $0
             in_unpack_entry = ($0 == "[[plugins.\"io.containerd.transfer.v1.local\".unpack_config]]")
             if (in_unpack_entry) {
                 has_unpack_config = 1
                 snapshotter = differ = 0
+                platform_arch = ""
             }
         }
+        # Check if the current section is the transfer service and look for the check_platform_supported setting
+        section == "[plugins.\"io.containerd.transfer.v1.local\"]" && /^check_platform_supported =/ {
+            check_platform_supported = ($0 == "check_platform_supported = true")
+        }
+
+        # Look for a platform entry if in an unpack_config section
+        in_unpack_entry && /^platform =/ {
+            split($3, platform, "/")
+            platform_arch = platform[2]
+            gsub(/"/, "", platform_arch)
+        }
+
+        # If in an unpack_config entry, look for the snapshotter and differ settings
         in_unpack_entry && /^snapshotter =/ {
             snapshotter = ($0 == "snapshotter = \"erofs\"")
         }
@@ -167,8 +189,8 @@ check_unpack_config() {
         }
         END {
             check_entry()
-            if (has_unpack_config && !erofs_entry) {
-                print "WARNING: explicit Transfer unpack_config has no entry selecting both the erofs snapshotter and differ" > "/dev/stderr"
+            if (has_unpack_config && !valid_erofs_entry) {
+                print "WARNING: explicit Transfer unpack_config has no compatible entry selecting both the erofs snapshotter and differ" > "/dev/stderr"
                 exit 1
             }
         }
