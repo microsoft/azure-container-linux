@@ -26,6 +26,7 @@ packages:
   sys-apps/systemd:
     - systemd
     - systemd-journal-remote
+    - polkit
     - libselinux-utils
     - selinux-policy
     - policycoreutils
