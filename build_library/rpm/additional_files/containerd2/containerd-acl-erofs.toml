@@ -1,0 +1,11 @@
+# Imported when IPE is activated at boot
+version = 4
+
+[plugins."io.containerd.snapshotter.v1.erofs"]
+  enable_dmverity_referrers = true
+
+[plugins."io.containerd.cri.v1.images"]
+  snapshotter = "erofs"
+
+[plugins."io.containerd.service.v1.diff-service"]
+  default = ["erofs", "walking"]
