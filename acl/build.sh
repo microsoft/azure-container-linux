@@ -44,6 +44,15 @@ function clone_azl3() {
 function build_specs() {
     local SPECS_DIR="$1"
 
+    local -a snapshot_args=()
+    if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" ]]; then
+        if [[ ! "${PACKAGE_SNAPSHOT_TIME}" =~ ^[1-9][0-9]{9}$ ]]; then
+            log "!!! ERROR: PACKAGE_SNAPSHOT_TIME must be a ten-digit Unix UTC timestamp"
+            exit 1
+        fi
+        snapshot_args=(REPO_SNAPSHOT_TIME="${PACKAGE_SNAPSHOT_TIME}")
+        log "Building RPM dependencies as of ${PACKAGE_SNAPSHOT_TIME}"
+    fi
     pushd "${BUILD_DIR}/azurelinux/toolkit"
     sudo make build-packages \
         -j"$(nproc)" \
@@ -56,6 +65,7 @@ function build_specs() {
         GOFLAGS="-buildvcs=false" \
         BUILD_DIR="$BUILD_DIR" \
         OUT_DIR="$OUT_DIR" \
+        "${snapshot_args[@]}" \
         LOG_LEVEL=info
     MAKE_STATUS=${PIPESTATUS[0]}
 

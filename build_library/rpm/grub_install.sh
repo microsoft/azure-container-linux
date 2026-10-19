@@ -20,25 +20,15 @@ grub_install_rpm() {
             # Source rpm_install functions
             . "${BUILD_LIBRARY_DIR}/rpm/rpm_install.sh" || die "Failed to source rpm_install.sh"
 
-            # Setup repositories
-            rpm_staging=$(rpm_get_staging_dir)
-            grub_local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
-
-            # Note: grub/shim packages should already be downloaded by finish_image_rpm()
-            # No need to call rpm_download_packages again - the packages are in the local cache
-
             # Install grub packages to BOARD_ROOT from local RPM files
             # We only need the grub binaries and modules, not runtime dependencies
             info "RPM mode: Installing grub2 and shim to BOARD_ROOT from local RPMs"
 
-            # Find grub RPMs in local cache — filter by target architecture
-            # so arm64 builds pick aarch64 RPMs and x86 builds pick x86_64 RPMs.
+            # Only use RPMs downloaded for this image, not persistent cache versions.
             grub_rpms=()
             for pkg in grub2 grub2-efi grub2-efi-binary shim; do
-                rpm_file=$(find "${grub_local_cache}" -name "${pkg}-[0-9]*.${rpm_arch}.rpm" | sort -V | tail -1)
-                if [[ -z "${rpm_file}" ]]; then
-                    die "RPM file not found for package: ${pkg} (${rpm_arch}) in ${grub_local_cache}"
-                fi
+                rpm_file=$(rpm_bootloader_package_file "${FLAGS_disk_image}" "${pkg}" "${rpm_arch}") ||
+                    die "Failed to select ${pkg} RPM"
                 grub_rpms+=("${rpm_file}")
             done
 

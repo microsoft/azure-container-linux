@@ -180,6 +180,7 @@ if [[ -z ${stat} ]] ; then
         -e SDK_USER_ID="$(id -u)"
         -e SDK_GROUP_ID="$(id -g)"
         -e PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-}"
+        -e PACKAGE_SNAPSHOT_TIME="${PACKAGE_SNAPSHOT_TIME:-}"
         -e BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
         -e RPM_STAGING_DIR="/mnt/host/source/src/scripts/__build__/rpm-staging"
         -e SYSEXT_COMPRESSION="${SYSEXT_COMPRESSION:-}"
@@ -219,6 +220,7 @@ EOF
 call_docker exec \
     --env-file="sdk_lib/env_pass.txt" \
     -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" \
+    -e PACKAGE_SNAPSHOT_TIME="${PACKAGE_SNAPSHOT_TIME:-}" \
     -e ACL_IPE_MODE="${ACL_IPE_MODE}" \
     -e ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE}" \
     "${envs[@]}" "${tty[@]}" -i \

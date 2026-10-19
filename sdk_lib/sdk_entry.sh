@@ -1,5 +1,12 @@
 #!/bin/bash
 
+if [[ -n ${PACKAGE_SNAPSHOT_TIME:-} ]]; then
+    if [[ ! ${PACKAGE_SNAPSHOT_TIME} =~ ^[1-9][0-9]{9}$ ]]; then
+        echo "PACKAGE_SNAPSHOT_TIME must be a 10-digit positive Unix timestamp" >&2
+        exit 2
+    fi
+fi
+
 if [ -n "${SDK_USER_ID:-}" ] ; then
     # If the "core" user from /usr/share/baselayout/passwd has the same ID, allow to take it instead
     usermod --non-unique -u $SDK_USER_ID sdk

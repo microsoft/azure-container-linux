@@ -27,7 +27,7 @@ DEPEND="
 	dev-libs/libfmt
 	dev-libs/libxml2
 	>=net-libs/librepo-1.18.0
-	>=dev-libs/libsolv-0.7.30
+	>=dev-libs/libsolv-0.7.30-r1
 	dev-libs/openssl:=
 	sys-apps/util-linux
 	comps? ( dev-libs/libcomps )
@@ -44,7 +44,7 @@ BDEPEND="
 	python? ( dev-lang/swig )
 "
 
-# No patch needed - 5.2.5.0 has native WITH_MODULEMD conditional compilation
+PATCHES=( "${FILESDIR}/snapshot-time.patch" )
 
 pkg_setup() {
 	use python && python-single-r1_pkg_setup
@@ -64,7 +64,9 @@ src_configure() {
 		-DWITH_GO=OFF
 		-DWITH_DNF5DAEMON_CLIENT=OFF
 		-DWITH_DNF5DAEMON_SERVER=OFF
-		-DWITH_DNF5_PLUGINS=OFF
+		-DWITH_DNF5_PLUGINS=ON
+		-DWITH_DNF5_STANDARD_PLUGINS=OFF
+		-DWITH_PLUGIN_REPO_SNAPSHOT=ON
 		-DWITH_PLUGIN_ACTIONS=OFF
 		-DWITH_PLUGIN_RHSM=OFF
 		-DWITH_PYTHON_PLUGINS_LOADER=OFF
