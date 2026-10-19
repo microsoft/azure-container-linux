@@ -664,6 +664,7 @@ install_oem_sysext() {
         build_sysext_env+=(
             "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE}"
             "RPM_STAGING_DIR=${RPM_STAGING_DIR}"
+            "PACKAGE_SNAPSHOT_TIME=${PACKAGE_SNAPSHOT_TIME:-}"
             "IMAGE_VERSION=${IMAGE_VERSION:-}"
             "IMAGE_VERSION_ID=${IMAGE_VERSION_ID:-}"
             "IMAGE_BUILD_ID=${IMAGE_BUILD_ID:-}"

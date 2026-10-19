@@ -3,6 +3,8 @@ ARG BASE
 FROM ${BASE}
 COPY --chown=sdk:sdk sdk_container/ /mnt/host/source
 COPY --chown=sdk:sdk . /mnt/host/source/src/scripts
+COPY sdk_lib/90_env_keep /etc/sudoers.d/90_env_keep
+RUN chmod 0440 /etc/sudoers.d/90_env_keep
 
 # Disable all sandboxing for SDK updates since some core packages
 #  (like GO) fail to build from a permission error otherwise.
@@ -18,9 +20,9 @@ RUN sudo bash -c 'cd /mnt/host/source/src/third_party/coreos-overlay/coreos-deve
 
 RUN /home/sdk/sdk_entry.sh ./update_chroot --toolchain_boards="amd64-usr arm64-usr"
 
-# Force rebuild of packages that need new USE flags
-# The base SDK may have these installed without the correct USE flags
-RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n --changed-use --deep dev-cpp/toml11 dev-libs/libcomps dev-libs/libsolv app-arch/rpm app-arch/dnf5 sys-apps/systemd'
+# Rebuild libsolv and DNF5 even when an earlier SDK already installed the same
+# versions: the snapshot-time patches change libsolv's rpm-md data and DNF5's plugins.
+RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n --changed-use --deep dev-cpp/toml11 dev-libs/libcomps app-arch/rpm sys-apps/systemd && sudo emerge --ask=n --oneshot =dev-libs/libsolv-0.7.30-r1 =app-arch/dnf5-5.2.6.0'
 
 RUN /home/sdk/sdk_entry.sh ./setup_board --board="arm64-usr" --regen_configs
 RUN /home/sdk/sdk_entry.sh ./setup_board --board="amd64-usr" --regen_configs
@@ -32,8 +34,32 @@ RUN echo "=== Checking for DNF5 installation ===" && \
     find /usr -name 'dnf5*' -type f 2>/dev/null | grep -E '(bin|sbin)' || echo "No dnf5 files found"
 RUN test -x /usr/bin/dnf5 || (echo "ERROR: dnf5 not found at /usr/bin/dnf5" && exit 1)
 RUN echo "Found DNF5 at: /usr/bin/dnf5"
+RUN su - sdk -c 'PACKAGE_SNAPSHOT_TIME=1735689600 sudo env | grep -qx PACKAGE_SNAPSHOT_TIME=1735689600'
 RUN echo "=== Testing DNF5 ===" && \
     /usr/bin/dnf5 --version || (echo "ERROR: dnf5 failed to run" && exit 1)
+RUN test -f /etc/dnf/libdnf5-plugins/repo_snapshot.conf && \
+    test -n "$(find /usr/lib /usr/lib64 -path '*/dnf5/plugins/repo_snapshot_cmd_plugin.so' -print -quit 2>/dev/null)" && \
+    test -n "$(find /usr/lib /usr/lib64 -path '*/libdnf5/plugins/repo_snapshot.so' -print -quit 2>/dev/null)" && \
+    /usr/bin/dnf5 --help | grep -- '--snapshot-time' >/dev/null && \
+    /usr/bin/dnf5 --help | grep -- '--snapshot-exclude-repos' >/dev/null && \
+    /usr/bin/dnf5 --snapshot-time=1735689600 --snapshot-exclude-repos=azurelinux-local-cache install --help >/dev/null && \
+    /usr/bin/dnf5 --snapshot-time=1735689600 --snapshot-exclude-repos=azurelinux-local-cache download --help >/dev/null && \
+    /usr/bin/dnf5 --snapshot-time=1735689600 --snapshot-exclude-repos=azurelinux-local-cache repoquery --available >/dev/null && \
+    if output=$(DNF5_SNAPSHOT_TIME=invalid /usr/bin/dnf5 repoquery --available 2>&1); then \
+        echo "ERROR: snapshot plugin did not reject an invalid time"; exit 1; \
+    fi && \
+    printf '%s\n' "$output" | grep -q 'invalid DNF5_SNAPSHOT_TIME'
+RUN cp /etc/dnf/libdnf5-plugins/repo_snapshot.conf /tmp/repo_snapshot.conf.orig && \
+    sed -i 's/^enabled = 1$/enabled = 0/' /etc/dnf/libdnf5-plugins/repo_snapshot.conf && \
+    grep -qx 'enabled = 0' /etc/dnf/libdnf5-plugins/repo_snapshot.conf && \
+    /usr/bin/dnf5 repoquery --available >/dev/null && \
+    if output=$(/usr/bin/dnf5 --snapshot-time=1735689600 repoquery --available 2>&1); then \
+        echo "ERROR: DNF5 proceeded without the disabled snapshot filter"; exit 1; \
+    fi && \
+    printf '%s\n' "$output" | grep -q 'repo_snapshot plugin is not loaded' && \
+    mv /tmp/repo_snapshot.conf.orig /etc/dnf/libdnf5-plugins/repo_snapshot.conf
+RUN /usr/bin/python3 /mnt/host/source/src/scripts/sdk_lib/test_snapshot_packages.py
+RUN bash /mnt/host/source/src/scripts/build_library/rpm/tests/test_bootloader_snapshot.sh
 
 # Remove problematic compatibility alias that references missing builddep plugin
 RUN sudo rm -f /usr/share/dnf5/aliases.d/compatibility-plugins.conf

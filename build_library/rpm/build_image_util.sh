@@ -328,8 +328,11 @@ download_bootloader_packages_rpm() {
     local root_fs_dir="$1"
 
     info "RPM mode: Pre-downloading bootloader packages (grub2, shim, systemd-boot)"
-    rpm_staging=$(rpm_get_staging_dir)
-    rpm_download_packages "${rpm_staging}" "${root_fs_dir}" grub2 grub2-efi grub2-efi-binary shim systemd-boot
+    [[ -n "${BUILD_DIR:-}" ]] || die "RPM mode: BUILD_DIR is not set"
+    local bootloader_dir="${BUILD_DIR}/bootloader-rpms"
+    rm -rf -- "${bootloader_dir}"
+    mkdir -p "${bootloader_dir}"
+    rpm_download_packages "${bootloader_dir}" "${root_fs_dir}" grub2 grub2-efi grub2-efi-binary shim systemd-boot
 }
 
 finish_image_cleanup_issue_rpm() {
