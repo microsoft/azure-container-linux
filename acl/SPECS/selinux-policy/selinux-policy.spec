@@ -10,7 +10,7 @@
 Summary:        SELinux policy
 Name:           selinux-policy
 Version:        %{refpolicy_major}.%{refpolicy_minor}
-Release:        11%{?dist}
+Release:        12%{?dist}
 License:        GPLv2
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
@@ -84,6 +84,7 @@ Patch60:        0060-container-Add-log-reader-domain.patch
 Patch61:        0061-container-Allow-log-reader-to-map-journals.patch
 Patch62:        0062-container-Add-CSI-sidecar-domain.patch
 Patch63:        0063-container-Allow-log-reader-runtime-probes.patch
+Patch64:        0064-container-Allow-privileged-containers-dbus-to-kernel_t.patch
 BuildRequires:  bzip2
 BuildRequires:  checkpolicy >= %{CHECKPOLICYVER}
 BuildRequires:  m4
@@ -362,6 +363,9 @@ exit 0
 selinuxenabled && semodule -nB
 exit 0
 %changelog
+* Mon Oct 19 2026 Francisco Huelsz Prince <frhuelsz@microsoft.com> - 2.20250213-12
+- Allow privileged containers to message unlabeled host D-Bus services.
+
 * Mon Aug 31 2026 Sean Dougherty <sdougherty@microsoft.com> - 2.20250213-11
 - Add a confined CSI sidecar domain for privileged driver socket access.
 - Allow confined container log readers to perform read-only runtime probes.
