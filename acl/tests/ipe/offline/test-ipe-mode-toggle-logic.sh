@@ -281,6 +281,35 @@ test_copied_guest_script_needs_no_sibling_file() (
     [[ "${SCRIPT_RESULTS_STATUS[0]}" -eq 1 ]]
 )
 
+test_audit_fallback_restores_containerd() (
+    local test_dir expected actual
+    test_dir="$(mktemp -d)"
+    trap 'rm -rf "${test_dir}"' EXIT
+    get_ipe_mode() { echo audit; }
+    ssh_cmd() {
+        case "$*" in
+            *"sudo test ! -e"*) ;;
+            *"sudo bash -s"*)
+                cat > "${test_dir}/setup"
+                echo setup >> "${test_dir}/calls"
+                return "${expected}"
+                ;;
+            *"sudo rm -f"*) echo restore >> "${test_dir}/calls" ;;
+            *) echo "Unexpected guest command: $*" >&2; return 1 ;;
+        esac
+    }
+    for expected in 0 7; do
+        : > "${test_dir}/calls"
+        set +e
+        (set -e; run_audit_fallback_validation)
+        actual=$?
+        set -e
+        [[ "${actual}" -eq "${expected}" ]]
+        [[ "$(cat "${test_dir}/calls")" == $'setup\nrestore' ]]
+        bash -n "${test_dir}/setup"
+    done
+)
+
 test_cleanup_preserves_primary_failure() {
     local status
 
@@ -353,6 +382,7 @@ test_probe_denial_correlation
 test_host_imds_matches_guest_parser
 test_streamed_guest_contains_cmdline_parser
 test_copied_guest_script_needs_no_sibling_file
+test_audit_fallback_restores_containerd
 test_cleanup_preserves_primary_failure
 test_cleanup_reboots_after_any_mutation
 

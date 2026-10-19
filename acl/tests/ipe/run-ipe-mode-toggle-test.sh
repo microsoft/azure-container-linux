@@ -133,6 +133,52 @@ run_audit_validation() {
         < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh"
 }
 
+run_audit_fallback_validation() (
+    local config="/run/containerd/ipe-fallback-test.toml"
+    local dropin="/run/systemd/system/containerd.service.d/99-ipe-fallback-test.conf"
+    local status=0
+
+    ssh_cmd "sudo test ! -e '${config}' && sudo test ! -e '${dropin}'" || {
+        error "IPE fallback test files already exist or the VM is unreachable"
+        return 1
+    }
+    trap '
+        status=$?
+        if ! ssh_cmd "sudo rm -f \"${config}\" \"${dropin}\" &&
+            sudo systemctl daemon-reload && sudo systemctl restart containerd"; then
+            error "Could not restore containerd after the IPE fallback test"
+            status=1
+        fi
+        exit "${status}"
+    ' EXIT
+
+    ssh_cmd "sudo bash -s -- '${config}' '${dropin}'" <<'EOF' || return
+set -euo pipefail
+/usr/bin/containerd --config /usr/share/containerd/config.toml config dump |
+    sed -e '/^imports = /d' \
+        -e 's/^\([[:space:]]*use_local_image_pull = \)false$/\1true/' > "$1"
+grep -Eq '^[[:space:]]*use_local_image_pull = true$' "$1"
+printf '[Service]\nEnvironment=CONTAINERD_CONFIG=%s\n' "$1" > "$2"
+systemctl daemon-reload
+systemctl restart containerd
+systemctl is-active --quiet containerd
+pid="$(systemctl show --property=MainPID --value containerd)"
+cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline")"
+[[ " ${cmdline} " == *" --config /run/containerd/acl-config.toml "* ]] || {
+    echo "Containerd is not using the IPE-selected config" >&2
+    exit 1
+}
+expected="$(/usr/bin/containerd --config "$1" config dump | sed '/^imports = /d')"
+effective="$(/usr/bin/containerd --config /run/containerd/acl-config.toml config dump |
+    sed '/^imports = /d')"
+[[ "${effective}" == "${expected}" ]] || {
+    echo "Containerd did not select the expected base fallback" >&2
+    exit 1
+}
+EOF
+    assert_ipe_mode "audit"
+)
+
 main() {
     parse_validate_args "$@"
 
@@ -201,6 +247,10 @@ main() {
     set_security_profile_key_and_reboot "ipe" "audit"
     assert_ipe_mode "audit"
     assert_ipe_assets_present 1
+    run_audit_validation
+
+    info "Verifying containerd base fallback while IPE remains in audit mode"
+    run_audit_fallback_validation
     run_audit_validation
 
     section "Step 4: Disable IPE through the canonical 'disabled' value"
