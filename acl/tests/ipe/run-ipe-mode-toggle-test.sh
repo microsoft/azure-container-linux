@@ -12,7 +12,7 @@
 # acl-node-security-profile=ipe=audit before first boot): Step 0 reads and
 # validates that initial state without forcing a reset first, then Steps
 # 1-4 exercise the canonical disabled/audit reboot toggle, and Step 5
-# exercises the 'off' alias.
+# exercises the 'off' alias. Step 6 verifies the no-tag audit default.
 
 set -euo pipefail
 
@@ -51,12 +51,12 @@ get_ipe_mode() {
 # Maps an acl-node-security-profile 'ipe' value (canonical or supported alias)
 # to the runtime state the loader is expected to produce. Mirrors
 # build_library/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.sh:
-# disabled|off -> inactive, audit -> active/audit,
+# disabled|off -> inactive, audit or no selection -> active/audit,
 # enforcing (reserved) and anything unrecognized -> inactive.
 expected_mode_for_tag() {
     case "$1" in
-        disabled|off|"") echo "off" ;;
-        audit) echo "audit" ;;
+        disabled|off) echo "off" ;;
+        audit|"") echo "audit" ;;
         *) echo "off" ;;
     esac
 }
@@ -262,6 +262,13 @@ main() {
     set_security_profile_key_and_reboot "ipe" "off"
     assert_ipe_mode "off"
     assert_ipe_assets_present
+
+    section "Step 6: Verify audit is active without a security-profile tag"
+    set_security_profile_tag_state '{"present":false,"value":""}'
+    reboot_and_wait
+    assert_ipe_mode "audit"
+    assert_ipe_assets_present 1
+    run_audit_validation
 
     section "IPE IMDS Reboot Toggle Test Summary"
     info "All reboot-based IPE toggle assertions passed"

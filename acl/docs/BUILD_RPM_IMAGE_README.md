@@ -181,10 +181,12 @@ Use `ephemeral` for dev/test or `esrp` for later production signing by
 ./acl/build_rpm_image.sh --rebuild --ipe-mode=audit --ipe-signing-mode=esrp
 ```
 
-The build tool defaults to IPE disabled. On Azure, set the VM tag
-`acl-node-security-profile=ipe=audit` to log would-deny events without blocking
-execution. Policy-load failures are logged and leave IPE inactive without
-blocking boot. `enforcing` is unsupported; QEMU runtime testing requires
+The build tool defaults to IPE disabled. Images built with IPE enabled default
+to audit on Azure when IMDS returns no IPE selection, logging would-deny events
+without blocking execution. The VM tag `acl-node-security-profile=ipe=audit`
+also explicitly selects audit; `ipe=disabled` or `ipe=off` leaves the policy
+inactive. IMDS lookup and policy-load failures are logged and leave IPE inactive
+without blocking boot. `enforcing` is unsupported; QEMU runtime testing requires
 `--ipe-mode=disabled`. See [architecture](architecture.md) for policy trust,
 credential handling and dm-verity details.
 The policy hash is reserved for the main UKI command line; IPE image

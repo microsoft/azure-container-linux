@@ -18,7 +18,7 @@ source "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-mode-toggle-test.sh"
 
 test_expected_mode_for_tag() {
     local case_spec input expected actual
-    for case_spec in "disabled:off" "off:off" ":off" "audit:audit" \
+    for case_spec in "disabled:off" "off:off" ":audit" "audit:audit" \
         "permissive:off" "enforcing:off" "bogus:off"; do
         input="${case_spec%%:*}"
         expected="${case_spec##*:}"
