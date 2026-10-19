@@ -1,5 +1,5 @@
 diff --git a/client/container_opts.go b/client/container_opts.go
-index 79b03da2dc..61b8e5a0a7 100644
+index 79b03da2dc525ca55fee81df57fa2444bfb67215..61b8e5a0a7025c799f2ced63f1d654bac4c68bc1 100644
 --- a/client/container_opts.go
 +++ b/client/container_opts.go
 @@ -240,16 +240,33 @@ func WithSnapshotCleanup(ctx context.Context, client *Client, c containers.Conta
@@ -56,7 +56,7 @@ index 79b03da2dc..61b8e5a0a7 100644
  		if err != nil {
  			return err
 diff --git a/core/images/usage/calculator.go b/core/images/usage/calculator.go
-index fd5493958a..9a46bb4077 100644
+index fd5493958a299c6e6056a802039fca9514bd8c1c..9a46bb4077da1cc02a32656b34b567ba57e52d58 100644
 --- a/core/images/usage/calculator.go
 +++ b/core/images/usage/calculator.go
 @@ -128,7 +128,12 @@ func CalculateImageUsage(ctx context.Context, i images.Image, provider content.I
@@ -74,7 +74,7 @@ index fd5493958a..9a46bb4077 100644
  							continue
  						}
 diff --git a/core/snapshots/snapshotter.go b/core/snapshots/snapshotter.go
-index 5cae7aae37..1d410acb4d 100644
+index 5cae7aae3743869888c869bb44d8f8afefa6252c..1d410acb4d07963395eb30b2fb26fc86861118b6 100644
 --- a/core/snapshots/snapshotter.go
 +++ b/core/snapshots/snapshotter.go
 @@ -115,6 +115,15 @@ type Info struct {
@@ -111,7 +111,7 @@ index 5cae7aae37..1d410acb4d 100644
  func WithParent(parent string) Opt {
  	return func(info *Info) error {
 diff --git a/core/transfer/local/pull.go b/core/transfer/local/pull.go
-index 712e81e20c..cd7137ca60 100644
+index 712e81e20c17366c75685fa32084a7ef85843c93..cd7137ca609c21dca12d24db40b175f9741e50ba 100644
 --- a/core/transfer/local/pull.go
 +++ b/core/transfer/local/pull.go
 @@ -189,6 +189,7 @@ func (ts *localTransferService) pull(ctx context.Context, ir transfer.ImageFetch
@@ -155,7 +155,7 @@ index 712e81e20c..cd7137ca60 100644
  		if unpacker != nil {
  			// wait for unpacker to cleanup
 diff --git a/core/transfer/local/transfer.go b/core/transfer/local/transfer.go
-index 568d993a03..06669be9dd 100644
+index 568d993a03cadfcc29a5cbe87aef28980294309c..06669be9dd2dd016ed32a78f9a547f92b1fb27f1 100644
 --- a/core/transfer/local/transfer.go
 +++ b/core/transfer/local/transfer.go
 @@ -30,6 +30,7 @@ import (
@@ -175,7 +175,7 @@ index 568d993a03..06669be9dd 100644
 +	PullHandlerWrapper func(context.Context, remotes.Fetcher, content.Store, bool, []unpack.Platform) (func(images.Handler) images.Handler, error)
  }
 diff --git a/core/unpack/unpacker.go b/core/unpack/unpacker.go
-index c3ef0331aa..20a836e699 100644
+index c3ef0331aadb1c6872284c56e5eada2405758fd2..68a58d6da15918d65e1568af8273747f718bf55a 100644
 --- a/core/unpack/unpacker.go
 +++ b/core/unpack/unpacker.go
 @@ -25,6 +25,7 @@ import (
@@ -198,7 +198,130 @@ index c3ef0331aa..20a836e699 100644
  	// ConfigType is the supported config type to be considered for unpacking
  	// Defaults to OCI image config
  	ConfigType string
-@@ -348,7 +354,7 @@ type unpackStatus struct {
+@@ -203,10 +209,11 @@ func (u *Unpacker) Unpack(h images.Handler) images.Handler {
+ 		// and so identical configs), which is why one digest can hold the
+ 		// layers of several manifests.
+ 		queuedLayers = map[digest.Digest][][]ocispec.Descriptor{}
+-		// Maps a config's digest to the layer descriptors selected for unpack.
+-		// Once these layers are queued for fetch, the value is set to nil. The key
+-		// remains to prevent scheduling another unpack.
+-		unpackedLayers = map[digest.Digest][]ocispec.Descriptor{}
++		// Maps a config's digest to the first manifest layers scheduled for each
++		// unpack identity. Once those layers are also queued for fetch, the value
++		// is set to nil to preserve ordinary same-identity dedup while ensuring at
++		// least one set of blobs reaches the content store if unpack hits cache.
++		unpackedLayers = map[digest.Digest]map[string][]ocispec.Descriptor{}
+ 	)
+ 
+ 	var layerTypes map[string]bool
+@@ -277,34 +284,83 @@ func (u *Unpacker) Unpack(h images.Handler) images.Handler {
+ 			lock.Lock()
+ 			queued := queuedLayers[desc.Digest]
+ 			delete(queuedLayers, desc.Digest)
+-			// Because manifests that share the same config unpack to the same
+-			// snapshot chain, we only need to unpack the layers for one
+-			// manifest. The layers for any remaining manifests sharing that
+-			// config are still fetched to ensure they make it in the content
+-			// store.
+-			var first []ocispec.Descriptor
+-			unpacked, ok := unpackedLayers[desc.Digest]
+-			if !ok && len(queued) > 0 {
+-				first, queued = queued[0], queued[1:]
+-				unpacked = first
+-				unpackedLayers[desc.Digest] = first
++			lock.Unlock()
++
++			var (
++				identities []string
++				prepared   [][]snapshots.LayerPreparation
++				toUnpack   []int
++				toFetch    [][]ocispec.Descriptor
++			)
++
++			if len(queued) > 0 {
++				cfg, err := u.readUnpackConfig(ctx, desc)
++				if err != nil {
++					u.eg.Go(func() error { return err })
++					return children, nil
++				}
++				unpack := u.selectPlatform(desc, cfg)
++				identities = make([]string, len(queued))
++				prepared = make([][]snapshots.LayerPreparation, len(queued))
++				// Ordinary images retain config-based dedup. Only a layer
++				// policy can select different chains for the same config.
++				if unpack != nil && unpack.PrepareLayer != nil {
++					for i, layers := range queued {
++						_, preparations, err := u.prepareLayers(ctx, unpack, layers, cfg.RootFS.DiffIDs)
++						if err != nil {
++							u.eg.Go(func() error { return err })
++							return children, nil
++						}
++						prepared[i] = preparations
++						identities[i] = layerPreparationIdentity(preparations)
++					}
++				}
+ 			}
+-			// Unpack may skip fetching layers whose snapshots already exist.
+-			// If another manifest shares this config, explicitly fetch the first
+-			// manifest's layers too so every manifest's blobs reach the content
+-			// store. For a config used by only one manifest, leave fetching to
+-			// unpack.
+-			if len(queued) > 0 && len(unpacked) > 0 {
+-				queued = append(queued, unpacked)
+-				unpackedLayers[desc.Digest] = nil
++
++			if len(queued) > 0 {
++				lock.Lock()
++				byIdentity, ok := unpackedLayers[desc.Digest]
++				if !ok {
++					byIdentity = make(map[string][]ocispec.Descriptor)
++					unpackedLayers[desc.Digest] = byIdentity
++				}
++				for i, layers := range queued {
++					id := identities[i]
++					unpacked, ok := byIdentity[id]
++					if !ok {
++						toUnpack = append(toUnpack, i)
++						if len(byIdentity) == 0 {
++							byIdentity[id] = layers
++						} else {
++							// A second manifest needs every set of blobs,
++							// even when distinct chains both hit cache.
++							toFetch = append(toFetch, layers)
++							for priorID, prior := range byIdentity {
++								if len(prior) > 0 {
++									toFetch = append(toFetch, prior)
++									byIdentity[priorID] = nil
++								}
++							}
++							byIdentity[id] = nil
++						}
++						continue
++					}
++					toFetch = append(toFetch, layers)
++					if len(unpacked) > 0 {
++						toFetch = append(toFetch, unpacked)
++						byIdentity[id] = nil
++					}
++				}
++				lock.Unlock()
+ 			}
+-			lock.Unlock()
+-			if len(first) > 0 {
++
++			for _, i := range toUnpack {
+ 				u.eg.Go(func() error {
+-					return u.unpack(h, desc, first)
++					return u.unpack(h, desc, queued[i], prepared[i])
+ 				})
+ 			}
+-			for _, layers := range queued {
++			for _, layers := range toFetch {
++				layers := layers
+ 				u.eg.Go(func() error {
+ 					return u.fetch(u.ctx, h, layers, nil)
+ 				})
+@@ -348,7 +404,7 @@ type unpackStatus struct {
  // snapshotters from incorrectly chowning the extracted layer to the supplied
  // mapped host uid/gid.
  func layerSnapshotLabels(annotations map[string]string) map[string]string {
@@ -207,10 +330,75 @@ index c3ef0331aa..20a836e699 100644
  	if labels == nil {
  		labels = make(map[string]string)
  	}
-@@ -428,6 +434,31 @@ func (u *Unpacker) unpack(
- 	copy(chainIDs, diffIDs)
- 	chainIDs = identity.ChainIDs(chainIDs)
+@@ -357,54 +413,121 @@ func layerSnapshotLabels(annotations map[string]string) map[string]string {
+ 	return labels
+ }
  
+-func (u *Unpacker) unpack(
+-	h images.Handler,
+-	config ocispec.Descriptor,
+-	layers []ocispec.Descriptor,
+-) error {
+-	ctx := u.ctx
+-	ctx, layerSpan := tracing.StartSpan(ctx, tracing.Name(unpackSpanPrefix, "unpack"))
+-	defer layerSpan.End()
+-	unpackStart := time.Now()
++func (u *Unpacker) readUnpackConfig(ctx context.Context, config ocispec.Descriptor) (unpackConfig, error) {
++	var cfg unpackConfig
+ 	p, err := content.ReadBlob(ctx, u.content, config)
+ 	if err != nil {
+-		return err
++		return unpackConfig{}, err
+ 	}
+-
+-	var i unpackConfig
+-	if err := json.Unmarshal(p, &i); err != nil {
+-		return fmt.Errorf("unmarshal image config: %w", err)
++	if err := json.Unmarshal(p, &cfg); err != nil {
++		return unpackConfig{}, fmt.Errorf("unmarshal image config: %w", err)
+ 	}
++	return cfg, nil
++}
+ 
+-	diffIDs := i.RootFS.DiffIDs
+-	if len(layers) != len(diffIDs) {
+-		return fmt.Errorf("number of layers and diffIDs don't match: %d != %d", len(layers), len(diffIDs))
+-	}
+-
+-	// TODO: Support multiple unpacks rather than just first match
+-	var unpack *Platform
+-
+-	imgPlatform := platforms.Normalize(i.Platform)
++func (u *Unpacker) selectPlatform(config ocispec.Descriptor, cfg unpackConfig) *Platform {
++	imgPlatform := platforms.Normalize(cfg.Platform)
+ 	for _, up := range u.platforms {
+ 		if up.ConfigType != "" && up.ConfigType != config.MediaType {
+ 			continue
+ 		}
+-		// "layers" is only supported rootfs value for OCI images
+-		if (up.ConfigType == "" || images.IsConfigType(up.ConfigType)) && i.RootFS.Type != "" && i.RootFS.Type != "layers" {
++		// "layers" is the only supported rootfs value for OCI images.
++		if (up.ConfigType == "" || images.IsConfigType(up.ConfigType)) && cfg.RootFS.Type != "" && cfg.RootFS.Type != "layers" {
+ 			continue
+ 		}
+ 		if up.Platform.Match(imgPlatform) {
+-			unpack = up
+-			break
++			return up
++		}
++	}
++	return nil
++}
++
++func (u *Unpacker) prepareLayers(ctx context.Context, unpack *Platform, layers []ocispec.Descriptor, diffIDs []digest.Digest) ([]digest.Digest, []snapshots.LayerPreparation, error) {
++	if len(layers) != len(diffIDs) {
++		return nil, nil, fmt.Errorf("number of layers and diffIDs don't match: %d != %d", len(layers), len(diffIDs))
++	}
++
++	chainIDs := make([]digest.Digest, len(diffIDs))
++	copy(chainIDs, diffIDs)
++	chainIDs = identity.ChainIDs(chainIDs)
++
 +	preparations := make([]snapshots.LayerPreparation, len(chainIDs))
 +	for i, chainID := range chainIDs {
 +		selected := snapshots.LayerPreparation{Key: chainID.String()}
@@ -219,27 +407,91 @@ index c3ef0331aa..20a836e699 100644
 +			if i > 0 {
 +				parent = preparations[i-1].Key
 +			}
++			var err error
 +			selected, err = unpack.PrepareLayer(ctx, layers[i], chainID.String(), parent)
 +			if err != nil {
-+				return fmt.Errorf("prepare layer policy for %s: %w", layers[i].Digest, err)
++				return nil, nil, fmt.Errorf("prepare layer policy for %s: %w", layers[i].Digest, err)
 +			}
 +			if selected.Key == "" {
-+				return fmt.Errorf("prepare layer policy for %s returned an empty snapshot key", layers[i].Digest)
++				return nil, nil, fmt.Errorf("prepare layer policy for %s returned an empty snapshot key", layers[i].Digest)
 +			}
 +			if strings.ContainsAny(selected.GCQualifier, "/\\") || selected.GCQualifier == "." || selected.GCQualifier == ".." {
-+				return fmt.Errorf("prepare layer policy for %s returned invalid GC label qualifier %q", layers[i].Digest, selected.GCQualifier)
++				return nil, nil, fmt.Errorf("prepare layer policy for %s returned invalid GC label qualifier %q", layers[i].Digest, selected.GCQualifier)
 +			}
 +			if selected.Key != chainID.String() && selected.GCQualifier == "" {
-+				return fmt.Errorf("alternate snapshot key %q for layer %s requires a GC label qualifier", selected.Key, layers[i].Digest)
++				return nil, nil, fmt.Errorf("alternate snapshot key %q for layer %s requires a GC label qualifier", selected.Key, layers[i].Digest)
 +			}
-+		}
+ 		}
 +		preparations[i] = selected
+ 	}
+ 
++	return chainIDs, preparations, nil
++}
++
++func layerPreparationIdentity(preparations []snapshots.LayerPreparation) string {
++	var b strings.Builder
++	for _, preparation := range preparations {
++		b.WriteString(preparation.Key)
++		b.WriteByte(0)
++	}
++	if len(preparations) > 0 {
++		b.WriteString(preparations[len(preparations)-1].GCQualifier)
++	}
++	return b.String()
++}
++
++func (u *Unpacker) unpack(
++	h images.Handler,
++	config ocispec.Descriptor,
++	layers []ocispec.Descriptor,
++	preparations []snapshots.LayerPreparation,
++) error {
++	ctx := u.ctx
++	ctx, layerSpan := tracing.StartSpan(ctx, tracing.Name(unpackSpanPrefix, "unpack"))
++	defer layerSpan.End()
++	unpackStart := time.Now()
++	cfg, err := u.readUnpackConfig(ctx, config)
++	if err != nil {
++		return err
 +	}
 +
++	// TODO: Support multiple unpacks rather than just first match
++	unpack := u.selectPlatform(config, cfg)
++
+ 	if unpack == nil {
++		imgPlatform := platforms.Normalize(cfg.Platform)
+ 		log.G(ctx).WithField("image", config.Digest).WithField("platform", platforms.Format(imgPlatform)).Debugf("unpacker does not support platform, only fetching layers")
+ 		return u.fetch(ctx, h, layers, nil)
+ 	}
+ 
++	var chainIDs []digest.Digest
++	if preparations == nil {
++		chainIDs, preparations, err = u.prepareLayers(ctx, unpack, layers, cfg.RootFS.DiffIDs)
++		if err != nil {
++			return err
++		}
++	} else {
++		chainIDs = identity.ChainIDs(append([]digest.Digest(nil), cfg.RootFS.DiffIDs...))
++	}
++
+ 	u.unpacks.Add(1)
++	diffIDs := cfg.RootFS.DiffIDs
+ 
+ 	var (
+ 		sn = unpack.Snapshotter
+@@ -423,11 +546,6 @@ func (u *Unpacker) unpack(
+ 	ctx, cancel := context.WithCancel(ctx)
+ 	defer cancel()
+ 
+-	// pre-calculate chain ids for each layer
+-	chainIDs := make([]digest.Digest, len(diffIDs))
+-	copy(chainIDs, diffIDs)
+-	chainIDs = identity.ChainIDs(chainIDs)
+-
  	topHalf := func(i int, desc ocispec.Descriptor, span *tracing.Span, startAt time.Time) (<-chan *unpackStatus, error) {
  		var (
  			err     error
-@@ -435,11 +466,12 @@ func (u *Unpacker) unpack(
+@@ -435,11 +553,12 @@ func (u *Unpacker) unpack(
  			chainID string
  		)
  		if i > 0 && !parallel {
@@ -254,7 +506,7 @@ index c3ef0331aa..20a836e699 100644
  		if err != nil {
  			return nil, err
  		}
-@@ -451,11 +483,15 @@ func (u *Unpacker) unpack(
+@@ -451,11 +570,15 @@ func (u *Unpacker) unpack(
  
  		// inherits a filtered set of annotations which are provided as snapshot labels
  		snapshotLabels := layerSnapshotLabels(desc.Annotations)
@@ -264,15 +516,15 @@ index c3ef0331aa..20a836e699 100644
  		if i > 0 {
 -			snapshotLabels[labelSnapshotParent] = chainIDs[i-1].String()
 +			snapshotLabels[labelSnapshotParent] = preparations[i-1].Key
-+		}
+ 		}
 +		for key, value := range prepared.Labels {
 +			snapshotLabels[key] = value
- 		}
++		}
 +		validateExistingSnapshot := prepared.ValidateExisting
  
  		var (
  			key    string
-@@ -465,17 +501,22 @@ func (u *Unpacker) unpack(
+@@ -465,17 +588,22 @@ func (u *Unpacker) unpack(
  
  		for try := 1; try <= 3; try++ {
  			// Prepare snapshot with from parent, label as root
@@ -299,7 +551,7 @@ index c3ef0331aa..20a836e699 100644
  						log.G(ctx).Debugf("snapshot %s with chainID %s already exists skip fetch blob %q ", snInfo.Name, chainID, desc.Digest)
  						// no need to handle, snapshot now found with chain id
  						return nil, nil
-@@ -542,12 +583,21 @@ func (u *Unpacker) unpack(
+@@ -542,12 +670,21 @@ func (u *Unpacker) unpack(
  					}
  
  					if i > 0 && parallel {
@@ -323,7 +575,7 @@ index c3ef0331aa..20a836e699 100644
  							return nil
  						}
  						return fmt.Errorf("failed to commit snapshot %s: %w", key, err)
-@@ -637,7 +687,10 @@ func (u *Unpacker) unpack(
+@@ -637,7 +774,10 @@ func (u *Unpacker) unpack(
  		return err
  	}
  
@@ -335,7 +587,7 @@ index c3ef0331aa..20a836e699 100644
  
  	for i, desc := range layers {
  		_, layerSpan := tracing.StartSpan(ctx, tracing.Name(unpackSpanPrefix, "unpackLayer"))
-@@ -650,6 +703,10 @@ func (u *Unpacker) unpack(
+@@ -650,6 +790,10 @@ func (u *Unpacker) unpack(
  		statusCh, err := topHalf(i, desc, layerSpan, unpackLayerStart)
  		if err != nil {
  			if parallel {
@@ -346,7 +598,7 @@ index c3ef0331aa..20a836e699 100644
  				break
  			} else {
  				layerSpan.SetStatus(err)
-@@ -673,7 +730,6 @@ func (u *Unpacker) unpack(
+@@ -673,7 +817,6 @@ func (u *Unpacker) unpack(
  
  	// In parallel mode, snapshots still need to be committed and rebased sequentially
  	if parallel {
@@ -354,7 +606,7 @@ index c3ef0331aa..20a836e699 100644
  		for _, sc := range statusChans {
  			if err := bottomHalf(<-sc, errs); err != nil {
  				errs = errors.Join(errs, err)
-@@ -685,22 +741,31 @@ func (u *Unpacker) unpack(
+@@ -685,22 +828,30 @@ func (u *Unpacker) unpack(
  	}
  
  	var chainID string
@@ -377,8 +629,8 @@ index c3ef0331aa..20a836e699 100644
  		},
  	}
 -	_, err = cs.Update(ctx, cinfo, fmt.Sprintf("labels.containerd.io/gc.ref.snapshot.%s", unpack.SnapshotterKey))
-+	_, err = cs.Update(ctx, cinfo, "labels."+gcRef)
- 	if err != nil {
+-	if err != nil {
++	if _, err := cs.Update(ctx, cinfo, "labels."+gcRef); err != nil {
  		return err
  	}
  	log.G(ctx).WithFields(log.Fields{
@@ -389,10 +641,10 @@ index c3ef0331aa..20a836e699 100644
  		"duration": time.Since(unpackStart),
  	}).Debug("image unpacked")
 diff --git a/docs/snapshotters/erofs.md b/docs/snapshotters/erofs.md
-index c49e381fed..19d0dfe552 100644
+index c49e381feda712eabdcf2252bad971218576bcfe..06a95da575c3966695313d4624312eecd7a9586e 100644
 --- a/docs/snapshotters/erofs.md
 +++ b/docs/snapshotters/erofs.md
-@@ -327,6 +327,32 @@ In other words, the EROFS differ can only be used with the EROFS snapshotter;
+@@ -327,6 +327,45 @@ In other words, the EROFS differ can only be used with the EROFS snapshotter;
  otherwise, it will skip to the next differ.  The EROFS snapshotter can work
  with or without the EROFS differ.
  
@@ -412,10 +664,23 @@ index c49e381fed..19d0dfe552 100644
 +and its original signature; it does not overwrite cached signature identity.
 +
 +CRI snapshot creation and unpack readiness resolve this same chain from the
-+selected platform manifest and its retained referrer bundle. Each signed top key
++selected platform manifest and its retained referrer bundle. Only rootfs layer
++descriptors participate in this chain; non-layer artifacts are excluded, matching
++the image unpacker's layer selection. Each signed top key
 +gets a distinct config GC reference
 +`containerd.io/gc.ref.snapshot.<snapshotter>/dmverity-<sha256(topKey)>`,
 +alongside any plain reference, so variants sharing a config remain reachable.
++Manifests sharing a config are deduplicated for unpack only when they select the
++same prepared snapshot chain. Alternate layer blobs are still fetched, including
++when the selected snapshots are already cached.
++
++Signed unpacking requires the EROFS differ. Before committing a snapshot with a
++signed identity, the snapshotter checks that the EROFS blob, dm-verity metadata,
++and selected signature were materialized and match that identity. A walking
++differ cannot satisfy this contract: the pull fails instead of converting its
++upper directory into an unsigned blob under a signed key. Ordinary unsigned
++EROFS snapshots retain the walking-differ conversion fallback. Kernel signature
++trust is still checked when the signed layer is mounted.
 +
 +Legacy `<ChainID>-dmverity` snapshots and their references are left untouched.
 +They are not selected by the new policy: a subsequent signed unpack materializes
@@ -426,7 +691,7 @@ index c49e381fed..19d0dfe552 100644
  
  The EROFS differ also supports a "tar index" mode that offers a unique approach to handling OCI image layers:
 diff --git a/internal/cri/opts/container.go b/internal/cri/opts/container.go
-index 563d2a9835..d5bd96855b 100644
+index 563d2a9835f8afa83f45977f3a6bf9f1d5d296eb..d5bd96855b1b3703b65df7dc368755027255d986 100644
 --- a/internal/cri/opts/container.go
 +++ b/internal/cri/opts/container.go
 @@ -21,6 +21,7 @@ import (
@@ -515,18 +780,26 @@ index 563d2a9835..d5bd96855b 100644
  	if err := images.Dispatch(ctx, u.Unpack(h), nil, i.Target()); err != nil {
  		_, _ = u.Wait()
 diff --git a/internal/cri/server/container_create.go b/internal/cri/server/container_create.go
-index 376628afe9..19d005ca82 100644
+index 376628afe9f109b7989c778e1bd135c1eb686eeb..45c5caa9dec7159069bcffd3ce69f88146963aa1 100644
 --- a/internal/cri/server/container_create.go
 +++ b/internal/cri/server/container_create.go
-@@ -29,6 +29,7 @@ import (
+@@ -29,6 +29,8 @@ import (
  	"github.com/containerd/platforms"
  	"github.com/containerd/typeurl/v2"
  	"github.com/davecgh/go-spew/spew"
 +	docker "github.com/distribution/reference"
++	"github.com/opencontainers/go-digest"
  	imagespec "github.com/opencontainers/image-spec/specs-go/v1"
  	runtimespec "github.com/opencontainers/runtime-spec/specs-go"
  	"github.com/opencontainers/selinux/go-selinux"
-@@ -43,6 +44,7 @@ import (
+@@ -37,12 +39,14 @@ import (
+ 
+ 	containerd "github.com/containerd/containerd/v2/client"
+ 	"github.com/containerd/containerd/v2/core/containers"
++	"github.com/containerd/containerd/v2/core/images"
+ 	"github.com/containerd/containerd/v2/internal/cri/annotations"
+ 	criconfig "github.com/containerd/containerd/v2/internal/cri/config"
+ 	cio "github.com/containerd/containerd/v2/internal/cri/io"
  	crilabels "github.com/containerd/containerd/v2/internal/cri/labels"
  	customopts "github.com/containerd/containerd/v2/internal/cri/opts"
  	containerstore "github.com/containerd/containerd/v2/internal/cri/store/container"
@@ -534,7 +807,7 @@ index 376628afe9..19d005ca82 100644
  	sandboxstore "github.com/containerd/containerd/v2/internal/cri/store/sandbox"
  	"github.com/containerd/containerd/v2/internal/cri/util"
  	"github.com/containerd/containerd/v2/internal/registrar"
-@@ -192,7 +194,20 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
+@@ -192,7 +196,20 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
  	if err != nil {
  		return nil, fmt.Errorf("failed to resolve image %q: %w", config.GetImage().GetImage(), err)
  	}
@@ -549,20 +822,26 @@ index 376628afe9..19d005ca82 100644
 +	}
 +	var containerdImage containerd.Image
 +	if capable {
-+		containerdImage, err = c.dmverityContainerImage(ctx, image, config.GetImage())
++		containerdImage, err = c.dmverityContainerImage(ctx, image, config.GetImage(), nil)
 +	} else {
 +		containerdImage, err = c.toContainerdImage(ctx, image)
 +	}
  	if err != nil {
  		return nil, fmt.Errorf("failed to get image from containerd %q: %w", image.ID, err)
  	}
-@@ -1234,6 +1249,48 @@ func (c *criService) linuxContainerMounts(sandboxID string, config *runtime.Cont
+@@ -1234,6 +1251,95 @@ func (c *criService) linuxContainerMounts(sandboxID string, config *runtime.Cont
  	return mounts
  }
  
 +// dmverityContainerImage preserves the requested manifest when config-sharing
 +// aliases can select different signed materializations.
-+func (c *criService) dmverityContainerImage(ctx context.Context, image imagestore.Image, spec *runtime.ImageSpec) (containerd.Image, error) {
++func (c *criService) dmverityContainerImage(ctx context.Context, image imagestore.Image, spec *runtime.ImageSpec, platform platforms.MatchComparer) (containerd.Image, error) {
++	withPlatform := func(selected containerd.Image) containerd.Image {
++		if platform != nil {
++			return containerd.NewImageWithPlatform(c.client, selected.Metadata(), platform)
++		}
++		return selected
++	}
 +	isID := func(ref string) bool {
 +		// LocalResolve tries named references before abbreviated IDs.
 +		if ref != image.ID {
@@ -582,7 +861,48 @@ index 376628afe9..19d005ca82 100644
 +		requested = spec.GetUserSpecifiedImage()
 +	}
 +	if requested == "" || isID(requested) {
-+		return nil, fmt.Errorf("image ID %q requires an explicit image reference or UserSpecifiedImage on a dm-verity-referrer snapshotter", image.ID)
++		var selected containerd.Image
++		var manifestDigest digest.Digest
++		for _, ref := range image.References {
++			candidate, err := c.client.GetImage(ctx, ref)
++			if err != nil {
++				return nil, fmt.Errorf("resolve cached image reference %q: %w", ref, err)
++			}
++			config, err := candidate.Config(ctx)
++			if err != nil {
++				return nil, fmt.Errorf("read config for cached image reference %q: %w", ref, err)
++			}
++			if config.Digest.String() != image.ID {
++				return nil, fmt.Errorf("cached image reference %q resolves to config %s, expected %s", ref, config.Digest, image.ID)
++			}
++			candidate = withPlatform(candidate)
++			var currentDigest digest.Digest
++			children := images.LimitManifests(images.FilterPlatforms(
++				images.ChildrenHandler(c.client.ContentStore()), candidate.Platform()), candidate.Platform(), 1)
++			err = images.Walk(ctx, images.HandlerFunc(func(ctx context.Context, desc imagespec.Descriptor) ([]imagespec.Descriptor, error) {
++				if images.IsManifestType(desc.MediaType) {
++					currentDigest = desc.Digest
++					return nil, nil
++				}
++				return children.Handle(ctx, desc)
++			}), candidate.Target())
++			if err != nil {
++				return nil, fmt.Errorf("resolve cached image manifest %q: %w", ref, err)
++			}
++			if currentDigest == "" {
++				return nil, fmt.Errorf("cached image reference %q has no matching manifest", ref)
++			}
++			if selected != nil && manifestDigest != currentDigest {
++				return nil, fmt.Errorf("image ID %q requires an explicit image reference or UserSpecifiedImage to distinguish cached manifests", image.ID)
++			}
++			if selected == nil {
++				selected, manifestDigest = candidate, currentDigest
++			}
++		}
++		if selected == nil {
++			return nil, fmt.Errorf("image ID %q has no cached image references", image.ID)
++		}
++		return selected, nil
 +	}
 +	normalized, err := docker.ParseDockerRef(requested)
 +	if err != nil {
@@ -599,14 +919,14 @@ index 376628afe9..19d005ca82 100644
 +	if config.Digest.String() != image.ID {
 +		return nil, fmt.Errorf("image reference %q resolves to config %s, expected %s", requested, config.Digest, image.ID)
 +	}
-+	return selected, nil
++	return withPlatform(selected), nil
 +}
 +
  func (c *criService) runtimeInfo(ctx context.Context, id string) (string, typeurl.Any, error) {
  	sandboxInfo, err := c.client.SandboxStore().Get(ctx, id)
  	if err == nil {
 diff --git a/internal/cri/server/container_image_mount.go b/internal/cri/server/container_image_mount.go
-index c319179214..beb0f66aaa 100644
+index c31917921489abd629c21d1f93c1f6491d38c755..520b4f27b42eb904c33b6461ceb7e87ae7108869 100644
 --- a/internal/cri/server/container_image_mount.go
 +++ b/internal/cri/server/container_image_mount.go
 @@ -21,10 +21,13 @@ import (
@@ -623,7 +943,24 @@ index c319179214..beb0f66aaa 100644
  	"github.com/containerd/errdefs"
  	"github.com/containerd/log"
  	"github.com/containerd/platforms"
-@@ -99,7 +102,6 @@ func (c *criService) mutateImageMount(
+@@ -92,14 +95,22 @@ func (c *criService) mutateImageMount(
+ 	if err != nil {
+ 		return fmt.Errorf("failed to resolve image %q: %w", ref, err)
+ 	}
+-	containerdImage, err := c.toContainerdImage(ctx, image)
++	capable, err := c.dmverityReferrersEnabled(ctx, snapshotter)
++	if err != nil {
++		return err
++	}
++	var containerdImage containerd.Image
++	if capable {
++		containerdImage, err = c.dmverityContainerImage(ctx, image, imageSpec, platforms.Only(platform))
++	} else {
++		containerdImage, err = c.toContainerdImage(ctx, image)
++	}
+ 	if err != nil {
+ 		return fmt.Errorf("failed to get image from containerd %q: %w", image.ID, err)
+ 	}
  
  	// This is a digest of the manifest
  	imageID := containerdImage.Target().Digest.Encoded()
@@ -631,30 +968,27 @@ index c319179214..beb0f66aaa 100644
  	target := c.getImageVolumeHostPath(sandboxID, imageID)
  
  	// Already mounted in another container on the same pod
-@@ -110,23 +112,35 @@ func (c *criService) mutateImageMount(
+@@ -110,23 +121,33 @@ func (c *criService) mutateImageMount(
  	if err != nil {
  		return fmt.Errorf("failed to ensure %s is mounted: %w", target, err)
  	}
 -	if !mounted {
--		img, err := c.client.ImageService().Get(ctx, ref)
 +	if mounted {
-+		capable, err := c.dmverityReferrersEnabled(ctx, snapshotter)
- 		if err != nil {
--			return fmt.Errorf("failed to get image volume ref %q: %w", ref, err)
-+			return err
-+		}
 +		if !capable {
 +			return setImageMountPath(extraMount, target)
- 		}
++		}
 +	}
 +
-+	img, err := c.client.ImageService().Get(ctx, ref)
-+	if err != nil {
-+		return fmt.Errorf("failed to get image volume ref %q: %w", ref, err)
-+	}
- 
++	i := containerdImage
++	if !capable {
+ 		img, err := c.client.ImageService().Get(ctx, ref)
+ 		if err != nil {
+ 			return fmt.Errorf("failed to get image volume ref %q: %w", ref, err)
+ 		}
+-
 -		i := containerd.NewImageWithPlatform(c.client, img, platforms.Only(platform))
-+	i := containerd.NewImageWithPlatform(c.client, img, platforms.Only(platform))
++		i = containerd.NewImageWithPlatform(c.client, img, platforms.Only(platform))
++	}
 +	diffIDs, err := i.RootFS(ctx)
 +	if err != nil {
 +		return fmt.Errorf("failed to get diff IDs for image volume %q: %w", ref, err)
@@ -677,7 +1011,7 @@ index c319179214..beb0f66aaa 100644
  		// Get snapshot options with user namespace idmap labels if needed
  		snapshotOpts, err := c.getImageVolumeSnapshotOpts(ctx, extraMount)
  		if err != nil {
-@@ -186,6 +200,10 @@ func (c *criService) mutateImageMount(
+@@ -186,6 +207,10 @@ func (c *criService) mutateImageMount(
  		}
  	}
  
@@ -688,7 +1022,7 @@ index c319179214..beb0f66aaa 100644
  	if imageSubPath := extraMount.GetImageSubPath(); imageSubPath != "" {
  		mountPoint, err := ensureImageSubPath(target, imageSubPath)
  		if err != nil {
-@@ -193,9 +211,7 @@ func (c *criService) mutateImageMount(
+@@ -193,9 +218,7 @@ func (c *criService) mutateImageMount(
  		}
  		target = mountPoint
  	}
@@ -698,7 +1032,7 @@ index c319179214..beb0f66aaa 100644
  	// Clear UID/GID mappings from the mount to prevent the OCI runtime from
  	// attempting idmap on the bind mount. The idmap is already applied to the
  	// overlay lower layers via the snapshotter when the image volume is prepared.
-@@ -203,7 +219,6 @@ func (c *criService) mutateImageMount(
+@@ -203,7 +226,6 @@ func (c *criService) mutateImageMount(
  	// (e.g., by another container in the same pod).
  	extraMount.UidMappings = nil
  	extraMount.GidMappings = nil
@@ -706,7 +1040,7 @@ index c319179214..beb0f66aaa 100644
  	return nil
  }
  
-@@ -283,3 +298,46 @@ func ensureImageSubPath(mountPoint, subPath string) (string, error) {
+@@ -283,3 +305,46 @@ func ensureImageSubPath(mountPoint, subPath string) (string, error) {
  
  	return file.Name(), nil
  }
@@ -754,7 +1088,7 @@ index c319179214..beb0f66aaa 100644
 +	return capable, nil
 +}
 diff --git a/internal/cri/server/images/check.go b/internal/cri/server/images/check.go
-index c680536dd9..2e2affc3cc 100644
+index c680536dd9d027ddb1ba601aaa22e18d29bad35c..2e2affc3cc15e24ae12f764ef5f54b8593650cfd 100644
 --- a/internal/cri/server/images/check.go
 +++ b/internal/cri/server/images/check.go
 @@ -19,9 +19,14 @@ package images
@@ -818,7 +1152,7 @@ index c680536dd9..2e2affc3cc 100644
 +	return i.IsUnpacked(ctx, snapshotter)
 +}
 diff --git a/internal/cri/server/images/image_pull.go b/internal/cri/server/images/image_pull.go
-index ec3cdf78e2..4f5f0d2bb4 100644
+index ec3cdf78e286fd7301c7830bda2a058b28645cbd..4f5f0d2bb4eae94e7b13dea3696b300cb2432d6a 100644
 --- a/internal/cri/server/images/image_pull.go
 +++ b/internal/cri/server/images/image_pull.go
 @@ -25,6 +25,7 @@ import (
@@ -853,7 +1187,7 @@ index ec3cdf78e2..4f5f0d2bb4 100644
  	} else {
  		image, err = c.pullImageWithTransferService(ctx, ref, credentials, snapshotter, labels, imagePullProgressTimeout)
 diff --git a/internal/cri/server/images/service.go b/internal/cri/server/images/service.go
-index 9654d206ac..e73f8c8c7d 100644
+index 9654d206ac0e16dcb39d54557420063442be9810..e73f8c8c7d22e662acfa1232bf2269d2ea2f0ec2 100644
 --- a/internal/cri/server/images/service.go
 +++ b/internal/cri/server/images/service.go
 @@ -43,6 +43,8 @@ type imageClient interface {
@@ -866,7 +1200,7 @@ index 9654d206ac..e73f8c8c7d 100644
  
  type ImagePlatform struct {
 diff --git a/internal/cri/server/service.go b/internal/cri/server/service.go
-index f1ad1276ef..88f15c9b1e 100644
+index f1ad1276ef34d44d56163798bc084a68c60378a5..88f15c9b1e3fc102974a7373d0021319e543d09f 100644
 --- a/internal/cri/server/service.go
 +++ b/internal/cri/server/service.go
 @@ -144,7 +144,9 @@ type criService struct {
@@ -881,10 +1215,28 @@ index f1ad1276ef..88f15c9b1e 100644
  	streamServer streaming.Server
  	// eventMonitor is the monitor monitors containerd events.
 diff --git a/internal/cri/store/image/image.go b/internal/cri/store/image/image.go
-index 2773c92f84..93f06adf79 100644
+index 2773c92f84244424d8639e4ea88b58308ae5f85c..9cedf145350f3363c016403fe5d5fa2c1f0f2b51 100644
 --- a/internal/cri/store/image/image.go
 +++ b/internal/cri/store/image/image.go
-@@ -182,7 +182,11 @@ func (s *Store) getImage(ctx context.Context, i images.Image) (*Image, error) {
+@@ -20,6 +20,7 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"fmt"
++	"maps"
+ 	"strings"
+ 	"sync"
+ 
+@@ -133,6 +134,9 @@ func (s *Store) update(ref string, img *Image) error {
+ 	}
+ 	if oldExist {
+ 		if oldID == img.ID {
++			if err := s.store.refreshSnapshotters(img.ID, img.Snapshotters); err != nil {
++				return err
++			}
+ 			if s.store.isPinned(img.ID, ref) == img.Pinned {
+ 				return nil
+ 			}
+@@ -182,7 +186,11 @@ func (s *Store) getImage(ctx context.Context, i images.Image) (*Image, error) {
  	for label := range info.Labels {
  		const prefix = "containerd.io/gc.ref.snapshot."
  		if strings.HasPrefix(label, prefix) {
@@ -897,8 +1249,32 @@ index 2773c92f84..93f06adf79 100644
  		}
  	}
  
+@@ -274,10 +282,23 @@ func (s *store) add(img Image) error {
+ 	// Or else, merge and sort the references.
+ 	i.References = docker.Sort(util.MergeStringSlices(i.References, img.References))
+ 	i.Pinned = i.Pinned || img.Pinned
++	i.Snapshotters = maps.Clone(img.Snapshotters)
+ 	s.images[img.ID] = i
+ 	return nil
+ }
+ 
++func (s *store) refreshSnapshotters(id string, snapshotters map[string]struct{}) error {
++	s.lock.Lock()
++	defer s.lock.Unlock()
++	i, ok := s.images[id]
++	if !ok {
++		return errdefs.ErrNotFound
++	}
++	i.Snapshotters = maps.Clone(snapshotters)
++	s.images[id] = i
++	return nil
++}
++
+ func (s *store) isPinned(id, ref string) bool {
+ 	s.lock.RLock()
+ 	defer s.lock.RUnlock()
 diff --git a/internal/dmverity/dmverity.go b/internal/dmverity/dmverity.go
-index 29121adfd3..be6e35422a 100644
+index 29121adfd378f6fa822e42d5d3b960a75920a4e0..be6e35422af5090503a9984f8d9ddcf38f1af636 100644
 --- a/internal/dmverity/dmverity.go
 +++ b/internal/dmverity/dmverity.go
 @@ -25,6 +25,12 @@ import (
@@ -928,7 +1304,7 @@ index 29121adfd3..be6e35422a 100644
  	return fmt.Sprintf("/dev/mapper/%s", name)
  }
 diff --git a/internal/dmverity/dmverity_linux.go b/internal/dmverity/dmverity_linux.go
-index ccaf988295..987dc270f6 100644
+index ccaf9882950285497b8d18e07deda610edf54378..987dc270f62cead8124ffb4d3b0cbce683de98b7 100644
 --- a/internal/dmverity/dmverity_linux.go
 +++ b/internal/dmverity/dmverity_linux.go
 @@ -19,8 +19,11 @@ package dmverity
@@ -1035,7 +1411,7 @@ index ccaf988295..987dc270f6 100644
 +}
 diff --git a/pkg/snapshotters/dmverity.go b/pkg/snapshotters/dmverity.go
 new file mode 100644
-index 0000000000..f2d028a023
+index 0000000000000000000000000000000000000000..f2d028a0230725c9ea827b9b1bab3a18bee1b64e
 --- /dev/null
 +++ b/pkg/snapshotters/dmverity.go
 @@ -0,0 +1,222 @@
@@ -1263,10 +1639,10 @@ index 0000000000..f2d028a023
 +}
 diff --git a/pkg/snapshotters/dmverity_referrers.go b/pkg/snapshotters/dmverity_referrers.go
 new file mode 100644
-index 0000000000..47dc4ebcf5
+index 0000000000000000000000000000000000000000..ae45e7bd1723bee10781788bd613622a4288f4d2
 --- /dev/null
 +++ b/pkg/snapshotters/dmverity_referrers.go
-@@ -0,0 +1,626 @@
+@@ -0,0 +1,640 @@
 +/*
 +   Copyright The containerd Authors.
 +
@@ -1298,6 +1674,7 @@ index 0000000000..47dc4ebcf5
 +	"github.com/containerd/containerd/v2/core/snapshots"
 +	"github.com/containerd/containerd/v2/internal/kmutex"
 +	"github.com/containerd/errdefs"
++	"github.com/containerd/go-dmverity/pkg/verity"
 +	"github.com/containerd/log"
 +	"github.com/containerd/platforms"
 +	"github.com/opencontainers/go-digest"
@@ -1367,7 +1744,12 @@ index 0000000000..47dc4ebcf5
 +		if len(selected) == 0 {
 +			return nil, fmt.Errorf("manifest %s has no image config", desc.Digest)
 +		}
-+		layers := selected[1:]
++		var layers []ocispec.Descriptor
++		for _, child := range selected[1:] {
++			if images.IsLayerType(child.MediaType) {
++				layers = append(layers, child)
++			}
++		}
 +		diffIDs, err := images.RootFS(ctx, store, selected[0])
 +		if err != nil {
 +			return nil, err
@@ -1535,6 +1917,14 @@ index 0000000000..47dc4ebcf5
 +			}
 +			info.Tree = layer
 +		case layerSignatureMediaType:
++			if layer.Size > verity.MaxSignatureSize {
++				return nil, fmt.Errorf(
++					"signature descriptor for layer %s has size %d, maximum is %d bytes",
++					sourceDigest,
++					layer.Size,
++					verity.MaxSignatureSize,
++				)
++			}
 +			rootHash := layer.Annotations[layerRootHashAnnotation]
 +			if err := validateRootHash(rootHash); err != nil {
 +				return nil, fmt.Errorf("signature descriptor for layer %s: %w", sourceDigest, err)
@@ -1894,7 +2284,7 @@ index 0000000000..47dc4ebcf5
 +	return nil
 +}
 diff --git a/plugins/diff/erofs/differ.go b/plugins/diff/erofs/differ.go
-index 926f6e8f13..8b4e65babc 100644
+index 926f6e8f13a3e1fe521e257bf33348d897755acb..8b4e65babc455f9e48610f5bea0b86ec3c0f758b 100644
 --- a/plugins/diff/erofs/differ.go
 +++ b/plugins/diff/erofs/differ.go
 @@ -34,6 +34,7 @@ import (
@@ -1947,7 +2337,7 @@ index 926f6e8f13..8b4e65babc 100644
  		}
 diff --git a/plugins/diff/erofs/signed_tar_index.go b/plugins/diff/erofs/signed_tar_index.go
 new file mode 100644
-index 0000000000..fc5dfb4930
+index 0000000000000000000000000000000000000000..fc5dfb4930d2366e09d0209dcb67d91758925765
 --- /dev/null
 +++ b/plugins/diff/erofs/signed_tar_index.go
 @@ -0,0 +1,161 @@
@@ -2113,10 +2503,15 @@ index 0000000000..fc5dfb4930
 +	return err
 +}
 diff --git a/plugins/mount/erofs/plugin_linux.go b/plugins/mount/erofs/plugin_linux.go
-index ad96089660..47b1d9ef5f 100644
+index ad96089660f2ef34effdf263011b71671b071563..3b60d6ecea8382d498516b3eb46959d400e02299 100644
 --- a/plugins/mount/erofs/plugin_linux.go
 +++ b/plugins/mount/erofs/plugin_linux.go
-@@ -30,6 +30,7 @@ import (
+@@ -26,10 +26,12 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	"github.com/containerd/go-dmverity/pkg/verity"
+ 	"github.com/containerd/log"
  	"github.com/containerd/platforms"
  	"github.com/containerd/plugin"
  	"github.com/containerd/plugin/registry"
@@ -2124,7 +2519,7 @@ index ad96089660..47b1d9ef5f 100644
  
  	"github.com/containerd/containerd/v2/core/mount"
  	"github.com/containerd/containerd/v2/internal/dmverity"
-@@ -42,6 +43,8 @@ import (
+@@ -42,6 +44,8 @@ import (
  
  var forceloop bool
  
@@ -2133,7 +2528,7 @@ index ad96089660..47b1d9ef5f 100644
  type erofsMountHandler struct{}
  
  // NewErofsMountHandler creates a new EROFS mount handler that supports dm-verity
-@@ -62,12 +65,41 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+@@ -62,12 +66,41 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
  		dmverity.Close(dmverityDevice)
  	}()
  
@@ -2179,7 +2574,7 @@ index ad96089660..47b1d9ef5f 100644
  		}
  	}
  
-@@ -83,7 +115,12 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+@@ -83,7 +116,12 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
  			return mount.ActiveMount{}, fmt.Errorf("failed to read dm-verity metadata from %s: %w", metadataPath, err)
  		}
  
@@ -2193,7 +2588,7 @@ index ad96089660..47b1d9ef5f 100644
  		dmverityDevice = cleanupName
  		if err != nil {
  			return mount.ActiveMount{}, err
-@@ -94,7 +131,10 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+@@ -94,7 +132,10 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
  	filteredOptions := make([]string, 0, len(m.Options))
  	for _, v := range m.Options {
  		// Skip loop option (handled by loop device setup) and dmverity options (already processed)
@@ -2205,7 +2600,7 @@ index ad96089660..47b1d9ef5f 100644
  			continue
  		}
  		filteredOptions = append(filteredOptions, v)
-@@ -106,11 +146,11 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+@@ -106,11 +147,11 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
  	}
  
  	err := error(unix.ENOTBLK)
@@ -2219,7 +2614,7 @@ index ad96089660..47b1d9ef5f 100644
  		var loops []*os.File
  
  		// Never try to mount with raw files anymore if tried
-@@ -205,6 +245,55 @@ func setupDmVerityDevice(ctx context.Context, source string, metadata *dmverity.
+@@ -205,6 +246,52 @@ func setupDmVerityDevice(ctx context.Context, source string, metadata *dmverity.
  	return devicePath, "", nil
  }
  
@@ -2262,12 +2657,9 @@ index ad96089660..47b1d9ef5f 100644
 +// dmveritySignatureFile checks readability and nonempty contents before mapper reuse.
 +func dmveritySignatureFile(source string) (string, error) {
 +	signatureFile := dmverity.SignaturePath(source)
-+	signature, err := os.ReadFile(signatureFile)
++	_, err := verity.ReadSignatureFile(signatureFile)
 +	if err != nil {
 +		return "", fmt.Errorf("read dm-verity signature %q: %w", signatureFile, err)
-+	}
-+	if len(signature) == 0 {
-+		return "", fmt.Errorf("dm-verity signature %q cannot be empty", signatureFile)
 +	}
 +	return signatureFile, nil
 +}
@@ -2275,7 +2667,7 @@ index ad96089660..47b1d9ef5f 100644
  // waitForDevice polls for the device node to appear, returning an error if it
  // does not appear within a reasonable timeout.
  func waitForDevice(devicePath string) error {
-@@ -234,16 +323,23 @@ func doMount(m mount.Mount, target string) error {
+@@ -234,16 +321,23 @@ func doMount(m mount.Mount, target string) error {
  
  func (h *erofsMountHandler) Unmount(ctx context.Context, path string) error {
  	// Check what's currently mounted to determine if dm-verity device cleanup is needed
@@ -2301,7 +2693,7 @@ index ad96089660..47b1d9ef5f 100644
  	if deviceName != "" {
  		log.G(ctx).WithFields(log.Fields{
 diff --git a/plugins/mount/fsview/erofs/erofs.go b/plugins/mount/fsview/erofs/erofs.go
-index 8039b33500..5b85e7efb2 100644
+index 8039b33500ebe8049b9ce230c32c78177abb4a03..5b85e7efb226ed9f34a09d5fa6c8bdb5302babbb 100644
 --- a/plugins/mount/fsview/erofs/erofs.go
 +++ b/plugins/mount/fsview/erofs/erofs.go
 @@ -25,6 +25,7 @@ import (
@@ -2330,10 +2722,20 @@ index 8039b33500..5b85e7efb2 100644
  	if err != nil {
  		return nil, err
 diff --git a/plugins/snapshots/erofs/erofs.go b/plugins/snapshots/erofs/erofs.go
-index 66ec66eae3..defe66effa 100644
+index 66ec66eae384c20850ecea66adb02b151289e416..3bb6eec758e367402527fedf378fb78cca60047b 100644
 --- a/plugins/snapshots/erofs/erofs.go
 +++ b/plugins/snapshots/erofs/erofs.go
-@@ -34,6 +34,7 @@ import (
+@@ -26,7 +26,9 @@ import (
+ 
+ 	"github.com/containerd/continuity/fs"
+ 	"github.com/containerd/errdefs"
++	"github.com/containerd/go-dmverity/pkg/verity"
+ 	"github.com/containerd/log"
++	"github.com/opencontainers/go-digest"
+ 
+ 	"github.com/containerd/containerd/v2/core/mount"
+ 	"github.com/containerd/containerd/v2/core/snapshots"
+@@ -34,6 +36,7 @@ import (
  	"github.com/containerd/containerd/v2/internal/dmverity"
  	"github.com/containerd/containerd/v2/internal/fsverity"
  	"github.com/containerd/containerd/v2/internal/userns"
@@ -2341,7 +2743,7 @@ index 66ec66eae3..defe66effa 100644
  )
  
  const snapshotTempDirPrefix = "new-"
-@@ -51,6 +52,8 @@ type SnapshotterConfig struct {
+@@ -51,6 +54,8 @@ type SnapshotterConfig struct {
  	remapIDs    bool
  	// dmverityMode controls dm-verity behavior: "auto" (use if .dmverity exists), "on" (require .dmverity), "off" (disable)
  	dmverityMode string
@@ -2350,7 +2752,7 @@ index 66ec66eae3..defe66effa 100644
  }
  
  // Opt is an option to configure the erofs snapshotter
-@@ -84,6 +87,13 @@ func WithDmverityMode(mode string) Opt {
+@@ -84,6 +89,13 @@ func WithDmverityMode(mode string) Opt {
  	}
  }
  
@@ -2364,7 +2766,7 @@ index 66ec66eae3..defe66effa 100644
  // WithDefaultSize creates a default size writable layer for active snapshots
  func WithDefaultSize(size int64) Opt {
  	return func(config *SnapshotterConfig) {
-@@ -105,15 +115,16 @@ type MetaStore interface {
+@@ -105,15 +117,16 @@ type MetaStore interface {
  }
  
  type snapshotter struct {
@@ -2390,7 +2792,7 @@ index 66ec66eae3..defe66effa 100644
  }
  
  // NewSnapshotter returns a Snapshotter which uses EROFS+OverlayFS. The layers
-@@ -133,14 +144,17 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
+@@ -133,14 +146,17 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
  	if config.dmverityMode != "auto" && config.dmverityMode != "on" && config.dmverityMode != "off" {
  		return nil, fmt.Errorf("invalid dmverity_mode %q: must be \"auto\", \"on\", or \"off\"", config.dmverityMode)
  	}
@@ -2410,7 +2812,7 @@ index 66ec66eae3..defe66effa 100644
  		}
  	}
  
-@@ -181,15 +195,16 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
+@@ -181,15 +197,16 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
  	}
  
  	return &snapshotter{
@@ -2436,7 +2838,7 @@ index 66ec66eae3..defe66effa 100644
  	}, nil
  }
  
-@@ -310,11 +325,24 @@ func (s *snapshotter) applyDmverityPolicy(layerBlob string) (string, error) {
+@@ -310,11 +327,24 @@ func (s *snapshotter) applyDmverityPolicy(layerBlob string) (string, error) {
  }
  
  // createErofsMount creates a mount specification for an EROFS layer.
@@ -2464,7 +2866,7 @@ index 66ec66eae3..defe66effa 100644
  		return mount.Mount{}, err
  	} else if dmverityOpt != "" {
  		options = append(options, dmverityOpt)
-@@ -327,7 +355,21 @@ func (s *snapshotter) createErofsMount(layerBlob string) (mount.Mount, error) {
+@@ -327,7 +357,21 @@ func (s *snapshotter) createErofsMount(layerBlob string) (mount.Mount, error) {
  	}, nil
  }
  
@@ -2487,7 +2889,7 @@ index 66ec66eae3..defe66effa 100644
  	var options []string
  
  	if len(snap.ParentIDs) == 0 {
-@@ -340,7 +382,7 @@ func (s *snapshotter) mounts(snap storage.Snapshot, info snapshots.Info) ([]moun
+@@ -340,7 +384,7 @@ func (s *snapshotter) mounts(snap storage.Snapshot, info snapshots.Info) ([]moun
  					return nil, err
  				}
  			}
@@ -2496,7 +2898,7 @@ index 66ec66eae3..defe66effa 100644
  			if err != nil {
  				return nil, fmt.Errorf("failed to create erofs mount: %w", err)
  			}
-@@ -426,7 +468,7 @@ func (s *snapshotter) mounts(snap storage.Snapshot, info snapshots.Info) ([]moun
+@@ -426,7 +470,7 @@ func (s *snapshotter) mounts(snap storage.Snapshot, info snapshots.Info) ([]moun
  		if err != nil {
  			return nil, err
  		}
@@ -2505,7 +2907,7 @@ index 66ec66eae3..defe66effa 100644
  		if err != nil {
  			return nil, fmt.Errorf("failed to create erofs mount: %w", err)
  		}
-@@ -436,12 +478,24 @@ func (s *snapshotter) mounts(snap storage.Snapshot, info snapshots.Info) ([]moun
+@@ -436,12 +480,24 @@ func (s *snapshotter) mounts(snap storage.Snapshot, info snapshots.Info) ([]moun
  	// first marks the start of the lowerdir range. A merged fsmeta ends the
  	// range but never moves its start: lowers stacked above it stay in range.
  	first := len(mounts)
@@ -2533,7 +2935,7 @@ index 66ec66eae3..defe66effa 100644
  		}
  
  		layerBlob, err := s.lowerPath(snap.ParentIDs[i])
-@@ -449,7 +503,7 @@ func (s *snapshotter) mounts(snap storage.Snapshot, info snapshots.Info) ([]moun
+@@ -449,7 +505,7 @@ func (s *snapshotter) mounts(snap storage.Snapshot, info snapshots.Info) ([]moun
  			return nil, err
  		}
  
@@ -2542,7 +2944,7 @@ index 66ec66eae3..defe66effa 100644
  		if err != nil {
  			return nil, fmt.Errorf("failed to create erofs mount for parent %s: %w", snap.ParentIDs[i], err)
  		}
-@@ -491,9 +545,11 @@ func (s *snapshotter) mounts(snap storage.Snapshot, info snapshots.Info) ([]moun
+@@ -491,9 +547,11 @@ func (s *snapshotter) mounts(snap storage.Snapshot, info snapshots.Info) ([]moun
  
  func (s *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, key, parent string, opts []snapshots.Opt) (_ []mount.Mount, err error) {
  	var (
@@ -2557,7 +2959,7 @@ index 66ec66eae3..defe66effa 100644
  	)
  
  	defer func() {
-@@ -528,6 +584,10 @@ func (s *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
+@@ -528,6 +586,10 @@ func (s *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
  		if err != nil {
  			return fmt.Errorf("failed to get snapshot info: %w", err)
  		}
@@ -2568,7 +2970,7 @@ index 66ec66eae3..defe66effa 100644
  
  		// In non-block mode, set the ownership of the upperdir so that
  		// user-namespace-remapped containers can write to it.
-@@ -584,12 +644,13 @@ func (s *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
+@@ -584,12 +646,13 @@ func (s *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
  			return fmt.Errorf("failed to rename: %w", err)
  		}
  		td = ""
@@ -2584,10 +2986,122 @@ index 66ec66eae3..defe66effa 100644
  }
  
  func (s *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
-@@ -692,6 +753,20 @@ func (s *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
+@@ -637,28 +700,97 @@ func (s *snapshotter) commitBlock(ctx context.Context, layerBlob string, id stri
+ 	return nil
+ }
+ 
++// commitSignedIdentity returns the signed labels Commit will persist. A
++// snapshot prepared with a signed identity must be committed with the same
++// identity, so a signed preparation cannot be committed as something else.
++func commitSignedIdentity(active, committed map[string]string) (map[string]string, error) {
++	activeRootHash, activeSignature, activeSigned, err := snpkg.GetDmveritySnapshotIdentity(active)
++	if err != nil {
++		return nil, err
++	}
++	rootHash, signature, signed, err := snpkg.GetDmveritySnapshotIdentity(committed)
++	if err != nil {
++		return nil, err
++	}
++	if activeSigned && (!signed || !strings.EqualFold(activeRootHash, rootHash) || activeSignature != signature) {
++		return nil, fmt.Errorf("commit identity differs from the prepared signed dm-verity identity")
++	}
++	if !signed {
++		return nil, nil
++	}
++	return committed, nil
++}
++
++// validateSignedArtifacts requires the signed differ's metadata and selected
++// signature beside layerBlob, matching the snapshot's signed identity.
++// Kernel signature trust and tree verification remain the mount handler's job.
++func validateSignedArtifacts(layerBlob string, labels map[string]string) error {
++	rootHash, signatureDigest, _, err := snpkg.GetDmveritySnapshotIdentity(labels)
++	if err != nil {
++		return err
++	}
++	metadata, err := dmverity.ReadMetadata(layerBlob)
++	if err != nil {
++		return err
++	}
++	if !strings.EqualFold(metadata.RootHash, rootHash) {
++		return fmt.Errorf("dm-verity metadata root hash %q does not match signed identity %q", metadata.RootHash, rootHash)
++	}
++	expected, err := digest.Parse(signatureDigest)
++	if err != nil {
++		return err
++	}
++	signature, err := verity.ReadSignatureFile(dmverity.SignaturePath(layerBlob))
++	if err != nil {
++		return err
++	}
++	if actual := expected.Algorithm().FromBytes(signature); actual != expected {
++		return fmt.Errorf("dm-verity signature digest %s does not match signed identity %s", actual, expected)
++	}
++	return nil
++}
++
+ func (s *snapshotter) Commit(ctx context.Context, name, key string, opts ...snapshots.Opt) error {
+ 	var layerBlob string
+ 	var id string
++	var activeLabels map[string]string
+ 
+ 	// Apply the overlayfs upperdir (generated by non-EROFS differs) into a EROFS blob
+ 	// in a read transaction first since conversion could be slow.
+ 	err := s.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
+-		sid, _, _, err := storage.GetInfo(ctx, key)
++		sid, info, _, err := storage.GetInfo(ctx, key)
  		if err != nil {
  			return err
  		}
+ 		id = sid
++		activeLabels = info.Labels
+ 		return err
+ 	})
+ 	if err != nil {
+ 		return err
+ 	}
+ 
++	// Resolve opts once; CommitActive receives the same resolved Info.
++	var committed snapshots.Info
++	for _, opt := range opts {
++		if err := opt(&committed); err != nil {
++			return fmt.Errorf("failed to commit snapshot %s: %w", key, err)
++		}
++	}
++	signed, err := commitSignedIdentity(activeLabels, committed.Labels)
++	if err != nil {
++		return fmt.Errorf("invalid signed dm-verity identity for snapshot %s: %w", key, err)
++	}
++
+ 	// If the layer blob doesn't exist, which means this layer wasn't applied by
+ 	// the EROFS differ (possibly the walking differ), convert the upperdir instead.
+ 	layerBlob = s.layerBlobPath(id)
+ 	if _, err := os.Stat(layerBlob); err != nil {
++		if signed != nil {
++			// Converting an upperdir would produce an unsigned blob under a
++			// signed identity; only the signed EROFS differ may produce it.
++			return fmt.Errorf("signed dm-verity snapshot %s was not applied by a signed EROFS differ: %w", key, err)
++		}
+ 		if cerr := s.commitBlock(ctx, layerBlob, id); cerr != nil {
+ 			if errdefs.IsNotImplemented(cerr) {
+ 				return err
+@@ -666,6 +798,11 @@ func (s *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
+ 			return cerr
+ 		}
+ 	}
++	if signed != nil {
++		if err := validateSignedArtifacts(layerBlob, signed); err != nil {
++			return fmt.Errorf("signed dm-verity snapshot %s has invalid signed artifacts: %w", key, err)
++		}
++	}
+ 
+ 	// Enable fsverity on the EROFS layer if configured
+ 	if s.enableFsverity {
+@@ -692,7 +829,24 @@ func (s *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
+ 		if err != nil {
+ 			return err
+ 		}
+-		if _, err = storage.CommitActive(ctx, key, name, snapshots.Usage(usage), opts...); err != nil {
 +		for _, layerReferrer := range []string{
 +			dmverity.MetadataPath(layerBlob),
 +			dmverity.SignaturePath(layerBlob),
@@ -2602,10 +3116,14 @@ index 66ec66eae3..defe66effa 100644
 +			usage.Inodes += layerReferrerUsage.Inodes
 +			usage.Size += layerReferrerUsage.Size
 +		}
- 		if _, err = storage.CommitActive(ctx, key, name, snapshots.Usage(usage), opts...); err != nil {
++		if _, err = storage.CommitActive(ctx, key, name, snapshots.Usage(usage), func(info *snapshots.Info) error {
++			*info = committed
++			return nil
++		}); err != nil {
  			return fmt.Errorf("failed to commit snapshot %s: %w", key, err)
  		}
-@@ -700,8 +775,11 @@ func (s *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
+ 		return nil
+@@ -700,8 +854,11 @@ func (s *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
  }
  
  func (s *snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount, err error) {
@@ -2619,7 +3137,7 @@ index 66ec66eae3..defe66effa 100644
  	if err := s.ms.WithTransaction(ctx, false, func(ctx context.Context) error {
  		snap, err = storage.GetSnapshot(ctx, key)
  		if err != nil {
-@@ -712,11 +790,15 @@ func (s *snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount,
+@@ -712,11 +869,15 @@ func (s *snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount,
  		if err != nil {
  			return fmt.Errorf("failed to get snapshot info: %w", err)
  		}
@@ -2637,7 +3155,7 @@ index 66ec66eae3..defe66effa 100644
  
  func (s *snapshotter) getCleanupDirectories(ctx context.Context) ([]string, error) {
 diff --git a/plugins/snapshots/erofs/plugin/plugin.go b/plugins/snapshots/erofs/plugin/plugin.go
-index cb297034d8..2074d2d84f 100644
+index cb297034d804edde19fbea1ed913c8fe900c3940..2074d2d84f3c734e32e03a27d8eb747dc7b04745 100644
 --- a/plugins/snapshots/erofs/plugin/plugin.go
 +++ b/plugins/snapshots/erofs/plugin/plugin.go
 @@ -56,6 +56,9 @@ type Config struct {
@@ -2662,7 +3180,7 @@ index cb297034d8..2074d2d84f 100644
  		},
  	})
 diff --git a/plugins/transfer/plugin.go b/plugins/transfer/plugin.go
-index 3fac37650c..8818c0ea19 100644
+index 3fac37650ca122a6623b5d7b76dea6f1bcdc1abe..8818c0ea190e67778133f78fb6f5d08105600a5a 100644
 --- a/plugins/transfer/plugin.go
 +++ b/plugins/transfer/plugin.go
 @@ -17,8 +17,10 @@
@@ -2752,7 +3270,7 @@ index 3fac37650c..8818c0ea19 100644
  	}
  	return nil
 diff --git a/plugins/types.go b/plugins/types.go
-index 1f67d00074..a96e20d50b 100644
+index 1f67d000743f0fac9495487f3afa007e844a90d5..a96e20d50b26dba59b8e26b9e75eadfdda62c9e7 100644
 --- a/plugins/types.go
 +++ b/plugins/types.go
 @@ -111,3 +111,7 @@ const (
@@ -2764,10 +3282,61 @@ index 1f67d00074..a96e20d50b 100644
 +	CapabilityDmverityReferrers = "dmverity-referrers"
 +)
 diff --git a/vendor/github.com/containerd/go-dmverity/pkg/verity/verity.go b/vendor/github.com/containerd/go-dmverity/pkg/verity/verity.go
-index eaf80d8ede..17b7d778e2 100644
+index eaf80d8edeaf5b77d469ec98ceb7a704dbd4a9c6..df8fa01dc0298fac3a8ae588e3f4605b4001b32c 100644
 --- a/vendor/github.com/containerd/go-dmverity/pkg/verity/verity.go
 +++ b/vendor/github.com/containerd/go-dmverity/pkg/verity/verity.go
-@@ -415,17 +415,6 @@ func Open(params *Params, name, dataDevice, hashDevice string, rootHash []byte,
+@@ -21,6 +21,7 @@ import (
+ 	"crypto"
+ 	"errors"
+ 	"fmt"
++	"io"
+ 	"log"
+ 	"os"
+ 	"strings"
+@@ -33,6 +34,33 @@ import (
+ 	"github.com/containerd/go-dmverity/pkg/utils"
+ )
+ 
++// MaxSignatureSize bounds signatures loaded into the kernel user keyring.
++// Linux's default per-UID key payload quota is 1 MiB, so a single untrusted
++// signature cannot exceed that kernel-compatible payload limit.
++const MaxSignatureSize = 1 << 20
++
++// ReadSignatureFile reads a nonempty dm-verity signature without allowing an
++// untrusted file to allocate more than MaxSignatureSize+1 bytes.
++func ReadSignatureFile(path string) ([]byte, error) {
++	f, err := os.Open(path)
++	if err != nil {
++		return nil, fmt.Errorf("open signature file: %w", err)
++	}
++	defer f.Close()
++
++	data, err := io.ReadAll(io.LimitReader(f, MaxSignatureSize+1))
++	if err != nil {
++		return nil, fmt.Errorf("read signature file: %w", err)
++	}
++	if len(data) == 0 {
++		return nil, errors.New("signature file cannot be empty")
++	}
++	if len(data) > MaxSignatureSize {
++		return nil, fmt.Errorf("signature file exceeds maximum size of %d bytes", MaxSignatureSize)
++	}
++	return data, nil
++}
++
+ func validateParams(params *Params, digestSize int) error {
+ 	if params == nil {
+ 		return errors.New("verity: nil params")
+@@ -355,7 +383,7 @@ func Open(params *Params, name, dataDevice, hashDevice string, rootHash []byte,
+ 	}
+ 
+ 	if signatureFile != "" {
+-		signatureData, err := os.ReadFile(signatureFile)
++		signatureData, err := ReadSignatureFile(signatureFile)
+ 		if err != nil {
+ 			return "", fmt.Errorf("failed to read signature file: %w", err)
+ 		}
+@@ -415,17 +443,6 @@ func Open(params *Params, name, dataDevice, hashDevice string, rootHash []byte,
  	}
  	defer c.Close()
  
@@ -2785,7 +3354,7 @@ index eaf80d8ede..17b7d778e2 100644
  	target := dm.Target{
  		SectorStart: 0,
  		Length:      lengthSectors,
-@@ -433,20 +422,13 @@ func Open(params *Params, name, dataDevice, hashDevice string, rootHash []byte,
+@@ -433,20 +450,13 @@ func Open(params *Params, name, dataDevice, hashDevice string, rootHash []byte,
  		Params:      targetParams,
  	}
  
@@ -2809,7 +3378,7 @@ index eaf80d8ede..17b7d778e2 100644
  	devPath := "/dev/mapper/" + name
  
  	for i := 0; i < 50; i++ {
-@@ -459,6 +441,33 @@ func Open(params *Params, name, dataDevice, hashDevice string, rootHash []byte,
+@@ -459,6 +469,33 @@ func Open(params *Params, name, dataDevice, hashDevice string, rootHash []byte,
  	return devPath, nil
  }
  
@@ -2843,3 +3412,51 @@ index eaf80d8ede..17b7d778e2 100644
  func Close(name string) error {
  	c, err := dm.Open()
  	if err != nil {
+diff --git a/plugins/snapshots/erofs/erofs_linux_test.go b/plugins/snapshots/erofs/erofs_linux_test.go
+--- a/plugins/snapshots/erofs/erofs_linux_test.go
++++ b/plugins/snapshots/erofs/erofs_linux_test.go
+@@ -417,7 +417,7 @@ func TestCreateErofsMount(t *testing.T) {
+ 	}
+ 
+ 	t.Run("creates regular erofs mount", func(t *testing.T) {
+-		m, err := s.createErofsMount(layerBlob)
++		m, err := s.createErofsMount(layerBlob, nil)
+ 		require.NoError(t, err)
+ 
+ 		assert.Equal(t, "erofs", m.Type)
+@@ -430,7 +430,7 @@ func TestCreateErofsMount(t *testing.T) {
+ 		s.dmverityMode = "on"
+ 		createDmverityMetadata(t, layerBlob)
+ 
+-		m, err := s.createErofsMount(layerBlob)
++		m, err := s.createErofsMount(layerBlob, nil)
+ 		require.NoError(t, err)
+ 		// Mount type is always "erofs" - dm-verity detection happens in mount handler
+ 		assert.Equal(t, "erofs", m.Type)
+@@ -449,7 +449,7 @@ func TestCreateErofsMount(t *testing.T) {
+ 
+ 		s.dmverityMode = "off"
+ 
+-		m, err := s.createErofsMount(layerBlob)
++		m, err := s.createErofsMount(layerBlob, nil)
+ 		require.NoError(t, err)
+ 
+ 		assert.Equal(t, "erofs", m.Type)
+@@ -824,7 +824,7 @@ func TestMountsWithMergedFsMeta(t *testing.T) {
+ 	snap := storage.Snapshot{Kind: snapshots.KindView, ParentIDs: parents}
+ 	info := snapshots.Info{}
+ 
+-	mounts, err := s.mounts(snap, info)
++	mounts, err := s.mounts(snap, info, make([]snapshots.Info, len(parents)))
+ 	require.NoError(t, err)
+ 
+ 	// Expect: [erofs(p0), erofs(p1), erofs(fsmeta p2, device=p3,p2), overlay]
+@@ -869,7 +869,7 @@ func TestMountsWithMergedFsMetaOnTopParent(t *testing.T) {
+ 	snap := storage.Snapshot{Kind: snapshots.KindView, ParentIDs: parents}
+ 	info := snapshots.Info{}
+ 
+-	mounts, err := s.mounts(snap, info)
++	mounts, err := s.mounts(snap, info, make([]snapshots.Info, len(parents)))
+ 	require.NoError(t, err)
+ 
+ 	require.Len(t, mounts, 2)
