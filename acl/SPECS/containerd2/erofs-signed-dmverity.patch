@@ -1,5 +1,5 @@
 diff --git a/client/container_opts.go b/client/container_opts.go
-index 79b03da2dc525ca55fee81df57fa2444bfb67215..61b8e5a0a7025c799f2ced63f1d654bac4c68bc1 100644
+index 79b03da2dc..61b8e5a0a7 100644
 --- a/client/container_opts.go
 +++ b/client/container_opts.go
 @@ -240,16 +240,33 @@ func WithSnapshotCleanup(ctx context.Context, client *Client, c containers.Conta
@@ -56,7 +56,7 @@ index 79b03da2dc525ca55fee81df57fa2444bfb67215..61b8e5a0a7025c799f2ced63f1d654ba
  		if err != nil {
  			return err
 diff --git a/core/images/usage/calculator.go b/core/images/usage/calculator.go
-index fd5493958a299c6e6056a802039fca9514bd8c1c..9a46bb4077da1cc02a32656b34b567ba57e52d58 100644
+index fd5493958a..9a46bb4077 100644
 --- a/core/images/usage/calculator.go
 +++ b/core/images/usage/calculator.go
 @@ -128,7 +128,12 @@ func CalculateImageUsage(ctx context.Context, i images.Image, provider content.I
@@ -74,7 +74,7 @@ index fd5493958a299c6e6056a802039fca9514bd8c1c..9a46bb4077da1cc02a32656b34b567ba
  							continue
  						}
 diff --git a/core/snapshots/snapshotter.go b/core/snapshots/snapshotter.go
-index 5cae7aae3743869888c869bb44d8f8afefa6252c..1d410acb4d07963395eb30b2fb26fc86861118b6 100644
+index 5cae7aae37..1d410acb4d 100644
 --- a/core/snapshots/snapshotter.go
 +++ b/core/snapshots/snapshotter.go
 @@ -115,6 +115,15 @@ type Info struct {
@@ -111,7 +111,7 @@ index 5cae7aae3743869888c869bb44d8f8afefa6252c..1d410acb4d07963395eb30b2fb26fc86
  func WithParent(parent string) Opt {
  	return func(info *Info) error {
 diff --git a/core/transfer/local/pull.go b/core/transfer/local/pull.go
-index 712e81e20c17366c75685fa32084a7ef85843c93..cd7137ca609c21dca12d24db40b175f9741e50ba 100644
+index 712e81e20c..cd7137ca60 100644
 --- a/core/transfer/local/pull.go
 +++ b/core/transfer/local/pull.go
 @@ -189,6 +189,7 @@ func (ts *localTransferService) pull(ctx context.Context, ir transfer.ImageFetch
@@ -155,7 +155,7 @@ index 712e81e20c17366c75685fa32084a7ef85843c93..cd7137ca609c21dca12d24db40b175f9
  		if unpacker != nil {
  			// wait for unpacker to cleanup
 diff --git a/core/transfer/local/transfer.go b/core/transfer/local/transfer.go
-index 568d993a03cadfcc29a5cbe87aef28980294309c..06669be9dd2dd016ed32a78f9a547f92b1fb27f1 100644
+index 568d993a03..06669be9dd 100644
 --- a/core/transfer/local/transfer.go
 +++ b/core/transfer/local/transfer.go
 @@ -30,6 +30,7 @@ import (
@@ -175,7 +175,7 @@ index 568d993a03cadfcc29a5cbe87aef28980294309c..06669be9dd2dd016ed32a78f9a547f92
 +	PullHandlerWrapper func(context.Context, remotes.Fetcher, content.Store, bool, []unpack.Platform) (func(images.Handler) images.Handler, error)
  }
 diff --git a/core/unpack/unpacker.go b/core/unpack/unpacker.go
-index c3ef0331aadb1c6872284c56e5eada2405758fd2..68a58d6da15918d65e1568af8273747f718bf55a 100644
+index c3ef0331aa..68a58d6da1 100644
 --- a/core/unpack/unpacker.go
 +++ b/core/unpack/unpacker.go
 @@ -25,6 +25,7 @@ import (
@@ -640,58 +640,8 @@ index c3ef0331aadb1c6872284c56e5eada2405758fd2..68a58d6da15918d65e1568af8273747f
  		"parallel": parallel,
  		"duration": time.Since(unpackStart),
  	}).Debug("image unpacked")
-diff --git a/docs/snapshotters/erofs.md b/docs/snapshotters/erofs.md
-index c49e381feda712eabdcf2252bad971218576bcfe..06a95da575c3966695313d4624312eecd7a9586e 100644
---- a/docs/snapshotters/erofs.md
-+++ b/docs/snapshotters/erofs.md
-@@ -327,6 +327,45 @@ In other words, the EROFS differ can only be used with the EROFS snapshotter;
- otherwise, it will skip to the next differ.  The EROFS snapshotter can work
- with or without the EROFS differ.
- 
-+## Signed Snapshot Identities
-+
-+For signed dm-verity referrers, the unpack policy derives each snapshot key as:
-+
-+```
-+sha256("erofs-dmverity-v2\n" + selectedParentKey + "\n" +
-+       ordinaryChainID + "\n" + lowercaseRootHash) + "-dmverity-v2"
-+```
-+
-+The first layer has an empty parent key. This keeps signed materializations with
-+different roots separate, including descendants whose own root is unchanged but
-+whose selected parent differs. Unsigned snapshots retain their ordinary OCI
-+ChainIDs. A replacement signature for the same root reuses the existing snapshot
-+and its original signature; it does not overwrite cached signature identity.
-+
-+CRI snapshot creation and unpack readiness resolve this same chain from the
-+selected platform manifest and its retained referrer bundle. Only rootfs layer
-+descriptors participate in this chain; non-layer artifacts are excluded, matching
-+the image unpacker's layer selection. Each signed top key
-+gets a distinct config GC reference
-+`containerd.io/gc.ref.snapshot.<snapshotter>/dmverity-<sha256(topKey)>`,
-+alongside any plain reference, so variants sharing a config remain reachable.
-+Manifests sharing a config are deduplicated for unpack only when they select the
-+same prepared snapshot chain. Alternate layer blobs are still fetched, including
-+when the selected snapshots are already cached.
-+
-+Signed unpacking requires the EROFS differ. Before committing a snapshot with a
-+signed identity, the snapshotter checks that the EROFS blob, dm-verity metadata,
-+and selected signature were materialized and match that identity. A walking
-+differ cannot satisfy this contract: the pull fails instead of converting its
-+upper directory into an unsigned blob under a signed key. Ordinary unsigned
-+EROFS snapshots retain the walking-differ conversion fallback. Kernel signature
-+trust is still checked when the signed layer is mounted.
-+
-+Legacy `<ChainID>-dmverity` snapshots and their references are left untouched.
-+They are not selected by the new policy: a subsequent signed unpack materializes
-+the versioned chain alongside them. Existing containers can keep their original
-+snapshot parents; no snapshot deletion is required.
-+
- ## Tar Index Mode
- 
- The EROFS differ also supports a "tar index" mode that offers a unique approach to handling OCI image layers:
 diff --git a/internal/cri/opts/container.go b/internal/cri/opts/container.go
-index 563d2a9835f8afa83f45977f3a6bf9f1d5d296eb..d5bd96855b1b3703b65df7dc368755027255d986 100644
+index 563d2a9835..d5bd96855b 100644
 --- a/internal/cri/opts/container.go
 +++ b/internal/cri/opts/container.go
 @@ -21,6 +21,7 @@ import (
@@ -780,19 +730,20 @@ index 563d2a9835f8afa83f45977f3a6bf9f1d5d296eb..d5bd96855b1b3703b65df7dc36875502
  	if err := images.Dispatch(ctx, u.Unpack(h), nil, i.Target()); err != nil {
  		_, _ = u.Wait()
 diff --git a/internal/cri/server/container_create.go b/internal/cri/server/container_create.go
-index 376628afe9f109b7989c778e1bd135c1eb686eeb..45c5caa9dec7159069bcffd3ce69f88146963aa1 100644
+index 376628afe9..329c7fb47d 100644
 --- a/internal/cri/server/container_create.go
 +++ b/internal/cri/server/container_create.go
-@@ -29,6 +29,8 @@ import (
+@@ -29,6 +29,9 @@ import (
  	"github.com/containerd/platforms"
  	"github.com/containerd/typeurl/v2"
  	"github.com/davecgh/go-spew/spew"
 +	docker "github.com/distribution/reference"
 +	"github.com/opencontainers/go-digest"
++	"github.com/opencontainers/image-spec/identity"
  	imagespec "github.com/opencontainers/image-spec/specs-go/v1"
  	runtimespec "github.com/opencontainers/runtime-spec/specs-go"
  	"github.com/opencontainers/selinux/go-selinux"
-@@ -37,12 +39,14 @@ import (
+@@ -37,18 +40,21 @@ import (
  
  	containerd "github.com/containerd/containerd/v2/client"
  	"github.com/containerd/containerd/v2/core/containers"
@@ -807,7 +758,14 @@ index 376628afe9f109b7989c778e1bd135c1eb686eeb..45c5caa9dec7159069bcffd3ce69f881
  	sandboxstore "github.com/containerd/containerd/v2/internal/cri/store/sandbox"
  	"github.com/containerd/containerd/v2/internal/cri/util"
  	"github.com/containerd/containerd/v2/internal/registrar"
-@@ -192,7 +196,20 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
+ 	"github.com/containerd/containerd/v2/pkg/blockio"
+ 	"github.com/containerd/containerd/v2/pkg/deprecation"
+ 	"github.com/containerd/containerd/v2/pkg/oci"
++	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
+ 	"github.com/containerd/containerd/v2/pkg/tracing"
+ )
+ 
+@@ -192,7 +198,20 @@ func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateConta
  	if err != nil {
  		return nil, fmt.Errorf("failed to resolve image %q: %w", config.GetImage().GetImage(), err)
  	}
@@ -829,7 +787,7 @@ index 376628afe9f109b7989c778e1bd135c1eb686eeb..45c5caa9dec7159069bcffd3ce69f881
  	if err != nil {
  		return nil, fmt.Errorf("failed to get image from containerd %q: %w", image.ID, err)
  	}
-@@ -1234,6 +1251,95 @@ func (c *criService) linuxContainerMounts(sandboxID string, config *runtime.Cont
+@@ -1234,6 +1253,119 @@ func (c *criService) linuxContainerMounts(sandboxID string, config *runtime.Cont
  	return mounts
  }
  
@@ -861,6 +819,20 @@ index 376628afe9f109b7989c778e1bd135c1eb686eeb..45c5caa9dec7159069bcffd3ce69f881
 +		requested = spec.GetUserSpecifiedImage()
 +	}
 +	if requested == "" || isID(requested) {
++		snapshotKey := func(candidate containerd.Image) (string, error) {
++			signed, err := snpkg.ImageHasDmverityReferrer(ctx, candidate.ContentStore(), candidate.Target(), candidate.Platform())
++			if err != nil {
++				return "", err
++			}
++			if signed {
++				return snpkg.DmverityImageSnapshotKey(ctx, candidate.ContentStore(), candidate.Target(), candidate.Platform())
++			}
++			diffIDs, err := candidate.RootFS(ctx)
++			if err != nil {
++				return "", err
++			}
++			return identity.ChainID(diffIDs).String(), nil
++		}
 +		var selected containerd.Image
 +		var manifestDigest digest.Digest
 +		for _, ref := range image.References {
@@ -893,7 +865,17 @@ index 376628afe9f109b7989c778e1bd135c1eb686eeb..45c5caa9dec7159069bcffd3ce69f881
 +				return nil, fmt.Errorf("cached image reference %q has no matching manifest", ref)
 +			}
 +			if selected != nil && manifestDigest != currentDigest {
-+				return nil, fmt.Errorf("image ID %q requires an explicit image reference or UserSpecifiedImage to distinguish cached manifests", image.ID)
++				selectedKey, err := snapshotKey(selected)
++				if err != nil {
++					return nil, fmt.Errorf("resolve snapshot identity for cached image reference %q: %w", selected.Name(), err)
++				}
++				candidateKey, err := snapshotKey(candidate)
++				if err != nil {
++					return nil, fmt.Errorf("resolve snapshot identity for cached image reference %q: %w", ref, err)
++				}
++				if selectedKey != candidateKey {
++					return nil, fmt.Errorf("image ID %q requires an explicit image reference or UserSpecifiedImage to distinguish cached snapshot identities", image.ID)
++				}
 +			}
 +			if selected == nil {
 +				selected, manifestDigest = candidate, currentDigest
@@ -926,7 +908,7 @@ index 376628afe9f109b7989c778e1bd135c1eb686eeb..45c5caa9dec7159069bcffd3ce69f881
  	sandboxInfo, err := c.client.SandboxStore().Get(ctx, id)
  	if err == nil {
 diff --git a/internal/cri/server/container_image_mount.go b/internal/cri/server/container_image_mount.go
-index c31917921489abd629c21d1f93c1f6491d38c755..520b4f27b42eb904c33b6461ceb7e87ae7108869 100644
+index c319179214..520b4f27b4 100644
 --- a/internal/cri/server/container_image_mount.go
 +++ b/internal/cri/server/container_image_mount.go
 @@ -21,10 +21,13 @@ import (
@@ -1088,7 +1070,7 @@ index c31917921489abd629c21d1f93c1f6491d38c755..520b4f27b42eb904c33b6461ceb7e87a
 +	return capable, nil
 +}
 diff --git a/internal/cri/server/images/check.go b/internal/cri/server/images/check.go
-index c680536dd9d027ddb1ba601aaa22e18d29bad35c..2e2affc3cc15e24ae12f764ef5f54b8593650cfd 100644
+index c680536dd9..2e2affc3cc 100644
 --- a/internal/cri/server/images/check.go
 +++ b/internal/cri/server/images/check.go
 @@ -19,9 +19,14 @@ package images
@@ -1152,7 +1134,7 @@ index c680536dd9d027ddb1ba601aaa22e18d29bad35c..2e2affc3cc15e24ae12f764ef5f54b85
 +	return i.IsUnpacked(ctx, snapshotter)
 +}
 diff --git a/internal/cri/server/images/image_pull.go b/internal/cri/server/images/image_pull.go
-index ec3cdf78e286fd7301c7830bda2a058b28645cbd..4f5f0d2bb4eae94e7b13dea3696b300cb2432d6a 100644
+index ec3cdf78e2..4f5f0d2bb4 100644
 --- a/internal/cri/server/images/image_pull.go
 +++ b/internal/cri/server/images/image_pull.go
 @@ -25,6 +25,7 @@ import (
@@ -1187,7 +1169,7 @@ index ec3cdf78e286fd7301c7830bda2a058b28645cbd..4f5f0d2bb4eae94e7b13dea3696b300c
  	} else {
  		image, err = c.pullImageWithTransferService(ctx, ref, credentials, snapshotter, labels, imagePullProgressTimeout)
 diff --git a/internal/cri/server/images/service.go b/internal/cri/server/images/service.go
-index 9654d206ac0e16dcb39d54557420063442be9810..e73f8c8c7d22e662acfa1232bf2269d2ea2f0ec2 100644
+index 9654d206ac..e73f8c8c7d 100644
 --- a/internal/cri/server/images/service.go
 +++ b/internal/cri/server/images/service.go
 @@ -43,6 +43,8 @@ type imageClient interface {
@@ -1200,7 +1182,7 @@ index 9654d206ac0e16dcb39d54557420063442be9810..e73f8c8c7d22e662acfa1232bf2269d2
  
  type ImagePlatform struct {
 diff --git a/internal/cri/server/service.go b/internal/cri/server/service.go
-index f1ad1276ef34d44d56163798bc084a68c60378a5..88f15c9b1e3fc102974a7373d0021319e543d09f 100644
+index f1ad1276ef..88f15c9b1e 100644
 --- a/internal/cri/server/service.go
 +++ b/internal/cri/server/service.go
 @@ -144,7 +144,9 @@ type criService struct {
@@ -1215,7 +1197,7 @@ index f1ad1276ef34d44d56163798bc084a68c60378a5..88f15c9b1e3fc102974a7373d0021319
  	streamServer streaming.Server
  	// eventMonitor is the monitor monitors containerd events.
 diff --git a/internal/cri/store/image/image.go b/internal/cri/store/image/image.go
-index 2773c92f84244424d8639e4ea88b58308ae5f85c..9cedf145350f3363c016403fe5d5fa2c1f0f2b51 100644
+index 2773c92f84..9cedf14535 100644
 --- a/internal/cri/store/image/image.go
 +++ b/internal/cri/store/image/image.go
 @@ -20,6 +20,7 @@ import (
@@ -1274,7 +1256,7 @@ index 2773c92f84244424d8639e4ea88b58308ae5f85c..9cedf145350f3363c016403fe5d5fa2c
  	s.lock.RLock()
  	defer s.lock.RUnlock()
 diff --git a/internal/dmverity/dmverity.go b/internal/dmverity/dmverity.go
-index 29121adfd378f6fa822e42d5d3b960a75920a4e0..be6e35422af5090503a9984f8d9ddcf38f1af636 100644
+index 29121adfd3..be6e35422a 100644
 --- a/internal/dmverity/dmverity.go
 +++ b/internal/dmverity/dmverity.go
 @@ -25,6 +25,12 @@ import (
@@ -1304,7 +1286,7 @@ index 29121adfd378f6fa822e42d5d3b960a75920a4e0..be6e35422af5090503a9984f8d9ddcf3
  	return fmt.Sprintf("/dev/mapper/%s", name)
  }
 diff --git a/internal/dmverity/dmverity_linux.go b/internal/dmverity/dmverity_linux.go
-index ccaf9882950285497b8d18e07deda610edf54378..987dc270f62cead8124ffb4d3b0cbce683de98b7 100644
+index ccaf988295..987dc270f6 100644
 --- a/internal/dmverity/dmverity_linux.go
 +++ b/internal/dmverity/dmverity_linux.go
 @@ -19,8 +19,11 @@ package dmverity
@@ -1411,7 +1393,7 @@ index ccaf9882950285497b8d18e07deda610edf54378..987dc270f62cead8124ffb4d3b0cbce6
 +}
 diff --git a/pkg/snapshotters/dmverity.go b/pkg/snapshotters/dmverity.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..f2d028a0230725c9ea827b9b1bab3a18bee1b64e
+index 0000000000..f2d028a023
 --- /dev/null
 +++ b/pkg/snapshotters/dmverity.go
 @@ -0,0 +1,222 @@
@@ -1639,10 +1621,10 @@ index 0000000000000000000000000000000000000000..f2d028a0230725c9ea827b9b1bab3a18
 +}
 diff --git a/pkg/snapshotters/dmverity_referrers.go b/pkg/snapshotters/dmverity_referrers.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..ae45e7bd1723bee10781788bd613622a4288f4d2
+index 0000000000..1a6ab51714
 --- /dev/null
 +++ b/pkg/snapshotters/dmverity_referrers.go
-@@ -0,0 +1,640 @@
+@@ -0,0 +1,652 @@
 +/*
 +   Copyright The containerd Authors.
 +
@@ -1985,6 +1967,18 @@ index 0000000000000000000000000000000000000000..ae45e7bd1723bee10781788bd613622a
 +
 +	// Strip registry-supplied targets so only those validated here reach unpack.
 +	imageLayers := sanitizeDmverityImageLayers(children)
++	if len(imageLayers) == 0 && len(children) > 0 {
++		unfiltered, err := images.ChildrenHandler(h.store).Handle(ctx, desc)
++		if err != nil {
++			return nil, fmt.Errorf("read manifest %s for dm-verity layer selection: %w", desc.Digest, err)
++		}
++		for _, child := range unfiltered {
++			if images.IsLayerType(child.MediaType) {
++				// Metadata-only traversal must not replace a retained signed selection.
++				return children, nil
++			}
++		}
++	}
 +	requireSigned := false
 +	if h.fetcher != nil {
 +		selected, discovered, err := fetchSignatures(ctx, h.fetcher, h.store, desc, imageLayers)
@@ -2284,7 +2278,7 @@ index 0000000000000000000000000000000000000000..ae45e7bd1723bee10781788bd613622a
 +	return nil
 +}
 diff --git a/plugins/diff/erofs/differ.go b/plugins/diff/erofs/differ.go
-index 926f6e8f13a3e1fe521e257bf33348d897755acb..8b4e65babc455f9e48610f5bea0b86ec3c0f758b 100644
+index 926f6e8f13..8b4e65babc 100644
 --- a/plugins/diff/erofs/differ.go
 +++ b/plugins/diff/erofs/differ.go
 @@ -34,6 +34,7 @@ import (
@@ -2337,7 +2331,7 @@ index 926f6e8f13a3e1fe521e257bf33348d897755acb..8b4e65babc455f9e48610f5bea0b86ec
  		}
 diff --git a/plugins/diff/erofs/signed_tar_index.go b/plugins/diff/erofs/signed_tar_index.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..fc5dfb4930d2366e09d0209dcb67d91758925765
+index 0000000000..fc5dfb4930
 --- /dev/null
 +++ b/plugins/diff/erofs/signed_tar_index.go
 @@ -0,0 +1,161 @@
@@ -2503,7 +2497,7 @@ index 0000000000000000000000000000000000000000..fc5dfb4930d2366e09d0209dcb67d917
 +	return err
 +}
 diff --git a/plugins/mount/erofs/plugin_linux.go b/plugins/mount/erofs/plugin_linux.go
-index ad96089660f2ef34effdf263011b71671b071563..3b60d6ecea8382d498516b3eb46959d400e02299 100644
+index ad96089660..3b60d6ecea 100644
 --- a/plugins/mount/erofs/plugin_linux.go
 +++ b/plugins/mount/erofs/plugin_linux.go
 @@ -26,10 +26,12 @@ import (
@@ -2693,7 +2687,7 @@ index ad96089660f2ef34effdf263011b71671b071563..3b60d6ecea8382d498516b3eb46959d4
  	if deviceName != "" {
  		log.G(ctx).WithFields(log.Fields{
 diff --git a/plugins/mount/fsview/erofs/erofs.go b/plugins/mount/fsview/erofs/erofs.go
-index 8039b33500ebe8049b9ce230c32c78177abb4a03..5b85e7efb226ed9f34a09d5fa6c8bdb5302babbb 100644
+index 8039b33500..5b85e7efb2 100644
 --- a/plugins/mount/fsview/erofs/erofs.go
 +++ b/plugins/mount/fsview/erofs/erofs.go
 @@ -25,6 +25,7 @@ import (
@@ -2722,7 +2716,7 @@ index 8039b33500ebe8049b9ce230c32c78177abb4a03..5b85e7efb226ed9f34a09d5fa6c8bdb5
  	if err != nil {
  		return nil, err
 diff --git a/plugins/snapshots/erofs/erofs.go b/plugins/snapshots/erofs/erofs.go
-index 66ec66eae384c20850ecea66adb02b151289e416..3bb6eec758e367402527fedf378fb78cca60047b 100644
+index 66ec66eae3..3bb6eec758 100644
 --- a/plugins/snapshots/erofs/erofs.go
 +++ b/plugins/snapshots/erofs/erofs.go
 @@ -26,7 +26,9 @@ import (
@@ -3155,7 +3149,7 @@ index 66ec66eae384c20850ecea66adb02b151289e416..3bb6eec758e367402527fedf378fb78c
  
  func (s *snapshotter) getCleanupDirectories(ctx context.Context) ([]string, error) {
 diff --git a/plugins/snapshots/erofs/plugin/plugin.go b/plugins/snapshots/erofs/plugin/plugin.go
-index cb297034d804edde19fbea1ed913c8fe900c3940..2074d2d84f3c734e32e03a27d8eb747dc7b04745 100644
+index cb297034d8..2074d2d84f 100644
 --- a/plugins/snapshots/erofs/plugin/plugin.go
 +++ b/plugins/snapshots/erofs/plugin/plugin.go
 @@ -56,6 +56,9 @@ type Config struct {
@@ -3180,7 +3174,7 @@ index cb297034d804edde19fbea1ed913c8fe900c3940..2074d2d84f3c734e32e03a27d8eb747d
  		},
  	})
 diff --git a/plugins/transfer/plugin.go b/plugins/transfer/plugin.go
-index 3fac37650ca122a6623b5d7b76dea6f1bcdc1abe..8818c0ea190e67778133f78fb6f5d08105600a5a 100644
+index 3fac37650c..8818c0ea19 100644
 --- a/plugins/transfer/plugin.go
 +++ b/plugins/transfer/plugin.go
 @@ -17,8 +17,10 @@
@@ -3270,7 +3264,7 @@ index 3fac37650ca122a6623b5d7b76dea6f1bcdc1abe..8818c0ea190e67778133f78fb6f5d081
  	}
  	return nil
 diff --git a/plugins/types.go b/plugins/types.go
-index 1f67d000743f0fac9495487f3afa007e844a90d5..a96e20d50b26dba59b8e26b9e75eadfdda62c9e7 100644
+index 1f67d00074..a96e20d50b 100644
 --- a/plugins/types.go
 +++ b/plugins/types.go
 @@ -111,3 +111,7 @@ const (
@@ -3282,7 +3276,7 @@ index 1f67d000743f0fac9495487f3afa007e844a90d5..a96e20d50b26dba59b8e26b9e75eadfd
 +	CapabilityDmverityReferrers = "dmverity-referrers"
 +)
 diff --git a/vendor/github.com/containerd/go-dmverity/pkg/verity/verity.go b/vendor/github.com/containerd/go-dmverity/pkg/verity/verity.go
-index eaf80d8edeaf5b77d469ec98ceb7a704dbd4a9c6..df8fa01dc0298fac3a8ae588e3f4605b4001b32c 100644
+index eaf80d8ede..df8fa01dc0 100644
 --- a/vendor/github.com/containerd/go-dmverity/pkg/verity/verity.go
 +++ b/vendor/github.com/containerd/go-dmverity/pkg/verity/verity.go
 @@ -21,6 +21,7 @@ import (
