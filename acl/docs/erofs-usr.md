@@ -38,8 +38,9 @@ The checked kernel.org source package includes an LZ4 round-trip test. An old
 `ACL_SDK_IMAGE` override is not repaired during the image build. The SDK and
 builder check the tool version: `mkfs.erofs` prints it through its no-argument
 usage error; `fsck.erofs -V` prints it directly.
-The imported SDK keeps its filesystem helper beside the entrypoint, so lean
-standalone images retain validation after their source checkout is removed.
+The mounted-checkout entrypoint loads the helper from `build_library`. The
+imported SDK keeps a copy beside its entrypoint, so lean standalone images
+retain validation after their source checkout is removed.
 
 The build uses a writable staging directory beside the disk image, bind-mounted
 at `/usr`. RPM installation and metadata changes finish there before the builder
@@ -82,7 +83,8 @@ Image Customizer must copy the mounted read-only tree with owners, modes,
 hardlinks, symlinks, capabilities and SELinux xattrs, customize in staging,
 repack, regenerate verity, and then sign. `fsck.erofs --extract=DIR` in 1.7.1
 does not restore xattrs and cannot replace that copy. Compatible Image
-Customizer and Trident releases are prerequisites for deployment and servicing.
+Customizer support is required. Trident installation, A/B updates and rollback
+must be qualified; update Trident only if that qualification identifies a gap.
 
 ```sh
 bash acl/tests/usr-filesystem/run.sh

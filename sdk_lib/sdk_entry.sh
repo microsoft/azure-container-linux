@@ -11,8 +11,16 @@ if [[ -n ${PACKAGE_SNAPSHOT_TIME:-} ]]; then
     printf 'export PACKAGE_SNAPSHOT_TIME=%s\n' "$PACKAGE_SNAPSHOT_TIME" >> /home/sdk/.bashrc
 fi
 
-source "$(dirname "${BASH_SOURCE[0]}")/usr_filesystem.sh" || exit 1
-acl_validate_usr_filesystem || exit 1
+sdk_entry_dir="$(dirname "${BASH_SOURCE[0]}")"
+if [[ -f "${sdk_entry_dir}/../build_library/usr_filesystem.sh" ]]; then
+    source "${sdk_entry_dir}/../build_library/usr_filesystem.sh" || exit 1
+else
+    # Standalone SDK images copy the helper beside this entrypoint.
+    source "${sdk_entry_dir}/usr_filesystem.sh" || exit 1
+fi
+if [[ -n "${ACL_USR_FS:-}" ]]; then
+    acl_validate_usr_filesystem || exit 1
+fi
 
 if [ -n "${SDK_USER_ID:-}" ] ; then
     # If the "core" user from /usr/share/baselayout/passwd has the same ID, allow to take it instead

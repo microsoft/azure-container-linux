@@ -48,7 +48,9 @@ acl_install_sysext_io_default() {
 
 acl_preserve_usr_filesystem() {
     local profile="$1"
-    acl_validate_usr_filesystem || return 1
+    if [[ -n "${ACL_USR_FS:-}" ]]; then
+        acl_validate_usr_filesystem || return 1
+    fi
     sed -i -e '/^export ACL_USR_FS=/d' \
         -e '/^export ACL_EXPERIMENTAL_USR_FS=/d' "${profile}" || return 1
     printf "export ACL_USR_FS='%s'\n" "${ACL_USR_FS:-}" >> "${profile}"

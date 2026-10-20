@@ -50,6 +50,7 @@ class FilesystemTests(unittest.TestCase):
         parts["2"]["fs_type"] = parts["2"]["image_fs_type"] = filesystem
         return parts
 
+    @unittest.skipUnless(hasattr(os, "setxattr"), "requires POSIX extended attributes")
     def test_sysext_io_installation_is_optin_and_preserves_binary_metadata(self):
         for filesystem in ("btrfs", "erofs"):
             with self.subTest(filesystem=filesystem), tempfile.TemporaryDirectory() as directory:
@@ -546,30 +547,63 @@ bash -c 'printf "EXPORTED|%s\\n" "${ACL_USR_FS-unset}"'
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "uki")
 
-    def test_copied_sdk_entrypoint_keeps_helper_without_source_checkout(self):
+    def test_sdk_entrypoint_loads_helper_from_checkout_and_standalone_image(self):
         dockerfile = (REPO / "sdk_lib/Dockerfile.sdk-import").read_text()
         repository_path = "/mnt/host/source/src/scripts"
         self.assertIn("COPY --chown=sdk:sdk . " + repository_path, dockerfile)
         self.assertIn("COPY --chown=sdk:sdk build_library/usr_filesystem.sh /home/sdk", dockerfile)
         source = (REPO / "sdk_lib/sdk_entry.sh").read_text()
         prefix = source[:source.index('if [ -n "${SDK_USER_ID:-}" ]')]
+        for layout in ("checkout", "standalone"):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                entry = root / ("sdk_lib/sdk_entry.sh" if layout == "checkout"
+                                else "home/sdk/sdk_entry.sh")
+                helper = root / ("build_library/usr_filesystem.sh" if layout == "checkout"
+                                 else "home/sdk/usr_filesystem.sh")
+                entry.parent.mkdir(parents=True)
+                helper.parent.mkdir(parents=True, exist_ok=True)
+                helper.write_text((REPO / "build_library/usr_filesystem.sh").read_text(),
+                                  newline="\n")
+                profile = root / "bashrc"
+                entry.write_text(prefix.replace("/home/sdk/.bashrc", '"$PROFILE"') +
+                                 '\nacl_usr_filesystem\n', newline="\n")
+                for filesystem, bootloader, accepted in (
+                        ("erofs", "uki", True), ("btrfs", "uki", True),
+                        ("invalid", "uki", False), ("", "grub", True),
+                        ("btrfs", "grub", True), ("erofs", "grub", False)):
+                    with self.subTest(filesystem=filesystem, bootloader=bootloader):
+                        profile.write_text("export PACKAGE_SNAPSHOT_TIME=1600000000\n",
+                                           newline="\n")
+                        result = subprocess.run(
+                            [os.environ.get("BASH", "bash"), str(entry)],
+                            env={**os.environ, "ACL_USR_FS": filesystem,
+                                 "BOOTLOADER_MODE": bootloader,
+                                 "PROFILE": profile.as_posix(),
+                                 "PACKAGE_SNAPSHOT_TIME": "1700000000"},
+                            text=True, capture_output=True)
+                        self.assertEqual(result.returncode == 0, accepted,
+                                         result.stderr)
+                        if result.returncode == 0:
+                            self.assertEqual(result.stdout.strip(), filesystem or "erofs")
+                            self.assertEqual(profile.read_text(),
+                                             "export PACKAGE_SNAPSHOT_TIME=1700000000\n")
+
+    def test_sdk_grub_operations_preserve_unselected_filesystem(self):
+        source = (REPO / "run_sdk_container").read_text()
+        start = source.index('export BOOTLOADER_MODE=')
+        prefix = source[start:source.index("\narch=", start)]
         with tempfile.TemporaryDirectory() as directory:
-            copied = Path(directory) / "home/sdk/sdk_entry.sh"
-            copied.parent.mkdir(parents=True)
-            copied.with_name("usr_filesystem.sh").write_text(
-                (REPO / "build_library/usr_filesystem.sh").read_text())
-            missing_repository = (Path(directory) / "missing-checkout").as_posix()
-            copied.write_text(prefix.replace(repository_path, missing_repository) +
-                              '\nacl_usr_filesystem\n')
-            for filesystem in ("erofs", "btrfs", "invalid"):
-                with self.subTest(filesystem=filesystem):
-                    result = subprocess.run(
-                        [os.environ.get("BASH", "bash"), str(copied)],
-                        env={**os.environ, "ACL_USR_FS": filesystem},
-                        text=True, capture_output=True)
-                    self.assertEqual(result.returncode == 0, filesystem != "invalid", result.stderr)
-                    if result.returncode == 0:
-                        self.assertEqual(result.stdout.strip(), filesystem)
+            profile = Path(directory) / "bashrc"
+            profile.write_text("export ACL_USR_FS=erofs\n", newline="\n")
+            result = self.shell(
+                'set -e\n' + prefix +
+                '\nacl_preserve_usr_filesystem "$PROFILE"\n'
+                'source "$PROFILE"\nprintf "%s" "${ACL_USR_FS}"\n',
+                ACL_USR_FS=None, BOOTLOADER_MODE="grub", PROFILE=profile.as_posix())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(profile.read_text(), "export ACL_USR_FS=''\n")
 
     def test_grub_non_image_operations_do_not_select_a_new_usr_filesystem(self):
         source = (REPO / "acl/build_rpm_image.sh").read_text()

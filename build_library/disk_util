@@ -823,14 +823,6 @@ def Update(options):
   """
 
   config, partitions = LoadPartitionConfig(options)
-  if any(p.get('fs_type') == 'erofs' for p in partitions.values()):
-    GetPartitionTableFromImage(options, config, partitions)
-    for part in partitions.values():
-      if part.get('fs_type') == 'erofs':
-        if (part.get('image_fs_type') != 'erofs' or
-            part['first_byte'] != part.get('image_first_byte') or
-            part['bytes'] != part.get('image_bytes')):
-          raise InvalidLayout('Cannot resize or migrate an EROFS /usr in place')
   WritePartitionTable(options, config, partitions)
 
   for part in partitions.values():

@@ -10,7 +10,9 @@ cd $(dirname "$0")
 source sdk_lib/sdk_container_common.sh
 source build_library/usr_filesystem.sh
 export BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
-acl_validate_usr_filesystem
+if [[ -n "${ACL_USR_FS:-}" ]]; then
+    acl_validate_usr_filesystem
+fi
 
 arch="all"
 name=""

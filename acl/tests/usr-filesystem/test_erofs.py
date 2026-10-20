@@ -129,15 +129,20 @@ class ErofsImageTests(unittest.TestCase):
                 disk.Mount(options)
             sudo.assert_not_called()
 
-    def test_resize_rejected_before_gpt_write(self):
-        parts = {"2": dict(fs_type="erofs", image_fs_type="erofs", first_byte=4096,
-                           image_first_byte=4096, bytes=16384, image_bytes=8192)}
-        with patch.object(disk, "LoadPartitionConfig", return_value=({}, parts)), \
-                patch.object(disk, "GetPartitionTableFromImage"), \
-                patch.object(disk, "WritePartitionTable") as write:
-            with self.assertRaisesRegex(disk.InvalidLayout, "Cannot resize"):
-                disk.Update(argparse.Namespace())
-            write.assert_not_called()
+    def test_update_rejects_resize_and_migration_before_gpt_write(self):
+        for compatible, filesystem in ((False, "erofs"), (True, "btrfs")):
+            parts = {"2": dict(label="USR-A", fs_type="erofs",
+                               image_fs_type=filesystem, image_compat=compatible)}
+            config = {"metadata": {"bytes": 16384}}
+            with self.subTest(compatible=compatible, filesystem=filesystem), \
+                    patch.object(disk, "LoadPartitionConfig", return_value=(config, parts)), \
+                    patch.object(disk, "GetPartitionTableFromImage") as probe, \
+                    patch.object(disk.subprocess, "check_call") as cgpt:
+                with self.assertRaises(disk.InvalidLayout):
+                    disk.Update(argparse.Namespace(create=False, disk_image=str(self.image)))
+                probe.assert_called_once()
+                cgpt.assert_not_called()
+                self.assertEqual(self.image.read_bytes(), self.original)
 
     def test_known_formatter_version_and_usage_status_are_required(self):
         with patch.object(disk.subprocess, "run") as run, \
