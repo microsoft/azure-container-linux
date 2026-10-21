@@ -94,6 +94,21 @@ if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
 fi
 log "Using IPE mode '${mode}'."
 
+# Benchmark-image branch only: select logging before SELinux runtime restrictions.
+perf_success_audit=0
+if [[ ",${security_profile:-}," == *",ipe-success-audit="* ]]; then
+    perf_success_audit="$(acl_security_profile_value "${security_profile}" "ipe-success-audit")"
+fi
+case "${perf_success_audit}" in
+    0|1) ;;
+    *) log "ERROR: invalid benchmark ipe-success-audit '${perf_success_audit}'."; exit 1 ;;
+esac
+write_value "${IPE_DIR}/success_audit" "${perf_success_audit}" ||
+    { log "ERROR: could not configure benchmark success auditing."; exit 1; }
+[[ "$(cat "${IPE_DIR}/success_audit")" == "${perf_success_audit}" ]] ||
+    { log "ERROR: benchmark success auditing readback mismatch."; exit 1; }
+log "Benchmark success auditing is ${perf_success_audit}."
+
 case "${mode}" in
     disabled|off)
         log "IPE mode is ${mode}; policy loaded but activation skipped."

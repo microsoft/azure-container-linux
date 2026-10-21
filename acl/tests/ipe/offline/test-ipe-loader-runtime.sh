@@ -32,6 +32,7 @@ prepare_case() {
     mkdir -p "${IPE_DIR}"
     : > "${IPE_DIR}/new_policy"
     printf '9\n' > "${IPE_DIR}/enforce"
+    printf '1\n' > "${IPE_DIR}/success_audit"
     cp "${CONTAINERD_EROFS_PROFILE}" "${CASE_DIR}/containerd-acl-erofs-profile.conf"
 
     command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
@@ -109,6 +110,7 @@ EOF
     [[ -s "${IPE_DIR}/new_policy" ]]
     # enforce should remain unchanged (not set to 0)
     [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
+    [[ "$(<"${IPE_DIR}/success_audit")" == "0" ]]
     [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
 }
 
@@ -123,17 +125,43 @@ test_removed_alias_inactive() {
 # ---- Test: audit activates the policy without enforcement ----
 test_valid_audit_active() {
     run_active_case valid-audit audit
+    run_active_case valid-audit-logging audit 1
+}
+
+test_invalid_perf_logging() {
+    prepare_case invalid-perf-logging
+    make_credential "${CASE_DIR}/credential.p7b.cred"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
+    command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
+acl_security_profile() { printf '%s\n' 'ipe=audit,ipe-success-audit=invalid'; }
+acl_security_profile_value() {
+    case "$2" in ipe) echo audit ;; ipe-success-audit) echo invalid ;; esac
+}
+EOF
+    local output
+    if output="$(run_loader)"; then
+        echo "Invalid benchmark logging unexpectedly accepted" >&2
+        return 1
+    fi
+    grep -Fq "ERROR: invalid benchmark ipe-success-audit 'invalid'." <<< "${output}"
+    [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
+    [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
 }
 
 run_active_case() (
-    local name="$1" imds_mode="$2"
+    local name="$1" imds_mode="$2" logging="${3:-0}"
     prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
     write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
 
     command cat > "${CASE_DIR}/security-profile.sh" <<EOF
-acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
-acl_security_profile_value() { printf '%s\n' '${imds_mode}'; }
+acl_security_profile() { printf '%s\n' 'ipe=${imds_mode},ipe-success-audit=${logging}'; }
+acl_security_profile_value() {
+    case "\$2" in
+        ipe) printf '%s\n' '${imds_mode}' ;;
+        ipe-success-audit) printf '%s\n' '${logging}' ;;
+    esac
+}
 EOF
 
     # Simulate the kernel creating the policy interface when the credential
@@ -154,6 +182,7 @@ EOF
         { echo "loader did not report requested mode '${imds_mode}'" >&2; return 1; }
     [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
     [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
+    [[ "$(<"${IPE_DIR}/success_audit")" == "${logging}" ]]
     cmp "${CASE_DIR}/containerd-acl-erofs-profile.conf" "${CASE_DIR}/dropins/90-acl-profile.conf"
 )
 
@@ -562,6 +591,7 @@ test_valid_inactive_load
 test_valid_disabled_alias_inactive
 test_removed_alias_inactive
 test_valid_audit_active
+test_invalid_perf_logging
 test_enforcing_mode_safe_fallback
 test_duplicate_token
 test_malformed_hash
