@@ -79,7 +79,7 @@ check_usr_denials() {
 }
 
 main() {
-[[ "$(uname -r)" == "6.6.157.1-1.btrfsipe1.azl3" ]] || fail "wrong kernel"
+[[ "$(uname -r)" == "6.6.157.1-1.btrfsipe2.azl3" ]] || fail "wrong kernel"
 [[ "$(getenforce)" == Enforcing ]] || fail "SELinux must be enforcing"
 [[ -x /usr/sbin/auditctl ]] || fail "diagnostic image is missing /usr/sbin/auditctl"
 ipe=/sys/kernel/security/ipe

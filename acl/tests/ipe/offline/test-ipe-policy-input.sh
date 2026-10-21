@@ -182,7 +182,7 @@ test_uki_provision_preserves_unsigned_verity() (
         kernel_version=6.6.145.2
         signature_option=""
         if [[ "${ACL_BTRFS_IPE_DIAGNOSTIC}" == 1 ]]; then
-            kernel_version=6.6.157.1-1.btrfsipe1.azl3
+            kernel_version=6.6.157.1-1.btrfsipe2.azl3
             roothash="${roothash,,}"
             signature_option=",root-hash-signature=/.extra/credentials/verity-usr-${roothash}.p7s.cred"
             bash "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${BUILD_DIR}/acl-ipe-ephemeral"
