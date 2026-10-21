@@ -265,7 +265,7 @@ test_streamed_guest_selects_btrfs_validator() (
     VM_IP=test-vm
     ssh_cmd() {
         case "$*" in
-            "uname -r") printf '%s\n' '6.6.157.1-1.btrfsipe3.azl3' ;;
+            "uname -r") printf '%s\n' '6.6.157.1-1.btrfsipe4.azl3' ;;
             "cat /proc/cmdline") printf '%s\n' 'ipe.success_audit=1 audit_backlog_limit=8192' ;;
             *) echo "Unexpected guest command: $*" >&2; return 1 ;;
         esac
@@ -277,8 +277,8 @@ test_streamed_guest_selects_btrfs_validator() (
     cmp "${payload}" "${SCRIPT_DIR}/acl/tests/ipe/btrfs/run-usr-audit-test.sh"
 )
 
-test_streamed_fastpath_validation() (
-    local payload="${TMPDIR:-/tmp}/ipe-fastpath-payload.$$" mode
+test_streamed_sbdev_validation() (
+    local payload="${TMPDIR:-/tmp}/ipe-sbdev-payload.$$" mode
     trap 'rm -f "${payload}"' EXIT
     VM_SSH_USER=tester
     VM_IP=test-vm
@@ -288,12 +288,12 @@ test_streamed_fastpath_validation() (
         cat > "${payload}"
     }
     for mode in disabled audit; do
-        run_btrfs_fastpath_validation "${mode}"
-        cmp "${payload}" "${SCRIPT_DIR}/acl/tests/ipe/btrfs/run-fastpath-test.sh"
+        run_btrfs_sbdev_validation "${mode}"
+        cmp "${payload}" "${SCRIPT_DIR}/acl/tests/ipe/btrfs/run-sbdev-test.sh"
     done
     is_btrfs_diagnostic() { return 1; }
     ssh() { echo "Unexpected non-diagnostic probe" >&2; exit 1; }
-    run_btrfs_fastpath_validation disabled
+    run_btrfs_sbdev_validation disabled
 )
 
 test_initial_btrfs_audit_isolates_container_history() (
@@ -311,7 +311,7 @@ test_initial_btrfs_audit_isolates_container_history() (
     assert_ipe_mode() { echo "mode:$1" >> "${calls}"; }
     run_audit_validation() { echo audit >> "${calls}"; }
     info() { :; }
-    kernel=6.6.157.1-1.btrfsipe3.azl3
+    kernel=6.6.157.1-1.btrfsipe4.azl3
     cmdline='ipe.success_audit=1 audit_backlog_limit=8192'
     validate_initial_audit_boot
     [[ "$(cat "${calls}")" == $'assets:1\nreboot\nmode:audit\nassets:1\naudit' ]]
@@ -320,7 +320,7 @@ test_initial_btrfs_audit_isolates_container_history() (
     validate_initial_audit_boot
     [[ "$(cat "${calls}")" == $'assets:1\naudit' ]]
     : > "${calls}"
-    kernel=6.6.157.1-1.btrfsipe3.azl3
+    kernel=6.6.157.1-1.btrfsipe4.azl3
     cmdline=''
     validate_initial_audit_boot
     [[ "$(cat "${calls}")" == $'assets:1\naudit' ]]
@@ -465,7 +465,7 @@ test_probe_denial_correlation
 test_host_imds_matches_guest_parser
 test_streamed_guest_contains_cmdline_parser
 test_streamed_guest_selects_btrfs_validator
-test_streamed_fastpath_validation
+test_streamed_sbdev_validation
 test_initial_btrfs_audit_isolates_container_history
 test_copied_guest_script_needs_no_sibling_file
 test_audit_fallback_restores_containerd

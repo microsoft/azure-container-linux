@@ -109,7 +109,7 @@ uki_provision_rpm() {
         die "UKI/RPM: Kernel not found on ESP (tried ${ESP_DIR}/vmlinuz-* and ${ESP_DIR}/flatcar/vmlinuz-a)"
     fi
     if [[ "${ACL_BTRFS_IPE_DIAGNOSTIC:-0}" == "1" ]]; then
-        [[ "$(basename "${kernel}")" == "vmlinuz-6.6.157.1-1.btrfsipe3.azl3" &&
+        [[ "$(basename "${kernel}")" == "vmlinuz-6.6.157.1-1.btrfsipe4.azl3" &&
            "${IPE_CAPABLE}" == "true" && "${ACL_IPE_SIGNING_MODE:-ephemeral}" == "ephemeral" ]] ||
             die "UKI/RPM: Btrfs diagnostics require the stable buddy kernel, IPE assets and ephemeral signing"
     fi

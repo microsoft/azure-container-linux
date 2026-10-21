@@ -128,7 +128,7 @@ assert_ipe_assets_present() {
 }
 
 is_btrfs_diagnostic() {
-    [[ "$(ssh_cmd 'uname -r')" == "6.6.157.1-1.btrfsipe3.azl3" ]] &&
+    [[ "$(ssh_cmd 'uname -r')" == "6.6.157.1-1.btrfsipe4.azl3" ]] &&
         [[ " $(ssh_cmd 'cat /proc/cmdline') " == *" ipe.success_audit=1 "* ]]
 }
 
@@ -142,12 +142,12 @@ run_audit_validation() {
         < "${test_script}"
 }
 
-run_btrfs_fastpath_validation() {
+run_btrfs_sbdev_validation() {
     local expected="$1"
     if is_btrfs_diagnostic; then
         ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
             "sudo bash -s -- '${expected}'" \
-            < "${SCRIPT_DIR}/acl/tests/ipe/btrfs/run-fastpath-test.sh"
+            < "${SCRIPT_DIR}/acl/tests/ipe/btrfs/run-sbdev-test.sh"
     fi
 }
 
@@ -265,7 +265,7 @@ main() {
     assert_ipe_mode "off"
     assert_ipe_assets_present
 
-    run_btrfs_fastpath_validation disabled
+    run_btrfs_sbdev_validation disabled
 
     section "Step 2: Verify the reserved 'enforcing' value is rejected and never activates"
     set_security_profile_key_and_reboot "ipe" "enforcing"
@@ -278,7 +278,7 @@ main() {
     assert_ipe_mode "audit"
     assert_ipe_assets_present 1
     run_audit_validation
-    run_btrfs_fastpath_validation audit
+    run_btrfs_sbdev_validation audit
 
     info "Verifying containerd base fallback while IPE remains in audit mode"
     run_audit_fallback_validation
