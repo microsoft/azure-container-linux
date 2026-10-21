@@ -192,6 +192,35 @@ conversion rejects active UKI addons (including the optional
 `EXTRA_KERNEL_CMDLINE` debug addon) that supply another
 `acl.ipe.policy_sha256` token.
 
+**Optional signed `/usr` root hash**
+
+Add `--usr-signature-mode=required` (or set `ACL_USR_SIGNATURE_MODE=required`)
+to an IPE-capable UKI build. The default is `disabled`; GRUB and IPE-disabled
+builds cannot opt in. For example:
+
+```bash
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit \
+  --ipe-signing-mode=ephemeral --usr-signature-mode=required
+```
+
+The build places a detached CMS signature in
+`<kernel>.efi.extra.d/verity-usr-<hash>.p7s.cred` on the ESP. Both slot
+templates reference it through `root-hash-signature=`; systemd-stub delivers
+the credential to the initrd. The `usr-signature-mode` artifact marker
+preserves this intent through conversion and hydration.
+
+On opted-in images, missing or invalid signatures prevent normal boot of
+that entry, even when runtime IPE is off or IMDS is unavailable. This does
+not change best-effort IPE policy loading or protect ESP files from deletion.
+Do not enable `dm_verity.require_signatures=1`: Trident's temporary update
+mapping does not consume this boot credential.
+
+Keep this opt-in disabled on release paths until kernel signer trust,
+signed boot and A/B update/rollback are qualified on both architectures.
+ESRP A/B tests must use the final signed COSI from publisher definition 5425,
+not the earlier candidate COSI. Customizing `/usr` requires regenerating and
+re-signing its root hash and matching boot assets.
+
 IPE activation triggers a containerd systemd drop-in that imports
 a base config (AgentBaker's on AKS nodes) merged with
 `/usr/share/containerd/acl-erofs.toml`, which selects EROFS as the CRI

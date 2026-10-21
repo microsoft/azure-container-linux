@@ -203,6 +203,13 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]
     else
         printf '%s\n' "${ipe_signing_mode}" > "$(_dst_dir)/ipe-signing-mode"
     fi
+    usr_signature_mode="$(ipe_read_usr_signature_mode "${FLAGS_from}")" ||
+        die_notrace "Invalid /usr signature metadata"
+    if [[ "${usr_signature_mode}" == "required" ]]; then
+        printf 'required\n' > "$(_dst_dir)/usr-signature-mode"
+    else
+        rm -f "$(_dst_dir)/usr-signature-mode"
+    fi
 fi
 
 # Changes done, glue it together

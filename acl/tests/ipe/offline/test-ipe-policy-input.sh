@@ -142,10 +142,16 @@ test_uki_provision_preserves_unsigned_verity() (
     local uki_name="vmlinuz-6.6.145.2.efi"
     local roothash="000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
     FLAGS_TRUE=0
-    for scenario in x64:false x64:true aa64:false aa64:true; do
+    for scenario in x64:false x64:true aa64:false aa64:true x64:required aa64:required; do
         EFI_ARCH="${scenario%:*}"
         capable="${scenario#*:}"
-        prepare_case "uki-${EFI_ARCH}-${capable}"
+        ACL_USR_SIGNATURE_MODE=disabled
+        if [[ "${capable}" == "required" ]]; then
+            capable=true
+            ACL_USR_SIGNATURE_MODE=required
+            roothash="${roothash,,}"
+        fi
+        prepare_case "uki-${scenario//:/-}"
         IPE_CAPABLE="${capable}"
         BOARD_ROOT="${CASE_ROOT}/board"
         FLAGS_disk_image="${BUILD_DIR}/image.bin"
@@ -174,6 +180,10 @@ test_uki_provision_preserves_unsigned_verity() (
         fi
         [[ "${failure}" == *"Verity enabled but no hash file"* ]]
         printf '%s\n' "${roothash}" > "${FLAGS_verity_hash}"
+        if [[ "${ACL_USR_SIGNATURE_MODE}" == "required" ]]; then
+            bash "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" \
+                "${BUILD_DIR}/acl-ipe-ephemeral" create
+        fi
         if [[ "${capable}" == "true" ]]; then
             FLAGS_verity=1
             if failure="$(uki_provision_rpm "${esp}" 2>&1)"; then
@@ -207,7 +217,15 @@ test_uki_provision_preserves_unsigned_verity() (
             hash_uuid="$(jq -r --arg label "HASH-${slot^^}" \
                 '.layouts.base[] | select(.label == $label) | .uuid' \
                 "${BUILD_LIBRARY_DIR}/disk_layout_uki.json")"
-            [[ "${addon_cmdline}" == "systemd.verity_usr_data=PARTUUID=${data_uuid} systemd.verity_usr_hash=PARTUUID=${hash_uuid} systemd.verity_usr_options=panic-on-corruption usrhash=${roothash} acl.slot=${slot}" ]]
+            local signature_option=""
+            if [[ "${ACL_USR_SIGNATURE_MODE}" == "required" ]]; then
+                signature_option=",root-hash-signature=/.extra/credentials/verity-usr-${roothash}.p7s.cred"
+                [[ -s "${extra}/verity-usr-${roothash}.p7s.cred" ]]
+                [[ "$(<"${BUILD_DIR}/usr-signature-mode")" == required ]]
+            else
+                [[ ! -e "${BUILD_DIR}/usr-signature-mode" ]]
+            fi
+            [[ "${addon_cmdline}" == "systemd.verity_usr_data=PARTUUID=${data_uuid} systemd.verity_usr_hash=PARTUUID=${hash_uuid} systemd.verity_usr_options=panic-on-corruption${signature_option} usrhash=${roothash} acl.slot=${slot}" ]]
             cmp "${BUILD_DIR}/slot-${slot}.addon.efi.cmdline" \
                 "${esp}/acl/uki-addons/slot-${slot}.addon.efi"
         done
@@ -528,6 +546,8 @@ test_markerless_secure_boot_cert_remains_disabled() {
     mkdir -p "${BUILD_DIR}/acl-ipe-ephemeral"
     printf 'test-cert\n' > "${BUILD_DIR}/acl-ipe-ephemeral/uki-signing-ca.pem"
     IPE_MODE_OVERRIDE_SET=false
+    USR_SIGNATURE_MODE_OVERRIDE_SET=false
+    ACL_USR_SIGNATURE_MODE=disabled
     ACL_IPE_MODE=audit
     ACL_IPE_SIGNING_MODE=ephemeral
 

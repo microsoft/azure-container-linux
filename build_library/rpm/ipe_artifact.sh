@@ -1,6 +1,19 @@
 #!/bin/bash
 # Sourced helpers for IPE artifact metadata and local Azure launch validation.
 
+ipe_read_usr_signature_mode() {
+    local marker="$1/usr-signature-mode"
+    if [[ ! -e "${marker}" && ! -L "${marker}" ]]; then
+        printf '%s\n' disabled
+    elif [[ -f "${marker}" && ! -L "${marker}" ]] &&
+        cmp -s -- "${marker}" <(printf 'required\n'); then
+        printf '%s\n' required
+    else
+        echo "Invalid /usr signature marker: ${marker}" >&2
+        return 1
+    fi
+}
+
 ipe_read_signing_mode() {
     local marker="$1"
 

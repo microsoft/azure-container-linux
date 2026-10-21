@@ -40,6 +40,10 @@ case "${IPE_CAPABLE}" in
         die_notrace "ACL_IPE_CAPABLE must be true or false (got: ${IPE_CAPABLE})"
         ;;
 esac
+case "${ACL_USR_SIGNATURE_MODE:-disabled}:${IPE_CAPABLE}" in
+    disabled:*|required:true) ;;
+    *) die_notrace "Required /usr signatures need an IPE-capable UKI build" ;;
+esac
 
 # Determine EFI architecture suffix
 case "${FLAGS_target}" in
@@ -586,6 +590,33 @@ _uki_build_verity_addons() {
     local verity_temp_dir
     verity_temp_dir=$(mktemp -d)
 
+    local signature_option=""
+    local artifact_dir
+    artifact_dir="$(dirname "$(readlink -f "${FLAGS_disk_image}")")"
+    if [[ "${ACL_USR_SIGNATURE_MODE:-disabled}" == "required" ]]; then
+        [[ "${usr_hash}" =~ ^[0-9a-f]{64}$ ]] ||
+            die "Signed /usr requires a canonical lowercase root hash"
+        local cert_dir="${artifact_dir}/acl-ipe-ephemeral"
+        local signature_name="verity-usr-${usr_hash}.p7s.cred"
+        printf '%s' "${usr_hash}" > "${verity_temp_dir}/root.hash"
+        "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" require ||
+            die "Missing /usr signing material"
+        openssl cms -sign -binary -noattr -md sha256 \
+            -in "${verity_temp_dir}/root.hash" \
+            -signer "${cert_dir}/uki-signing-ca.pem" -inkey "${cert_dir}/ca.key" \
+            -outform DER -out "${verity_temp_dir}/${signature_name}" ||
+            die "Failed to sign /usr root hash"
+        openssl cms -verify -binary -inform DER \
+            -in "${verity_temp_dir}/${signature_name}" \
+            -content "${verity_temp_dir}/root.hash" \
+            -nointern -certfile "${cert_dir}/uki-signing-ca.pem" -noverify \
+            -out /dev/null || die "Invalid /usr signature candidate"
+        sudo mkdir -p "${esp_dir}/EFI/Linux/${uki_name}.extra.d"
+        sudo cp "${verity_temp_dir}/${signature_name}" \
+            "${esp_dir}/EFI/Linux/${uki_name}.extra.d/${signature_name}"
+        signature_option=",root-hash-signature=/.extra/credentials/${signature_name}"
+    fi
+
     local template_dir="${esp_dir}/acl/uki-addons"
     sudo mkdir -p "${template_dir}"
 
@@ -606,6 +637,7 @@ _uki_build_verity_addons() {
         cmdline="systemd.verity_usr_data=PARTUUID=${data_uuid}"
         cmdline+=" systemd.verity_usr_hash=PARTUUID=${hash_uuid}"
         cmdline+=" systemd.verity_usr_options=panic-on-corruption"
+        cmdline+="${signature_option}"
         cmdline+=" usrhash=${usr_hash}"
         cmdline+=" acl.slot=${slot}"
 
@@ -639,6 +671,11 @@ _uki_build_verity_addons() {
     sudo mkdir -p "${addon_dir}"
     sudo cp "${template_dir}/slot-a.addon.efi" "${addon_dir}/slot-a.addon.efi"
     info "UKI/RPM: Activated slot A → EFI/Linux/${uki_name}.extra.d/slot-a.addon.efi"
+    if [[ -n "${signature_option}" ]]; then
+        printf 'required\n' > "${artifact_dir}/usr-signature-mode"
+    else
+        rm -f "${artifact_dir}/usr-signature-mode"
+    fi
 
     # NOTE: Both slot templates are built with the same root hash at image
     # build time.  Trident overwrites the active addon (and its root hash)

@@ -72,6 +72,9 @@ test_mode_forwarded() {
                 { echo "IPE signing mode ${signing} was not forwarded" >&2; return 1; }
         done
     done
+    ACL_USR_SIGNATURE_MODE=required run_container audit ephemeral "${log}"
+    grep -Fq $'\t-e\tACL_USR_SIGNATURE_MODE=required\t' "${log}" ||
+        { echo "/usr signature mode was not forwarded" >&2; return 1; }
 }
 
 test_invalid_mode_rejected() {
