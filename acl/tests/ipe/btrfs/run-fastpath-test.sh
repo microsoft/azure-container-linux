@@ -4,7 +4,7 @@ fail() { echo "FAILED: $*" >&2; exit 1; }
 
 expected="${1:?expected disabled or audit}"
 [[ "$expected" == disabled || "$expected" == audit ]] || fail "invalid mode"
-[[ "$(uname -r)" == "6.6.157.1-1.btrfsipe2.azl3" ]] || fail "wrong kernel"
+[[ "$(uname -r)" == "6.6.157.1-1.btrfsipe3.azl3" ]] || fail "wrong kernel"
 [[ "$(getenforce)" == Enforcing ]] || fail "SELinux must remain enforcing"
 ipe=/sys/kernel/security/ipe
 shopt -s nullglob
