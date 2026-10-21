@@ -170,19 +170,20 @@ test_uki_provision_preserves_unsigned_verity() (
         cp "${cmdline}" "${output}"
     }
 
-    local scenario capable esp extra cmdline policy_hash failure
+    local scenario capable esp extra cmdline policy_hash failure variant
     local slot addon_cmdline data_uuid hash_uuid
     local uki_name kernel_version signature_option
     local roothash="000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
     FLAGS_TRUE=0
     for scenario in x64:false:0 x64:true:0 aa64:false:0 aa64:true:0 \
-                    x64:true:1 aa64:true:1; do
-        IFS=: read -r EFI_ARCH capable ACL_BTRFS_IPE_DIAGNOSTIC <<< "${scenario}"
-        prepare_case "uki-${EFI_ARCH}-${capable}-${ACL_BTRFS_IPE_DIAGNOSTIC}"
+                    x64:true:1 aa64:true:1 x64:true:1:control; do
+        IFS=: read -r EFI_ARCH capable ACL_BTRFS_IPE_DIAGNOSTIC variant <<< "${scenario}"
+        prepare_case "uki-${EFI_ARCH}-${capable}-${ACL_BTRFS_IPE_DIAGNOSTIC}-${variant:-patched}"
         kernel_version=6.6.145.2
         signature_option=""
         if [[ "${ACL_BTRFS_IPE_DIAGNOSTIC}" == 1 ]]; then
             kernel_version=6.6.157.1-1.btrfsipe3.azl3
+            [[ "${variant}" != control ]] || kernel_version=6.6.157.1-1.azl3
             roothash="${roothash,,}"
             signature_option=",root-hash-signature=/.extra/credentials/verity-usr-${roothash}.p7s.cred"
             bash "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${BUILD_DIR}/acl-ipe-ephemeral"
@@ -212,7 +213,7 @@ test_uki_provision_preserves_unsigned_verity() (
         if [[ "${ACL_BTRFS_IPE_DIAGNOSTIC}" == 1 ]]; then
             mv "${esp}/vmlinuz-${kernel_version}" "${esp}/vmlinuz-stock"
             if failure="$(uki_provision_rpm "${esp}" 2>&1)"; then
-                echo "Btrfs diagnostics accepted a stock kernel" >&2
+                echo "Btrfs diagnostics accepted an unexpected kernel" >&2
                 return 1
             fi
             [[ "${failure}" == *"Btrfs diagnostics require the stable buddy kernel"* ]]

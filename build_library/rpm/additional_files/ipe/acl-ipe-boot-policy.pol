@@ -3,5 +3,7 @@ policy_name=acl_ipe_boot_policy policy_version=0.0.1
 DEFAULT action=ALLOW
 
 DEFAULT op=EXECUTE action=DENY
+# Benchmark-only: make both kernels take the same allow rule. Not a security policy.
+op=EXECUTE action=ALLOW
 op=EXECUTE boot_verified=TRUE action=ALLOW
 op=EXECUTE dmverity_signature=TRUE action=ALLOW
