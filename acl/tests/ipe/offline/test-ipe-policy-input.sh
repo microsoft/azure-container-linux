@@ -145,10 +145,10 @@ test_uki_provision_preserves_unsigned_verity() (
     for scenario in x64:false x64:true aa64:false aa64:true x64:required aa64:required; do
         EFI_ARCH="${scenario%:*}"
         capable="${scenario#*:}"
-        ACL_USR_SIGNATURE_MODE=disabled
+        ACL_ROOT_HASH_SIGNING_ENABLED=false
         if [[ "${capable}" == "required" ]]; then
             capable=true
-            ACL_USR_SIGNATURE_MODE=required
+            ACL_ROOT_HASH_SIGNING_ENABLED=true
             roothash="${roothash,,}"
         fi
         prepare_case "uki-${scenario//:/-}"
@@ -180,7 +180,7 @@ test_uki_provision_preserves_unsigned_verity() (
         fi
         [[ "${failure}" == *"Verity enabled but no hash file"* ]]
         printf '%s\n' "${roothash}" > "${FLAGS_verity_hash}"
-        if [[ "${ACL_USR_SIGNATURE_MODE}" == "required" ]]; then
+        if [[ "${ACL_ROOT_HASH_SIGNING_ENABLED}" == "true" ]]; then
             bash "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" \
                 "${BUILD_DIR}/acl-ipe-ephemeral" create
         fi
@@ -218,7 +218,7 @@ test_uki_provision_preserves_unsigned_verity() (
                 '.layouts.base[] | select(.label == $label) | .uuid' \
                 "${BUILD_LIBRARY_DIR}/disk_layout_uki.json")"
             local signature_option=""
-            if [[ "${ACL_USR_SIGNATURE_MODE}" == "required" ]]; then
+            if [[ "${ACL_ROOT_HASH_SIGNING_ENABLED}" == "true" ]]; then
                 signature_option=",root-hash-signature=/.extra/credentials/verity-usr-${roothash}.p7s.cred"
                 [[ -s "${extra}/verity-usr-${roothash}.p7s.cred" ]]
                 [[ "$(<"${BUILD_DIR}/usr-signature-mode")" == required ]]
@@ -536,6 +536,43 @@ test_incomplete_or_mismatched_cert_pair_rejected() {
     fi
 }
 
+test_root_hash_signing_boolean_and_hydration() (
+    source_test_functions "${SCRIPT_DIR}/acl/build_rpm_image.sh" \
+        validate_ipe_mode_value configure_ipe_mode load_artifact_ipe_signing_mode
+    error() { echo "$*" >&2; }
+    ACL_IPE_MODE=audit
+    ACL_IPE_SIGNING_MODE=ephemeral
+    ACL_ROOT_HASH_SIGNING_ENABLED=true
+    configure_ipe_mode
+    ACL_ROOT_HASH_SIGNING_ENABLED=required
+    if configure_ipe_mode 2>/dev/null; then
+        echo "non-boolean root signing value was accepted" >&2
+        return 1
+    fi
+    ACL_ROOT_HASH_SIGNING_ENABLED=true
+    ACL_IPE_MODE=disabled
+    if configure_ipe_mode 2>/dev/null; then
+        echo "root signing without IPE capability was accepted" >&2
+        return 1
+    fi
+
+    prepare_case root-signing-hydration
+    printf 'ephemeral\n' > "${BUILD_DIR}/ipe-signing-mode"
+    printf 'required\n' > "${BUILD_DIR}/usr-signature-mode"
+    IPE_MODE_OVERRIDE_SET=false
+    IPE_SIGNING_MODE_OVERRIDE_SET=false
+    ROOT_HASH_SIGNING_OVERRIDE_SET=false
+    ACL_ROOT_HASH_SIGNING_ENABLED=false
+    load_artifact_ipe_signing_mode "${BUILD_DIR}"
+    [[ "${ACL_ROOT_HASH_SIGNING_ENABLED}" == true ]]
+    ROOT_HASH_SIGNING_OVERRIDE_SET=true
+    ACL_ROOT_HASH_SIGNING_ENABLED=false
+    if load_artifact_ipe_signing_mode "${BUILD_DIR}" 2>/dev/null; then
+        echo "explicit false downgraded a required source image" >&2
+        return 1
+    fi
+)
+
 test_markerless_secure_boot_cert_remains_disabled() {
     local build_script="${SCRIPT_DIR}/acl/build_rpm_image.sh"
     source_test_functions "${build_script}" load_artifact_ipe_signing_mode
@@ -546,8 +583,8 @@ test_markerless_secure_boot_cert_remains_disabled() {
     mkdir -p "${BUILD_DIR}/acl-ipe-ephemeral"
     printf 'test-cert\n' > "${BUILD_DIR}/acl-ipe-ephemeral/uki-signing-ca.pem"
     IPE_MODE_OVERRIDE_SET=false
-    USR_SIGNATURE_MODE_OVERRIDE_SET=false
-    ACL_USR_SIGNATURE_MODE=disabled
+    ROOT_HASH_SIGNING_OVERRIDE_SET=false
+    ACL_ROOT_HASH_SIGNING_ENABLED=false
     ACL_IPE_MODE=audit
     ACL_IPE_SIGNING_MODE=ephemeral
 
@@ -616,6 +653,7 @@ test_vm_conversions_share_secure_boot_cert
 test_disabled_vm_signing_is_scoped_to_build
 test_markerless_ipe_assets_are_rejected
 test_incomplete_or_mismatched_cert_pair_rejected
+test_root_hash_signing_boolean_and_hydration
 test_markerless_secure_boot_cert_remains_disabled
 test_pure_vm_reuse_skips_local_artifact
 test_reused_vm_type_loaded_from_state

@@ -144,12 +144,12 @@ case "${ACL_IPE_SIGNING_MODE}" in
         exit 1
         ;;
 esac
-ACL_USR_SIGNATURE_MODE="${ACL_USR_SIGNATURE_MODE:-disabled}"
-case "${ACL_USR_SIGNATURE_MODE}:${ACL_IPE_CAPABLE}:${BOOTLOADER_MODE:-uki}" in
-    disabled:*) ;;
-    required:true:uki) ;;
+ACL_ROOT_HASH_SIGNING_ENABLED="${ACL_ROOT_HASH_SIGNING_ENABLED:-false}"
+case "${ACL_ROOT_HASH_SIGNING_ENABLED}:${ACL_IPE_CAPABLE}:${BOOTLOADER_MODE:-uki}" in
+    false:*) ;;
+    true:true:uki) ;;
     *)
-        echo "ERROR: /usr signature mode must be disabled or required on an IPE-capable UKI build" >&2
+        echo "ERROR: ACL_ROOT_HASH_SIGNING_ENABLED must be false, or true on an IPE-capable UKI build" >&2
         exit 1
         ;;
 esac
@@ -157,12 +157,12 @@ sed -i \
     -e '/export ACL_IPE_MODE=/d' \
     -e '/export ACL_IPE_SIGNING_MODE=/d' \
     -e '/export ACL_IPE_CAPABLE=/d' \
-    -e '/export ACL_USR_SIGNATURE_MODE=/d' \
+    -e '/export ACL_ROOT_HASH_SIGNING_ENABLED=/d' \
     /home/sdk/.bashrc 2>/dev/null || true
 echo "export ACL_IPE_MODE='${ACL_IPE_MODE}'" >> /home/sdk/.bashrc
 echo "export ACL_IPE_SIGNING_MODE='${ACL_IPE_SIGNING_MODE}'" >> /home/sdk/.bashrc
 echo "export ACL_IPE_CAPABLE='${ACL_IPE_CAPABLE}'" >> /home/sdk/.bashrc
-echo "export ACL_USR_SIGNATURE_MODE='${ACL_USR_SIGNATURE_MODE}'" >> /home/sdk/.bashrc
+echo "export ACL_ROOT_HASH_SIGNING_ENABLED='${ACL_ROOT_HASH_SIGNING_ENABLED}'" >> /home/sdk/.bashrc
 
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"

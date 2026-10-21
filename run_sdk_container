@@ -212,5 +212,5 @@ call_docker exec "${tty[@]}" -i \
     -e PACKAGE_SNAPSHOT_TIME="${PACKAGE_SNAPSHOT_TIME:-}" \
     -e ACL_IPE_MODE="${ACL_IPE_MODE}" \
     -e ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE}" \
-    -e ACL_USR_SIGNATURE_MODE="${ACL_USR_SIGNATURE_MODE:-disabled}" \
+    -e ACL_ROOT_HASH_SIGNING_ENABLED="${ACL_ROOT_HASH_SIGNING_ENABLED:-false}" \
     "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"
