@@ -34,13 +34,15 @@ switch_to_strict_mode
 . "${BUILD_LIBRARY_DIR}/board_options.sh"  || exit 1
 
 IPE_CAPABLE="${ACL_IPE_CAPABLE:-false}"
+ROOT_HASH_SIGNING_ENABLED="${ACL_ROOT_HASH_SIGNING_ENABLED:-false}"
 case "${IPE_CAPABLE}" in
     true|false) ;;
     *)
         die_notrace "ACL_IPE_CAPABLE must be true or false (got: ${IPE_CAPABLE})"
         ;;
 esac
-case "${ACL_ROOT_HASH_SIGNING_ENABLED:-false}:${IPE_CAPABLE}" in
+# Accept only true/false; signing requires an IPE-capable UKI build.
+case "${ROOT_HASH_SIGNING_ENABLED}:${IPE_CAPABLE}" in
     false:*|true:true) ;;
     *) die_notrace "Required /usr signatures need an IPE-capable UKI build" ;;
 esac
@@ -593,7 +595,7 @@ _uki_build_verity_addons() {
     local signature_option=""
     local artifact_dir
     artifact_dir="$(dirname "$(readlink -f "${FLAGS_disk_image}")")"
-    if [[ "${ACL_ROOT_HASH_SIGNING_ENABLED:-false}" == "true" ]]; then
+    if [[ "${ROOT_HASH_SIGNING_ENABLED}" == "true" ]]; then
         [[ "${usr_hash}" =~ ^[0-9a-f]{64}$ ]] ||
             die "Signed /usr requires a canonical lowercase root hash"
         local cert_dir="${artifact_dir}/acl-ipe-ephemeral"

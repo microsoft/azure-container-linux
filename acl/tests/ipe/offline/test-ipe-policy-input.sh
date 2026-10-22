@@ -145,10 +145,10 @@ test_uki_provision_preserves_unsigned_verity() (
     for scenario in x64:false x64:true aa64:false aa64:true x64:required aa64:required; do
         EFI_ARCH="${scenario%:*}"
         capable="${scenario#*:}"
-        ACL_ROOT_HASH_SIGNING_ENABLED=false
+        ROOT_HASH_SIGNING_ENABLED=false
         if [[ "${capable}" == "required" ]]; then
             capable=true
-            ACL_ROOT_HASH_SIGNING_ENABLED=true
+            ROOT_HASH_SIGNING_ENABLED=true
             roothash="${roothash,,}"
         fi
         prepare_case "uki-${scenario//:/-}"
@@ -180,7 +180,7 @@ test_uki_provision_preserves_unsigned_verity() (
         fi
         [[ "${failure}" == *"Verity enabled but no hash file"* ]]
         printf '%s\n' "${roothash}" > "${FLAGS_verity_hash}"
-        if [[ "${ACL_ROOT_HASH_SIGNING_ENABLED}" == "true" ]]; then
+        if [[ "${ROOT_HASH_SIGNING_ENABLED}" == "true" ]]; then
             bash "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" \
                 "${BUILD_DIR}/acl-ipe-ephemeral" create
         fi
@@ -218,7 +218,7 @@ test_uki_provision_preserves_unsigned_verity() (
                 '.layouts.base[] | select(.label == $label) | .uuid' \
                 "${BUILD_LIBRARY_DIR}/disk_layout_uki.json")"
             local signature_option=""
-            if [[ "${ACL_ROOT_HASH_SIGNING_ENABLED}" == "true" ]]; then
+            if [[ "${ROOT_HASH_SIGNING_ENABLED}" == "true" ]]; then
                 signature_option=",root-hash-signature=/.extra/credentials/verity-usr-${roothash}.p7s.cred"
                 [[ -s "${extra}/verity-usr-${roothash}.p7s.cred" ]]
                 [[ "$(<"${BUILD_DIR}/usr-signature-mode")" == required ]]
