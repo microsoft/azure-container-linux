@@ -15,6 +15,7 @@ CERT="${CERT_DIR}/uki-signing-ca.pem"
 STAGED_POLICY="${ARTIFACT_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred"
 source "$(dirname "${BASH_SOURCE[0]}")/ipe_artifact.sh"
 usr_signature_mode="$(ipe_read_usr_signature_mode "${ARTIFACT_DIR}")"
+ipe_validate_usr_signature_assets "${usr_signature_mode}" "${ESP_DIR}"
 
 verify_attached_cms() {
     local signature="$1"

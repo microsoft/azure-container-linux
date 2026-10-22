@@ -165,6 +165,8 @@ validate_ipe_marker_consistency() {
         echo "IPE assets are present without a valid ipe-signing-mode marker" >&2
         return 1
     fi
+    ipe_validate_usr_signature_assets "${usr_signature_mode}" "${esp_dir}" ||
+        return 1
     printf '%s\n' "${signing_mode}"
 }
 

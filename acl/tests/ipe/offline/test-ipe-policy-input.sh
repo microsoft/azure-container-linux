@@ -421,6 +421,82 @@ test_required_usr_signature_continuity() (
     reject_required "signature for another root hash" "Invalid /usr signature candidate"
     cp "${TEST_DIR}/original-usr.cred" "${credential}"
     verify_required
+
+    rm "${artifact_dir}/usr-signature-mode"
+    reject_required "signed assets without marker" "Signed /usr assets require usr-signature-mode=required"
+    printf 'corrupt\n' > "${credential}"
+    reject_required "corrupt credential without marker" "Signed /usr assets require usr-signature-mode=required"
+    rm "${credential}"
+    reject_required "missing credential without marker" "Signed /usr assets require usr-signature-mode=required"
+    cp "${TEST_DIR}/original-usr.cred" "${credential}"
+    printf 'required\n' > "${artifact_dir}/usr-signature-mode"
+    verify_required
+)
+
+test_markerless_usr_signature_assets() (
+    source_test_functions "${SCRIPT_DIR}/image_to_vm.sh" \
+        has_ipe_assets validate_ipe_marker_consistency
+    local artifact_dir="${TEST_DIR}/usr-markerless-artifact"
+    local esp_dir="${TEST_DIR}/usr-markerless-esp"
+    local hash unsigned asset mode failure credential signed
+    local -a assets
+    hash="$(printf '%064d' 1)"
+    unsigned="usrhash=${hash} systemd.verity_usr_options=panic-on-corruption"
+    assets=("${esp_dir}/EFI/Linux/acl.efi"
+        "${esp_dir}/EFI/Linux/other.efi"
+        "${esp_dir}/EFI/Linux/acl.efi.extra.d/slot-a.addon.efi"
+        "${esp_dir}/EFI/Linux/acl.efi.extra.d/slot-b.addon.efi"
+        "${esp_dir}/loader/addons/global.addon.efi"
+        "${esp_dir}/acl/uki-addons/slot-a.addon.efi"
+        "${esp_dir}/acl/uki-addons/slot-b.addon.efi")
+    credential="${esp_dir}/EFI/Linux/acl.efi.extra.d/verity-usr-${hash}.p7s.cred"
+    mkdir -p "${artifact_dir}"
+    for asset in "${assets[@]}"; do
+        mkdir -p "${asset%/*}"
+        write_test_uki "${asset}" "${unsigned}"
+    done
+    reject_markerless() {
+        if failure="$(validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}" 2>&1)"; then
+            echo "Accepted markerless signed /usr asset: $1" >&2
+            return 1
+        fi
+        [[ "${failure}" == *"Signed /usr assets require usr-signature-mode=required"* ]] || {
+            echo "Unexpected markerless asset failure: ${failure}" >&2
+            return 1
+        }
+    }
+    for mode in disabled ephemeral esrp; do
+        if [[ "${mode}" != disabled ]]; then
+            printf '%s\n' "${mode}" > "${artifact_dir}/ipe-signing-mode"
+        fi
+        [[ "$(validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}")" == "${mode}" ]]
+        for asset in "${assets[@]}"; do
+            write_test_uki "${asset}" "${unsigned},root-hash-signature=/.extra/credentials/verity-usr-${hash}.p7s.cred"
+            reject_markerless "${asset}"
+            write_test_uki "${asset}" "${unsigned}"
+        done
+        : > "${credential}"
+        reject_markerless "orphan empty credential"
+        rm "${credential}"
+        ln -s missing-credential "${credential}"
+        reject_markerless "orphan dangling credential symlink"
+        rm "${credential}"
+        [[ "$(validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}")" == "${mode}" ]]
+    done
+    for signed in \
+        'systemd.verity-usr-options=panic-on-corruption,root-hash-signature=/missing' \
+        '"root-hash-signature=/missing"' \
+        $'quiet\rroot-hash-signature=/missing'; do
+        write_test_uki "${assets[0]}" "${unsigned} ${signed}"
+        reject_markerless "${signed}"
+    done
+    write_test_uki "${assets[0]}" "${unsigned}"
+    : > "${assets[0]}.invalid-json"
+    if failure="$(validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}" 2>&1)"; then
+        echo "Failed EFI inspection was treated as unsigned" >&2
+        return 1
+    fi
+    [[ "${failure}" == *"Cannot inspect /usr signature state"* ]]
 )
 
 test_vm_conversions_share_secure_boot_cert() {
@@ -591,6 +667,7 @@ test_vm_conversions_share_secure_boot_cert() {
         echo "matching but unrelated signer pair was accepted" >&2
         return 1
     fi
+    test_markerless_usr_signature_assets
     test_required_usr_signature_continuity \
         "${cert_dir}" "${other_cert_dir}" "${artifact_dir}" "${esp_dir}" "${token}"
     printf 'invalid policy credential\n' > "${extra_dir}/acl-ipe-policy.p7b.cred"
@@ -752,6 +829,16 @@ SH
         return 1
     fi
     [[ "${output}" == *"Required /usr signatures need a valid ipe-signing-mode marker"* ]]
+    [[ ! -e "${fixture}/signing-actions" && ! -e "${fixture}/output/usr-signature-mode" ]]
+
+    rm "${fixture}/input/usr-signature-mode"
+    mkdir -p "${fixture}/mounted/boot/EFI/Linux/acl.efi.extra.d"
+    : > "${fixture}/mounted/boot/EFI/Linux/acl.efi.extra.d/verity-usr-orphan.p7s.cred"
+    if output="$(bash "${fixture}/image_to_vm.sh" 2>&1)"; then
+        echo "Direct conversion signed markerless /usr signature assets" >&2
+        return 1
+    fi
+    [[ "${output}" == *"Signed /usr assets require usr-signature-mode=required"* ]]
     [[ ! -e "${fixture}/signing-actions" && ! -e "${fixture}/output/usr-signature-mode" ]]
 )
 
