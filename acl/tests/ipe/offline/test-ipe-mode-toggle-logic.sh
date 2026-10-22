@@ -269,6 +269,32 @@ test_signed_and_unsigned_probe_expectations() {
     fi
 }
 
+test_signed_btrfs_probe_defers_no_denial_assertion() (
+    local event output
+    event='type=1420 ipe_op=EXECUTE enforcing=0 pid=123 path="/usr/bin/true" rule="DEFAULT op=EXECUTE action=DENY"'
+    blkid() { echo btrfs; }
+    output="$(ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 required)"
+    grep -Fq "WARN: Skipping signed /usr no-denial assertion" <<< "${output}"
+    ipe_assert_usr_probe_audit "" /usr/bin/true 123 required
+    ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 none
+    if ipe_assert_usr_probe_audit "" /usr/bin/true 123 none; then
+        echo "Unsigned /usr lost its denial assertion" >&2
+        return 1
+    fi
+
+    blkid() { echo ext4; }
+    ipe_assert_usr_probe_audit "" /usr/bin/true 123 required
+    if ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 required; then
+        echo "Signed non-btrfs /usr lost its no-denial assertion" >&2
+        return 1
+    fi
+    blkid() { return 1; }
+    if ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 required; then
+        echo "Filesystem detection failure bypassed the audit assertion" >&2
+        return 1
+    fi
+)
+
 test_probe_denial_correlation() {
     local event='type=1420 ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=123 comm="true" path="/usr/bin/true" rule="DEFAULT op=EXECUTE action=DENY"'
     local invalid
@@ -481,6 +507,7 @@ test_root_signature_detection
 test_usr_verity_signature_contract
 test_toggle_preserves_usr_signature_mode
 test_signed_and_unsigned_probe_expectations
+test_signed_btrfs_probe_defers_no_denial_assertion
 test_probe_denial_correlation
 test_host_imds_matches_guest_parser
 test_streamed_guest_contains_cmdline_parser
