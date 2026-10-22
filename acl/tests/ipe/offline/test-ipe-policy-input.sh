@@ -268,7 +268,7 @@ test_required_usr_signature_continuity() (
     local uki="${esp_dir}/EFI/Linux/acl.efi"
     local extra_dir="${uki}.extra.d" template_dir="${esp_dir}/acl/uki-addons"
     local verifier="${SCRIPT_DIR}/build_library/rpm/verify_ipe_signer_continuity.sh"
-    local root_hash other_hash options slot data_uuid hash_uuid addon original bad_cmdline
+    local root_hash other_hash options slot data_uuid hash_uuid addon original bad_cmdline option_key
     root_hash="$(printf '%064d' 1)"
     other_hash="$(printf '%064d' 2)"
     options="panic-on-corruption,root-hash-signature=/.extra/credentials/verity-usr-${root_hash}.p7s.cred"
@@ -315,6 +315,9 @@ test_required_usr_signature_continuity() (
         write_test_uki "${extra_dir}/slot-${slot}.addon.efi" \
             "${original//${options}/panic-on-corruption}"
         reject_required "unsigned active slot ${slot}" "Inconsistent signed /usr slot metadata"
+        write_test_uki "${extra_dir}/slot-${slot}.addon.efi" \
+            "${original} systemd.verity-usr-options=panic-on-corruption"
+        reject_required "dash-equivalent active slot ${slot} override" "Invalid signed /usr slot metadata"
         rm "${extra_dir}/slot-${slot}.addon.efi"*
     done
     reject_required "no active slot" "exactly one active"
@@ -334,10 +337,16 @@ test_required_usr_signature_continuity() (
 
     original="$(<"${uki}.cmdline")"
     for bad_cmdline in "${token}" "${token} mount.usr=PARTUUID=unverified" \
-        "${original} mount.usr=PARTUUID=unverified"; do
+        "${original} mount.usr=PARTUUID=unverified" \
+        "${token} rd.mount.usr=PARTUUID=unverified" \
+        "${original} rd.mount.usr=PARTUUID=unverified" \
+        "${original} rd.mount.usr=/dev/mapper/usr" \
+        "rd.mount.usr=PARTUUID=unverified ${original}"; do
         write_test_uki "${uki}" "${bad_cmdline}"
         reject_required "missing, wrong or duplicate mount binding" "must mount /dev/mapper/usr"
     done
+    write_test_uki "${uki}" "${original/mount.usr=/rd.mount.usr=}"
+    verify_required
     for bad_cmdline in '"mount.usr=PARTUUID=unverified"' \
         "'mount.usr=PARTUUID=unverified'" 'mount\.usr=PARTUUID=unverified'; do
         write_test_uki "${uki}" "${original} ${bad_cmdline}"
@@ -357,6 +366,12 @@ test_required_usr_signature_continuity() (
         done
         write_test_uki "${addon}" "${original} systemd.verity_usr_options=panic-on-corruption"
         reject_required "duplicate slot options" "Invalid signed /usr slot metadata"
+        for option_key in systemd.verity-usr-options systemd.verity_usr-options systemd.verity-usr_options; do
+            write_test_uki "${addon}" "${original} ${option_key}=panic-on-corruption"
+            reject_required "dash-equivalent slot options override" "Invalid signed /usr slot metadata"
+            write_test_uki "${addon}" "${original/systemd.verity_usr_options=/${option_key}=}"
+            verify_required
+        done
         write_test_uki "${addon}" "${original//${options}/panic-on-corruption}"
         reject_required "unsigned slot options" "Inconsistent signed /usr slot metadata"
         write_test_uki "${addon}" "${original//${root_hash}/${other_hash}}"

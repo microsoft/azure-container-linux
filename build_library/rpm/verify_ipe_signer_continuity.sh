@@ -103,7 +103,9 @@ fi
 if [[ "${usr_signature_mode}" == "required" ]]; then
     mounts=()
     for token in "${tokens[@]}"; do
-        [[ "${token}" != mount.usr=* ]] || mounts+=("${token#*=}")
+        case "${token}" in
+            mount.usr=*|rd.mount.usr=*) mounts+=("${token#*=}") ;;
+        esac
     done
     [[ "${#mounts[@]}" -eq 1 && "${mounts[0]}" == /dev/mapper/usr ]] || {
         echo "Signed /usr must mount /dev/mapper/usr" >&2
@@ -182,7 +184,8 @@ if [[ "${usr_signature_mode}" == "required" ]]; then
         options=()
         read -r -a tokens <<< "${slot_cmdline//$'\n'/ }"
         for token in "${tokens[@]}"; do
-            case "${token}" in
+            # Match systemd's equivalent key spellings, retaining values verbatim.
+            case "${token//-/_}" in
                 usrhash=*) hashes+=("${token#*=}") ;;
                 systemd.verity_usr_options=*) options+=("${token#*=}") ;;
             esac
