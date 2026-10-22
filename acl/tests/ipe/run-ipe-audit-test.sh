@@ -9,7 +9,9 @@ ipe_cmdline_field() {
 
     IFS="${delimiter}" read -r -a fields <<< "${input}"
     for field in "${fields[@]}"; do
-        if [[ "${field}" == "${name}="* ]]; then
+        if [[ "${field}" == "${name}="* ||
+            ( "${name}" == systemd.verity_usr_options &&
+              "${field}" == systemd.verity[-_]usr[-_]options=* ) ]]; then
             printf '%s\n' "${field#*=}"
             return 0
         fi
@@ -24,7 +26,7 @@ ipe_has_root_hash_signature() {
     for word in $1; do
         case "${word}" in
             root-hash-signature=*) return 0 ;;
-            systemd.verity_usr_options=*)
+            systemd.verity[-_]usr[-_]options=*)
                 IFS=, read -r -a options <<< "${word#*=}"
                 for option in "${options[@]}"; do
                     [[ "${option}" != root-hash-signature=* ]] || return 0

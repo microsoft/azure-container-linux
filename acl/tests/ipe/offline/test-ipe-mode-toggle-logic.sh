@@ -141,6 +141,7 @@ test_host_imds_rejects_multiple_documents() (
 
 test_shared_cmdline_fields() {
     local cmdline='usrhash=ABC usrhash=DEF acl.ipe.policy_sha256=123 systemd.verity_usr_options=foo=bar,root-hash-signature=/expected,other=value'
+    local option_key options='foo=bar,root-hash-signature=/expected-path_with-punctuation,other=value'
 
     [[ "$(ipe_cmdline_field "${cmdline}" usrhash)" == "ABC" ]]
     [[ "$(ipe_cmdline_field "${cmdline}" acl.ipe.policy_sha256)" == "123" ]]
@@ -148,10 +149,17 @@ test_shared_cmdline_fields() {
     [[ "$(ipe_cmdline_field \
         "$(ipe_cmdline_field "${cmdline}" systemd.verity_usr_options)" \
         root-hash-signature ',')" == "/expected" ]]
+    for option_key in systemd.verity_usr_options systemd.verity-usr-options \
+        systemd.verity_usr-options systemd.verity-usr_options; do
+        [[ "$(ipe_cmdline_field "${option_key}=${options}" systemd.verity_usr_options)" == "${options}" ]]
+        [[ "$(ipe_cmdline_field \
+            "$(ipe_cmdline_field "${option_key}=${options}" systemd.verity_usr_options)" \
+            root-hash-signature ',')" == "/expected-path_with-punctuation" ]]
+    done
 }
 
 test_root_signature_detection() {
-    local cmdline
+    local cmdline option_key
     if ipe_has_root_hash_signature \
         'usrhash=abc systemd.verity_usr_options=hash-offset=4096,panic-on-corruption'; then
         echo "unsigned verity was classified as requiring a signature" >&2
@@ -167,12 +175,21 @@ test_root_signature_detection() {
             return 1
         }
     done
+    for option_key in systemd.verity_usr_options systemd.verity-usr-options \
+        systemd.verity_usr-options systemd.verity-usr_options; do
+        ipe_has_root_hash_signature "${option_key}=panic-on-corruption,root-hash-signature=/expected"
+        if ipe_has_root_hash_signature "${option_key}=panic-on-corruption" ||
+           ipe_has_root_hash_signature "${option_key}=root_hash_signature=/unexpected"; then
+            echo "Unsigned verity or an invalid inner option was classified as signed: ${option_key}" >&2
+            return 1
+        fi
+    done
 }
 
 test_usr_verity_signature_contract() {
-    local hash unsigned_cmdline signed_cmdline unsigned_table signed_table
+    local hash unsigned_cmdline signed_cmdline unsigned_table signed_table option_key="${1:-systemd.verity_usr_options}"
     hash="$(printf '%064d' 1)"
-    unsigned_cmdline="usrhash=${hash} systemd.verity_usr_options=panic-on-corruption"
+    unsigned_cmdline="usrhash=${hash} ${option_key}=panic-on-corruption"
     signed_cmdline="${unsigned_cmdline},root-hash-signature=/.extra/credentials/verity-usr-${hash}.p7s.cred"
     unsigned_table="0 2097152 verity 1 8:2 8:3 4096 4096 262144 1 sha256 ${hash} abcd 1 panic_on_corruption"
     signed_table="${unsigned_table/1 panic_on_corruption/3 panic_on_corruption root_hash_sig_key_desc test-key}"
@@ -193,9 +210,9 @@ test_usr_verity_signature_contract() {
 }
 
 test_toggle_preserves_usr_signature_mode() (
-    local hash unsigned_cmdline unsigned_table
+    local hash unsigned_cmdline unsigned_table option_key="${1:-systemd.verity_usr_options}"
     hash="$(printf '%064d' 1)"
-    unsigned_cmdline="usrhash=${hash} acl.ipe.policy_sha256=${hash} systemd.verity_usr_options=panic-on-corruption"
+    unsigned_cmdline="usrhash=${hash} acl.ipe.policy_sha256=${hash} ${option_key}=panic-on-corruption"
     unsigned_table="0 2097152 verity 1 8:2 8:3 4096 4096 262144 1 sha256 ${hash} abcd 1 panic_on_corruption"
     export MOCK_CMDLINE="${unsigned_cmdline},root-hash-signature=/.extra/credentials/verity-usr-${hash}.p7s.cred"
     export MOCK_TABLE="${unsigned_table/1 panic_on_corruption/3 panic_on_corruption root_hash_sig_key_desc test-key}"
@@ -504,8 +521,11 @@ test_tag_state_distinguishes_absent_from_empty
 test_host_imds_rejects_multiple_documents
 test_shared_cmdline_fields
 test_root_signature_detection
-test_usr_verity_signature_contract
-test_toggle_preserves_usr_signature_mode
+for option_key in systemd.verity_usr_options systemd.verity-usr-options \
+    systemd.verity_usr-options systemd.verity-usr_options; do
+    test_usr_verity_signature_contract "${option_key}"
+    test_toggle_preserves_usr_signature_mode "${option_key}"
+done
 test_signed_and_unsigned_probe_expectations
 test_signed_btrfs_probe_defers_no_denial_assertion
 test_probe_denial_correlation

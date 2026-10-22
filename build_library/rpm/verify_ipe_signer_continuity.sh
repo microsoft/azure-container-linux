@@ -26,9 +26,13 @@ verify_attached_cms() {
 }
 
 validate_cmdline_syntax() {
-    # Producers emit whitespace-separated arguments. Do not let quoting or
-    # escaping hide overrides from the token checks below.
+    # Do not let quoting, escaping or differences in whitespace handling
+    # between Bash and systemd hide overrides from the token checks below.
     case "$1" in
+        *$'\r'*)
+            echo "Unsupported carriage return in IPE command line: $2" >&2
+            return 1
+            ;;
         *\"*|*\'*|*\\*)
             echo "Unsupported quoting or escaping in IPE command line: $2" >&2
             return 1

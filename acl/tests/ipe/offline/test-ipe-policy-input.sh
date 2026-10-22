@@ -318,6 +318,11 @@ test_required_usr_signature_continuity() (
         write_test_uki "${extra_dir}/slot-${slot}.addon.efi" \
             "${original} systemd.verity-usr-options=panic-on-corruption"
         reject_required "dash-equivalent active slot ${slot} override" "Invalid signed /usr slot metadata"
+        for bad_cmdline in $'quiet\rmount.usr=PARTUUID=unverified' \
+            $'quiet\rsystemd.verity_usr_options=panic-on-corruption'; do
+            write_test_uki "${extra_dir}/slot-${slot}.addon.efi" "${original} ${bad_cmdline}"
+            reject_required "CR-hidden active slot ${slot} override" "Unsupported carriage return"
+        done
         rm "${extra_dir}/slot-${slot}.addon.efi"*
     done
     reject_required "no active slot" "exactly one active"
@@ -352,6 +357,11 @@ test_required_usr_signature_continuity() (
         write_test_uki "${uki}" "${original} ${bad_cmdline}"
         reject_required "quoted or escaped base override" "Unsupported quoting or escaping"
     done
+    for bad_cmdline in $'quiet\rmount.usr=PARTUUID=unverified' \
+        $'quiet\rrd.mount.usr=PARTUUID=unverified'; do
+        write_test_uki "${uki}" "${original} ${bad_cmdline}"
+        reject_required "CR-hidden base mount override" "Unsupported carriage return"
+    done
     write_test_uki "${uki}" "${original}"
 
     for addon in "${extra_dir}/slot-a.addon.efi" \
@@ -363,6 +373,11 @@ test_required_usr_signature_continuity() (
             'systemd\.verity_usr_options=panic-on-corruption'; do
             write_test_uki "${addon}" "${original} ${bad_cmdline}"
             reject_required "quoted or escaped slot override" "Unsupported quoting or escaping"
+        done
+        for bad_cmdline in $'quiet\rmount.usr=PARTUUID=unverified' \
+            $'quiet\rsystemd.verity_usr_options=panic-on-corruption'; do
+            write_test_uki "${addon}" "${original} ${bad_cmdline}"
+            reject_required "CR-hidden slot override" "Unsupported carriage return"
         done
         write_test_uki "${addon}" "${original} systemd.verity_usr_options=panic-on-corruption"
         reject_required "duplicate slot options" "Invalid signed /usr slot metadata"
@@ -383,6 +398,8 @@ test_required_usr_signature_continuity() (
         "${esp_dir}/loader/addons/global.addon.efi" "${template_dir}/debug.addon.efi"; do
         write_test_uki "${addon}" '"mount.usr=PARTUUID=unverified"'
         reject_required "quoted addon mount override" "Unsupported quoting or escaping"
+        write_test_uki "${addon}" $'quiet\rmount.usr=PARTUUID=unverified'
+        reject_required "CR-hidden addon mount override" "Unsupported carriage return"
         write_test_uki "${addon}" 'systemd.verity_usr_options=panic-on-corruption'
         reject_required "non-slot verity override" "Unexpected slot addon"
         rm "${addon}"*
