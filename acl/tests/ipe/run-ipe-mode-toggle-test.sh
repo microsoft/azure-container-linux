@@ -128,7 +128,7 @@ assert_ipe_assets_present() {
 }
 
 is_btrfs_diagnostic() {
-    [[ "$(ssh_cmd 'uname -r')" == "6.6.157.1-1.btrfsipe4.azl3" ]] &&
+    [[ "$(ssh_cmd 'uname -r')" == "6.6.159.1-2.azl3" ]] &&
         [[ " $(ssh_cmd 'cat /proc/cmdline') " == *" ipe.success_audit=1 "* ]]
 }
 
