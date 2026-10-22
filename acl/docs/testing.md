@@ -20,6 +20,26 @@ ACL reuses the Flatcar **Mantle/Kola** test framework:
 
 Results are emitted in TAP format and converted to Markdown summaries.
 
+## GitHub Validation
+
+The required `github-acl-pr-validation` status check remains the ACL product
+validation gate.
+
+All 13 inherited Flatcar GitHub Actions workflow definitions in
+`.github/workflows/` have a `.disabled` suffix. GitHub only discovers workflow
+files ending in `.yml` or `.yaml`, so these definitions no longer register
+scheduled, pull-request, comment, manual, or reusable workflows. Their contents
+and helper scripts are retained for reference.
+
+These legacy workflows assumed Flatcar release channels, package maintenance,
+credentials, or runner infrastructure that is not configured for ACL. They
+must not be counted as upstream compatibility coverage. Dedicated validation
+of ACL changes against upstream Flatcar is follow-up work.
+
+Re-enabling a definition requires removing its `.disabled` suffix in a reviewed
+change, adapting its branch, authorization, and runner configuration, and
+restoring any required reusable workflows together with their callers.
+
 ## ACL-Specific Tests
 
 Additional tests live in `acl/tests/`:

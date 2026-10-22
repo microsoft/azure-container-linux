@@ -2,7 +2,7 @@
 
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-
+#
 # Build Azure Container Linux (ACL) Image - Complete workflow
 #
 # This script builds an Azure Container Linux (ACL) image using Azure Linux RPMs and Flatcar SDK container.
@@ -15,87 +15,101 @@
 #   --acg-image-version-id=ID            Azure Compute Gallery image version resource ID. When set,
 #                                        skip VHD upload and image creation; use this image directly
 #                                        (for start-vm --vm-type=azure)
+#   --az-backup-regions=REGIONS          Space-separated fallback regions for Azure VM provisioning
+#                                        Image must already be replicated to each region
+#   --az-gallery-rg=NAME                 Resource group containing the Azure Compute Gallery (for start-vm --vm-type=azure)
+#   --az-region=REGION                   Azure region to override default (for start-vm --vm-type=azure)
 #   --az-storage-account=NAME            Azure storage account name to override default (for start-vm --vm-type=azure)
 #   --az-storage-container=NAME          Azure storage container name for VHDs (for start-vm --vm-type=azure)
 #   --az-storage-rg=NAME                 Resource group containing the storage account (for start-vm --vm-type=azure)
-#   --az-gallery-rg=NAME                 Resource group containing the Azure Compute Gallery (for start-vm --vm-type=azure)
 #   --az-sub-id=ID                       Azure subscription ID to override default (for start-vm --vm-type=azure)
-#   --az-region=REGION                   Azure region to override default (for start-vm --vm-type=azure)
+#   --az-vm-args=ARGS                    Additional arguments to pass to vm start command, esp azure vms
+#                                        Space separated list ('--az-vm-args="<key><space><value><space>"')
+#                                        ex: --az-vm-args="--user-data <path-to-ignition-file> --enable-vtpm true"
 #   --az-vm-size=SIZE                    Azure VM size (default: Standard_D2s_v5)
 #   --board=BOARD                        Target board (default: amd64-usr)
 #   --boot-timeout=SECS                  Timeout waiting for VM boot (default: arch-based — amd64 100s, arm64 300s)
+#   --build-image                        Build the base image
 #   --build-rpms                         Build custom RPM packages using Azure Linux toolkit (runs acl/build.sh)
 #   --build-sdk-container                Update/rebuild SDK container with RPM tools (can run standalone)
-#   --build-standalone-sysexts[=TAG,...]  Build standalone sysexts (all, or only those matching any given tag)
+#   --build-standalone-sysexts[=TAG,...] Build standalone sysexts (all, or only those matching any given tag)
 #   --build-test-image                   Build a test VM image (includes docker sysext) for kola testing
 #   --build-vm-image                     Build VM images after creating base image (no docker sysext)
 #   --clean                              Clean staging and build RPM directories before download
 #   --console-password=PASS              Serial console login password (empty for passwordless)
 #   --console-user=USER                  Serial console login user (default: root)
+#   --disk-layout=LAYOUT                 Disk layout to use (default: vm)
 #   --download-rpms                      [no-op] Kept for pipeline compatibility
 #   --group=GROUP                        Image group: developer|production|prod (default: production)
 #   --help                               Show this help message
 #   --img-name=NAME                      Base image name prefix (default: acl_production)
 #                                        Final image will be NAME_image.bin, VM image will be NAME_qemu_uefi_image.img
+#   --ipe-mode=MODE                      IPE runtime mode: disabled|audit|enforcing (default: disabled)
+#                                        'enforcing' is reserved and rejected at build time.
+#   --ipe-signing-mode=MODE              IPE signing mode: ephemeral|esrp (default: ephemeral)
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
+#   --no-secure-boot                     Disable Secure Boot where supported (not Azure arm64 VMs)
 #   --output=DIR                         Output directory for images
-#   --reuse-vm                           Reuse an already-running VM (reads IP/RG from .vm-state.env)
-#   --tag=KEY=VALUE                      Add a resource tag to Azure VMs/RGs (can specify multiple times)
-#                                        Default tag: createdBy=<current user>
 #   --rebuild                            Force rebuild even if image exists
+#   --rebuild-and-test                   Rebuild image and run smoke tests (equivalent to
+#                                        --rebuild --build-vm-image --run-tests)
 #   --retry=N                            Retry build steps up to N times with exponential backoff
 #                                        (default backoff: 15s initial, 5min max). Clears intermediate
 #                                        build caches between retries but preserves toolchain, azurelinux
 #                                        clone, and rpm-staging.
-#   --rebuild-and-test                   Rebuild image and run smoke tests (equivalent to
-#                                        --rebuild --build-vm-image --run-tests)
+#   --reuse-image                        Reuse the latest Azure gallery image and start a VM (skip VHD upload)
+#                                        Requires --vm-type=azure; not with --acg-image-version-id
+#   --reuse-vm                           Reuse an already-running VM (reads IP/RG from .vm-state.env)
+#   --run-host-script=PATH               Run script on the host (can specify multiple times). Implies --start-vm
+#   --run-kola-tests                     Run kola tests after building (qemu or azure, based on --vm-type)
+#   --run-script=PATH                    Run script on VM after boot (can specify multiple times)
+#                                        Can be a file path or inline command. Implies --start-vm
 #   --run-tests                          Start a VM and run a series of predefined tests on the VM after boot
 #                                        (includes run-secureboot-test.sh, run-container-test.sh,
 #                                        run-systemd-health-test.sh, run-dmesg-io-error-test.sh,
 #                                        run-selinux-avc-test.sh)
-#   --run-script=PATH                    Run script on VM after boot (can specify multiple times)
-#                                        Can be a file path or inline command. Implies --start-vm
-#   --run-kola-tests                     Run kola tests after building (qemu or azure, based on --vm-type)
-#   --ssh-authorized-keys=KEYS           SSH public keys for VM access (file path or key string)
 #   --skip-standalone-sysexts            Skip building standalone sysexts (to speed up rebuilds)
+#   --ssh-authorized-keys=KEYS           SSH public keys for VM access (file path or key string)
 #   --ssh-key=PATH                       SSH private key for VM access
 #   --ssh-timeout=SECS                   Timeout waiting for SSH (default: 120)
-#   --ssh-user=USER                      SSH user for VM scripts (default: core)
-#   --start-vm                           Start the VM after building (implies --build-vm-image)
+#   --ssh-user=USER                      SSH user for VM scripts (default: azureuser)
+#   --start-vm                           Start a VM using an existing VM image; use --build-vm-image to create one
+#   --tag=KEY=VALUE                      Add a resource tag to Azure VMs/RGs (can specify multiple times)
+#                                        Default tag: createdBy=<current user>
 #   --use-serial                         Use serial console for script execution (no SSH/ignition needed)
 #   --use-ssh                            Use SSH for script execution (default, requires working ignition/SSH keys)
 #   --use-test-image                     Boot the test VM image (with docker sysext) instead of the regular image
 #   --vm-name=NAME                       Name for the VM (default: acl)
 #   --vm-type=TYPE                       VM type when building VM images: azure|qemu (default: qemu)
-#   --az-vm-args=ARGS                    Additional arguments to pass to vm start command, esp azure vms
-#                                        Space separated list ('--az-vm-args="<key><space><value><space>"')
-#                                        ex: --az-vm-args="--user-data <path-to-ignition-file> --enable-vtpm true"
 #
 # Examples:
-#   # Build and run a test script on the VM via serial console
-#   ./build_rpm_image.sh --run-script=./tests/smoke_test.sh
+#   # Run a test script on the VM via serial console
+#   ./build_rpm_image.sh --use-serial --run-script=./tests/smoke_test.sh
 #
 #   # Run inline command via serial console
-#   ./build_rpm_image.sh --run-script="cat /etc/os-release"
+#   ./build_rpm_image.sh --use-serial --run-script="cat /etc/os-release"
 #
 #   # Run multiple scripts
 #   ./build_rpm_image.sh --run-script=./setup.sh --run-script=./test.sh
 #
-#   # Use SSH instead of serial console (requires ignition/SSH setup)
+#   # Use SSH (default; requires ignition/SSH setup)
 #   ./build_rpm_image.sh --use-ssh --run-script="systemctl status docker"
 #
 #   # Run with specific console user
-#   ./build_rpm_image.sh --console-user=core --run-script="whoami"
+#   ./build_rpm_image.sh --use-serial --console-user=core --run-script="whoami"
 #
 # Environment Variables:
 #   ACL_SDK_IMAGE           Override SDK container image (e.g., <your-registry>/sdk:<release>)
 #                           Bypasses auto-detection from version.txt when set
+#   BUILD_ID                Build identifier for versioning
 #   NO_TTY                  Set to "true" to disable TTY allocation (for CI pipelines)
 #   RPM_REPO_URL            Azure Linux repository URL
 #   RPM_ARCH                Target architecture (default: x86_64)
-#   BUILD_ID                Build identifier for versioning
-#   USE_SERIAL_CONSOLE      Use serial console (true) or SSH (false) - default: true
+#   SYSEXT_COMPRESSION      Sysext compression algorithm (default: zstd)
+#   PACKAGE_SNAPSHOT_TIME   Ten-digit Unix UTC cutoff for RPM and image package resolution;
+#                           requires an SDK with DNF5 snapshot support
+#   USE_SERIAL_CONSOLE      Use serial console (true) or SSH (false) - default: false
 #   VM_CONSOLE_USER         Serial console login user (default: root)
 #   VM_CONSOLE_PASSWORD     Serial console login password
 #   VM_BOOT_TIMEOUT         Boot timeout in seconds (default: arch-based — amd64 100s, arm64 300s)
@@ -116,6 +130,7 @@ fi
 # shellcheck source=../build_library/retry_with_backoff.sh
 source "${SCRIPT_DIR}/build_library/retry_with_backoff.sh"
 source "${SCRIPT_DIR}/build_library/standalone_sysext_util.sh"
+source "${SCRIPT_DIR}/build_library/rpm/ipe_artifact.sh"
 cd "${SCRIPT_DIR}"
 
 # Default configuration
@@ -171,6 +186,19 @@ export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
+# Build-time IPE mode and signing mode. Runtime activation is selected only
+# through the Azure IMDS acl-node-security-profile tag.
+IPE_MODE_OVERRIDE_SET=false
+if [[ -v ACL_IPE_MODE ]]; then
+    IPE_MODE_OVERRIDE_SET=true
+fi
+ACL_IPE_MODE="${ACL_IPE_MODE:-disabled}"
+
+IPE_SIGNING_MODE_OVERRIDE_SET=false
+if [[ -v ACL_IPE_SIGNING_MODE ]]; then
+    IPE_SIGNING_MODE_OVERRIDE_SET=true
+fi
+ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE:-ephemeral}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
@@ -227,8 +255,152 @@ is_azure_linux_3() {
 
 # Show usage information
 show_help() {
-    head -30 "$0" | grep -E "^#" | sed 's/^# *//'
+    awk '
+        /^#!/ { next }
+        /^#/ {
+            found = 1
+            sub(/^# ?/, "")
+            print
+            next
+        }
+        found { exit }
+    ' "$0"
     exit 0
+}
+
+validate_ipe_boot_path() {
+    local vm_type="${1:-}"
+    local -a az_vm_args=()
+
+    [[ "${ACL_IPE_CAPABLE}" == "false" ]] && return 0
+    if [[ "${BOOTLOADER_MODE}" != "uki" ]]; then
+        error "IPE requires BOOTLOADER_MODE=uki"
+        return 1
+    fi
+    if [[ "${vm_type}" == "qemu" ]]; then
+        error "IPE runtime mode testing requires the Azure IMDS UKI path"
+        return 1
+    fi
+    if [[ "${vm_type}" == "azure" ]]; then
+        ipe_split_argument_string az_vm_args "${AZ_VM_ARGS:-}"
+        if ! ipe_reject_azure_image_overrides "${az_vm_args[@]}"; then
+            error "--az-vm-args cannot override the image for IPE-capable Azure images"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+validate_ipe_mode_value() {
+    case "${ACL_IPE_MODE}" in
+        disabled|audit) ;;
+        enforcing)
+            error "IPE mode 'enforcing' is reserved for future use and is not supported by this build (use 'audit' or 'disabled')"
+            return 1
+            ;;
+        *)
+            error "Invalid IPE mode: ${ACL_IPE_MODE} (expected disabled, audit, or enforcing)"
+            return 1
+            ;;
+    esac
+}
+
+configure_ipe_mode() {
+    validate_ipe_mode_value || return 1
+    case "${ACL_IPE_MODE}" in
+        disabled) ACL_IPE_CAPABLE=false ;;
+        audit)    ACL_IPE_CAPABLE=true ;;
+    esac
+    case "${ACL_IPE_SIGNING_MODE}" in
+        ephemeral|esrp) ;;
+        *)
+            error "Invalid IPE signing mode: ${ACL_IPE_SIGNING_MODE} (expected ephemeral or esrp)"
+            return 1
+            ;;
+    esac
+    export ACL_IPE_MODE ACL_IPE_SIGNING_MODE ACL_IPE_CAPABLE
+}
+
+load_artifact_ipe_signing_mode() {
+    local artifact_dir="$1"
+    local artifact_signing_mode
+    local expected_capability=""
+
+    if [[ "${IPE_MODE_OVERRIDE_SET}" == "true" ]]; then
+        [[ "${ACL_IPE_MODE}" == "audit" ]] && expected_capability=true ||
+            expected_capability=false
+    fi
+    artifact_signing_mode="$(
+        ipe_resolve_artifact_signing_mode "${artifact_dir}" "${expected_capability}"
+    )" || return 1
+
+    if [[ "${artifact_signing_mode}" == "disabled" ]]; then
+        ACL_IPE_MODE=disabled
+        configure_ipe_mode
+        return 0
+    fi
+
+    if [[ "${IPE_MODE_OVERRIDE_SET}" != "true" ]]; then
+        ACL_IPE_MODE=audit
+    fi
+
+    if [[ "${IPE_SIGNING_MODE_OVERRIDE_SET}" == "true" &&
+        "${ACL_IPE_SIGNING_MODE}" != "${artifact_signing_mode}" ]]; then
+        error "Requested IPE signing mode '${ACL_IPE_SIGNING_MODE}' does not match source image signing mode '${artifact_signing_mode}'"
+        return 1
+    fi
+    ACL_IPE_SIGNING_MODE="${artifact_signing_mode}"
+
+    configure_ipe_mode
+}
+
+operation_uses_vm_image() {
+    [[ "$BUILD_VM_IMAGE" == "true" ]] ||
+        [[ "$BUILD_TEST_IMAGE" == "true" ]] ||
+        [[ "$START_VM" == "true" ]] ||
+        [[ "$RUN_KOLA_TESTS" == "true" ]]
+}
+
+operation_uses_gallery_image() {
+    [[ -n "$ACG_IMAGE_VERSION_ID" ]] || [[ "$REUSE_IMAGE" == "true" ]]
+}
+
+operation_uses_local_image_artifact() {
+    if [[ "$REUSE_VM" == "true" ]] &&
+        [[ "$BUILD_VM_IMAGE" != "true" ]] &&
+        [[ "$BUILD_TEST_IMAGE" != "true" ]]; then
+        return 1
+    fi
+
+    [[ "$BUILD_IMAGE" != "true" ]] &&
+        ! operation_uses_gallery_image &&
+        operation_uses_vm_image
+}
+
+load_reused_vm_type() {
+    local state_file="${1:-${SCRIPT_DIR}/.vm-state.env}"
+    local key value state_vm_type=""
+
+    [[ "${REUSE_VM}" == "true" ]] || return 0
+    if [[ ! -r "${state_file}" ]]; then
+        error "--reuse-vm requires VM state at ${state_file}"
+        return 1
+    fi
+
+    while IFS='=' read -r key value; do
+        if [[ "${key}" == "VM_TYPE" ]]; then
+            state_vm_type="${value}"
+            break
+        fi
+    done < "${state_file}"
+
+    case "${state_vm_type}" in
+        azure|qemu) VM_TYPE="${state_vm_type}" ;;
+        *)
+            error "Invalid or missing VM_TYPE in ${state_file}"
+            return 1
+            ;;
+    esac
 }
 
 # Parse command line arguments
@@ -249,6 +421,26 @@ parse_args() {
                 ;;
             --group)
                 GROUP="$2"
+                shift 2
+                ;;
+            --ipe-mode=*)
+                ACL_IPE_MODE="${1#*=}"
+                IPE_MODE_OVERRIDE_SET=true
+                shift
+                ;;
+            --ipe-mode)
+                ACL_IPE_MODE="$2"
+                IPE_MODE_OVERRIDE_SET=true
+                shift 2
+                ;;
+            --ipe-signing-mode=*)
+                ACL_IPE_SIGNING_MODE="${1#*=}"
+                IPE_SIGNING_MODE_OVERRIDE_SET=true
+                shift
+                ;;
+            --ipe-signing-mode)
+                ACL_IPE_SIGNING_MODE="$2"
+                IPE_SIGNING_MODE_OVERRIDE_SET=true
                 shift 2
                 ;;
             --img-name=*)
@@ -601,6 +793,10 @@ parse_args() {
         esac
     done
 
+    # Fail unsupported IPE modes as early as possible, before any
+    # staging/build work (including artifact/gallery-image inspection below).
+    validate_ipe_mode_value || exit 1
+
     # Validate --retry value
     if [[ "$RETRY_ATTEMPTS" != "0" ]]; then
         if ! [[ "$RETRY_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
@@ -612,6 +808,21 @@ parse_args() {
             exit 1
         fi
     fi
+
+    load_reused_vm_type || exit 1
+
+    if operation_uses_local_image_artifact; then
+        load_artifact_ipe_signing_mode \
+            "${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest" ||
+            exit 1
+    fi
+    if operation_uses_gallery_image &&
+        [[ "${START_VM}" == "true" || "${RUN_KOLA_TESTS}" == "true" ]] &&
+        [[ "${IPE_MODE_OVERRIDE_SET}" == "false" ]]; then
+        warn "ACL_IPE_MODE is not set for gallery image validation; defaulting to disabled"
+    fi
+
+    configure_ipe_mode || exit 1
 
     # Normalize group name
     case "$GROUP" in
@@ -636,9 +847,17 @@ parse_args() {
                 ;;
         esac
     fi
+    local ipe_vm_type=""
+    if operation_uses_vm_image; then
+        ipe_vm_type="${VM_TYPE}"
+    fi
+    validate_ipe_boot_path "${ipe_vm_type}" || exit 1
 
     # Add platform-specific host-side tests when --run-tests is used.
     if [[ "${RUN_TESTS:-false}" == "true" ]] && [[ "$VM_TYPE" == "azure" ]]; then
+        if [[ "${ACL_IPE_CAPABLE}" == "true" ]]; then
+            RUN_HOST_SCRIPTS+=("./acl/tests/ipe/run-ipe-mode-toggle-test.sh")
+        fi
         RUN_HOST_SCRIPTS+=("./acl/tests/run-selinux-toggle-test.sh")
     fi
 
@@ -870,6 +1089,7 @@ build_image() {
     info "  Output:          ${OUTPUT_ROOT}"
     info "  Staging Dir:     ${STAGING_DIR}"
     info "  Force Rebuild:   ${FORCE_REBUILD}"
+    info "  IPE Mode:        ${ACL_IPE_MODE} (signing: ${ACL_IPE_SIGNING_MODE})"
     echo
 
     # Count RPMs
@@ -1054,6 +1274,9 @@ build_vm_image() {
     # pulling a stale version.txt into local dev builds.
     local version_args=()
     local from_dir="${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest"
+    load_artifact_ipe_signing_mode "${from_dir}" || exit 1
+    validate_ipe_boot_path "${vm_type}" || exit 1
+
     if [[ "${NO_TTY:-false}" == "true" ]] && [[ -f "${from_dir}/version.txt" ]]; then
         info "Installing artifact version.txt into manifest location (CI mode)"
         cp "${from_dir}/version.txt" \
@@ -1261,6 +1484,7 @@ main() {
 
     section "Azure Container Linux Image Builder"
     info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"
+    info "IPE mode: ${ACL_IPE_MODE} (signing: ${ACL_IPE_SIGNING_MODE})"
 
     check_prerequisites
     print_summary

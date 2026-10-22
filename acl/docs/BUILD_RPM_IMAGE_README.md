@@ -47,6 +47,9 @@ curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 
 **Note**: `docker.io` is used because it is available from the default Ubuntu repositories on all LTS versions. `docker-ce` requires adding Docker's third-party apt source. The `qemu-system-x86` package is preferred over the `qemu-kvm` transitional package for forward compatibility.
 
+**yq v4:** Install [Mike Farah's yq v4](https://github.com/mikefarah/yq/#install) separately on the build host for RPM and standalone sysext builds.
+The `yq` package currently provided by the default apt repositories is a different implementation and does not work.
+
 Install on Azure Linux:
 
 ```bash
@@ -146,14 +149,73 @@ This step:
 
 **Build output:** Custom RPMs are added to `__build__/rpm-staging/`.
 
+**Compression Failure Tip**
+
+Some distros (including WSL) may not have the default `zstd` support causing
+the build to fail. This can be easily corrected with a `SYSEXT_COMPRESSION`
+override at the failing command:
+
+```bash
+SYSEXT_COMPRESSION=xz ./acl/build_rpm_image.sh {options}
+```
+
+See the [mksquashfs compression options](https://manpages.debian.org/trixie/squashfs-tools/mksquashfs.1.en.html#Filesystem_compression_options)
+for the full list of available compression tools.
+
 ### Phase 3: Build the Image
 
-Build the Flatcar production image using RPM package sources.
+Build the ACL production image using RPM package sources.
 
 ```bash
 # Build image
 ./acl/build_rpm_image.sh --rebuild
 ```
+
+**Optional IPE audit (UKI images)**
+
+Use `ephemeral` for dev/test or `esrp` for later production signing by
+`ACL-Publish-MCR-And-ACG`; both initially build a test-signed policy.
+
+```bash
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit --ipe-signing-mode=ephemeral
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit --ipe-signing-mode=esrp
+```
+
+The build tool defaults to IPE disabled. On Azure, set the VM tag
+`acl-node-security-profile=ipe=audit` to log would-deny events without blocking
+execution. Policy-load failures are logged and leave IPE inactive without
+blocking boot. `enforcing` is unsupported; QEMU runtime testing requires
+`--ipe-mode=disabled`. See [architecture](architecture.md) for policy trust,
+credential handling and dm-verity details.
+The policy hash is reserved for the main UKI command line; IPE image
+conversion rejects active UKI addons (including the optional
+`EXTRA_KERNEL_CMDLINE` debug addon) that supply another
+`acl.ipe.policy_sha256` token.
+
+IPE activation triggers a containerd systemd drop-in that imports
+a base config (AgentBaker's on AKS nodes) merged with
+`/usr/share/containerd/acl-erofs.toml`, which selects EROFS as the CRI
+and snapshotter plugins and enables the flag to discover dm-verity OCI
+referrers. This requires a matching containerd RPM with signed EROFS referrer
+support. Disabled IPE leaves the base config selected. If the merged profile is
+incompatible with signed EROFS, confirmed IPE `enforce=0` selects the base
+config as a fallback, without signed-referrer support. The selector checks
+flag support in `containerd config default` before validating the merged
+configuration and reports unsupported binaries separately from configuration-read
+failures.
+
+The GitHub PR entrypoint (`.pipelines/github-pr-validation.yml`) opts into IPE
+audit with ephemeral signing for both AMD64 and ARM64 Azure builds. It runs the
+offline IPE checks and the existing `azure.smoke.ipe-mode-toggle` test, which
+checks policy activation, execution-correlated audit events, and reboot-based
+mode changes. IPE validation failures fail the pipeline; QEMU remains
+IPE-disabled. This does not enable production signing or enforcing mode.
+
+Manually queued pipeline runs default to IPE audit, just like automatic PR runs.
+Normal manual validation should also include the full smoke suite, including IPE.
+
+Release branches need the entrypoint change too, since their PRs use their own
+YAML.
 
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
 
@@ -322,6 +384,21 @@ By default, before starting a new Azure VM, all the pre-existing resource groups
 ./acl/build_rpm_image.sh --start-vm --vm-type=azure --no-cleanup
 ```
 
+For test-signed IPE policies, including unpublished ESRP candidates, use the
+Secure Boot smoke path with the matching `uki-signing-ca.pem`. Kernel-trusted
+production policies can activate on Standard Gen2, but IPE does not select
+that VM profile automatically. `--run-tests` still includes the Secure Boot check.
+
+IPE-capable launches reject image overrides and `--reuse-image` before VM cleanup.
+The latest gallery version has no verified IPE capability/signing contract, so
+use a local IPE VHD or explicitly select a gallery version whose IPE
+capability and signing provenance you have verified separately.
+For local IPE VHDs, the launcher pins the resolved build directory before
+preflight and uploads from that same directory even if `latest` moves. Keep
+build-version directories unchanged during upload; pinning cannot prevent
+in-place modification of a VHD.
+Non-IPE `--reuse-image` behavior is unchanged.
+
 You can also use the `--run-script` flag to run tests on the Azure VM, just like with the QEMU VM.
 
 #### Access the VM
@@ -482,6 +559,9 @@ AZURE_SUBSCRIPTION_ID="<your-subscription-id>" \
 AZURE_TOKEN_CREDENTIALS=AzureCLICredential \
   ./run_azure_tests.sh amd64 2 cl.ignition.v1.once coreos.ignition.once
 ```
+
+Kola boot success alone does not prove active IPE audit. Use the IPE smoke
+test to verify policy activation and execution-correlated audit events.
 
 **Arguments:**
 

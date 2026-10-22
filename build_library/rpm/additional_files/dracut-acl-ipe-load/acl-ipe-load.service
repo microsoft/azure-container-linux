@@ -1,0 +1,19 @@
+[Unit]
+Description=Load and activate ACL IPE boot policy
+Documentation=https://docs.kernel.org/admin-guide/LSM/ipe.html
+DefaultDependencies=no
+# Run during initrd while SELinux is not yet loaded.
+After=initrd-setup-root.service acl-selinux-toggle.service
+Before=initrd-parse-etc.service
+ConditionVirtualization=microsoft
+ConditionKernelCommandLine=flatcar.oem.id=azure
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/acl-ipe-load
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=initrd.target

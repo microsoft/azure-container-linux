@@ -12,6 +12,7 @@
 #
 # REPOSITORY CONFIGURATION:
 #   - Local cache repository (if RPM_LOCAL_CACHE is set) - priority 1
+#     Snapshot builds exclude retained upstream bootloader RPMs from this cache.
 #   - Bootstrap base repo (used only to install filesystem + azurelinux-repos)
 #   - Azure Linux official repositories (installed via azurelinux-repos RPM)
 
@@ -33,7 +34,32 @@ rpm_get_staging_dir() {
     echo "${rpm_staging}"
 }
 
+rpm_bootloader_package_file() {
+    local disk_image="$1" package="$2" arch="$3"
+    local download_dir
+    download_dir="$(dirname "${disk_image}")/bootloader-rpms"
+    [[ -d "${download_dir}" ]] ||
+        die "Bootloader RPM directory not found: ${download_dir}"
+
+    local -a matches=()
+    mapfile -t matches < <(find "${download_dir}" -maxdepth 1 -type f \
+        -name "${package}-[0-9]*.${arch}.rpm")
+    [[ ${#matches[@]} -eq 1 ]] ||
+        die "Expected one ${package} RPM for ${arch} in ${download_dir}, found ${#matches[@]}"
+    printf '%s\n' "${matches[0]}"
+}
+
 RPM_MANIFEST_QUERY_FORMAT='%|ARCH?{%{NAME}\t%{VERSION}-%{RELEASE}\t%{INSTALLTIME}\t%{BUILDTIME}\t%{VENDOR}\t%{EPOCH}\t%{SIZE}\t%{ARCH}\t%{EPOCHNUM}\t%{SOURCERPM}\n}:{}|'
+
+rpm_snapshot_args() {
+    local -n args="$1"
+    [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" ]] || return 0
+    [[ "${PACKAGE_SNAPSHOT_TIME}" =~ ^[1-9][0-9]{9}$ ]] ||
+        die "PACKAGE_SNAPSHOT_TIME must be a ten-digit Unix UTC timestamp"
+    /usr/bin/dnf5 --help | grep -- '--snapshot-time' >/dev/null ||
+        die "SDK DNF5 does not support --snapshot-time; rebuild the SDK with the snapshot plugin"
+    args+=(--snapshot-time="${PACKAGE_SNAPSHOT_TIME}" --snapshot-exclude-repos=azurelinux-local-cache)
+}
 
 # Emit a Syft-compatible RPM manifest for the installed packages in a rootfs.
 # The ARCH guard drops non-package entries for the same reason as in
@@ -89,6 +115,11 @@ rpm_setup_repos() {
     if [[ -n "${local_repo_dir}" ]] && [[ -d "${local_repo_dir}" ]]; then
         if [[ -f "${local_repo_dir}/repodata/repomd.xml" ]]; then
             info "  Adding local repository cache: ${local_repo_dir}"
+            local local_exclusions=""
+            if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" ]]; then
+                # Retained upstream bootloader RPMs are not locally built packages.
+                local_exclusions="excludepkgs=grub2 grub2-efi grub2-efi-binary shim systemd-boot"
+            fi
             sudo tee "${repo_dir}/azurelinux-local.repo" > /dev/null <<EOF
 [azurelinux-local-cache]
 name=Azure Linux Local Package Cache
@@ -97,6 +128,7 @@ enabled=1
 gpgcheck=0
 repo_gpgcheck=0
 priority=1
+${local_exclusions}
 EOF
         else
             warn "  Skipping local cache (no repository metadata): ${local_repo_dir}"
@@ -334,10 +366,12 @@ _rpm_package_exists() {
     if [[ ${BOARD:-} == "arm64-usr" ]]; then
         dnf_args+=(--forcearch="aarch64")
     fi
+    local -a snapshot_args=()
+    rpm_snapshot_args snapshot_args
 
     # repoquery exits 0 with output if package exists, 0 with no output if not
     local result
-    result=$(sudo /usr/bin/dnf5 repoquery "${dnf_args[@]}" "${pkg_name}" 2>/dev/null)
+    result=$(sudo /usr/bin/dnf5 "${snapshot_args[@]}" repoquery "${dnf_args[@]}" "${pkg_name}" 2>/dev/null)
     [[ -n "${result}" ]]
 }
 
@@ -373,14 +407,16 @@ rpm_install_package() {
     if [[ "${nogpgcheck}" == "true" ]]; then
         dnf_args+=(--nogpgcheck)
     fi
+    local -a snapshot_args=()
+    rpm_snapshot_args snapshot_args
 
     # Mount pseudo-filesystems for scriptlets
     rpm_mount_pseudofs "${root_fs_dir}"
 
     # Disable errexit around dnf5 + unmount to guarantee pseudofs cleanup
     set +e
-    info "Running: dnf5 install ${dnf_args[*]} ${packages[*]}"
-    sudo /usr/bin/dnf5 install "${dnf_args[@]}" "${packages[@]}" 2>&1 | sudo tee /tmp/rpm-install.log
+    info "Running: dnf5 ${snapshot_args[*]} install ${dnf_args[*]} ${packages[*]}"
+    sudo /usr/bin/dnf5 "${snapshot_args[@]}" install "${dnf_args[@]}" "${packages[@]}" 2>&1 | sudo tee /tmp/rpm-install.log
     local dnf_exit_code=${PIPESTATUS[0]}
 
     # Always unmount pseudo-filesystems after dnf5 finishes
@@ -502,6 +538,8 @@ rpm_install_local_packages() {
 rpm_install_init() {
     local root_fs_dir="$1"; shift
 
+    local -a snapshot_check_args=()
+    rpm_snapshot_args snapshot_check_args
     # Initialize RPM database if needed
     rpm_init_database "${root_fs_dir}" || return 1
 
@@ -795,9 +833,7 @@ rpm_install_package_using_portage_name() {
 # =============================================================================
 # Download RPM packages to a local staging directory
 # =============================================================================
-# Downloads named packages (and their dependencies) from Azure Linux repos
-# into a local directory, then updates repository metadata so the directory
-# can be used as a local dnf/rpm cache.
+# Downloads named packages from Azure Linux repos into a local directory.
 #
 # Usage:  rpm_download_packages <dest_dir> <root_fs_dir> <package> [package ...]
 #
@@ -838,8 +874,13 @@ rpm_download_packages() {
     if [[ ${BOARD:-} == "arm64-usr" ]]; then
         download_args+=(--forcearch="aarch64")
     fi
+    local -a snapshot_args=()
+    rpm_snapshot_args snapshot_args
+    if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" && -f "${repo_dir}/azurelinux-local.repo" ]]; then
+        snapshot_args+=(--disable-repo=azurelinux-local-cache)
+    fi
 
-    dnf5 download "${download_args[@]}" "${packages[@]}"
+    dnf5 "${snapshot_args[@]}" download "${download_args[@]}" "${packages[@]}"
 }
 
 # Remove the bootstrap repo after azurelinux-repos has been installed,
@@ -872,6 +913,118 @@ enabled=1
 skip_if_unavailable=True
 sslverify=1
 EOF
+}
+
+rpm_record_ipe_signing_mode() {
+    local ipe_signing_mode="$1"
+    [[ -n "${BUILD_DIR:-}" ]] || return 0
+    printf '%s\n' "${ipe_signing_mode}" > "${BUILD_DIR}/ipe-signing-mode" ||
+        die "RPM mode: failed to record IPE signing mode"
+}
+
+rpm_clear_ipe_signing_mode() {
+    [[ -n "${BUILD_DIR:-}" ]] || return 0
+    rm -f -- "${BUILD_DIR}/ipe-signing-mode"
+}
+
+rpm_validate_ipe_policy_source() {
+    local policy_src="$1"
+    [[ -f "${policy_src}" ]] ||
+        die "RPM mode: IPE policy source not found: ${policy_src}"
+    grep -Fq 'op=EXECUTE dmverity_signature=TRUE action=ALLOW' "${policy_src}" ||
+        die "RPM mode: IPE policy does not trust verified dm-verity signatures"
+}
+
+rpm_prepare_ipe_policy_artifact() {
+    local policy_src="$1" policy_sig="$2" cert_dir="$3"
+    local key="${cert_dir}/ca.key"
+    local cert="${cert_dir}/uki-signing-ca.pem"
+
+    "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" ||
+        die "RPM mode: IPE could not ensure ephemeral signing cert"
+    if ! openssl smime -sign -binary \
+            -in "${policy_src}" \
+            -signer "${cert}" \
+            -inkey "${key}" \
+            -noattr -nodetach -nosmimecap \
+            -outform der \
+            -out "${policy_sig}" 2>/dev/null || [[ ! -s "${policy_sig}" ]]; then
+        die "RPM mode: IPE failed to sign policy"
+    fi
+}
+
+rpm_verify_ipe_policy_artifact() {
+    local policy_src="$1" policy_sig="$2" verified_policy="$3"
+    if ! openssl smime -verify -inform der -binary \
+            -in "${policy_sig}" -noverify \
+            -out "${verified_policy}" >/dev/null 2>&1; then
+        die "RPM mode: IPE policy is not a valid attached DER PKCS#7 artifact"
+    fi
+    cmp -s "${policy_src}" "${verified_policy}" ||
+        die "RPM mode: verified IPE policy content differs from source policy"
+}
+
+rpm_install_ipe_policy() {
+    local root_fs_dir="$1"
+    local ipe_mode="${ACL_IPE_MODE:-disabled}"
+
+    case "${ipe_mode}" in
+        disabled)
+            if [[ -n "${BUILD_DIR:-}" ]]; then
+                rm -rf -- "${BUILD_DIR}/acl-ipe-policy" "${BUILD_DIR}/acl-ipe-ephemeral"
+            fi
+            rpm_clear_ipe_signing_mode
+            return 0
+            ;;
+        audit) ;;
+        *) die "Invalid ACL_IPE_MODE: ${ipe_mode}" ;;
+    esac
+
+    local ipe_signing_mode="${ACL_IPE_SIGNING_MODE:-ephemeral}"
+    case "${ipe_signing_mode}" in
+        ephemeral|esrp) ;;
+        *) die "Invalid ACL_IPE_SIGNING_MODE: ${ipe_signing_mode}" ;;
+    esac
+
+    [[ "${BOOTLOADER_MODE:-uki}" == "uki" ]] ||
+        die "RPM mode: IPE requires the UKI bootloader"
+    [[ -n "${BUILD_DIR:-}" ]] ||
+        die "RPM mode: BUILD_DIR is not set; cannot create IPE signing assets"
+
+    local policy_src="${BUILD_LIBRARY_DIR}/rpm/additional_files/ipe/acl-ipe-boot-policy.pol"
+
+    rpm_validate_ipe_policy_source "${policy_src}"
+
+    local cert_dir
+    cert_dir="$(readlink -f "${BUILD_DIR}")/acl-ipe-ephemeral"
+
+    # Stage directory for Pipelines collector and uki_install.sh.
+    local stage_dir="${BUILD_DIR}/acl-ipe-policy"
+    rm -rf -- "${stage_dir}"
+    mkdir -p "${stage_dir}"
+
+    local policy_sig="${stage_dir}/acl-ipe-policy.p7b.cred"
+    local staged_raw="${stage_dir}/acl-ipe-boot-policy.pol"
+    local work_dir verified_policy
+    work_dir="$(mktemp -d)"
+    verified_policy="${work_dir}/acl-ipe-boot-policy.verified.pol"
+
+    rpm_prepare_ipe_policy_artifact \
+        "${policy_src}" "${policy_sig}" "${cert_dir}"
+    rpm_verify_ipe_policy_artifact \
+        "${policy_src}" "${policy_sig}" "${verified_policy}"
+
+    # ESRP replaces the candidate CMS downstream and therefore needs the
+    # canonical source. Ephemeral builds consume only the verified CMS.
+    if [[ "${ipe_signing_mode}" == "esrp" ]]; then
+        cp "${policy_src}" "${staged_raw}" ||
+            die "RPM mode: failed to stage raw IPE policy"
+    fi
+
+    rm -rf "${work_dir}"
+    rpm_record_ipe_signing_mode "${ipe_signing_mode}"
+
+    info "RPM mode: Staged ${ipe_signing_mode} IPE policy candidate at ${stage_dir}"
 }
 
 rpm_configure_selinux() {
@@ -968,7 +1121,7 @@ EOF
     sudo rm -f "${root_fs_dir}/${policy_hotfix}"
 
     # Remove unnecessary SELinux policy modules (minimize the policy)
-    info "RPM mode: Minimizing SELinux policy".
+    info "RPM mode: Minimizing SELinux policy."
     sudo chroot "${root_fs_dir}" semodule -X 100 -r \
         abrt accountsd acct acpi afs aide aisexec alsa amanda amavis amtu anaconda \
         apache apcupsd apt aptcacher arpwatch asterisk auditadm automount avahi \
@@ -1046,6 +1199,7 @@ rpm_cleanup_build_dir() {
 }
 
 # Export functions
+export -f rpm_snapshot_args
 export -f rpm_install_package_using_portage_name
 export -f rpm_get_staging_dir
 export -f rpm_install_init
@@ -1056,4 +1210,10 @@ export -f rpm_download_packages
 export -f rpm_use_official_repos
 export -f rpm_cleanup_build_dir
 export -f rpm_umount_pseudofs
+export -f rpm_record_ipe_signing_mode
+export -f rpm_clear_ipe_signing_mode
+export -f rpm_validate_ipe_policy_source
+export -f rpm_prepare_ipe_policy_artifact
+export -f rpm_verify_ipe_policy_artifact
+export -f rpm_install_ipe_policy
 export -f rpm_configure_selinux

@@ -328,8 +328,11 @@ download_bootloader_packages_rpm() {
     local root_fs_dir="$1"
 
     info "RPM mode: Pre-downloading bootloader packages (grub2, shim, systemd-boot)"
-    rpm_staging=$(rpm_get_staging_dir)
-    rpm_download_packages "${rpm_staging}" "${root_fs_dir}" grub2 grub2-efi grub2-efi-binary shim systemd-boot
+    [[ -n "${BUILD_DIR:-}" ]] || die "RPM mode: BUILD_DIR is not set"
+    local bootloader_dir="${BUILD_DIR}/bootloader-rpms"
+    rm -rf -- "${bootloader_dir}"
+    mkdir -p "${bootloader_dir}"
+    rpm_download_packages "${bootloader_dir}" "${root_fs_dir}" grub2 grub2-efi grub2-efi-binary shim systemd-boot
 }
 
 finish_image_cleanup_issue_rpm() {
@@ -590,6 +593,37 @@ EOF
     if [[ -f "${root_fs_dir}/usr/lib/systemd/system/rpcbind.socket" ]]; then
         info "RPM mode: Fixing rpcbind.socket (/var/run → /run)"
         sudo sed -i 's|/var/run/|/run/|g' "${root_fs_dir}/usr/lib/systemd/system/rpcbind.socket"
+    fi
+
+    # Enable tridentd.socket - listens for trident API requests.
+    # trident-acl (and thus tridentd.socket) is only installed on UKI-ACL
+    # images (package_catalog.sh scopes it to BOOTLOADER_MODE=uki, since
+    # GRUB-ACL has no Trident A/B-update support and never installs it).
+    # A missing unit on UKI is still a broken image - fail the build now
+    # rather than leave a dangling wants-symlink and ship an image whose
+    # provisioning socket never activates.
+    #
+    # Statically enable via a /usr .wants symlink (like systemd's own
+    # core sockets, e.g. systemd-journald.socket) instead of
+    # `systemctl enable --root=`, which would write the enablement
+    # symlink into /etc instead. /etc lives on the shared, non-slotted
+    # ROOT partition and gets repopulated by systemd's first-boot preset
+    # pass; that pass doesn't reliably preserve unit-specific symlinks
+    # created directly at build time (see the /etc symlink cleanup a few
+    # lines below - RPM-preset-created dangling links there abort the
+    # whole preset population). A symlink baked into /usr, by contrast,
+    # ships as part of the read-only, dm-verity-protected partition,
+    # identical on both A/B slots, and needs no first-boot pass to take
+    # effect - it's active from the moment /usr is mounted, every boot.
+    if [[ "${BOOTLOADER_MODE}" == "uki" ]]; then
+        if [[ ! -f "${root_fs_dir}/usr/lib/systemd/system/tridentd.socket" ]]; then
+            die "tridentd.socket not found in image - trident RPM missing (trident is required for UKI-ACL)"
+        fi
+        info "RPM mode: Statically enabling tridentd.socket (via /usr .wants symlink)"
+        sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system/sockets.target.wants"
+        sudo ln -sf ../tridentd.socket "${root_fs_dir}/usr/lib/systemd/system/sockets.target.wants/tridentd.socket"
+    else
+        info "RPM mode: Skipping tridentd.socket (trident is UKI-only)"
     fi
 
     # Create /var/lib/nfs directories needed by rpc-statd and NFS server via tmpfiles
@@ -1036,61 +1070,6 @@ EOF
     sudo chmod 0644 "${root_fs_dir}/etc/systemd/system/ldconfig.service"
 }
 
-# ── etcd: remove native server, keep etcdctl, prepare for Docker wrapper ─────
-_configure_etcd_rpm() {
-    local root_fs_dir="$1"
-
-    # Remove etcd server and etcdutl binaries - we only need etcdctl from the etcd RPM.
-    # The etcd server runs inside a Docker container via etcd-wrapper, not natively.
-    if [[ -f "${root_fs_dir}/usr/bin/etcd" ]]; then
-        info "RPM mode: Removing /usr/bin/etcd (etcd server runs in Docker via etcd-wrapper)"
-        sudo rm -f "${root_fs_dir}/usr/bin/etcd"
-    fi
-    if [[ -f "${root_fs_dir}/usr/bin/etcdutl" ]]; then
-        info "RPM mode: Removing /usr/bin/etcdutl (not needed)"
-        sudo rm -f "${root_fs_dir}/usr/bin/etcdutl"
-    fi
-    # Also remove the native etcd.service - etcd-member.service (Docker-based) is used instead
-    if [[ -f "${root_fs_dir}/usr/lib/systemd/system/etcd.service" ]]; then
-        info "RPM mode: Removing native etcd.service (using etcd-member.service instead)"
-        sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/etcd.service"
-    fi
-    # Remove the etcd preset file (refers to the native etcd.service we just removed)
-    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system-preset/50-etcd.preset"
-    # Remove etcd config file (native etcd.service config, not used with etcd-wrapper)
-    sudo rm -f "${root_fs_dir}/etc/etcd/etcd-default-conf.yml"
-
-    # sysusers.d config to create the etcd user/group (needed by etcd-wrapper).
-    # The etcd RPM doesn't create this user, but etcd-wrapper needs it for:
-    #   - chown etcd:etcd on the data directory
-    #   - id -u/-g to map the user into the Docker container
-    # This MUST be in the rootfs (not the sysext) so systemd-sysusers creates
-    # the user before the docker sysext is mounted.
-    cat <<'SYSUSERS_EOF' | sudo tee "${root_fs_dir}/usr/lib/sysusers.d/etcd.conf" > /dev/null
-u etcd - "etcd user" /var/lib/etcd
-SYSUSERS_EOF
-
-    # CLC transpiler generates ExecStart=/usr/lib/coreos/etcd-wrapper
-    # Create compat symlink so /usr/lib/coreos -> flatcar resolves
-    sudo ln -sfT flatcar "${root_fs_dir}/usr/lib/coreos"
-
-    # etcd-member.service and etcd-wrapper.conf MUST be in the rootfs (not the
-    # sysext) because Ignition runs before sysext merge. If the unit file only
-    # exists in the sysext, Ignition cannot read its [Install] WantedBy= section
-    # to create the multi-user.target.wants symlink, so the service never starts.
-    local etcd_wrapper_src="${SCRIPT_ROOT}/sdk_container/src/third_party/coreos-overlay/app-admin/etcd-wrapper/files"
-    local etcd_version="3.5.16"
-    if [[ ! -d "${etcd_wrapper_src}" ]]; then
-        die "etcd-wrapper source not found at ${etcd_wrapper_src}"
-    fi
-    # etcd-member.service (substitute image tag)
-    sed "s|@ETCD_IMAGE_TAG@|v${etcd_version}|g" \
-        "${etcd_wrapper_src}/etcd-member.service" \
-        | sudo tee "${root_fs_dir}/usr/lib/systemd/system/etcd-member.service" > /dev/null
-    # etcd-wrapper.conf -> /usr/lib/tmpfiles.d/ (creates /var/lib/etcd 0700 etcd:etcd)
-    sudo cp "${etcd_wrapper_src}/etcd-wrapper.conf" "${root_fs_dir}/usr/lib/tmpfiles.d/etcd-wrapper.conf"
-}
-
 # CIS Level 1 hardening
 # Addresses CIS Azure Container Linux 4 Level 1 failures without affecting
 # network connectivity or core system operation. All settings are safe for
@@ -1337,13 +1316,8 @@ UMASK_CIS
     # 6.1.1.1.3/5/6: Journald configuration
     # The CIS assessor runs "systemd-analyze cat-config systemd/journald.conf"
     # and searches for uncommented parameters. Use a drop-in to override defaults.
-    # 6.1.1.1.3: ForwardToSyslog is set to "no" on purpose. Azure Linux's
-    # /etc/rsyslog.conf loads imjournal, which reads the journal directly,
-    # so forwarding as well would give two independent paths and write
-    # every message to /var/log/messages twice. The rsyslog RPM ships its
-    # own drop-in, 50-rsyslog-journald.conf, setting this to "yes". Drop-ins
-    # are applied in lexicographic filename order and the last one wins, so
-    # "cis.conf" sorts after "50-..." and this is the setting that applies.
+    # 6.1.1.1.3: rsyslog reads the journal via imjournal; forwarding duplicates
+    # messages. This drop-in overrides the RPM's 50-rsyslog-journald.conf.
     sudo install -d -m 0755 "${root_fs_dir}/etc/systemd/journald.conf.d"
     cat <<'JOURNALD_CIS' | sudo tee "${root_fs_dir}/etc/systemd/journald.conf.d/cis.conf" > /dev/null
 [Journal]
@@ -1374,7 +1348,6 @@ finish_image_post_tmpfiles_rpm() {
     _configure_disk_autogrow_rpm "${root_fs_dir}"
     _remove_unused_systemd_components_rpm "${root_fs_dir}"
     _configure_pcrlock_rpm "${root_fs_dir}"
-    _configure_etcd_rpm "${root_fs_dir}"
     _configure_kdump_rpm "${root_fs_dir}"
     _configure_misc_rpm "${root_fs_dir}"
     _configure_cis_hardening_rpm "${root_fs_dir}"
@@ -1432,7 +1405,7 @@ finish_image_backup_etc_rpm() {
     sudo cp -a "${root_fs_dir}/etc" "${ETC_FULL_PATH}"
 }
 
-# Write the image's package list and SPDX manifest from the final rpmdb.
+# Write the image's package list and SPDX 2.2 package manifest from the final rpmdb.
 finish_image_package_manifest_rpm() {
     local root_fs_dir="$1"
     local image_base_name="$2"
@@ -1449,15 +1422,29 @@ finish_image_package_manifest_rpm() {
         die "RPM mode: No packages in ${root_fs_dir}"
     fi
 
+    # A second listing for the SPDX 2.2 package manifest, in container-manifest-2
+    # layout. packages_file is a published artifact with a NEVRA on each line
+    # but no vendor, which is needed to determine package supplier.
+    # This second listing is kept out of the published set by the leading dot.
+    #
+    # Sorted in place rather than through a pipe, so an rpm failure isn't masked
+    # by sort's exit status. build_image does not set pipefail.
+    local manifest_packages_file="${BUILD_DIR}/.${image_base_name}_manifest_packages.tmp"
+    rpm_query_manifest "${root_fs_dir}" > "${manifest_packages_file}"
+    sort -o "${manifest_packages_file}" "${manifest_packages_file}"
+    if [[ ! -s "${manifest_packages_file}" ]]; then
+        die "RPM mode: No packages in the container-manifest-2 listing of ${root_fs_dir}"
+    fi
+
     local created_epoch
     created_epoch=$(stat -c '%Y' "${root_fs_dir}/usr/lib/os-release")
 
     write_package_manifest \
         image \
         "${root_fs_dir}" \
-        "${image_base_name}" \
+        "azurecontainerlinux" \
         "${IMAGE_VERSION_ID}${IMAGE_BUILD_ID:++${IMAGE_BUILD_ID}}" \
-        "${packages_file}" \
+        "${manifest_packages_file}" \
         "${created_epoch}"
 }
 

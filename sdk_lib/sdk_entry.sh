@@ -1,5 +1,16 @@
 #!/bin/bash
 
+# su starts a fresh SDK login shell, so forward the cutoff through .bashrc.
+# Clear it even when the current Docker invocation did not request a snapshot.
+sed -i '/^export PACKAGE_SNAPSHOT_TIME=/d' /home/sdk/.bashrc || exit 1
+if [[ -n ${PACKAGE_SNAPSHOT_TIME:-} ]]; then
+    if [[ ! ${PACKAGE_SNAPSHOT_TIME} =~ ^[1-9][0-9]{9}$ ]]; then
+        echo "PACKAGE_SNAPSHOT_TIME must be a 10-digit positive Unix timestamp" >&2
+        exit 2
+    fi
+    printf 'export PACKAGE_SNAPSHOT_TIME=%s\n' "$PACKAGE_SNAPSHOT_TIME" >> /home/sdk/.bashrc
+fi
+
 if [ -n "${SDK_USER_ID:-}" ] ; then
     # If the "core" user from /usr/share/baselayout/passwd has the same ID, allow to take it instead
     usermod --non-unique -u $SDK_USER_ID sdk
@@ -107,6 +118,40 @@ fi
 # Forward docker sysext injection flag for test image builds
 sed -i -e '/export INJECT_DOCKER_SYSEXT=/d' /home/sdk/.bashrc 2>/dev/null || true
 echo "export INJECT_DOCKER_SYSEXT='${INJECT_DOCKER_SYSEXT:-false}'" >> /home/sdk/.bashrc
+
+ACL_IPE_MODE="${ACL_IPE_MODE:-disabled}"
+case "${ACL_IPE_MODE}" in
+    disabled)
+        ACL_IPE_CAPABLE=false
+        ;;
+    audit)
+        ACL_IPE_CAPABLE=true
+        ;;
+    enforcing)
+        echo "ERROR: ACL_IPE_MODE=enforcing is reserved and not supported by this build" >&2
+        exit 1
+        ;;
+    *)
+        echo "ERROR: ACL_IPE_MODE must be disabled, audit, or enforcing (got: ${ACL_IPE_MODE})" >&2
+        exit 1
+        ;;
+esac
+ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE:-ephemeral}"
+case "${ACL_IPE_SIGNING_MODE}" in
+    ephemeral|esrp) ;;
+    *)
+        echo "ERROR: ACL_IPE_SIGNING_MODE must be ephemeral or esrp (got: ${ACL_IPE_SIGNING_MODE})" >&2
+        exit 1
+        ;;
+esac
+sed -i \
+    -e '/export ACL_IPE_MODE=/d' \
+    -e '/export ACL_IPE_SIGNING_MODE=/d' \
+    -e '/export ACL_IPE_CAPABLE=/d' \
+    /home/sdk/.bashrc 2>/dev/null || true
+echo "export ACL_IPE_MODE='${ACL_IPE_MODE}'" >> /home/sdk/.bashrc
+echo "export ACL_IPE_SIGNING_MODE='${ACL_IPE_SIGNING_MODE}'" >> /home/sdk/.bashrc
+echo "export ACL_IPE_CAPABLE='${ACL_IPE_CAPABLE}'" >> /home/sdk/.bashrc
 
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"

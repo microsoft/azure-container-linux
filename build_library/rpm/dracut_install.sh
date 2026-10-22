@@ -48,10 +48,9 @@ _dracut_prepare_chroot() {
 _dracut_patch_bootengine_modules() {
     local root_fs_dir="$1"
 
-    # Remove dracut modules that require hardware we don't have in VMs
-    # This prevents systemd-cryptsetup from depending on fido2/pkcs11/tpm2-tss
-    # which would cause dracut-systemd to fail
-    for mod in 91fido2 91pkcs11 91tpm2-tss; do
+    # Non-host-only cryptsetup auto-adds available token modules. Keep TPM2
+    # for vTPM-enabled VMs; exclude FIDO2 and PKCS#11 from this image.
+    for mod in 91fido2 91pkcs11; do
         if [[ -d "${root_fs_dir}/usr/lib/dracut/modules.d/${mod}" ]]; then
             info "RPM mode: Removing dracut module ${mod} (not needed for VM boot)"
             sudo rm -rf "${root_fs_dir}/usr/lib/dracut/modules.d/${mod}"
@@ -304,8 +303,37 @@ SETUP_EOF
         "${selinux_toggle_module}/acl-selinux-toggle.sh"
     sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-selinux-toggle/acl-selinux-toggle.service" \
         "${selinux_toggle_module}/acl-selinux-toggle.service"
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/acl-node-security-profile.sh" \
+        "${selinux_toggle_module}/acl-node-security-profile.sh"
     sudo chmod +x "${selinux_toggle_module}/module-setup.sh"
     sudo chmod +x "${selinux_toggle_module}/acl-selinux-toggle.sh"
+
+    # Optional ACL IPE policy loader. Capable images always carry the loader,
+    # but it leaves the policy inactive unless Azure IMDS requests a mode.
+    case "${ACL_IPE_CAPABLE:-false}" in
+        false)
+            ;;
+        true)
+            info "RPM mode: Creating acl-ipe-load dracut module"
+            local ipe_load_module="${root_fs_dir}/usr/lib/dracut/modules.d/99acl-ipe-load"
+            sudo mkdir -p "${ipe_load_module}"
+            sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-ipe-load/module-setup.sh" \
+                "${ipe_load_module}/module-setup.sh"
+            sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.sh" \
+                "${ipe_load_module}/acl-ipe-load.sh"
+            sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.service" \
+                "${ipe_load_module}/acl-ipe-load.service"
+            sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/containerd2/containerd-acl-erofs-profile.conf" \
+                "${ipe_load_module}/containerd-acl-erofs-profile.conf"
+            sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/acl-node-security-profile.sh" \
+                "${ipe_load_module}/acl-node-security-profile.sh"
+            sudo chmod +x "${ipe_load_module}/module-setup.sh"
+            sudo chmod +x "${ipe_load_module}/acl-ipe-load.sh"
+            ;;
+        *)
+            die "Invalid ACL_IPE_CAPABLE: ${ACL_IPE_CAPABLE}"
+            ;;
+    esac
 
     # NOTE: /etc overlay is handled by bootengine's 99setup-root/initrd-setup-root
     # We need to create the required files BEFORE dracut runs so they get included in initramfs
@@ -398,6 +426,16 @@ EOF
 [Unit]
 # Disable job timeout to allow verity setup to wait for slow device enumeration
 JobRunningTimeoutSec=infinity
+EOF
+
+    # Drop-in for bootengine's decrypt-root.service (31decrypt-root dracut module).
+    # Kept here rather than as a bootengine patch to avoid rebasing with bootengine updates.
+    info "RPM mode: Creating drop-in for decrypt-root.service (ordering before root device wait)"
+    sudo mkdir -p "${systemd_dropin_dir}/decrypt-root.service.d"
+    cat <<'EOF' | sudo tee "${systemd_dropin_dir}/decrypt-root.service.d/10-acl-ordering.conf" > /dev/null
+[Unit]
+# Decrypt ROOT before initramfs waits for it.
+Before=initrd-root-device.target
 EOF
 }
 
