@@ -263,6 +263,134 @@ write_test_uki() {
     printf '%s\n' "$2" > "$1.cmdline"
 }
 
+test_required_usr_signature_continuity() (
+    local cert_dir="$1" other_cert_dir="$2" artifact_dir="$3" esp_dir="$4" token="$5"
+    local uki="${esp_dir}/EFI/Linux/acl.efi"
+    local extra_dir="${uki}.extra.d" template_dir="${esp_dir}/acl/uki-addons"
+    local verifier="${SCRIPT_DIR}/build_library/rpm/verify_ipe_signer_continuity.sh"
+    local root_hash other_hash options slot data_uuid hash_uuid addon original bad_cmdline
+    root_hash="$(printf '%064d' 1)"
+    other_hash="$(printf '%064d' 2)"
+    options="panic-on-corruption,root-hash-signature=/.extra/credentials/verity-usr-${root_hash}.p7s.cred"
+    local credential="${extra_dir}/verity-usr-${root_hash}.p7s.cred"
+
+    verify_required() {
+        bash "${verifier}" "${cert_dir}" "${artifact_dir}" "${esp_dir}"
+    }
+    reject_required() {
+        local failure
+        if failure="$(verify_required 2>&1)"; then
+            echo "Required /usr verification accepted $1" >&2
+            return 1
+        fi
+        [[ "${failure}" == *"$2"* ]] || {
+            echo "Unexpected failure for $1: ${failure}" >&2
+            return 1
+        }
+    }
+
+    mkdir -p "${template_dir}"
+    printf 'required\n' > "${artifact_dir}/usr-signature-mode"
+    write_test_uki "${uki}" "${token} mount.usr=/dev/mapper/usr mount.usrflags=ro"
+    for slot in a b; do
+        data_uuid="$(jq -r --arg label "USR-${slot^^}" \
+            '.layouts.base[] | select(.label == $label) | .uuid' \
+            "${BUILD_LIBRARY_DIR}/disk_layout_uki.json")"
+        hash_uuid="$(jq -r --arg label "HASH-${slot^^}" \
+            '.layouts.base[] | select(.label == $label) | .uuid' \
+            "${BUILD_LIBRARY_DIR}/disk_layout_uki.json")"
+        write_test_uki "${template_dir}/slot-${slot}.addon.efi" \
+            "systemd.verity_usr_data=PARTUUID=${data_uuid} systemd.verity_usr_hash=PARTUUID=${hash_uuid} systemd.verity_usr_options=${options} usrhash=${root_hash} acl.slot=${slot}"
+    done
+    openssl cms -sign -binary -noattr -nosmimecap -outform DER \
+        -in <(printf '%s' "${root_hash}") \
+        -signer "${cert_dir}/uki-signing-ca.pem" -inkey "${cert_dir}/ca.key" \
+        -out "${credential}"
+    cp "${credential}" "${TEST_DIR}/original-usr.cred"
+
+    for slot in a b; do
+        cp "${template_dir}/slot-${slot}.addon.efi"* "${extra_dir}/"
+        verify_required
+        original="$(<"${extra_dir}/slot-${slot}.addon.efi.cmdline")"
+        write_test_uki "${extra_dir}/slot-${slot}.addon.efi" \
+            "${original//${options}/panic-on-corruption}"
+        reject_required "unsigned active slot ${slot}" "Inconsistent signed /usr slot metadata"
+        rm "${extra_dir}/slot-${slot}.addon.efi"*
+    done
+    reject_required "no active slot" "exactly one active"
+    cp "${template_dir}/slot-"*.addon.efi* "${extra_dir}/"
+    reject_required "both active slots" "exactly one active"
+    write_test_uki "${extra_dir}/slot-b.addon.efi" \
+        "systemd.verity_usr_options=panic-on-corruption"
+    reject_required "extra unsigned active slot B" "exactly one active"
+    rm "${extra_dir}/slot-b.addon.efi"*
+
+    for addon in "${esp_dir}/loader/addons/slot-b.addon.efi" \
+        "${template_dir}/slot-c.addon.efi"; do
+        write_test_uki "${addon}" "$(<"${template_dir}/slot-b.addon.efi.cmdline")"
+        reject_required "misplaced slot ${addon}" "Unexpected slot addon"
+        rm "${addon}"*
+    done
+
+    original="$(<"${uki}.cmdline")"
+    for bad_cmdline in "${token}" "${token} mount.usr=PARTUUID=unverified" \
+        "${original} mount.usr=PARTUUID=unverified"; do
+        write_test_uki "${uki}" "${bad_cmdline}"
+        reject_required "missing, wrong or duplicate mount binding" "must mount /dev/mapper/usr"
+    done
+    for bad_cmdline in '"mount.usr=PARTUUID=unverified"' \
+        "'mount.usr=PARTUUID=unverified'" 'mount\.usr=PARTUUID=unverified'; do
+        write_test_uki "${uki}" "${original} ${bad_cmdline}"
+        reject_required "quoted or escaped base override" "Unsupported quoting or escaping"
+    done
+    write_test_uki "${uki}" "${original}"
+
+    for addon in "${extra_dir}/slot-a.addon.efi" \
+        "${template_dir}/slot-a.addon.efi" "${template_dir}/slot-b.addon.efi"; do
+        original="$(<"${addon}.cmdline")"
+        for bad_cmdline in '"mount.usr=PARTUUID=unverified"' \
+            '"systemd.verity_usr_options=panic-on-corruption"' \
+            "'systemd.verity_usr_options=panic-on-corruption'" \
+            'systemd\.verity_usr_options=panic-on-corruption'; do
+            write_test_uki "${addon}" "${original} ${bad_cmdline}"
+            reject_required "quoted or escaped slot override" "Unsupported quoting or escaping"
+        done
+        write_test_uki "${addon}" "${original} systemd.verity_usr_options=panic-on-corruption"
+        reject_required "duplicate slot options" "Invalid signed /usr slot metadata"
+        write_test_uki "${addon}" "${original//${options}/panic-on-corruption}"
+        reject_required "unsigned slot options" "Inconsistent signed /usr slot metadata"
+        write_test_uki "${addon}" "${original//${root_hash}/${other_hash}}"
+        reject_required "slot root hash disagreement" "Inconsistent signed /usr slot metadata"
+        write_test_uki "${addon}" "${original}"
+    done
+
+    for addon in "${extra_dir}/debug.addon.efi" \
+        "${esp_dir}/loader/addons/global.addon.efi" "${template_dir}/debug.addon.efi"; do
+        write_test_uki "${addon}" '"mount.usr=PARTUUID=unverified"'
+        reject_required "quoted addon mount override" "Unsupported quoting or escaping"
+        write_test_uki "${addon}" 'systemd.verity_usr_options=panic-on-corruption'
+        reject_required "non-slot verity override" "Unexpected slot addon"
+        rm "${addon}"*
+    done
+
+    rm "${credential}"
+    reject_required "missing root signature" "Invalid /usr signature candidate"
+    printf 'tampered\n' > "${credential}"
+    reject_required "tampered root signature" "Invalid /usr signature candidate"
+    openssl cms -sign -binary -noattr -nosmimecap -outform DER \
+        -in <(printf '%s' "${root_hash}") \
+        -signer "${other_cert_dir}/uki-signing-ca.pem" -inkey "${other_cert_dir}/ca.key" \
+        -out "${credential}"
+    reject_required "wrong root signer" "Invalid /usr signature candidate"
+    openssl cms -sign -binary -noattr -nosmimecap -outform DER \
+        -in <(printf '%s' "${other_hash}") \
+        -signer "${cert_dir}/uki-signing-ca.pem" -inkey "${cert_dir}/ca.key" \
+        -out "${credential}"
+    reject_required "signature for another root hash" "Invalid /usr signature candidate"
+    cp "${TEST_DIR}/original-usr.cred" "${credential}"
+    verify_required
+)
+
 test_vm_conversions_share_secure_boot_cert() {
     local cert_dir="${TEST_DIR}/vm-shared-cert"
     local other_cert_dir="${TEST_DIR}/vm-other-cert"
@@ -431,6 +559,8 @@ test_vm_conversions_share_secure_boot_cert() {
         echo "matching but unrelated signer pair was accepted" >&2
         return 1
     fi
+    test_required_usr_signature_continuity \
+        "${cert_dir}" "${other_cert_dir}" "${artifact_dir}" "${esp_dir}" "${token}"
     printf 'invalid policy credential\n' > "${extra_dir}/acl-ipe-policy.p7b.cred"
     if bash "${verifier}" \
         "${cert_dir}" "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
@@ -494,6 +624,104 @@ test_markerless_ipe_assets_are_rejected() {
     printf 'ephemeral\n' > "${artifact_dir}/ipe-signing-mode"
     validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}"
 }
+
+test_vm_conversion_requires_ipe_for_usr_signatures() (
+    source_test_functions "${SCRIPT_DIR}/image_to_vm.sh" \
+        has_ipe_assets validate_ipe_marker_consistency
+    local artifact_dir="${TEST_DIR}/required-marker-artifact"
+    local esp_dir="${TEST_DIR}/required-marker-esp" failure mode
+    mkdir -p "${artifact_dir}" "${esp_dir}/EFI/Linux"
+    [[ "$(validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}")" == disabled ]]
+
+    printf 'required\n' > "${artifact_dir}/usr-signature-mode"
+    if failure="$(validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}" 2>&1)"; then
+        echo "Direct VM conversion accepted required signatures without IPE metadata or assets" >&2
+        return 1
+    fi
+    [[ "${failure}" == *"Required /usr signatures need a valid ipe-signing-mode marker"* ]]
+    for mode in ephemeral esrp; do
+        printf '%s\n' "${mode}" > "${artifact_dir}/ipe-signing-mode"
+        [[ "$(validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}")" == "${mode}" ]]
+    done
+    printf 'disabled\n' > "${artifact_dir}/usr-signature-mode"
+    if validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
+        echo "Direct VM conversion accepted invalid /usr signature metadata" >&2
+        return 1
+    fi
+)
+
+test_direct_vm_conversion_rejects_required_before_signing() (
+    local fixture="${TEST_DIR}/direct-conversion"
+    local library="${fixture}/build_library" output
+    export CONVERSION_FIXTURE="${fixture}"
+    mkdir -p "${library}/rpm" "${fixture}/input" "${fixture}/output" \
+        "${fixture}/mounted/boot/EFI/Linux"
+    cp "${SCRIPT_DIR}/image_to_vm.sh" "${fixture}/image_to_vm.sh"
+    cp "${SCRIPT_DIR}/build_library/rpm/ipe_artifact.sh" "${library}/rpm/"
+    # Stub disk/SDK setup, but execute the conversion entry point and its real
+    # metadata checks. Signing stubs record whether they were reached.
+    cat > "${fixture}/common.sh" <<'SH'
+BUILD_LIBRARY_DIR="${CONVERSION_FIXTURE}/build_library"
+DEFAULT_BOARD=amd64-usr
+DEFAULT_MEM=1024
+DEFAULT_BUILD_ROOT="${CONVERSION_FIXTURE}"
+VM_TMP_ROOT="${CONVERSION_FIXTURE}/mounted"
+PACKAGE_SOURCE_MODE=RPM
+BOOTLOADER_MODE=uki
+FLATCAR_PRODUCTION_IMAGE_NAME=image.bin
+FLATCAR_PRODUCTION_IMAGE_SYSEXT_BASE=image_sysext
+FLAGS_FALSE=1
+FLAGS_TRUE=0
+FLAGS_ARGV=""
+VALID_IMG_TYPES=(azure)
+assert_inside_chroot() { :; }
+assert_not_root_user() { :; }
+DEFINE_string() { printf -v "FLAGS_$1" '%s' "$2"; }
+DEFINE_integer() { DEFINE_string "$@"; }
+DEFINE_boolean() { DEFINE_string "$@"; }
+FLAGS() {
+    FLAGS_from="${CONVERSION_FIXTURE}/input"
+    FLAGS_to="${CONVERSION_FIXTURE}/output"
+    FLAGS_format=azure
+}
+switch_to_strict_mode() { set -euo pipefail; }
+info() { :; }
+die_notrace() { echo "$*" >&2; exit 1; }
+set_vm_type() { :; }
+set_vm_paths() { :; }
+vm_cleanup() { :; }
+fix_mtab() { :; }
+setup_disk_image() { :; }
+install_oem_package() { :; }
+install_oem_sysext() { :; }
+run_fs_hook() { :; }
+_dst_dir() { printf '%s\n' "${CONVERSION_FIXTURE}/output"; }
+write_vm_disk() { exit 0; }
+SH
+    local helper
+    for helper in toolchain_util build_image_util vm_image_util cros_vm_constants \
+        release_util board_options; do
+        : > "${library}/${helper}.sh"
+    done
+    for helper in ensure_ephemeral_cert sign_uki_ephemeral; do
+        cat > "${library}/rpm/${helper}.sh" <<'SH'
+#!/bin/bash
+printf '%s\n' "${0##*/}" >> "${CONVERSION_FIXTURE}/signing-actions"
+SH
+        chmod +x "${library}/rpm/${helper}.sh"
+    done
+
+    bash "${fixture}/image_to_vm.sh"
+    grep -qxF 'sign_uki_ephemeral.sh' "${fixture}/signing-actions"
+    rm "${fixture}/signing-actions"
+    printf 'required\n' > "${fixture}/input/usr-signature-mode"
+    if output="$(bash "${fixture}/image_to_vm.sh" 2>&1)"; then
+        echo "Direct conversion signed required input without IPE metadata" >&2
+        return 1
+    fi
+    [[ "${output}" == *"Required /usr signatures need a valid ipe-signing-mode marker"* ]]
+    [[ ! -e "${fixture}/signing-actions" && ! -e "${fixture}/output/usr-signature-mode" ]]
+)
 
 test_incomplete_or_mismatched_cert_pair_rejected() {
     local cert_dir="${TEST_DIR}/incomplete-cert"
@@ -652,6 +880,8 @@ test_uki_binds_policy_before_writing_cmdline
 test_vm_conversions_share_secure_boot_cert
 test_disabled_vm_signing_is_scoped_to_build
 test_markerless_ipe_assets_are_rejected
+test_vm_conversion_requires_ipe_for_usr_signatures
+test_direct_vm_conversion_rejects_required_before_signing
 test_incomplete_or_mismatched_cert_pair_rejected
 test_root_hash_signing_boolean_and_hydration
 test_markerless_secure_boot_cert_remains_disabled

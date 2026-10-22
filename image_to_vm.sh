@@ -150,10 +150,16 @@ has_ipe_assets() {
 
 validate_ipe_marker_consistency() {
     local artifact_dir="$1" esp_dir="$2"
-    local signing_mode
+    local signing_mode usr_signature_mode
 
     signing_mode="$(ipe_resolve_artifact_signing_mode "${artifact_dir}")" ||
         return 1
+    usr_signature_mode="$(ipe_read_usr_signature_mode "${artifact_dir}")" ||
+        return 1
+    if [[ "${usr_signature_mode}" == "required" && "${signing_mode}" == "disabled" ]]; then
+        echo "Required /usr signatures need a valid ipe-signing-mode marker" >&2
+        return 1
+    fi
     if [[ "${signing_mode}" == "disabled" ]] &&
         has_ipe_assets "${artifact_dir}" "${esp_dir}"; then
         echo "IPE assets are present without a valid ipe-signing-mode marker" >&2
@@ -176,6 +182,8 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]
     ipe_signing_mode="$(
         validate_ipe_marker_consistency "${FLAGS_from}" "${VM_TMP_ROOT}/boot"
     )" || die_notrace "IPE artifact metadata is inconsistent with installed assets"
+    usr_signature_mode="$(ipe_read_usr_signature_mode "${FLAGS_from}")" ||
+        die_notrace "Invalid /usr signature metadata"
     if [[ "${ipe_signing_mode}" != "disabled" ]]; then
         ephemeral_cert_dir="${FLAGS_from}/acl-ipe-ephemeral"
         "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" \
@@ -203,8 +211,6 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${BOOTLOADER_MODE:-uki}" == "uki" ]]
     else
         printf '%s\n' "${ipe_signing_mode}" > "$(_dst_dir)/ipe-signing-mode"
     fi
-    usr_signature_mode="$(ipe_read_usr_signature_mode "${FLAGS_from}")" ||
-        die_notrace "Invalid /usr signature metadata"
     if [[ "${usr_signature_mode}" == "required" ]]; then
         printf 'required\n' > "$(_dst_dir)/usr-signature-mode"
     else

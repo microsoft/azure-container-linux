@@ -25,6 +25,17 @@ verify_attached_cms() {
         -out /dev/null >/dev/null 2>&1
 }
 
+validate_cmdline_syntax() {
+    # Producers emit whitespace-separated arguments. Do not let quoting or
+    # escaping hide overrides from the token checks below.
+    case "$1" in
+        *\"*|*\'*|*\\*)
+            echo "Unsupported quoting or escaping in IPE command line: $2" >&2
+            return 1
+            ;;
+    esac
+}
+
 [[ -s "${CERT}" ]] || {
     echo "IPE signer certificate is missing: ${CERT}" >&2
     exit 1
@@ -71,6 +82,7 @@ cmdline="$(ukify inspect "${uki}" --json=short --section=.cmdline:text |
         echo "Cannot read the selected UKI command line: ${uki}" >&2
         exit 1
     }
+validate_cmdline_syntax "${cmdline}" "${uki}"
 read -r -a tokens <<< "${cmdline//$'\n'/ }"
 expected_hash="$(sha256sum "${STAGED_POLICY}" | cut -d' ' -f1)"
 hashes=()
@@ -100,6 +112,19 @@ if [[ "${usr_signature_mode}" == "required" ]]; then
 fi
 
 shopt -s nullglob nocaseglob
+template_a="${ESP_DIR}/acl/uki-addons/slot-a.addon.efi"
+template_b="${ESP_DIR}/acl/uki-addons/slot-b.addon.efi"
+active_slot=""
+if [[ "${usr_signature_mode}" == "required" ]]; then
+    active_slots=("${uki}.extra.d"/slot-*.addon.efi)
+    if [[ "${#active_slots[@]}" -ne 1 ||
+        ( "${active_slots[0]:-}" != "${uki}.extra.d/slot-a.addon.efi" &&
+          "${active_slots[0]:-}" != "${uki}.extra.d/slot-b.addon.efi" ) ]]; then
+        echo "Signed /usr requires exactly one active slot-a or slot-b addon" >&2
+        exit 1
+    fi
+    active_slot="${active_slots[0]}"
+fi
 for addon in "${uki}.extra.d"/*.addon.efi "${ESP_DIR}/loader/addons"/*.addon.efi \
     "${ESP_DIR}/acl/uki-addons"/*.addon.efi; do
     [[ -f "${addon}" && ! -L "${addon}" ]] || {
@@ -119,6 +144,7 @@ for addon in "${uki}.extra.d"/*.addon.efi "${ESP_DIR}/loader/addons"/*.addon.efi
         echo "Cannot read IPE UKI addon command line: ${addon}" >&2
         exit 1
     }
+    validate_cmdline_syntax "${addon_cmdline}" "${addon}"
     read -r -a addon_tokens <<< "${addon_cmdline//$'\n'/ }"
     for token in "${addon_tokens[@]}"; do
         if [[ "${token}" == acl.ipe.policy_sha256=* ]]; then
@@ -135,20 +161,23 @@ for addon in "${uki}.extra.d"/*.addon.efi "${ESP_DIR}/loader/addons"/*.addon.efi
         fi
     done
     if [[ "${usr_signature_mode}" == "required" &&
-        "${addon##*/}" != slot-a.addon.efi && "${addon##*/}" != slot-b.addon.efi &&
-        "${addon_cmdline}" =~ (usrhash=|systemd[.]verity|root-hash-signature=) ]]; then
-        echo "Non-slot addon overrides signed /usr metadata: ${addon}" >&2
-        exit 1
+        "${addon}" != "${template_a}" && "${addon}" != "${template_b}" &&
+        "${addon}" != "${active_slot}" ]]; then
+        addon_name="${addon##*/}"
+        if [[ "${addon_name,,}" == slot-*.addon.efi ||
+            "${addon_cmdline}" =~ (usrhash=|systemd[.]verity|root-hash-signature=) ]]; then
+            echo "Unexpected slot addon or signed /usr metadata: ${addon}" >&2
+            exit 1
+        fi
     fi
 done
 
 if [[ "${usr_signature_mode}" == "required" ]]; then
     root_hash=""
-    for addon in "${ESP_DIR}/acl/uki-addons/slot-a.addon.efi" \
-        "${ESP_DIR}/acl/uki-addons/slot-b.addon.efi" \
-        "${uki}.extra.d/slot-a.addon.efi"; do
+    for addon in "${template_a}" "${template_b}" "${active_slot}"; do
         slot_cmdline="$(ukify inspect "${addon}" --json=short --section=.cmdline:text |
-            jq -er '.[".cmdline"].text')" || exit 1
+            jq -er '.[".cmdline"].text | select(type == "string" and (contains("\u0000") | not))')" || exit 1
+        validate_cmdline_syntax "${slot_cmdline}" "${addon}"
         hashes=()
         options=()
         read -r -a tokens <<< "${slot_cmdline//$'\n'/ }"

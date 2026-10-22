@@ -191,6 +191,9 @@ The policy hash is reserved for the main UKI command line; IPE image
 conversion rejects active UKI addons (including the optional
 `EXTRA_KERNEL_CMDLINE` debug addon) that supply another
 `acl.ipe.policy_sha256` token.
+Verified UKI, active/global addon, and addon template command lines must
+use whitespace-separated arguments without quotes or backslash escapes,
+including arguments supplied through `EXTRA_KERNEL_CMDLINE`.
 
 **Optional signed `/usr` root hash**
 
@@ -208,6 +211,10 @@ The build places a detached CMS signature in
 templates reference it through `root-hash-signature=`; systemd-stub delivers
 the credential to the initrd. The `usr-signature-mode` artifact marker
 preserves this intent through conversion and hydration.
+Conversion requires a valid IPE signing marker for `required` mode and
+exactly one active slot addon (A or B) in the selected UKI's `.extra.d`.
+Both slot templates and that active addon must agree on the root hash
+and signature credential; slot-named addons elsewhere are rejected.
 
 On opted-in images, missing or invalid signatures prevent normal boot of
 that entry, even when runtime IPE is off or IMDS is unavailable.
