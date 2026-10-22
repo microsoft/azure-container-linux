@@ -58,10 +58,20 @@ ipe_validate_usr_verity_table() {
             return 1
         fi
     fi
-    if [[ -n "${expected_mode}" && "${mode}" != "${expected_mode}" ]]; then
-        echo "/usr signature mode changed: expected ${expected_mode}, got ${mode}" >&2
-        return 1
-    fi
+    case "${expected_mode}" in
+        "") ;; # Standalone audit validation requires the declared candidate.
+        none) mode=none ;;
+        required)
+            [[ "${mode}" == required ]] || {
+                echo "/usr has no signature candidate but a signed mapping is required" >&2
+                return 1
+            }
+            ;;
+        *)
+            echo "Invalid expected /usr signature mode: ${expected_mode}" >&2
+            return 1
+            ;;
+    esac
     read -r -a fields <<< "${table}"
     if [[ "${fields[2]:-}" != verity || "${fields[10]:-}" != sha256 ||
           "${fields[11]:-}" != "${usr_hash}" ]]; then

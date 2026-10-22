@@ -1,0 +1,18 @@
+[Unit]
+Description=Resolve ACL security profile before /usr verity attachment
+DefaultDependencies=no
+Wants=systemd-networkd.service
+After=systemd-networkd.service
+Before=systemd-veritysetup@usr.service
+ConditionVirtualization=microsoft
+ConditionKernelCommandLine=flatcar.oem.id=azure
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=210s
+TimeoutStopSec=10s
+ExecStart=/usr/bin/acl-security-profile-early lookup
+ExecStopPost=/usr/bin/acl-security-profile-early finalize
+StandardOutput=journal+console
+StandardError=journal+console

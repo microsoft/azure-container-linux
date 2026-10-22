@@ -26,7 +26,6 @@ source "${SCRIPT_DIR}/build_library/rpm/additional_files/acl-node-security-profi
 POLICY_NAME="acl_ipe_boot_policy"
 IPE_DIR="/sys/kernel/security/ipe"
 POLICY_DIR="${IPE_DIR}/policies/${POLICY_NAME}"
-EXPECTED_USR_SIGNATURE_MODE=""
 
 get_ipe_mode() {
     local active enforce
@@ -90,7 +89,7 @@ assert_ipe_mode() {
 
 assert_ipe_assets_present() {
     local expected_active="${1:-0}"
-    local cmdline usr_hash policy_hash policy_active
+    local cmdline usr_hash policy_hash policy_active expected_signature_mode=none
     cmdline=$(ssh_cmd "cat /proc/cmdline")
 
     if [[ " ${cmdline} " == *" ipe.enforce="* ]]; then
@@ -121,14 +120,11 @@ assert_ipe_assets_present() {
         error "Valid /usr root hash is missing from the UKI"
         return 1
     fi
-    if [[ -z "${EXPECTED_USR_SIGNATURE_MODE}" ]]; then
-        EXPECTED_USR_SIGNATURE_MODE=none
-        if ipe_has_root_hash_signature "${cmdline}"; then
-            EXPECTED_USR_SIGNATURE_MODE=required
-        fi
+    if [[ "${expected_active}" == 1 ]] && ipe_has_root_hash_signature "${cmdline}"; then
+        expected_signature_mode=required
     fi
     ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
-        "sudo bash -s -- --verity-only '${EXPECTED_USR_SIGNATURE_MODE}'" \
+        "sudo bash -s -- --verity-only '${expected_signature_mode}'" \
         < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh" || {
         error "/usr dm-verity state changed or is invalid"
         return 1

@@ -47,7 +47,7 @@
 #   --ipe-mode=MODE                      IPE runtime mode: disabled|audit|enforcing (default: disabled)
 #                                        'enforcing' is reserved and rejected at build time.
 #   --ipe-signing-mode=MODE              IPE signing mode: ephemeral|esrp (default: ephemeral)
-#   --root-hash-signing-enabled=BOOL     Require a signed /usr root hash: true|false (default: false)
+#   --root-hash-signing-enabled=BOOL     Require /usr signature in runtime IPE audit: true|false (default: false)
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
 #   --no-secure-boot                     Disable Secure Boot where supported (not Azure arm64 VMs)

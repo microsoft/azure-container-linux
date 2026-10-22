@@ -239,6 +239,36 @@ _dracut_patch_bootengine_modules() {
     done
 }
 
+_dracut_install_usr_signature_module() {
+    local root_fs_dir="$1"
+    local module="${root_fs_dir}/usr/lib/dracut/modules.d/99acl-usr-signature"
+    local source_dir="${BUILD_LIBRARY_DIR}/rpm/additional_files/dracut-acl-usr-signature"
+    case "${ACL_ROOT_HASH_SIGNING_ENABLED:-false}" in
+        false)
+            sudo rm -rf "${module}"
+            return
+            ;;
+        true)
+            [[ "${ACL_IPE_CAPABLE:-false}" == true && "${BOOTLOADER_MODE:-uki}" == uki ]] ||
+                die "Audit-only /usr signatures require an IPE-capable UKI image"
+            ;;
+        *)
+            die "Invalid ACL_ROOT_HASH_SIGNING_ENABLED: ${ACL_ROOT_HASH_SIGNING_ENABLED}"
+            ;;
+    esac
+    info "RPM mode: Creating audit-only /usr signature dracut module"
+    sudo mkdir -p "${module}"
+    local file
+    for file in module-setup.sh acl-security-profile-early.sh \
+        acl-security-profile-early.service acl-usr-signature-generator systemd-veritysetup; do
+        sudo cp "${source_dir}/${file}" "${module}/${file}"
+    done
+    sudo cp "${BUILD_LIBRARY_DIR}/rpm/additional_files/acl-node-security-profile.sh" \
+        "${module}/acl-node-security-profile.sh"
+    sudo chmod +x "${module}/module-setup.sh" "${module}/acl-security-profile-early.sh" \
+        "${module}/systemd-veritysetup" "${module}/acl-usr-signature-generator"
+}
+
 # Install new initramfs assets that dracut will pick up.
 # Creates the sysroot-oem dracut module, flatcar-tmpfiles stub, tmpfiles.d configs,
 # and systemd drop-ins for verity device timing. Must run BEFORE dracut execution.
@@ -334,6 +364,8 @@ SETUP_EOF
             die "Invalid ACL_IPE_CAPABLE: ${ACL_IPE_CAPABLE}"
             ;;
     esac
+
+    _dracut_install_usr_signature_module "${root_fs_dir}"
 
     # NOTE: /etc overlay is handled by bootengine's 99setup-root/initrd-setup-root
     # We need to create the required files BEFORE dracut runs so they get included in initramfs

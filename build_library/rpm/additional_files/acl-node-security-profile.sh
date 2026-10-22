@@ -2,12 +2,16 @@
 # Shared Azure IMDS security-profile helpers for IPE and SELinux initramfs loaders.
 # Cache the validated profile or lookup failure for the current boot.
 
-ACL_SECURITY_PROFILE_CACHE="/run/acl/node-security-profile"
+ACL_SECURITY_PROFILE_CACHE="${ACL_SECURITY_PROFILE_CACHE:-/run/acl/node-security-profile}"
 ACL_SECURITY_PROFILE_FAILURE_CACHE="${ACL_SECURITY_PROFILE_CACHE}.failed"
 
 acl_usrbin() {
     local cmd="$1"
     shift
+    if [[ "${ACL_SECURITY_PROFILE_EARLY:-false}" == true ]]; then
+        "/usr/lib/acl/early/${cmd}" "$@"
+        return
+    fi
     LD_LIBRARY_PATH=/sysusr/usr/lib64 /sysusr/usr/bin/"${cmd}" "$@"
 }
 
@@ -15,10 +19,34 @@ acl_security_profile_cache_failure() {
     local cache_dir temporary_failure_cache
 
     cache_dir="${ACL_SECURITY_PROFILE_FAILURE_CACHE%/*}"
-    mkdir -p "${cache_dir}"
+    mkdir -p "${cache_dir}" || return 1
     temporary_failure_cache="${ACL_SECURITY_PROFILE_FAILURE_CACHE}.$$"
-    : > "${temporary_failure_cache}"
+    : > "${temporary_failure_cache}" || return 1
     mv -f "${temporary_failure_cache}" "${ACL_SECURITY_PROFILE_FAILURE_CACHE}"
+}
+
+acl_security_profile_cached() {
+    if [[ -e "${ACL_SECURITY_PROFILE_FAILURE_CACHE}" ]]; then
+        echo "ACL: Using cached IMDS security profile failure" >&2
+        return 1
+    fi
+    if [[ -r "${ACL_SECURITY_PROFILE_CACHE}" ]]; then
+        cat "${ACL_SECURITY_PROFILE_CACHE}"
+        return
+    fi
+    return 2
+}
+
+acl_security_profile_finalize() {
+    local rc
+    if acl_security_profile_cached >/dev/null; then
+        return 0
+    else
+        rc=$?
+    fi
+    [[ "${rc}" == 2 ]] || return 0
+    echo "ACL: No early IMDS result; caching failure for this boot" >&2
+    acl_security_profile_cache_failure
 }
 
 acl_security_profile_jq_filter() {
@@ -54,19 +82,19 @@ acl_security_profile_parse() {
 
 acl_security_profile() {
     local cache_dir imds_tags security_profile temporary_cache
-    local i transport_succeeded=false
+    local i rc transport_succeeded=false
 
-    if [[ -r "${ACL_SECURITY_PROFILE_CACHE}" ]]; then
-        printf '%s\n' "$(<"${ACL_SECURITY_PROFILE_CACHE}")"
+    if acl_security_profile_cached; then
         return 0
+    else
+        rc=$?
     fi
-    if [[ -e "${ACL_SECURITY_PROFILE_FAILURE_CACHE}" ]]; then
-        echo "ACL: Using cached IMDS security profile failure" >&2
-        return 1
-    fi
+    [[ "${rc}" == 2 ]] || return "${rc}"
 
-    echo "ACL: Starting networkd for IMDS security profile check" >&2
-    systemctl start --quiet systemd-networkd systemd-resolved 2>/dev/null || true
+    if [[ "${ACL_SECURITY_PROFILE_EARLY:-false}" != true ]]; then
+        echo "ACL: Starting networkd for IMDS security profile check" >&2
+        systemctl start --quiet systemd-networkd systemd-resolved 2>/dev/null || true
+    fi
 
     imds_tags=""
     for ((i = 1; i <= 30; i++)); do
@@ -97,10 +125,10 @@ acl_security_profile() {
     fi
 
     cache_dir="${ACL_SECURITY_PROFILE_CACHE%/*}"
-    mkdir -p "${cache_dir}"
+    mkdir -p "${cache_dir}" || return 1
     temporary_cache="${ACL_SECURITY_PROFILE_CACHE}.$$"
-    printf '%s' "${security_profile}" > "${temporary_cache}"
-    mv -f "${temporary_cache}" "${ACL_SECURITY_PROFILE_CACHE}"
+    printf '%s' "${security_profile}" > "${temporary_cache}" || return 1
+    mv -f "${temporary_cache}" "${ACL_SECURITY_PROFILE_CACHE}" || return 1
     printf '%s\n' "${security_profile}"
 }
 
@@ -117,4 +145,23 @@ acl_security_profile_value() {
         fi
     done
     return 0
+}
+
+acl_security_profile_ipe_mode() {
+    local requested_mode
+    requested_mode="$(acl_security_profile_value "$1" ipe)" || return 1
+    case "${requested_mode}" in
+        disabled|off|audit) printf '%s\n' "${requested_mode}" ;;
+        enforcing)
+            echo "ACL: IPE mode 'enforcing' is not supported at runtime; leaving IPE inactive." >&2
+            printf '%s\n' off
+            ;;
+        "")
+            printf '%s\n' off
+            ;;
+        *)
+            echo "ACL: Ignoring unrecognized IPE mode '${requested_mode}' from IMDS." >&2
+            printf '%s\n' off
+            ;;
+    esac
 }

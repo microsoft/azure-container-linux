@@ -72,22 +72,14 @@ source "${SECURITY_PROFILE_HELPER}" ||
     skip "could not load security profile helper: ${SECURITY_PROFILE_HELPER}"
 declare -F acl_security_profile >/dev/null ||
     skip "security profile helper is missing required functions"
-declare -F acl_security_profile_value >/dev/null ||
+declare -F acl_security_profile_ipe_mode >/dev/null ||
     skip "security profile helper is missing required functions"
 
 mode="off"
 if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
     if security_profile="$(acl_security_profile)"; then
-        requested_mode="$(acl_security_profile_value "${security_profile}" "ipe")"
-        case "${requested_mode}" in
-            disabled|off|audit) mode="${requested_mode}" ;;
-            enforcing)
-                log "IPE mode 'enforcing' is not supported at runtime; leaving IPE inactive."
-                mode="off"
-                ;;
-            "") ;;
-            *) log "Ignoring unrecognized IPE mode '${requested_mode}' from IMDS." ;;
-        esac
+        mode="$(acl_security_profile_ipe_mode "${security_profile}")" ||
+            skip "could not resolve IPE mode from security profile"
     else
         log "IMDS unavailable; leaving IPE inactive (policy loaded but not activated)."
     fi

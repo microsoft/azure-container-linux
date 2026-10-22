@@ -1,0 +1,50 @@
+#!/bin/bash
+
+set -euo pipefail
+
+real="${ACL_USR_VERITY_REAL:-/usr/lib/acl/real/systemd-veritysetup}"
+if [[ "${1:-}" != attach || "${2:-}" != usr ]]; then
+    exec "${real}" "$@"
+fi
+
+fail() { echo "acl-usr-signature: $*" >&2; exit 1; }
+[[ "$#" == 6 ]] || fail "Expected six arguments for /usr attachment"
+
+options="$6"
+[[ "${options}" != *\\* && "${options}" != /* &&
+    "${options}" != *$'\r'* && "${options}" != *$'\n'* ]] ||
+    fail "Unsupported escaped, multiline or legacy /usr verity options"
+IFS=, read -r -a fields <<< "${options},"
+unsigned_options=""
+separator=""
+signature_count=0
+for option in "${fields[@]}"; do
+    case "${option}" in
+        root-hash-signature=*)
+            signature_count=$((signature_count + 1))
+            [[ "${option#*=}" == "/.extra/credentials/verity-usr-${5}.p7s.cred" ]] ||
+                fail "Signature credential does not match the /usr root hash"
+            ;;
+        *)
+            unsigned_options+="${separator}${option}"
+            separator=,
+            ;;
+    esac
+done
+[[ "${signature_count}" == 1 ]] || fail "Expected exactly one /usr root-hash signature candidate"
+
+# shellcheck source=/usr/lib/acl/acl-node-security-profile.sh
+source "${ACL_SECURITY_PROFILE_HELPER:-/usr/lib/acl/acl-node-security-profile.sh}"
+# Also seals a skipped/failed early unit, so later loaders cannot re-query IMDS.
+acl_security_profile_finalize || fail "Could not record the early IMDS decision"
+mode=off
+if profile="$(acl_security_profile_cached)"; then
+    mode="$(acl_security_profile_ipe_mode "${profile}")" ||
+        fail "Could not resolve cached IPE mode"
+fi
+if [[ "${mode}" == audit ]]; then
+    echo "acl-usr-signature: IPE mode '${mode}'; forwarding signature candidate" >&2
+    exec "${real}" "$@"
+fi
+echo "acl-usr-signature: IPE mode '${mode}'; omitting root-hash signature" >&2
+exec "${real}" "${@:1:5}" "${unsigned_options}"

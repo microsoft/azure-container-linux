@@ -209,15 +209,31 @@ builds cannot opt in. For example:
 The build places a detached CMS signature in
 `<kernel>.efi.extra.d/verity-usr-<hash>.p7s.cred` on the ESP. Both slot
 templates reference it through `root-hash-signature=`; systemd-stub delivers
-the credential to the initrd. The `usr-signature-mode` artifact marker
-preserves this intent through conversion and hydration.
+the credential to the initrd. The `usr-signature-mode=required` artifact marker
+preserves the signed candidate's audit-mode requirement through conversion and
+hydration; it does not require a signed mapping when runtime IPE is disabled.
 Conversion requires a valid IPE signing marker for `required` mode and
 exactly one active slot addon (A or B) in the selected UKI's `.extra.d`.
 Both slot templates and that active addon must agree on the root hash
 and signature credential; slot-named addons elsewhere are rejected.
 
-On opted-in images, missing or invalid signatures prevent normal boot of
-that entry, even when runtime IPE is off or IMDS is unavailable.
+On opted-in images, an early initramfs service resolves and caches the Azure
+`acl-node-security-profile` tag before `/usr` attachment. Only `ipe=audit`
+passes the candidate signature to `systemd-veritysetup`; missing or invalid
+signatures then prevent attachment, with no unsigned retry. `ipe=disabled`,
+`ipe=off`, missing/unsupported modes, and unavailable or malformed IMDS omit the
+signature while retaining dm-verity block verification and `panic-on-corruption`.
+Non-Azure boots also omit it. Signing-disabled images are unchanged.
+
+The early lookup has a 210-second service timeout and caches failures for the
+rest of the boot, so the later IPE and SELinux loaders cannot make a different
+IMDS decision. Its failure does not block `/usr` attachment. Azure-only generator
+wiring masks bootengine's VMware-only `afterburn-network-kargs.service`, whose
+`/usr` dependency would otherwise form a cycle with early networking. Other
+providers retain their existing network setup. The signed command
+line still declares the candidate in every mode; validate actual signature use
+with the live dm-verity table's `root_hash_sig_key_desc`, not `/proc/cmdline` or
+the host-side generated service. Mode changes take effect on reboot.
 
 IPE activation triggers a containerd systemd drop-in that imports
 a base config (AgentBaker's on AKS nodes) merged with

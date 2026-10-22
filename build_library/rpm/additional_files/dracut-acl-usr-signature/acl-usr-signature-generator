@@ -1,0 +1,19 @@
+#!/bin/bash
+
+set -euo pipefail
+
+cmdline="$(cat "${ACL_IPE_CMDLINE_FILE:-/proc/cmdline}")"
+[[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]] || exit 0
+
+normal="${1:?Missing generator output directory}"
+early="${2:?Missing early generator output directory}"
+mkdir -p "${normal}/systemd-veritysetup@usr.service.d" "${early}"
+
+# Conditions do not remove ordering edges: this VMware-only networkd dependency
+# waits for /usr even on Azure, creating a cycle with the early IMDS lookup.
+ln -sf /dev/null "${early}/afterburn-network-kargs.service"
+cat > "${normal}/systemd-veritysetup@usr.service.d/audit-signature.conf" <<'EOF'
+[Unit]
+Wants=acl-security-profile-early.service
+After=acl-security-profile-early.service
+EOF

@@ -34,12 +34,10 @@ prepare_case() {
     printf '9\n' > "${IPE_DIR}/enforce"
     cp "${CONTAINERD_EROFS_PROFILE}" "${CASE_DIR}/containerd-acl-erofs-profile.conf"
 
-    command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
+    command cat > "${CASE_DIR}/security-profile.sh" <<EOF
+source "${PROFILE_HELPER}"
 acl_security_profile() {
     printf '%s\n' 'ipe=audit'
-}
-acl_security_profile_value() {
-    printf '%s\n' 'audit'
 }
 EOF
 }
@@ -99,8 +97,8 @@ run_inactive_case() {
 
     # Override IMDS to return the requested inactive-style mode
     command cat > "${CASE_DIR}/security-profile.sh" <<EOF
+source "${PROFILE_HELPER}"
 acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
-acl_security_profile_value() { printf '%s\n' '${imds_mode}'; }
 EOF
 
     # The policy is loaded into new_policy but not activated
@@ -132,8 +130,8 @@ run_active_case() (
     write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
 
     command cat > "${CASE_DIR}/security-profile.sh" <<EOF
+source "${PROFILE_HELPER}"
 acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
-acl_security_profile_value() { printf '%s\n' '${imds_mode}'; }
 EOF
 
     # Simulate the kernel creating the policy interface when the credential
@@ -164,9 +162,9 @@ test_enforcing_mode_safe_fallback() {
     make_credential "${CASE_DIR}/credential.p7b.cred"
     write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
 
-    command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
+    command cat > "${CASE_DIR}/security-profile.sh" <<EOF
+source "${PROFILE_HELPER}"
 acl_security_profile() { printf '%s\n' 'ipe=enforcing'; }
-acl_security_profile_value() { printf '%s\n' 'enforcing'; }
 EOF
 
     local output
@@ -326,6 +324,23 @@ test_imds_failure_after_validation() {
         ! acl_security_profile >/dev/null 2>&1
         [[ "$(wc -c < "${attempts}")" -eq 30 ]]
     )
+}
+
+test_early_failure_keeps_loader_inactive() {
+    prepare_case early-profile-failure
+    make_credential "${CASE_DIR}/credential.p7b.cred"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
+    : > "${CASE_DIR}/profile.failed"
+    command cat > "${CASE_DIR}/security-profile.sh" <<EOF
+source "${PROFILE_HELPER}"
+acl_usrbin() { echo unexpected-network-call >> "${CASE_DIR}/calls"; return 99; }
+EOF
+    local output
+    output="$(ACL_SECURITY_PROFILE_CACHE="${CASE_DIR}/profile" run_loader)"
+    grep -Fq "IMDS unavailable; leaving IPE inactive" <<< "${output}"
+    [[ "$(<"${IPE_DIR}/enforce")" == 9 ]]
+    [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
+    [[ ! -e "${CASE_DIR}/calls" ]]
 }
 
 # ---- Static assertions: Azure-scoped, best-effort service wiring ----
@@ -576,6 +591,7 @@ test_other_preexisting_ambiguity
 test_missing_security_profile_helper
 test_incomplete_security_profile_helper
 test_imds_failure_after_validation
+test_early_failure_keeps_loader_inactive
 test_best_effort_service_wiring
 test_containerd_profile_selection
 

@@ -195,6 +195,7 @@ test_usr_verity_signature_contract() {
     signed_table="${unsigned_table/1 panic_on_corruption/3 panic_on_corruption root_hash_sig_key_desc test-key}"
 
     [[ "$(ipe_validate_usr_verity_table "${unsigned_cmdline}" "${unsigned_table}" none)" == none ]]
+    [[ "$(ipe_validate_usr_verity_table "${signed_cmdline}" "${unsigned_table}" none)" == none ]]
     [[ "$(ipe_validate_usr_verity_table "${signed_cmdline}" "${signed_table}" required)" == required ]]
     if ipe_validate_usr_verity_table "${signed_cmdline}" "${unsigned_table}" required ||
        ipe_validate_usr_verity_table "${unsigned_cmdline}" "${signed_table}" none ||
@@ -209,7 +210,7 @@ test_usr_verity_signature_contract() {
     fi
 }
 
-test_toggle_preserves_usr_signature_mode() (
+test_toggle_selects_usr_signature_mode() (
     local hash unsigned_cmdline unsigned_table option_key="${1:-systemd.verity_usr_options}"
     hash="$(printf '%064d' 1)"
     unsigned_cmdline="usrhash=${hash} acl.ipe.policy_sha256=${hash} ${option_key}=panic-on-corruption"
@@ -217,7 +218,6 @@ test_toggle_preserves_usr_signature_mode() (
     export MOCK_CMDLINE="${unsigned_cmdline},root-hash-signature=/.extra/credentials/verity-usr-${hash}.p7s.cred"
     export MOCK_TABLE="${unsigned_table/1 panic_on_corruption/3 panic_on_corruption root_hash_sig_key_desc test-key}"
     local mock_active=1
-    EXPECTED_USR_SIGNATURE_MODE=""
     VM_SSH_USER=tester
     VM_IP=test-vm
     SSH_OPTS=()
@@ -250,24 +250,25 @@ test_toggle_preserves_usr_signature_mode() (
     ssh() { bash -c "${@: -1}"; }
 
     assert_ipe_assets_present 1
-    [[ "${EXPECTED_USR_SIGNATURE_MODE}" == required ]]
     mock_active=0
+    if assert_ipe_assets_present 0; then
+        echo "Disabling IPE retained a signed /usr mapping" >&2
+        return 1
+    fi
+    MOCK_TABLE="${unsigned_table}"
     assert_ipe_assets_present 0
+    mock_active=1
+    if assert_ipe_assets_present 1; then
+        echo "Audit accepted an unsigned mapping with a signature candidate" >&2
+        return 1
+    fi
+    MOCK_TABLE="${unsigned_table/1 panic_on_corruption/3 panic_on_corruption root_hash_sig_key_desc test-key}"
+    assert_ipe_assets_present 1
     MOCK_CMDLINE="${unsigned_cmdline}"
     MOCK_TABLE="${unsigned_table}"
-    if assert_ipe_assets_present 0; then
-        echo "Disabling IPE allowed the root signature requirement to disappear" >&2
-        return 1
-    fi
-    EXPECTED_USR_SIGNATURE_MODE=""
+    assert_ipe_assets_present 1
+    mock_active=0
     assert_ipe_assets_present 0
-    [[ "${EXPECTED_USR_SIGNATURE_MODE}" == none ]]
-    MOCK_CMDLINE="${unsigned_cmdline},root-hash-signature=/.extra/credentials/verity-usr-${hash}.p7s.cred"
-    MOCK_TABLE="${unsigned_table/1 panic_on_corruption/3 panic_on_corruption root_hash_sig_key_desc test-key}"
-    if assert_ipe_assets_present 0; then
-        echo "Unsigned-root baseline changed during IPE toggling" >&2
-        return 1
-    fi
 )
 
 test_signed_and_unsigned_probe_expectations() {
@@ -524,7 +525,7 @@ test_root_signature_detection
 for option_key in systemd.verity_usr_options systemd.verity-usr-options \
     systemd.verity_usr-options systemd.verity-usr_options; do
     test_usr_verity_signature_contract "${option_key}"
-    test_toggle_preserves_usr_signature_mode "${option_key}"
+    test_toggle_selects_usr_signature_mode "${option_key}"
 done
 test_signed_and_unsigned_probe_expectations
 test_signed_btrfs_probe_defers_no_denial_assertion
