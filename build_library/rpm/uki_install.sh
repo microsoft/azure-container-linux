@@ -70,24 +70,15 @@ uki_install_rpm() {
     fi
     info "UKI/RPM: Using SDK-provided ukify from $(command -v ukify)"
 
-    # Source rpm_install functions for rpm_get_staging_dir
+    # Source rpm_install functions for bootloader RPM selection
     . "${BUILD_LIBRARY_DIR}/rpm/rpm_install.sh" || die "Failed to source rpm_install.sh"
 
-    # Locate the RPM cache directory
-    rpm_staging=$(rpm_get_staging_dir)
-    local uki_local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
-
-    # Note: systemd-boot and shim packages should already be downloaded by finish_image_rpm()
-    # No need to call rpm_download_packages again - the packages are in the local cache
-
-    # Find systemd-boot and shim RPMs in local cache — filter by target architecture
+    # Only use the RPMs downloaded for this image, not persistent local-cache versions.
     local uki_rpms=()
     local rpm_file
     for pkg in systemd-boot shim; do
-        rpm_file=$(find "${uki_local_cache}" -name "${pkg}-[0-9]*.${RPM_ARCH}.rpm" | sort -V | tail -1)
-        if [[ -z "${rpm_file}" ]]; then
-            die "RPM file not found for package: ${pkg} (${RPM_ARCH}) in ${uki_local_cache}"
-        fi
+        rpm_file=$(rpm_bootloader_package_file "${FLAGS_disk_image}" "${pkg}" "${RPM_ARCH}") ||
+            die "Failed to select ${pkg} RPM"
         uki_rpms+=("${rpm_file}")
     done
 

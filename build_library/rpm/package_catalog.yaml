@@ -26,6 +26,12 @@ packages:
   sys-apps/systemd:
     - systemd
     - systemd-journal-remote
+    - polkit
+    - systemd-container
+    # Select compression CLIs explicitly; the library dependencies alone do
+    # not provide the programs tar invokes for bzip2/zstd archives.
+    - bzip2
+    - zstd
     - libselinux-utils
     - selinux-policy
     - policycoreutils
@@ -54,6 +60,8 @@ packages:
   sys-libs/libgcc: libgcc
   sys-libs/libstdc++: libstdc++
   sys-libs/glibc: glibc
+  # Low priority: omit glibc-nscd (nscd); do not add a caching daemon without
+  # a host runtime requirement.
   sys-devel/binutils: binutils
 
   # Core utilities
@@ -85,7 +93,9 @@ packages:
   sys-apps/texinfo: texinfo
 
   # Networking
-  sys-apps/iproute2: iproute
+  sys-apps/iproute2:
+    - iproute
+    - iproute-tc
   net-misc/iputils: iputils
   net-misc/openssh: openssh
   net-misc/curl: curl
@@ -184,6 +194,8 @@ packages:
 
   # Editors
   app-editors/vim: vim
+  # Low priority: omit vim-extra (xxd) from the Vim mappings for now.
+  # Proposed mapping if needed: dev-util/xxd: vim-extra
   app-editors/nano: nano
 
   # Version control
@@ -306,6 +318,11 @@ packages:
   sys-fs/xfsprogs: xfsprogs
   sys-fs/btrfs-progs: btrfs-progs
   sys-fs/quota: quota
+  # Low priority: omit quota-rpc (rpc.rquotad) and quota-warnquota (warnquota);
+  # NFS quota serving and email administration are not baseline host needs.
+  # Low priority: omit EROFS tools from the base catalog for now; kernel
+  # mounting does not require them. The containerd sysext selects erofs-utils
+  # separately. Proposed base mapping: sys-fs/erofs-utils: erofs-utils
 
   # Device management
   sys-fs/udev: systemd-udev
@@ -338,9 +355,7 @@ packages:
 
   # Kernel headers and firmware
   sys-kernel/linux-headers: SKIP
-  sys-firmware/intel-microcode:
-    rpm: microcode_ctl
-    arch: amd64
+  sys-firmware/intel-microcode: SKIP
   sys-kernel/coreos-firmware: SKIP
 
   # Alternatives system (Azure Linux provides alternatives)
@@ -424,6 +439,7 @@ packages:
   # Cryptography libraries
   app-crypt/libmd: libmd
   app-crypt/p11-kit: p11-kit
+  # Low priority: omit p11-kit-server; remote token serving is not required.
   app-crypt/p11-kit-trust: p11-kit-trust
   app-crypt/pesign: pesign
   app-crypt/pinentry: pinentry
@@ -474,6 +490,8 @@ packages:
   dev-libs/oniguruma: oniguruma
   dev-libs/protobuf: protobuf
   dev-libs/userspace-rcu: userspace-rcu
+  # Low priority: omit xxhash (xxhsum family), optional checksum diagnostics.
+  # Proposed mapping if needed: dev-libs/xxhash: xxhash
 
   # Development utilities
   dev-util/pkgconf: pkgconf
@@ -482,8 +500,11 @@ packages:
   net-dns/bind:
     - bind
     - bind-utils
+  # Low priority: omit bind-dnssec-utils; DNSSEC signing/administration is
+  # not required on the host.
   net-dns/c-ares: c-ares
   net-dns/libidn2: libidn2
+  # Low priority: omit idn2, the optional interactive IDN conversion CLI.
 
   # Firewall utilities
   net-firewall/ebtables: ebtables-legacy
@@ -505,6 +526,8 @@ packages:
   net-libs/libnfnetlink: libnfnetlink
   net-libs/libnftnl: libnftnl
   net-libs/libpsl: libpsl
+  # Low priority: omit psl (psl/psl-make-dafsa); interactive PSL queries and
+  # data generation are not required for library consumers.
   net-libs/libtirpc: libtirpc
   net-libs/nghttp2: nghttp2
   net-libs/rpcsvc-proto: rpcsvc-proto
@@ -539,6 +562,7 @@ packages:
   sys-fs/cryptsetup:
     - cryptsetup
     - veritysetup
+    - integritysetup
   sys-libs/cryptsetup-libs: cryptsetup-libs
   sys-fs/device-mapper: device-mapper
   sys-fs/device-mapper-libs: device-mapper-libs
@@ -556,6 +580,8 @@ packages:
   sys-libs/libcap-ng: libcap-ng
   sys-libs/libnvme: libnvme
   sys-libs/libseccomp: libseccomp
+  # Low priority: omit libseccomp-devel (scmp_sys_resolver); do not install
+  # headers/development payload solely for this optional diagnostic.
   sys-libs/libselinux: libselinux
   sys-libs/libsemanage: libsemanage
   sys-libs/libsepol: libsepol
@@ -566,6 +592,8 @@ packages:
   sys-libs/ncurses-libs: ncurses-libs
   sys-libs/talloc: libtalloc
   sys-libs/tdb: libtdb
+  # Low priority: omit tdb-tools (tdbbackup/tdbdump/tdbrestore/tdbtool);
+  # database inspection/repair tools are not baseline runtime requirements.
 
   # System process utilities
   sys-process/audit: audit

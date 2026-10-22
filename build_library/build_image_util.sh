@@ -945,6 +945,7 @@ EOF
   fi
 
   rm -rf "${BUILD_DIR}"/configroot
+  rm -f "${BUILD_DIR}"/.*_manifest_packages.tmp
   cleanup_mounts "${root_fs_dir}"
   trap - EXIT
 
@@ -1014,6 +1015,10 @@ EOF
             "${bootloader_args[@]}"
       done
     fi
+  fi
+
+  if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+    rm -rf -- "${BUILD_DIR}/bootloader-rpms"
   fi
 
   if [[ -n "${pcr_policy}" ]]; then
