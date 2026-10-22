@@ -26,6 +26,7 @@ source "${SCRIPT_DIR}/build_library/rpm/additional_files/acl-node-security-profi
 POLICY_NAME="acl_ipe_boot_policy"
 IPE_DIR="/sys/kernel/security/ipe"
 POLICY_DIR="${IPE_DIR}/policies/${POLICY_NAME}"
+EXPECTED_USR_SIGNATURE_MODE=""
 
 get_ipe_mode() {
     local active enforce
@@ -120,10 +121,18 @@ assert_ipe_assets_present() {
         error "Valid /usr root hash is missing from the UKI"
         return 1
     fi
-    if ipe_has_root_hash_signature "${cmdline}"; then
-        error "Policy-only IPE must not require a /usr root-hash signature"
-        return 1
+    if [[ -z "${EXPECTED_USR_SIGNATURE_MODE}" ]]; then
+        EXPECTED_USR_SIGNATURE_MODE=none
+        if ipe_has_root_hash_signature "${cmdline}"; then
+            EXPECTED_USR_SIGNATURE_MODE=required
+        fi
     fi
+    ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
+        "sudo bash -s -- --verity-only '${EXPECTED_USR_SIGNATURE_MODE}'" \
+        < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh" || {
+        error "/usr dm-verity state changed or is invalid"
+        return 1
+    }
     info "IPE assets are present and policy active state is '${policy_active}'"
 }
 
