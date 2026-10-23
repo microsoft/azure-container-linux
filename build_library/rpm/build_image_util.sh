@@ -1316,7 +1316,8 @@ UMASK_CIS
     # 6.1.1.1.3/5/6: Journald configuration
     # The CIS assessor runs "systemd-analyze cat-config systemd/journald.conf"
     # and searches for uncommented parameters. Use a drop-in to override defaults.
-    # 6.1.1.1.3: ForwardToSyslog — ACL has no rsyslog, so set to "no".
+    # 6.1.1.1.3: rsyslog reads the journal via imjournal; forwarding duplicates
+    # messages. This drop-in overrides the RPM's 50-rsyslog-journald.conf.
     sudo install -d -m 0755 "${root_fs_dir}/etc/systemd/journald.conf.d"
     cat <<'JOURNALD_CIS' | sudo tee "${root_fs_dir}/etc/systemd/journald.conf.d/cis.conf" > /dev/null
 [Journal]
@@ -1335,6 +1336,20 @@ JOURNALD_CIS
     info "RPM mode: CIS Level 1 hardening complete"
 }
 
+_configure_rsyslog_rpm() {
+    local root_fs_dir="$1"
+    local config="${root_fs_dir}/etc/rsyslog.conf"
+
+    [[ -f "$config" ]] || die "RPM mode: missing rsyslog config: $config"
+    [[ $(sudo grep -c '^module(load="imjournal")' "$config") -eq 1 ]] ||
+        die "RPM mode: unexpected imjournal config: $config"
+
+    sudo sed -i 's|^module(load="imjournal")|module(load="imjournal" StateFile="/var/lib/rsyslog/imjournal.state" PersistStateInterval="100")|' "$config"
+    echo 'd /var/lib/rsyslog 0755 root root -' |
+        sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/rsyslog.conf" > /dev/null
+    sudo chmod 0644 "${root_fs_dir}/usr/lib/tmpfiles.d/rsyslog.conf"
+}
+
 # ── Orchestrator: post-tmpfiles image customization ──────────────────────────
 finish_image_post_tmpfiles_rpm() {
     local root_fs_dir="$1"
@@ -1350,6 +1365,7 @@ finish_image_post_tmpfiles_rpm() {
     _configure_kdump_rpm "${root_fs_dir}"
     _configure_misc_rpm "${root_fs_dir}"
     _configure_cis_hardening_rpm "${root_fs_dir}"
+    _configure_rsyslog_rpm "${root_fs_dir}"
     _generate_hwdb_rpm "${root_fs_dir}"
     _mask_core_sshkeys_rpm "${root_fs_dir}"
 }
