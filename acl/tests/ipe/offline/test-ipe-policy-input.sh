@@ -263,12 +263,29 @@ write_test_uki() {
     printf '%s\n' "$2" > "$1.cmdline"
 }
 
+test_systemd_cmdline_quoting() {
+    local -a words=()
+    local payload
+    ipe_split_systemd_cmdline words \
+        'one="two words" mixed=a"b c"d path=C:\tmp\file empty="" slash=\"left right"' test
+    [[ "${#words[@]}" -eq 5 ]]
+    [[ "${words[0]}" == 'one=two words' && "${words[1]}" == 'mixed=ab cd' ]]
+    [[ "${words[2]}" == 'path=C:\tmp\file' && "${words[3]}" == 'empty=' ]]
+    [[ "${words[4]}" == 'slash=\left right' ]]
+    ipe_split_systemd_cmdline words "one='two words' ''" test
+    [[ "${#words[@]}" -eq 2 && "${words[0]}" == 'one=two words' && -z "${words[1]}" ]]
+    printf -v payload 'note="$(touch %s)"' "${TEST_DIR}/cmdline-executed"
+    ipe_split_systemd_cmdline words "${payload}" test
+    [[ "${words[0]}" == "note=\$(touch ${TEST_DIR}/cmdline-executed)" ]]
+    [[ ! -e "${TEST_DIR}/cmdline-executed" ]]
+}
+
 test_required_usr_signature_continuity() (
     local cert_dir="$1" other_cert_dir="$2" artifact_dir="$3" esp_dir="$4" token="$5"
     local uki="${esp_dir}/EFI/Linux/acl.efi"
     local extra_dir="${uki}.extra.d" template_dir="${esp_dir}/acl/uki-addons"
     local verifier="${SCRIPT_DIR}/build_library/rpm/verify_ipe_signer_continuity.sh"
-    local root_hash other_hash options slot data_uuid hash_uuid addon original bad_cmdline option_key
+    local root_hash other_hash options slot data_uuid hash_uuid addon original cmdline bad_cmdline option_key control
     root_hash="$(printf '%064d' 1)"
     other_hash="$(printf '%064d' 2)"
     options="panic-on-corruption,root-hash-signature=/.extra/credentials/verity-usr-${root_hash}.p7s.cred"
@@ -362,6 +379,10 @@ test_required_usr_signature_continuity() (
         write_test_uki "${uki}" "${original} ${bad_cmdline}"
         reject_required "CR-hidden base mount override" "Unsupported carriage return"
     done
+    for control in $'\v' $'\f' $'\x7f' $'\x01'; do
+        write_test_uki "${uki}" "${original} quiet${control}mount.usr=PARTUUID=unverified"
+        reject_required "control-hidden base mount override" "Unsupported control character"
+    done
     write_test_uki "${uki}" "${original}"
 
     for addon in "${extra_dir}/slot-a.addon.efi" \
@@ -396,8 +417,33 @@ test_required_usr_signature_continuity() (
 
     for addon in "${extra_dir}/debug.addon.efi" \
         "${esp_dir}/loader/addons/global.addon.efi" "${template_dir}/debug.addon.efi"; do
-        write_test_uki "${addon}" '"mount.usr=PARTUUID=unverified"'
-        reject_required "quoted addon mount override" "Unsupported quoting or escaping"
+        for cmdline in 'debug.message="hello world" debug.path=C:\logs\boot' \
+            "debug.message='two words'" \
+            'debug.message="usrhash=example mount.usr=example systemd.verity_usr_options=example"'; do
+            write_test_uki "${addon}" "${cmdline}"
+            verify_required
+        done
+        for bad_cmdline in '"mount.usr=PARTUUID=unverified"' \
+            'mount."usr"=PARTUUID=unverified' \
+            "'rd.mount.usr'=PARTUUID=unverified" \
+            'rd.systemd.verity-usr-options="panic-on-corruption"'; do
+            write_test_uki "${addon}" "${bad_cmdline}"
+            reject_required "quoted addon override" "Addon overrides required /usr verification"
+        done
+        for bad_cmdline in '"usrhash"=bad' \
+            'systemd."verity"_usr_options="panic-on-corruption"' \
+            "'systemd.verity-usr-options'=panic-on-corruption"; do
+            write_test_uki "${addon}" "${bad_cmdline}"
+            reject_required "quoted addon verity metadata" "Unexpected slot addon"
+        done
+        for bad_cmdline in 'debug.message="unfinished' "debug.message='unfinished"; do
+            write_test_uki "${addon}" "${bad_cmdline}"
+            reject_required "unbalanced addon quotes" "Unbalanced quoting"
+        done
+        for control in $'\v' $'\f' $'\x7f' $'\x01'; do
+            write_test_uki "${addon}" "quiet${control}usrhash=bad"
+            reject_required "control-hidden addon override" "Unsupported control character"
+        done
         write_test_uki "${addon}" $'quiet\rmount.usr=PARTUUID=unverified'
         reject_required "CR-hidden addon mount override" "Unsupported carriage return"
         write_test_uki "${addon}" 'systemd.verity_usr_options=panic-on-corruption'
@@ -485,11 +531,17 @@ test_markerless_usr_signature_assets() (
     done
     for signed in \
         'systemd.verity-usr-options=panic-on-corruption,root-hash-signature=/missing' \
+        'systemd.verity_usr_options=panic-on-corruption,root-hash-sig"nature"=/missing' \
+        "systemd.verity_usr_options=panic-on-corruption,root-hash-'signature'=/missing" \
         '"root-hash-signature=/missing"' \
         $'quiet\rroot-hash-signature=/missing'; do
         write_test_uki "${assets[0]}" "${unsigned} ${signed}"
         reject_markerless "${signed}"
     done
+    # This metadata guard must not impose IPE quoting rules on unsigned images.
+    write_test_uki "${assets[0]}" 'debug.message="unfinished'
+    rm "${artifact_dir}/ipe-signing-mode"
+    [[ "$(validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}")" == disabled ]]
     write_test_uki "${assets[0]}" "${unsigned}"
     : > "${assets[0]}.invalid-json"
     if failure="$(validate_ipe_marker_consistency "${artifact_dir}" "${esp_dir}" 2>&1)"; then
@@ -562,10 +614,11 @@ test_vm_conversions_share_secure_boot_cert() {
 
     local addon="${extra_dir}/debug.addon.efi"
     local global_dir="${esp_dir}/loader/addons"
-    write_test_uki "${addon}" "systemd.log_level=debug"
+    write_test_uki "${addon}" 'systemd.log_level=debug debug.message="two words" debug.path=C:\logs'
     bash "${verifier}" "${cert_dir}" "${artifact_dir}" "${esp_dir}"
     for bad_cmdline in "${token}" "quiet acl.ipe.policy_sha256=bad" \
-        "acl.ipe.policy_sha256="; do
+        "acl.ipe.policy_sha256=" '"acl.ipe.policy_sha256=bad"' \
+        'acl."ipe".policy_sha256=bad' "debug.message=\" ${token} \""; do
         write_test_uki "${addon}" "${bad_cmdline}"
         if bash "${verifier}" "${cert_dir}" "${artifact_dir}" "${esp_dir}" 2>/dev/null; then
             echo "IPE policy hash in active debug addon was accepted" >&2
@@ -667,6 +720,7 @@ test_vm_conversions_share_secure_boot_cert() {
         echo "matching but unrelated signer pair was accepted" >&2
         return 1
     fi
+    test_systemd_cmdline_quoting
     test_markerless_usr_signature_assets
     test_required_usr_signature_continuity \
         "${cert_dir}" "${other_cert_dir}" "${artifact_dir}" "${esp_dir}" "${token}"

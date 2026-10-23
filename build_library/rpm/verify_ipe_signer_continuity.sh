@@ -26,14 +26,11 @@ verify_attached_cms() {
         -out /dev/null >/dev/null 2>&1
 }
 
-validate_cmdline_syntax() {
-    # Do not let quoting, escaping or differences in whitespace handling
-    # between Bash and systemd hide overrides from the token checks below.
+validate_generated_cmdline_syntax() {
+    ipe_validate_cmdline_controls "$1" "$2" || return 1
+    # Base and slot metadata are generated, not user-supplied. Keep them
+    # canonical for the policy loader and guest signature checks.
     case "$1" in
-        *$'\r'*)
-            echo "Unsupported carriage return in IPE command line: $2" >&2
-            return 1
-            ;;
         *\"*|*\'*|*\\*)
             echo "Unsupported quoting or escaping in IPE command line: $2" >&2
             return 1
@@ -87,7 +84,7 @@ cmdline="$(ukify inspect "${uki}" --json=short --section=.cmdline:text |
         echo "Cannot read the selected UKI command line: ${uki}" >&2
         exit 1
     }
-validate_cmdline_syntax "${cmdline}" "${uki}"
+validate_generated_cmdline_syntax "${cmdline}" "${uki}"
 read -r -a tokens <<< "${cmdline//$'\n'/ }"
 expected_hash="$(sha256sum "${STAGED_POLICY}" | cut -d' ' -f1)"
 hashes=()
@@ -151,8 +148,23 @@ for addon in "${uki}.extra.d"/*.addon.efi "${ESP_DIR}/loader/addons"/*.addon.efi
         echo "Cannot read IPE UKI addon command line: ${addon}" >&2
         exit 1
     }
-    validate_cmdline_syntax "${addon_cmdline}" "${addon}"
+    reserved_slot=false
+    case "${addon}" in
+        "${template_a}"|"${template_b}"|"${uki}.extra.d/slot-a.addon.efi"|"${uki}.extra.d/slot-b.addon.efi")
+            reserved_slot=true
+            validate_generated_cmdline_syntax "${addon_cmdline}" "${addon}"
+            ;;
+    esac
+    # The initrd policy loader uses raw whitespace splitting, unlike systemd.
+    # Check that view too, including policy tokens inside quoted user values.
     read -r -a addon_tokens <<< "${addon_cmdline//$'\n'/ }"
+    for token in "${addon_tokens[@]}"; do
+        if [[ "${token}" == acl.ipe.policy_sha256=* ]]; then
+            echo "IPE UKI addon must not set acl.ipe.policy_sha256: ${addon}" >&2
+            exit 1
+        fi
+    done
+    ipe_split_systemd_cmdline addon_tokens "${addon_cmdline}" "${addon}"
     for token in "${addon_tokens[@]}"; do
         if [[ "${token}" == acl.ipe.policy_sha256=* ]]; then
             echo "IPE UKI addon must not set acl.ipe.policy_sha256: ${addon}" >&2
@@ -165,14 +177,28 @@ for addon in "${uki}.extra.d"/*.addon.efi "${ESP_DIR}/loader/addons"/*.addon.efi
                     exit 1
                     ;;
             esac
+            if [[ "${reserved_slot}" == false ]]; then
+                key="${token%%=*}"
+                key="${key#rd.}"
+                key="${key//-/_}"
+                case "${key}" in
+                    usrhash|systemd.verity*|mount.usr*|root_hash_signature)
+                        echo "Unexpected slot addon or signed /usr metadata: ${addon}" >&2
+                        exit 1
+                        ;;
+                esac
+                if [[ "${token}" == *root-hash-signature=* ]]; then
+                    echo "Unexpected slot addon or signed /usr metadata: ${addon}" >&2
+                    exit 1
+                fi
+            fi
         fi
     done
     if [[ "${usr_signature_mode}" == "required" &&
         "${addon}" != "${template_a}" && "${addon}" != "${template_b}" &&
         "${addon}" != "${active_slot}" ]]; then
         addon_name="${addon##*/}"
-        if [[ "${addon_name,,}" == slot-*.addon.efi ||
-            "${addon_cmdline}" =~ (usrhash=|systemd[.]verity|root-hash-signature=) ]]; then
+        if [[ "${addon_name,,}" == slot-*.addon.efi ]]; then
             echo "Unexpected slot addon or signed /usr metadata: ${addon}" >&2
             exit 1
         fi
@@ -184,7 +210,7 @@ if [[ "${usr_signature_mode}" == "required" ]]; then
     for addon in "${template_a}" "${template_b}" "${active_slot}"; do
         slot_cmdline="$(ukify inspect "${addon}" --json=short --section=.cmdline:text |
             jq -er '.[".cmdline"].text | select(type == "string" and (contains("\u0000") | not))')" || exit 1
-        validate_cmdline_syntax "${slot_cmdline}" "${addon}"
+        validate_generated_cmdline_syntax "${slot_cmdline}" "${addon}"
         hashes=()
         options=()
         read -r -a tokens <<< "${slot_cmdline//$'\n'/ }"

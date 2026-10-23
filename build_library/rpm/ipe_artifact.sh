@@ -14,6 +14,62 @@ ipe_read_usr_signature_mode() {
     fi
 }
 
+ipe_validate_cmdline_controls() {
+    local text="$1" context="$2" LC_ALL=C
+    if [[ "${text}" == *$'\r'* ]]; then
+        echo "Unsupported carriage return in IPE command line: ${context}" >&2
+        return 1
+    fi
+    # systemd-stub converts C0 controls and DEL to spaces before boot.
+    text="${text//$'\t'/}"
+    text="${text//$'\n'/}"
+    if [[ "${text}" =~ [[:cntrl:]] ]]; then
+        echo "Unsupported control character in IPE command line: ${context}" >&2
+        return 1
+    fi
+}
+
+ipe_split_systemd_cmdline() {
+    local -n result="$1"
+    local input="$2" context="$3" quote="" word="" char
+    local i started=false
+    result=()
+    ipe_validate_cmdline_controls "${input}" "${context}" || return 1
+    # systemd v255 proc-cmdline uses UNQUOTE|RETAIN_ESCAPE: quotes group words,
+    # but backslashes are literal, not shell escapes. Never evaluate input.
+    for ((i = 0; i < ${#input}; i++)); do
+        char="${input:i:1}"
+        if [[ -n "${quote}" ]]; then
+            if [[ "${char}" == "${quote}" ]]; then
+                quote=""
+            else
+                word+="${char}"
+            fi
+        else
+            case "${char}" in
+                \"|\') quote="${char}"; started=true ;;
+                ' '|$'\t'|$'\n')
+                    if [[ "${started}" == true ]]; then
+                        result+=("${word}")
+                        word=""
+                        started=false
+                    fi
+                    ;;
+                *) word+="${char}"; started=true ;;
+            esac
+        fi
+    done
+    # Unlike systemd's RELAX mode, require each asset to close its quotes:
+    # an open quote could consume arguments from the next appended addon.
+    if [[ -n "${quote}" ]]; then
+        echo "Unbalanced quoting in IPE command line: ${context}" >&2
+        return 1
+    fi
+    if [[ "${started}" == true ]]; then
+        result+=("${word}")
+    fi
+}
+
 ipe_validate_usr_signature_assets() (
     local mode="$1" esp_dir="$2" asset cmdline
     [[ "${mode}" != required ]] || return 0
@@ -43,7 +99,10 @@ ipe_validate_usr_signature_assets() (
                 echo "Cannot inspect /usr signature state: ${asset}" >&2
                 return 1
             }
-        # Scan the raw text so quotes, CRs and equivalent outer keys cannot hide it.
+        # Keep this conservative scan syntax-agnostic for non-IPE images too.
+        # Also catch signature option names split by systemd quote delimiters.
+        cmdline="${cmdline//\"/}"
+        cmdline="${cmdline//\'/}"
         if [[ "${cmdline}" == *root-hash-signature=* ]]; then
             echo "Signed /usr assets require usr-signature-mode=required: ${asset}" >&2
             return 1

@@ -191,9 +191,12 @@ The policy hash is reserved for the main UKI command line; IPE image
 conversion rejects active UKI addons (including the optional
 `EXTRA_KERNEL_CMDLINE` debug addon) that supply another
 `acl.ipe.policy_sha256` token.
-Verified UKI, active/global addon, and addon template command lines must
-use whitespace-separated arguments without quotes or backslash escapes,
-including arguments supplied through `EXTRA_KERNEL_CMDLINE`.
+User-supplied addon arguments, including `EXTRA_KERNEL_CMDLINE`, support
+balanced single/double quotes and literal backslashes. Conversion checks
+them using systemd's quoting rules; quotes cannot hide protected overrides.
+Unbalanced quotes and control characters other than tabs/newlines are rejected
+on the IPE verification path. Generated base UKI and slot metadata remain
+canonical, without quotes or backslashes.
 
 **Optional signed `/usr` root hash**
 
