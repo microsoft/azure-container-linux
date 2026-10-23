@@ -940,6 +940,19 @@ KDUMP_COMMANDLINE_APPEND="irqpoll nr_cpus=1 reset_devices"
 KDUMP_SYSCONFIG
 }
 
+_configure_sysext_rpm() {
+    local root_fs_dir="$1"
+    local dropin_dir="${root_fs_dir}/usr/lib/systemd/system/systemd-sysext.service.d"
+
+    # Avoid the direct-I/O fallback teardown racing with udev on 4K-backed images.
+    sudo install -d -m 0755 "${dropin_dir}"
+    sudo tee "${dropin_dir}/60-loop-buffered-io.conf" > /dev/null <<'EOF'
+[Service]
+Environment=SYSTEMD_LOOP_DIRECT_IO=0
+EOF
+    sudo chmod 0644 "${dropin_dir}/60-loop-buffered-io.conf"
+}
+
 # ── Misc: kernel modules, resolv.conf, serial console, etc. ─────────────────
 _configure_misc_rpm() {
     local root_fs_dir="$1"
@@ -1348,6 +1361,7 @@ finish_image_post_tmpfiles_rpm() {
     _remove_unused_systemd_components_rpm "${root_fs_dir}"
     _configure_pcrlock_rpm "${root_fs_dir}"
     _configure_kdump_rpm "${root_fs_dir}"
+    _configure_sysext_rpm "${root_fs_dir}"
     _configure_misc_rpm "${root_fs_dir}"
     _configure_cis_hardening_rpm "${root_fs_dir}"
     _generate_hwdb_rpm "${root_fs_dir}"
