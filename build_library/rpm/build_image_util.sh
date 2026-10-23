@@ -328,8 +328,11 @@ download_bootloader_packages_rpm() {
     local root_fs_dir="$1"
 
     info "RPM mode: Pre-downloading bootloader packages (grub2, shim, systemd-boot)"
-    rpm_staging=$(rpm_get_staging_dir)
-    rpm_download_packages "${rpm_staging}" "${root_fs_dir}" grub2 grub2-efi grub2-efi-binary shim systemd-boot
+    [[ -n "${BUILD_DIR:-}" ]] || die "RPM mode: BUILD_DIR is not set"
+    local bootloader_dir="${BUILD_DIR}/bootloader-rpms"
+    rm -rf -- "${bootloader_dir}"
+    mkdir -p "${bootloader_dir}"
+    rpm_download_packages "${bootloader_dir}" "${root_fs_dir}" grub2 grub2-efi grub2-efi-binary shim systemd-boot
 }
 
 finish_image_cleanup_issue_rpm() {
@@ -1401,7 +1404,7 @@ finish_image_backup_etc_rpm() {
     sudo cp -a "${root_fs_dir}/etc" "${ETC_FULL_PATH}"
 }
 
-# Write the image's package list and SPDX manifest from the final rpmdb.
+# Write the image's package list and SPDX 2.2 package manifest from the final rpmdb.
 finish_image_package_manifest_rpm() {
     local root_fs_dir="$1"
     local image_base_name="$2"
@@ -1418,15 +1421,29 @@ finish_image_package_manifest_rpm() {
         die "RPM mode: No packages in ${root_fs_dir}"
     fi
 
+    # A second listing for the SPDX 2.2 package manifest, in container-manifest-2
+    # layout. packages_file is a published artifact with a NEVRA on each line
+    # but no vendor, which is needed to determine package supplier.
+    # This second listing is kept out of the published set by the leading dot.
+    #
+    # Sorted in place rather than through a pipe, so an rpm failure isn't masked
+    # by sort's exit status. build_image does not set pipefail.
+    local manifest_packages_file="${BUILD_DIR}/.${image_base_name}_manifest_packages.tmp"
+    rpm_query_manifest "${root_fs_dir}" > "${manifest_packages_file}"
+    sort -o "${manifest_packages_file}" "${manifest_packages_file}"
+    if [[ ! -s "${manifest_packages_file}" ]]; then
+        die "RPM mode: No packages in the container-manifest-2 listing of ${root_fs_dir}"
+    fi
+
     local created_epoch
     created_epoch=$(stat -c '%Y' "${root_fs_dir}/usr/lib/os-release")
 
     write_package_manifest \
         image \
         "${root_fs_dir}" \
-        "${image_base_name}" \
+        "azurecontainerlinux" \
         "${IMAGE_VERSION_ID}${IMAGE_BUILD_ID:++${IMAGE_BUILD_ID}}" \
-        "${packages_file}" \
+        "${manifest_packages_file}" \
         "${created_epoch}"
 }
 

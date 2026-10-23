@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Francisco Huelsz Prince <frhuelsz@microsoft.com>
+Date: Mon, 19 Oct 2026 00:00:00 -0700
+Subject: [PATCH] container: Allow privileged containers to dbus kernel_t
+
+On ACL, /usr ships with no SELinux labels, so dbus-daemon and other host
+services currently run as kernel_t instead of their intended labeled
+domains (init_t, system_dbusd_t, systemd_machined_t). Until that is
+fixed, a privileged container's first D-Bus message to the system bus
+is denied, because the policy only permits privileged_container_domain
+to talk to the labeled domains, not to kernel_t.
+
+Tested: adding this rule alone (without any relabeling) resolves the
+denial, with no further denials observed.
+
+Signed-off-by: Francisco Huelsz Prince <frhuelsz@microsoft.com>
+---
+ policy/modules/services/container.te | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/policy/modules/services/container.te b/policy/modules/services/container.te
+--- a/policy/modules/services/container.te
++++ b/policy/modules/services/container.te
+@@ -1025,6 +1025,12 @@
+ 	systemd_dbus_chat_logind(privileged_container_domain)
+ ')
+ 
++# ACL: /usr ships unlabeled, so dbus-daemon and other host services currently
++# run as kernel_t rather than their intended labeled domains. Until that is
++# fixed, a privileged container is denied its first D-Bus message to the
++# system bus.
++allow spc_t kernel_t:dbus send_msg;
++
+ ########################################
+ #
+ # spc local policy
+-- 
+2.45.4
