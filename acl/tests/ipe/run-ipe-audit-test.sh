@@ -38,10 +38,14 @@ ipe_has_root_hash_signature() {
 }
 
 ipe_validate_usr_verity_table() {
-    local cmdline="$1" table="$2" expected_mode="${3:-}"
+    local cmdline="$1" table="$2" expected_mode="${3:-auto}"
     local usr_hash signature mode=none signed_mapping=false
     local -a fields=()
 
+    case "${expected_mode}" in
+        required|none|auto) ;;
+        *) echo "Invalid expected /usr signature mode: ${expected_mode}" >&2; return 1 ;;
+    esac
     usr_hash="$(ipe_cmdline_field "${cmdline}" usrhash)"
     usr_hash="${usr_hash,,}"
     if ! [[ "${usr_hash}" =~ ^[[:xdigit:]]{64}$ ]]; then
@@ -58,7 +62,7 @@ ipe_validate_usr_verity_table() {
             return 1
         fi
     fi
-    if [[ -n "${expected_mode}" && "${mode}" != "${expected_mode}" ]]; then
+    if [[ "${expected_mode}" != auto && "${mode}" != "${expected_mode}" ]]; then
         echo "/usr signature mode changed: expected ${expected_mode}, got ${mode}" >&2
         return 1
     fi
@@ -84,7 +88,7 @@ ipe_validate_usr_verity_table() {
 }
 
 ipe_check_usr_verity() {
-    local expected_mode="${1:-}" cmdline verity_device usr_source usr_device
+    local expected_mode="${1:-auto}" cmdline verity_device usr_source usr_device
     local usr_verity_mounted=false verity_name verity_table
     cmdline="$(cat /proc/cmdline)" || return 1
     verity_device="$(readlink -f /dev/mapper/usr 2>/dev/null || true)"
@@ -184,12 +188,24 @@ fail() {
 
 if [[ "${1:-}" == "--verity-only" ]]; then
     case "${2:-}" in
-        required|none) ;;
-        *) fail "--verity-only requires an expected signature mode: required or none" ;;
+        required|none|auto) ;;
+        *) fail "--verity-only requires an expected signature mode: required, none or auto" ;;
     esac
+    [[ "$#" -eq 2 ]] || fail "Unexpected arguments after --verity-only mode"
     ipe_check_usr_verity "$2" || fail "/usr dm-verity validation failed"
     exit 0
 fi
+
+expected_usr_signature_mode=auto
+if [[ "${1:-}" == "--expected-usr-signature-mode" && "$#" -eq 2 ]]; then
+    expected_usr_signature_mode="$2"
+elif [[ "$#" -ne 0 ]]; then
+    fail "Usage: $0 [--expected-usr-signature-mode required|none|auto]"
+fi
+case "${expected_usr_signature_mode}" in
+    required|none|auto) ;;
+    *) fail "Invalid expected /usr signature mode: ${expected_usr_signature_mode}" ;;
+esac
 
 echo "========================================="
 echo "IPE Audit Mode Validation Test"
@@ -207,6 +223,9 @@ usr_hash="${usr_hash,,}"
 if ! [[ "${usr_hash}" =~ ^[[:xdigit:]]{64}$ ]]; then
     fail "could not read the /usr dm-verity SHA-256 root hash from the command line"
 fi
+
+usr_signature_mode="$(ipe_check_usr_verity "${expected_usr_signature_mode}")" ||
+    fail "/usr dm-verity validation failed"
 
 if [[ ! -r "${IPE_DIR}/enforce" ]]; then
     fail "IPE securityfs interface is unavailable"
@@ -265,9 +284,6 @@ grep -Fq "op=EXECUTE dmverity_signature=TRUE action=ALLOW" <<< "${policy}" ||
 if grep -Fq "dmverity_roothash=" <<< "${policy}"; then
     fail "active policy must not contain dmverity_roothash rules"
 fi
-
-usr_signature_mode="$(ipe_check_usr_verity)" ||
-    fail "/usr dm-verity validation failed"
 
 # Writable storage must audit DENY; signed /usr has a known btrfs exception below.
 # Record each exec PID so older audit events cannot satisfy these probes.
