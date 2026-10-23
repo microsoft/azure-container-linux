@@ -145,6 +145,13 @@ case "${ACL_IPE_SIGNING_MODE}" in
         ;;
 esac
 ACL_ROOT_HASH_SIGNING_ENABLED="${ACL_ROOT_HASH_SIGNING_ENABLED:-false}"
+case "${ACL_ROOT_HASH_SIGNING_ENABLED}" in
+    true|false) ;;
+    *)
+        echo "ERROR: ACL_ROOT_HASH_SIGNING_ENABLED must be true or false" >&2
+        exit 1
+        ;;
+esac
 case "${ACL_ROOT_HASH_SIGNING_ENABLED}:${ACL_IPE_CAPABLE}:${BOOTLOADER_MODE:-uki}" in
     false:*) ;;
     true:true:uki) ;;
