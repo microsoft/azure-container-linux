@@ -29,47 +29,6 @@ ipe_validate_cmdline_controls() {
     fi
 }
 
-ipe_split_systemd_cmdline() {
-    local -n result="$1"
-    local input="$2" context="$3" quote="" word="" char
-    local i started=false
-    result=()
-    ipe_validate_cmdline_controls "${input}" "${context}" || return 1
-    # systemd v255 proc-cmdline uses UNQUOTE|RETAIN_ESCAPE: quotes group words,
-    # but backslashes are literal, not shell escapes. Never evaluate input.
-    for ((i = 0; i < ${#input}; i++)); do
-        char="${input:i:1}"
-        if [[ -n "${quote}" ]]; then
-            if [[ "${char}" == "${quote}" ]]; then
-                quote=""
-            else
-                word+="${char}"
-            fi
-        else
-            case "${char}" in
-                \"|\') quote="${char}"; started=true ;;
-                ' '|$'\t'|$'\n')
-                    if [[ "${started}" == true ]]; then
-                        result+=("${word}")
-                        word=""
-                        started=false
-                    fi
-                    ;;
-                *) word+="${char}"; started=true ;;
-            esac
-        fi
-    done
-    # Unlike systemd's RELAX mode, require each asset to close its quotes:
-    # an open quote could consume arguments from the next appended addon.
-    if [[ -n "${quote}" ]]; then
-        echo "Unbalanced quoting in IPE command line: ${context}" >&2
-        return 1
-    fi
-    if [[ "${started}" == true ]]; then
-        result+=("${word}")
-    fi
-}
-
 ipe_validate_usr_signature_assets() (
     local mode="$1" esp_dir="$2" asset cmdline
     [[ "${mode}" != required ]] || return 0

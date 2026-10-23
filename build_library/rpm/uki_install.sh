@@ -595,11 +595,15 @@ _uki_build_verity_addons() {
     local signature_option=""
     local artifact_dir
     artifact_dir="$(dirname "$(readlink -f "${FLAGS_disk_image}")")"
-    if [[ "${ROOT_HASH_SIGNING_ENABLED}" == "true" ]]; then
+
+    # Use the caller's root hash and staging paths; set signature_option only
+    # after installing the verified credential for both slot addons to use.
+    _install_usr_hash_signature() {
         [[ "${usr_hash}" =~ ^[0-9a-f]{64}$ ]] ||
             die "Signed /usr requires a canonical lowercase root hash"
         local cert_dir="${artifact_dir}/acl-ipe-ephemeral"
         local signature_name="verity-usr-${usr_hash}.p7s.cred"
+        # dm-verity verifies the 64 ASCII hash bytes, without a trailing newline.
         printf '%s' "${usr_hash}" > "${verity_temp_dir}/root.hash"
         "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" require ||
             die "Missing /usr signing material"
@@ -613,10 +617,15 @@ _uki_build_verity_addons() {
             -content "${verity_temp_dir}/root.hash" \
             -nointern -certfile "${cert_dir}/uki-signing-ca.pem" -noverify \
             -out /dev/null || die "Invalid /usr signature candidate"
+        # systemd-stub exposes this per-UKI file under /.extra/credentials/.
         sudo mkdir -p "${esp_dir}/EFI/Linux/${uki_name}.extra.d"
         sudo cp "${verity_temp_dir}/${signature_name}" \
             "${esp_dir}/EFI/Linux/${uki_name}.extra.d/${signature_name}"
         signature_option=",root-hash-signature=/.extra/credentials/${signature_name}"
+    }
+
+    if [[ "${ROOT_HASH_SIGNING_ENABLED}" == "true" ]]; then
+        _install_usr_hash_signature
     fi
 
     local template_dir="${esp_dir}/acl/uki-addons"

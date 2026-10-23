@@ -264,20 +264,23 @@ write_test_uki() {
 }
 
 test_systemd_cmdline_quoting() {
-    local -a words=()
-    local payload
-    ipe_split_systemd_cmdline words \
-        'one="two words" mixed=a"b c"d path=C:\tmp\file empty="" slash=\"left right"' test
-    [[ "${#words[@]}" -eq 5 ]]
-    [[ "${words[0]}" == 'one=two words' && "${words[1]}" == 'mixed=ab cd' ]]
-    [[ "${words[2]}" == 'path=C:\tmp\file' && "${words[3]}" == 'empty=' ]]
-    [[ "${words[4]}" == 'slash=\left right' ]]
-    ipe_split_systemd_cmdline words "one='two words' ''" test
-    [[ "${#words[@]}" -eq 2 && "${words[0]}" == 'one=two words' && -z "${words[1]}" ]]
+    local validator="${SCRIPT_DIR}/build_library/rpm/verify_ipe_addon_cmdline.py"
+    local payload failure
+    python3 "${validator}" required false test <<'EOF'
+one="two words" mixed=a"b c"d path=C:\tmp\file empty="" slash=\"left right"
+one='two words' ''
+EOF
     printf -v payload 'note="$(touch %s)"' "${TEST_DIR}/cmdline-executed"
-    ipe_split_systemd_cmdline words "${payload}" test
-    [[ "${words[0]}" == "note=\$(touch ${TEST_DIR}/cmdline-executed)" ]]
+    python3 "${validator}" required false test <<< "${payload}"
     [[ ! -e "${TEST_DIR}/cmdline-executed" ]]
+    # A shell-style lexer would hide the override after # or escape its quote.
+    for payload in '#literal mount.usr=bad' 'note=\"left right" mount.usr=bad'; do
+        if failure="$(python3 "${validator}" required false test <<< "${payload}" 2>&1)"; then
+            echo "Addon validator accepted hidden override: ${payload}" >&2
+            return 1
+        fi
+        [[ "${failure}" == *"Addon overrides required /usr verification"* ]]
+    done
 }
 
 test_required_usr_signature_continuity() (

@@ -155,45 +155,8 @@ for addon in "${uki}.extra.d"/*.addon.efi "${ESP_DIR}/loader/addons"/*.addon.efi
             validate_generated_cmdline_syntax "${addon_cmdline}" "${addon}"
             ;;
     esac
-    # The initrd policy loader uses raw whitespace splitting, unlike systemd.
-    # Check that view too, including policy tokens inside quoted user values.
-    read -r -a addon_tokens <<< "${addon_cmdline//$'\n'/ }"
-    for token in "${addon_tokens[@]}"; do
-        if [[ "${token}" == acl.ipe.policy_sha256=* ]]; then
-            echo "IPE UKI addon must not set acl.ipe.policy_sha256: ${addon}" >&2
-            exit 1
-        fi
-    done
-    ipe_split_systemd_cmdline addon_tokens "${addon_cmdline}" "${addon}"
-    for token in "${addon_tokens[@]}"; do
-        if [[ "${token}" == acl.ipe.policy_sha256=* ]]; then
-            echo "IPE UKI addon must not set acl.ipe.policy_sha256: ${addon}" >&2
-            exit 1
-        fi
-        if [[ "${usr_signature_mode}" == "required" ]]; then
-            case "${token}" in
-                rd.systemd.verity*|rd.usrhash=*|mount.usr*|rd.mount.usr*|systemd.verity=*)
-                    echo "Addon overrides required /usr verification: ${addon}" >&2
-                    exit 1
-                    ;;
-            esac
-            if [[ "${reserved_slot}" == false ]]; then
-                key="${token%%=*}"
-                key="${key#rd.}"
-                key="${key//-/_}"
-                case "${key}" in
-                    usrhash|systemd.verity*|mount.usr*|root_hash_signature)
-                        echo "Unexpected slot addon or signed /usr metadata: ${addon}" >&2
-                        exit 1
-                        ;;
-                esac
-                if [[ "${token}" == *root-hash-signature=* ]]; then
-                    echo "Unexpected slot addon or signed /usr metadata: ${addon}" >&2
-                    exit 1
-                fi
-            fi
-        fi
-    done
+    python3 "$(dirname "${BASH_SOURCE[0]}")/verify_ipe_addon_cmdline.py" \
+        "${usr_signature_mode}" "${reserved_slot}" "${addon}" <<< "${addon_cmdline}"
     if [[ "${usr_signature_mode}" == "required" &&
         "${addon}" != "${template_a}" && "${addon}" != "${template_b}" &&
         "${addon}" != "${active_slot}" ]]; then
