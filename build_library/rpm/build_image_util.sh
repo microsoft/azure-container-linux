@@ -1336,6 +1336,20 @@ JOURNALD_CIS
     info "RPM mode: CIS Level 1 hardening complete"
 }
 
+_configure_rsyslog_rpm() {
+    local root_fs_dir="$1"
+    local config="${root_fs_dir}/etc/rsyslog.conf"
+
+    [[ -f "$config" ]] || die "RPM mode: missing rsyslog config: $config"
+    [[ $(sudo grep -c '^module(load="imjournal")' "$config") -eq 1 ]] ||
+        die "RPM mode: unexpected imjournal config: $config"
+
+    sudo sed -i 's|^module(load="imjournal")|module(load="imjournal" StateFile="/var/lib/rsyslog/imjournal.state" PersistStateInterval="100")|' "$config"
+    echo 'd /var/lib/rsyslog 0755 root root -' |
+        sudo tee "${root_fs_dir}/usr/lib/tmpfiles.d/rsyslog.conf" > /dev/null
+    sudo chmod 0644 "${root_fs_dir}/usr/lib/tmpfiles.d/rsyslog.conf"
+}
+
 # ── Orchestrator: post-tmpfiles image customization ──────────────────────────
 finish_image_post_tmpfiles_rpm() {
     local root_fs_dir="$1"
@@ -1351,6 +1365,7 @@ finish_image_post_tmpfiles_rpm() {
     _configure_kdump_rpm "${root_fs_dir}"
     _configure_misc_rpm "${root_fs_dir}"
     _configure_cis_hardening_rpm "${root_fs_dir}"
+    _configure_rsyslog_rpm "${root_fs_dir}"
     _generate_hwdb_rpm "${root_fs_dir}"
     _mask_core_sshkeys_rpm "${root_fs_dir}"
 }
