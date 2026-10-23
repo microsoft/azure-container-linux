@@ -35,12 +35,14 @@ done
 
 # shellcheck source=/usr/lib/acl/acl-node-security-profile.sh
 source "${ACL_SECURITY_PROFILE_HELPER:-/usr/lib/acl/acl-node-security-profile.sh}"
-# Also seals a skipped/failed early unit, so later loaders cannot re-query IMDS.
-acl_security_profile_finalize || fail "Could not record the early IMDS decision"
 mode=off
 if profile="$(acl_security_profile_cached)"; then
     mode="$(acl_security_profile_ipe_mode "${profile}")" ||
         fail "Could not resolve cached IPE mode"
+else
+    # Seal missing/failed lookups before attachment so later loaders cannot re-query.
+    echo "acl-usr-signature: No cached security profile; recording failure for this boot" >&2
+    acl_security_profile_cache_failure || fail "Could not record the early IMDS decision"
 fi
 if [[ "${mode}" == audit ]]; then
     echo "acl-usr-signature: IPE mode '${mode}'; forwarding signature candidate" >&2

@@ -121,10 +121,9 @@ test_invalid_options_and_helper_failure() {
     assert_options "${options}" # Exactly one call, with no unsigned retry.
 }
 
-test_lookup_and_finalization() {
+test_lookup_and_cached_fallback() {
     prepare_case early-success
-    bash "${MODULE}/acl-security-profile-early.sh" lookup
-    bash "${MODULE}/acl-security-profile-early.sh" finalize
+    bash "${MODULE}/acl-security-profile-early.sh"
     attach
     assert_options "${options}"
     [[ "$(cat "${NETWORK_CALLS}")" == curl ]]
@@ -139,7 +138,7 @@ test_lookup_and_finalization() {
             else
                 MOCK_PROFILE='"invalid-json'
             fi
-            if bash "${MODULE}/acl-security-profile-early.sh" lookup; then
+            if bash "${MODULE}/acl-security-profile-early.sh"; then
                 echo "Invalid IMDS response was accepted" >&2
                 return 1
             fi
@@ -147,10 +146,7 @@ test_lookup_and_finalization() {
                 [[ "$(wc -l < "${NETWORK_CALLS}")" -eq 30 ]]
             fi
         fi
-        # A killed lookup leaves no result; ExecStopPost must seal that outcome.
-        if [[ "${outcome}" != skipped ]]; then
-            bash "${MODULE}/acl-security-profile-early.sh" finalize
-        fi
+        # A timed-out or skipped lookup leaves no result; the wrapper must seal it.
         : > "${NETWORK_CALLS}"
         attach
         assert_options hash-offset=4096,panic-on-corruption
@@ -246,7 +242,7 @@ test_azure_only_dependency_generation() (
 test_runtime_selection
 test_empty_options_and_passthrough
 test_invalid_options_and_helper_failure
-test_lookup_and_finalization
+test_lookup_and_cached_fallback
 test_module_staging
 test_module_overwrites_stock_binary
 test_azure_only_dependency_generation

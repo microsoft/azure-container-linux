@@ -37,18 +37,6 @@ acl_security_profile_cached() {
     return 2
 }
 
-acl_security_profile_finalize() {
-    local rc
-    if acl_security_profile_cached >/dev/null; then
-        return 0
-    else
-        rc=$?
-    fi
-    [[ "${rc}" == 2 ]] || return 0
-    echo "ACL: No early IMDS result; caching failure for this boot" >&2
-    acl_security_profile_cache_failure
-}
-
 acl_security_profile_jq_filter() {
     cat <<'JQ'
         if length != 1 then
