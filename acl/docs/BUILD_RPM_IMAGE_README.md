@@ -191,6 +191,36 @@ The policy hash is reserved for the main UKI command line; IPE image
 conversion rejects active UKI addons (including the optional
 `EXTRA_KERNEL_CMDLINE` debug addon) that supply another
 `acl.ipe.policy_sha256` token.
+User-supplied addon arguments, including `EXTRA_KERNEL_CMDLINE`, support
+balanced single/double quotes and literal backslashes. Conversion checks
+them using systemd's quoting rules; quotes cannot hide protected overrides.
+Unbalanced quotes and control characters other than tabs/newlines are rejected
+on the IPE verification path. Generated base UKI and slot metadata remain
+canonical, without quotes or backslashes.
+
+**Optional signed `/usr` root hash**
+
+Add `--root-hash-signing-enabled=true` (or set `ACL_ROOT_HASH_SIGNING_ENABLED=true`)
+to an IPE-capable UKI build. The default is `false`; GRUB and IPE-disabled
+builds cannot opt in. For example:
+
+```bash
+./acl/build_rpm_image.sh --rebuild --ipe-mode=audit \
+  --ipe-signing-mode=ephemeral --root-hash-signing-enabled=true
+```
+
+The build places a detached CMS signature in
+`<kernel>.efi.extra.d/verity-usr-<hash>.p7s.cred` on the ESP. Both slot
+templates reference it through `root-hash-signature=`; systemd-stub delivers
+the credential to the initrd. The `usr-signature-mode` artifact marker
+preserves this intent through conversion and hydration.
+Conversion requires a valid IPE signing marker for `required` mode and
+exactly one active slot addon (A or B) in the selected UKI's `.extra.d`.
+Both slot templates and that active addon must agree on the root hash
+and signature credential; slot-named addons elsewhere are rejected.
+
+On opted-in images, missing or invalid signatures prevent normal boot of
+that entry, even when runtime IPE is off or IMDS is unavailable.
 
 IPE activation triggers a containerd systemd drop-in that imports
 a base config (AgentBaker's on AKS nodes) merged with
