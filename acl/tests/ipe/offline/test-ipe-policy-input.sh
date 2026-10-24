@@ -117,6 +117,34 @@ test_enforcing_mode_rejected() {
     unset ACL_IPE_MODE
 }
 
+test_uki_installer_root_signing_guard() {
+    local guard value capable output
+    # Exercise the installer guard directly, without SDK entrypoint validation.
+    guard="$(awk '
+        /^IPE_CAPABLE=/ { copying=1 }
+        /^# Determine EFI architecture suffix/ { exit }
+        copying { print }
+    ' "${SCRIPT_DIR}/build_library/rpm/uki_install.sh")"
+    [[ "${guard}" == *'case "${ROOT_HASH_SIGNING_ENABLED}:${IPE_CAPABLE}" in'* ]]
+    for capable in false true; do
+        for value in false true false:garbage "false:'quoted'" true:garbage; do
+            if output="$(ACL_IPE_CAPABLE="${capable}" ACL_ROOT_HASH_SIGNING_ENABLED="${value}" \
+                bash -c 'die_notrace() { echo "$*" >&2; exit 1; }; '"${guard}" 2>&1)"; then
+                [[ "${value}" == false || ( "${value}" == true && "${capable}" == true ) ]] || {
+                    echo "UKI installer accepted signing=${value}, IPE-capable=${capable}" >&2
+                    return 1
+                }
+            else
+                [[ "${value}" != false && ( "${value}" != true || "${capable}" != true ) ]] || {
+                    echo "UKI installer rejected a valid configuration: ${output}" >&2
+                    return 1
+                }
+                [[ "${output}" == *"Required /usr signatures need an IPE-capable UKI build"* ]]
+            fi
+        done
+    done
+}
+
 test_uki_provision_preserves_unsigned_verity() (
     source_test_functions "${SCRIPT_DIR}/build_library/rpm/uki_install.sh" \
         uki_provision_rpm _uki_build_verity_addons
@@ -1051,6 +1079,7 @@ test_disabled_cleanup_removes_stale_assets
 test_audit_ephemeral_stages_candidate
 test_audit_esrp_stages_candidate
 test_enforcing_mode_rejected
+test_uki_installer_root_signing_guard
 test_uki_provision_preserves_unsigned_verity
 test_uki_binds_policy_before_writing_cmdline
 test_vm_conversions_share_secure_boot_cert

@@ -43,7 +43,7 @@ case "${IPE_CAPABLE}" in
 esac
 # Accept only true/false; signing requires an IPE-capable UKI build.
 case "${ROOT_HASH_SIGNING_ENABLED}:${IPE_CAPABLE}" in
-    false:*|true:true) ;;
+    false:false|false:true|true:true) ;;
     *) die_notrace "Required /usr signatures need an IPE-capable UKI build" ;;
 esac
 
