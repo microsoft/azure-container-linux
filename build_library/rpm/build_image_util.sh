@@ -106,6 +106,9 @@ start_image_rpm() {
 finish_image_rpm() {
   local root_fs_dir="$1"
 
+    # Create the shared vendor default before dracut copies it into initramfs.
+    _configure_sysext_rpm "${root_fs_dir}"
+
     # Create /usr/share/oem -> ../../oem symlink for backward compatibility
     # The OEM partition is mounted at /oem, but legacy configs reference /usr/share/oem
     # Use relative symlink (../../oem) so it works correctly when accessed via /sysroot in initrd
@@ -1361,7 +1364,6 @@ finish_image_post_tmpfiles_rpm() {
     _remove_unused_systemd_components_rpm "${root_fs_dir}"
     _configure_pcrlock_rpm "${root_fs_dir}"
     _configure_kdump_rpm "${root_fs_dir}"
-    _configure_sysext_rpm "${root_fs_dir}"
     _configure_misc_rpm "${root_fs_dir}"
     _configure_cis_hardening_rpm "${root_fs_dir}"
     _generate_hwdb_rpm "${root_fs_dir}"
