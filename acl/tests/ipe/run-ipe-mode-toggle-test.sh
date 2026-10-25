@@ -26,6 +26,13 @@ source "${SCRIPT_DIR}/build_library/rpm/additional_files/acl-node-security-profi
 POLICY_NAME="acl_ipe_boot_policy"
 IPE_DIR="/sys/kernel/security/ipe"
 POLICY_DIR="${IPE_DIR}/policies/${POLICY_NAME}"
+# Qualification supplies intent independently of the guest. Generic tests
+# resolve auto on the first boot and retain that baseline across toggles.
+EXPECTED_USR_SIGNATURE_MODE="${ACL_EXPECTED_USR_SIGNATURE_MODE-auto}"
+case "${EXPECTED_USR_SIGNATURE_MODE}" in
+    required|none|auto) ;;
+    *) echo "Invalid ACL_EXPECTED_USR_SIGNATURE_MODE: ${EXPECTED_USR_SIGNATURE_MODE}" >&2; exit 1 ;;
+esac
 
 get_ipe_mode() {
     local active enforce
@@ -120,16 +127,24 @@ assert_ipe_assets_present() {
         error "Valid /usr root hash is missing from the UKI"
         return 1
     fi
-    if ipe_has_root_hash_signature "${cmdline}"; then
-        error "Policy-only IPE must not require a /usr root-hash signature"
-        return 1
+    if [[ "${EXPECTED_USR_SIGNATURE_MODE}" == auto ]]; then
+        EXPECTED_USR_SIGNATURE_MODE=none
+        if ipe_has_root_hash_signature "${cmdline}"; then
+            EXPECTED_USR_SIGNATURE_MODE=required
+        fi
     fi
+    ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
+        "sudo bash -s -- --verity-only '${EXPECTED_USR_SIGNATURE_MODE}'" \
+        < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh" || {
+        error "/usr dm-verity state changed or is invalid"
+        return 1
+    }
     info "IPE assets are present and policy active state is '${policy_active}'"
 }
 
 run_audit_validation() {
     ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
-        "sudo bash -s" \
+        "sudo bash -s -- --expected-usr-signature-mode '${EXPECTED_USR_SIGNATURE_MODE}'" \
         < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh"
 }
 
