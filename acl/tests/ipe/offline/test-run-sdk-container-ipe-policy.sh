@@ -72,6 +72,9 @@ test_mode_forwarded() {
                 { echo "IPE signing mode ${signing} was not forwarded" >&2; return 1; }
         done
     done
+    ACL_ROOT_HASH_SIGNING_ENABLED=true run_container audit ephemeral "${log}"
+    grep -Fq $'\t-e\tACL_ROOT_HASH_SIGNING_ENABLED=true\t' "${log}" ||
+        { echo "Root-hash signing setting was not forwarded" >&2; return 1; }
 }
 
 test_invalid_mode_rejected() {
@@ -95,9 +98,50 @@ test_enforcing_mode_rejected() {
     fi
 }
 
+test_sdk_entry_root_signing_validation() (
+    local entry value mode bootloader output
+    export SDK_TEST_BASHRC="${TEST_DIR}/sdk.bashrc"
+    # Exercise the entrypoint's validation and exports without SDK setup or su.
+    entry="$(awk '
+        /^ACL_IPE_MODE=/ { copying=1 }
+        /^if \[ \$# -gt 0 \]/ { exit }
+        copying { print }
+    ' "${SCRIPT_DIR}/sdk_lib/sdk_entry.sh")"
+    [[ "${entry}" == *'export ACL_ROOT_HASH_SIGNING_ENABLED='* ]]
+    entry="${entry//\/home\/sdk\/.bashrc/\"\$SDK_TEST_BASHRC\"}"
+
+    for value in false true; do
+        for mode in disabled audit; do
+            for bootloader in grub uki; do
+                : > "${SDK_TEST_BASHRC}"
+                if output="$(ACL_ROOT_HASH_SIGNING_ENABLED="${value}" ACL_IPE_MODE="${mode}" \
+                    BOOTLOADER_MODE="${bootloader}" bash -c "${entry}" 2>&1)"; then
+                    [[ "${value}" == false || ( "${mode}" == audit && "${bootloader}" == uki ) ]]
+                    grep -Fxq "export ACL_ROOT_HASH_SIGNING_ENABLED='${value}'" "${SDK_TEST_BASHRC}"
+                else
+                    [[ "${value}" == true && ( "${mode}" != audit || "${bootloader}" != uki ) ]]
+                    [[ "${output}" == *"true on an IPE-capable UKI build"* ]]
+                    [[ ! -s "${SDK_TEST_BASHRC}" ]]
+                fi
+            done
+        done
+    done
+    for value in false:garbage "false:'quoted'" garbage true:garbage; do
+        printf 'unchanged\n' > "${SDK_TEST_BASHRC}"
+        if output="$(ACL_ROOT_HASH_SIGNING_ENABLED="${value}" ACL_IPE_MODE=audit \
+            BOOTLOADER_MODE=uki bash -c "${entry}" 2>&1)"; then
+            echo "SDK entrypoint accepted invalid boolean: ${value}" >&2
+            return 1
+        fi
+        [[ "${output}" == *"ACL_ROOT_HASH_SIGNING_ENABLED must be true or false"* ]]
+        [[ "$(<"${SDK_TEST_BASHRC}")" == unchanged ]]
+    done
+)
+
 test_mode_forwarded
 test_invalid_mode_rejected
 test_invalid_signing_mode_rejected
 test_enforcing_mode_rejected
+test_sdk_entry_root_signing_validation
 
 echo "run_sdk_container IPE mode tests passed"

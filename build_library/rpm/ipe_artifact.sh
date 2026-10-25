@@ -1,6 +1,74 @@
 #!/bin/bash
 # Sourced helpers for IPE artifact metadata and local Azure launch validation.
 
+ipe_read_usr_signature_mode() {
+    local marker="$1/usr-signature-mode"
+    if [[ ! -e "${marker}" && ! -L "${marker}" ]]; then
+        printf '%s\n' disabled
+    elif [[ -f "${marker}" && ! -L "${marker}" ]] &&
+        cmp -s -- "${marker}" <(printf 'required\n'); then
+        printf '%s\n' required
+    else
+        echo "Invalid /usr signature marker: ${marker}" >&2
+        return 1
+    fi
+}
+
+ipe_validate_cmdline_controls() {
+    local text="$1" context="$2" LC_ALL=C
+    if [[ "${text}" == *$'\r'* ]]; then
+        echo "Unsupported carriage return in IPE command line: ${context}" >&2
+        return 1
+    fi
+    # systemd-stub converts C0 controls and DEL to spaces before boot.
+    text="${text//$'\t'/}"
+    text="${text//$'\n'/}"
+    if [[ "${text}" =~ [[:cntrl:]] ]]; then
+        echo "Unsupported control character in IPE command line: ${context}" >&2
+        return 1
+    fi
+}
+
+ipe_validate_usr_signature_assets() (
+    local mode="$1" esp_dir="$2" asset cmdline
+    [[ "${mode}" != required ]] || return 0
+
+    # Include every UKI conversion may re-sign, not just the boot default.
+    shopt -s nullglob nocaseglob
+    for asset in "${esp_dir}"/EFI/Linux/*.efi.extra.d/verity-usr-*.p7s.cred \
+        "${esp_dir}"/EFI/Linux/*.efi \
+        "${esp_dir}"/EFI/Linux/*.efi.extra.d/*.addon.efi \
+        "${esp_dir}"/loader/addons/*.addon.efi \
+        "${esp_dir}"/acl/uki-addons/*.addon.efi; do
+        if [[ "${asset,,}" == *.p7s.cred ]]; then
+            echo "Signed /usr assets require usr-signature-mode=required: ${asset}" >&2
+            return 1
+        fi
+        [[ -f "${asset}" && ! -L "${asset}" ]] || {
+            echo "Cannot inspect /usr signature state of non-regular EFI asset: ${asset}" >&2
+            return 1
+        }
+        cmdline="$(ukify inspect "${asset}" --json=short --section=.cmdline:text |
+            jq -er '
+                if type != "object" then error("invalid EFI inspection")
+                elif has(".cmdline") then
+                    .[".cmdline"].text | select(type == "string" and (contains("\u0000") | not))
+                else "" end
+            ')" || {
+                echo "Cannot inspect /usr signature state: ${asset}" >&2
+                return 1
+            }
+        # Keep this conservative scan syntax-agnostic for non-IPE images too.
+        # Also catch signature option names split by systemd quote delimiters.
+        cmdline="${cmdline//\"/}"
+        cmdline="${cmdline//\'/}"
+        if [[ "${cmdline}" == *root-hash-signature=* ]]; then
+            echo "Signed /usr assets require usr-signature-mode=required: ${asset}" >&2
+            return 1
+        fi
+    done
+)
+
 ipe_read_signing_mode() {
     local marker="$1"
 
