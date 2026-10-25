@@ -106,6 +106,9 @@ start_image_rpm() {
 finish_image_rpm() {
   local root_fs_dir="$1"
 
+    # Create the shared vendor default before dracut copies it into initramfs.
+    _configure_sysext_rpm "${root_fs_dir}"
+
     # Create /usr/share/oem -> ../../oem symlink for backward compatibility
     # The OEM partition is mounted at /oem, but legacy configs reference /usr/share/oem
     # Use relative symlink (../../oem) so it works correctly when accessed via /sysroot in initrd
@@ -938,6 +941,19 @@ KDUMP_IMG="vmlinuz"
 # irqpoll + reset_devices ensure stable device access post-panic.
 KDUMP_COMMANDLINE_APPEND="irqpoll nr_cpus=1 reset_devices"
 KDUMP_SYSCONFIG
+}
+
+_configure_sysext_rpm() {
+    local root_fs_dir="$1"
+    local dropin_dir="${root_fs_dir}/usr/lib/systemd/system/systemd-sysext.service.d"
+
+    # Avoid the direct-I/O fallback teardown racing with udev on 4K-backed images.
+    sudo install -d -m 0755 "${dropin_dir}"
+    sudo tee "${dropin_dir}/60-loop-buffered-io.conf" > /dev/null <<'EOF'
+[Service]
+Environment=SYSTEMD_LOOP_DIRECT_IO=0
+EOF
+    sudo chmod 0644 "${dropin_dir}/60-loop-buffered-io.conf"
 }
 
 # ── Misc: kernel modules, resolv.conf, serial console, etc. ─────────────────
