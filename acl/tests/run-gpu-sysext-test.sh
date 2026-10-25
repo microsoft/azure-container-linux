@@ -109,7 +109,7 @@ ls -la /etc/extensions/*.raw
 
 # ── Step 4: Refresh systemd-sysext ─────────────────────────────────────────
 echo "[4/6] Refreshing systemd-sysext..."
-sudo systemd-sysext refresh
+sudo env SYSTEMD_LOOP_DIRECT_IO=0 systemd-sysext refresh
 sudo systemd-sysext status
 
 # ── Step 5: Verify nvidia-smi ──────────────────────────────────────────────
