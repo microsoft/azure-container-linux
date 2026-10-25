@@ -141,6 +141,7 @@ test_host_imds_rejects_multiple_documents() (
 
 test_shared_cmdline_fields() {
     local cmdline='usrhash=ABC usrhash=DEF acl.ipe.policy_sha256=123 systemd.verity_usr_options=foo=bar,root-hash-signature=/expected,other=value'
+    local option_key options='foo=bar,root-hash-signature=/expected-path_with-punctuation,other=value'
 
     [[ "$(ipe_cmdline_field "${cmdline}" usrhash)" == "ABC" ]]
     [[ "$(ipe_cmdline_field "${cmdline}" acl.ipe.policy_sha256)" == "123" ]]
@@ -148,10 +149,17 @@ test_shared_cmdline_fields() {
     [[ "$(ipe_cmdline_field \
         "$(ipe_cmdline_field "${cmdline}" systemd.verity_usr_options)" \
         root-hash-signature ',')" == "/expected" ]]
+    for option_key in systemd.verity_usr_options systemd.verity-usr-options \
+        systemd.verity_usr-options systemd.verity-usr_options; do
+        [[ "$(ipe_cmdline_field "${option_key}=${options}" systemd.verity_usr_options)" == "${options}" ]]
+        [[ "$(ipe_cmdline_field \
+            "$(ipe_cmdline_field "${option_key}=${options}" systemd.verity_usr_options)" \
+            root-hash-signature ',')" == "/expected-path_with-punctuation" ]]
+    done
 }
 
-test_policy_only_cmdline_contract() {
-    local cmdline
+test_root_signature_detection() {
+    local cmdline option_key
     if ipe_has_root_hash_signature \
         'usrhash=abc systemd.verity_usr_options=hash-offset=4096,panic-on-corruption'; then
         echo "unsigned verity was classified as requiring a signature" >&2
@@ -167,7 +175,176 @@ test_policy_only_cmdline_contract() {
             return 1
         }
     done
+    for option_key in systemd.verity_usr_options systemd.verity-usr-options \
+        systemd.verity_usr-options systemd.verity-usr_options; do
+        ipe_has_root_hash_signature "${option_key}=panic-on-corruption,root-hash-signature=/expected"
+        if ipe_has_root_hash_signature "${option_key}=panic-on-corruption" ||
+           ipe_has_root_hash_signature "${option_key}=root_hash_signature=/unexpected"; then
+            echo "Unsigned verity or an invalid inner option was classified as signed: ${option_key}" >&2
+            return 1
+        fi
+    done
 }
+
+test_usr_verity_signature_contract() {
+    local hash unsigned_cmdline signed_cmdline unsigned_table signed_table option_key="${1:-systemd.verity_usr_options}"
+    hash="$(printf '%064d' 1)"
+    unsigned_cmdline="usrhash=${hash} ${option_key}=panic-on-corruption"
+    signed_cmdline="${unsigned_cmdline},root-hash-signature=/.extra/credentials/verity-usr-${hash}.p7s.cred"
+    unsigned_table="0 2097152 verity 1 8:2 8:3 4096 4096 262144 1 sha256 ${hash} abcd 1 panic_on_corruption"
+    signed_table="${unsigned_table/1 panic_on_corruption/3 panic_on_corruption root_hash_sig_key_desc test-key}"
+
+    [[ "$(ipe_validate_usr_verity_table "${unsigned_cmdline}" "${unsigned_table}" none)" == none ]]
+    [[ "$(ipe_validate_usr_verity_table "${unsigned_cmdline}" "${unsigned_table}" auto)" == none ]]
+    [[ "$(ipe_validate_usr_verity_table "${signed_cmdline}" "${signed_table}" required)" == required ]]
+    if ipe_validate_usr_verity_table "${signed_cmdline}" "${unsigned_table}" required ||
+       ipe_validate_usr_verity_table "${unsigned_cmdline}" "${signed_table}" none ||
+       ipe_validate_usr_verity_table "${unsigned_cmdline}" "${unsigned_table}" required ||
+       ipe_validate_usr_verity_table "${signed_cmdline}" "${signed_table}" none ||
+       ipe_validate_usr_verity_table "${signed_cmdline}" "${signed_table/${hash}/wrong-hash}" required ||
+       ipe_validate_usr_verity_table "${signed_cmdline/.p7s.cred/.wrong}" "${signed_table}" required ||
+       ipe_validate_usr_verity_table "${unsigned_cmdline},root-hash-signature=" "${signed_table}" required ||
+       ipe_validate_usr_verity_table "${signed_cmdline}" "${signed_table% test-key}" required ||
+       ipe_validate_usr_verity_table "${unsigned_cmdline}" "${unsigned_table}" invalid; then
+        echo "Accepted an inconsistent /usr signature contract" >&2
+        return 1
+    fi
+}
+
+test_toggle_preserves_usr_signature_mode() (
+    local hash unsigned_cmdline unsigned_table option_key="${1:-systemd.verity_usr_options}"
+    hash="$(printf '%064d' 1)"
+    unsigned_cmdline="usrhash=${hash} acl.ipe.policy_sha256=${hash} ${option_key}=panic-on-corruption"
+    unsigned_table="0 2097152 verity 1 8:2 8:3 4096 4096 262144 1 sha256 ${hash} abcd 1 panic_on_corruption"
+    export MOCK_CMDLINE="${unsigned_cmdline},root-hash-signature=/.extra/credentials/verity-usr-${hash}.p7s.cred"
+    export MOCK_TABLE="${unsigned_table/1 panic_on_corruption/3 panic_on_corruption root_hash_sig_key_desc test-key}"
+    local mock_active=1
+    EXPECTED_USR_SIGNATURE_MODE=auto
+    VM_SSH_USER=tester
+    VM_IP=test-vm
+    SSH_OPTS=()
+    ssh_cmd() {
+        case "$*" in
+            "cat /proc/cmdline") printf '%s\n' "${MOCK_CMDLINE}" ;;
+            *"test -r"*) return 0 ;;
+            *"/active"*) printf '%s\n' "${mock_active}" ;;
+            *) echo "Unexpected guest command: $*" >&2; return 1 ;;
+        esac
+    }
+    cat() {
+        if [[ "${1:-}" == /proc/cmdline ]]; then
+            printf '%s\n' "${MOCK_CMDLINE}"
+        else
+            command cat "$@"
+        fi
+    }
+    readlink() { echo /dev/dm-0; }
+    findmnt() { echo /dev/dm-0; }
+    dmsetup() {
+        case "$1" in
+            info) echo usr ;;
+            table) printf '%s\n' "${MOCK_TABLE}" ;;
+            *) echo "Unexpected dmsetup command: $*" >&2; return 1 ;;
+        esac
+    }
+    sudo() { "$@"; }
+    export -f cat readlink findmnt dmsetup sudo
+    ssh() { bash -c "${@: -1}"; }
+
+    assert_ipe_assets_present 1
+    [[ "${EXPECTED_USR_SIGNATURE_MODE}" == required ]]
+    mock_active=0
+    assert_ipe_assets_present 0
+    MOCK_CMDLINE="${unsigned_cmdline}"
+    MOCK_TABLE="${unsigned_table}"
+    if assert_ipe_assets_present 0; then
+        echo "Disabling IPE allowed the root signature requirement to disappear" >&2
+        return 1
+    fi
+    # The independent expectation rejects an unsigned first boot in both
+    # the toggle assertion and the ordinary streamed audit invocation.
+    EXPECTED_USR_SIGNATURE_MODE=required
+    if assert_ipe_assets_present 0; then
+        echo "Signed qualification accepted an unsigned first boot" >&2
+        return 1
+    fi
+    local failure
+    if failure="$(run_audit_validation 2>&1)"; then
+        echo "Ordinary audit accepted an unsigned signed-qualification image" >&2
+        return 1
+    fi
+    [[ "${failure}" == *"expected required, got none"* ]]
+    EXPECTED_USR_SIGNATURE_MODE=none
+    assert_ipe_assets_present 0
+    EXPECTED_USR_SIGNATURE_MODE=auto
+    assert_ipe_assets_present 0
+    [[ "${EXPECTED_USR_SIGNATURE_MODE}" == none ]]
+    MOCK_CMDLINE="${unsigned_cmdline},root-hash-signature=/.extra/credentials/verity-usr-${hash}.p7s.cred"
+    MOCK_TABLE="${unsigned_table/1 panic_on_corruption/3 panic_on_corruption root_hash_sig_key_desc test-key}"
+    if assert_ipe_assets_present 0; then
+        echo "Unsigned-root baseline changed during IPE toggling" >&2
+        return 1
+    fi
+)
+
+test_toggle_accepts_caller_expectation() (
+    local mode output
+    for mode in required none auto; do
+        output="$(ACL_EXPECTED_USR_SIGNATURE_MODE="${mode}" bash -c '
+            source "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-mode-toggle-test.sh"
+            printf "%s" "${EXPECTED_USR_SIGNATURE_MODE}"
+        ')"
+        [[ "${output}" == "${mode}" ]]
+    done
+    if ACL_EXPECTED_USR_SIGNATURE_MODE=invalid bash -c '
+        source "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-mode-toggle-test.sh"
+    '; then
+        echo "Invalid qualification expectation was accepted" >&2
+        return 1
+    fi
+)
+
+test_signed_and_unsigned_probe_expectations() {
+    local usr_event writable_event
+    usr_event='type=1420 ipe_op=EXECUTE enforcing=0 pid=123 path="/usr/bin/true" rule="DEFAULT op=EXECUTE action=DENY"'
+    writable_event='type=1420 ipe_op=EXECUTE enforcing=0 pid=456 path="/var/tmp/probe" rule="DEFAULT op=EXECUTE action=DENY"'
+    ipe_assert_probe_audit "${writable_event}" /usr/bin/true 123 allow
+    ipe_assert_probe_audit "${usr_event}" /usr/bin/true 123 deny
+    ipe_assert_probe_audit "${writable_event}" /var/tmp/probe 456 deny
+    if ipe_assert_probe_audit "${usr_event}" /usr/bin/true 123 allow ||
+       ipe_assert_probe_audit "${writable_event}" /usr/bin/true 123 deny ||
+       ipe_assert_probe_audit "${usr_event}" /var/tmp/probe 456 deny ||
+       ipe_assert_probe_audit "" /usr/bin/true invalid allow; then
+        echo "Accepted an incorrect signed/unsigned audit result" >&2
+        return 1
+    fi
+}
+
+test_signed_btrfs_probe_defers_no_denial_assertion() (
+    local event output
+    event='type=1420 ipe_op=EXECUTE enforcing=0 pid=123 path="/usr/bin/true" rule="DEFAULT op=EXECUTE action=DENY"'
+    blkid() { echo btrfs; }
+    output="$(ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 required)"
+    grep -Fq "WARN: Skipping signed /usr no-denial assertion" <<< "${output}"
+    ipe_assert_usr_probe_audit "" /usr/bin/true 123 required
+    ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 none
+    if ipe_assert_usr_probe_audit "" /usr/bin/true 123 none; then
+        echo "Unsigned /usr lost its denial assertion" >&2
+        return 1
+    fi
+
+    blkid() { echo ext4; }
+    ipe_assert_usr_probe_audit "" /usr/bin/true 123 required
+    if ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 required; then
+        echo "Signed non-btrfs /usr lost its no-denial assertion" >&2
+        return 1
+    fi
+    blkid() { return 1; }
+    if ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 required; then
+        echo "Filesystem detection failure bypassed the audit assertion" >&2
+        return 1
+    fi
+)
 
 test_probe_denial_correlation() {
     local event='type=1420 ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=123 comm="true" path="/usr/bin/true" rule="DEFAULT op=EXECUTE action=DENY"'
@@ -236,8 +413,12 @@ test_streamed_guest_contains_cmdline_parser() (
     trap 'rm -f "${payload}" "${payload}.out"' EXIT
     VM_SSH_USER=tester
     VM_IP=test-vm
-    ssh() { cat > "${payload}"; }
+    ssh() {
+        [[ "${*: -1}" == "sudo bash -s -- --expected-usr-signature-mode 'required'" ]]
+        cat > "${payload}"
+    }
 
+    EXPECTED_USR_SIGNATURE_MODE=required
     run_audit_validation
     bash -n "${payload}"
     grep -Fq 'ipe_cmdline_field() {' "${payload}"
@@ -377,7 +558,15 @@ test_security_profile_updates_preserve_unrelated_keys
 test_tag_state_distinguishes_absent_from_empty
 test_host_imds_rejects_multiple_documents
 test_shared_cmdline_fields
-test_policy_only_cmdline_contract
+test_root_signature_detection
+test_toggle_accepts_caller_expectation
+for option_key in systemd.verity_usr_options systemd.verity-usr-options \
+    systemd.verity_usr-options systemd.verity-usr_options; do
+    test_usr_verity_signature_contract "${option_key}"
+    test_toggle_preserves_usr_signature_mode "${option_key}"
+done
+test_signed_and_unsigned_probe_expectations
+test_signed_btrfs_probe_defers_no_denial_assertion
 test_probe_denial_correlation
 test_host_imds_matches_guest_parser
 test_streamed_guest_contains_cmdline_parser

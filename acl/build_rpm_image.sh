@@ -47,6 +47,7 @@
 #   --ipe-mode=MODE                      IPE runtime mode: disabled|audit|enforcing (default: disabled)
 #                                        'enforcing' is reserved and rejected at build time.
 #   --ipe-signing-mode=MODE              IPE signing mode: ephemeral|esrp (default: ephemeral)
+#   --root-hash-signing-enabled=BOOL     Require a signed /usr root hash: true|false (default: false)
 #   --keep-vm                            Keep VM running after scripts complete (write state to .vm-state.env)
 #   --no-cleanup                         Skip cleanup of existing VM resource groups (for start-vm --vm-type=azure)
 #   --no-secure-boot                     Disable Secure Boot where supported (not Azure arm64 VMs)
@@ -199,6 +200,9 @@ if [[ -v ACL_IPE_SIGNING_MODE ]]; then
     IPE_SIGNING_MODE_OVERRIDE_SET=true
 fi
 ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE:-ephemeral}"
+ROOT_HASH_SIGNING_OVERRIDE_SET=false
+[[ ! -v ACL_ROOT_HASH_SIGNING_ENABLED ]] || ROOT_HASH_SIGNING_OVERRIDE_SET=true
+ACL_ROOT_HASH_SIGNING_ENABLED="${ACL_ROOT_HASH_SIGNING_ENABLED:-false}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"
@@ -318,7 +322,17 @@ configure_ipe_mode() {
             return 1
             ;;
     esac
-    export ACL_IPE_MODE ACL_IPE_SIGNING_MODE ACL_IPE_CAPABLE
+    case "${ACL_ROOT_HASH_SIGNING_ENABLED}" in
+        false) ;;
+        true)
+            if [[ "${ACL_IPE_CAPABLE}" != "true" || "${BOOTLOADER_MODE}" != "uki" ]]; then
+                error "Required /usr signatures need IPE-capable UKI builds"
+                return 1
+            fi
+            ;;
+        *) error "ACL_ROOT_HASH_SIGNING_ENABLED must be true or false"; return 1 ;;
+    esac
+    export ACL_IPE_MODE ACL_IPE_SIGNING_MODE ACL_IPE_CAPABLE ACL_ROOT_HASH_SIGNING_ENABLED
 }
 
 load_artifact_ipe_signing_mode() {
@@ -333,6 +347,17 @@ load_artifact_ipe_signing_mode() {
     artifact_signing_mode="$(
         ipe_resolve_artifact_signing_mode "${artifact_dir}" "${expected_capability}"
     )" || return 1
+    local usr_signature_mode root_hash_signing_enabled=false
+    usr_signature_mode="$(ipe_read_usr_signature_mode "${artifact_dir}")" || return 1
+    if [[ "${usr_signature_mode}" == "required" ]]; then
+        root_hash_signing_enabled=true
+    fi
+    if [[ "${ROOT_HASH_SIGNING_OVERRIDE_SET}" == "true" &&
+        "${ACL_ROOT_HASH_SIGNING_ENABLED}" != "${root_hash_signing_enabled}" ]]; then
+        error "Requested root-hash signing setting differs from source image metadata"
+        return 1
+    fi
+    ACL_ROOT_HASH_SIGNING_ENABLED="${root_hash_signing_enabled}"
 
     if [[ "${artifact_signing_mode}" == "disabled" ]]; then
         ACL_IPE_MODE=disabled
@@ -437,6 +462,16 @@ parse_args() {
                 ACL_IPE_SIGNING_MODE="${1#*=}"
                 IPE_SIGNING_MODE_OVERRIDE_SET=true
                 shift
+                ;;
+            --root-hash-signing-enabled=*)
+                ACL_ROOT_HASH_SIGNING_ENABLED="${1#*=}"
+                ROOT_HASH_SIGNING_OVERRIDE_SET=true
+                shift
+                ;;
+            --root-hash-signing-enabled)
+                ACL_ROOT_HASH_SIGNING_ENABLED="$2"
+                ROOT_HASH_SIGNING_OVERRIDE_SET=true
+                shift 2
                 ;;
             --ipe-signing-mode)
                 ACL_IPE_SIGNING_MODE="$2"

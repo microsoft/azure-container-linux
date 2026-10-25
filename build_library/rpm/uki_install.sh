@@ -34,11 +34,17 @@ switch_to_strict_mode
 . "${BUILD_LIBRARY_DIR}/board_options.sh"  || exit 1
 
 IPE_CAPABLE="${ACL_IPE_CAPABLE:-false}"
+ROOT_HASH_SIGNING_ENABLED="${ACL_ROOT_HASH_SIGNING_ENABLED:-false}"
 case "${IPE_CAPABLE}" in
     true|false) ;;
     *)
         die_notrace "ACL_IPE_CAPABLE must be true or false (got: ${IPE_CAPABLE})"
         ;;
+esac
+# Accept only true/false; signing requires an IPE-capable UKI build.
+case "${ROOT_HASH_SIGNING_ENABLED}:${IPE_CAPABLE}" in
+    false:false|false:true|true:true) ;;
+    *) die_notrace "Required /usr signatures need an IPE-capable UKI build" ;;
 esac
 
 # Determine EFI architecture suffix
@@ -586,6 +592,42 @@ _uki_build_verity_addons() {
     local verity_temp_dir
     verity_temp_dir=$(mktemp -d)
 
+    local signature_option=""
+    local artifact_dir
+    artifact_dir="$(dirname "$(readlink -f "${FLAGS_disk_image}")")"
+
+    # Use the caller's root hash and staging paths; set signature_option only
+    # after installing the verified credential for both slot addons to use.
+    _install_usr_hash_signature() {
+        [[ "${usr_hash}" =~ ^[0-9a-f]{64}$ ]] ||
+            die "Signed /usr requires a canonical lowercase root hash"
+        local cert_dir="${artifact_dir}/acl-ipe-ephemeral"
+        local signature_name="verity-usr-${usr_hash}.p7s.cred"
+        # dm-verity verifies the 64 ASCII hash bytes, without a trailing newline.
+        printf '%s' "${usr_hash}" > "${verity_temp_dir}/root.hash"
+        "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" require ||
+            die "Missing /usr signing material"
+        openssl cms -sign -binary -noattr -md sha256 \
+            -in "${verity_temp_dir}/root.hash" \
+            -signer "${cert_dir}/uki-signing-ca.pem" -inkey "${cert_dir}/ca.key" \
+            -outform DER -out "${verity_temp_dir}/${signature_name}" ||
+            die "Failed to sign /usr root hash"
+        openssl cms -verify -binary -inform DER \
+            -in "${verity_temp_dir}/${signature_name}" \
+            -content "${verity_temp_dir}/root.hash" \
+            -nointern -certfile "${cert_dir}/uki-signing-ca.pem" -noverify \
+            -out /dev/null || die "Invalid /usr signature candidate"
+        # systemd-stub exposes this per-UKI file under /.extra/credentials/.
+        sudo mkdir -p "${esp_dir}/EFI/Linux/${uki_name}.extra.d"
+        sudo cp "${verity_temp_dir}/${signature_name}" \
+            "${esp_dir}/EFI/Linux/${uki_name}.extra.d/${signature_name}"
+        signature_option=",root-hash-signature=/.extra/credentials/${signature_name}"
+    }
+
+    if [[ "${ROOT_HASH_SIGNING_ENABLED}" == "true" ]]; then
+        _install_usr_hash_signature
+    fi
+
     local template_dir="${esp_dir}/acl/uki-addons"
     sudo mkdir -p "${template_dir}"
 
@@ -606,6 +648,7 @@ _uki_build_verity_addons() {
         cmdline="systemd.verity_usr_data=PARTUUID=${data_uuid}"
         cmdline+=" systemd.verity_usr_hash=PARTUUID=${hash_uuid}"
         cmdline+=" systemd.verity_usr_options=panic-on-corruption"
+        cmdline+="${signature_option}"
         cmdline+=" usrhash=${usr_hash}"
         cmdline+=" acl.slot=${slot}"
 
@@ -639,6 +682,11 @@ _uki_build_verity_addons() {
     sudo mkdir -p "${addon_dir}"
     sudo cp "${template_dir}/slot-a.addon.efi" "${addon_dir}/slot-a.addon.efi"
     info "UKI/RPM: Activated slot A → EFI/Linux/${uki_name}.extra.d/slot-a.addon.efi"
+    if [[ -n "${signature_option}" ]]; then
+        printf 'required\n' > "${artifact_dir}/usr-signature-mode"
+    else
+        rm -f "${artifact_dir}/usr-signature-mode"
+    fi
 
     # NOTE: Both slot templates are built with the same root hash at image
     # build time.  Trident overwrites the active addon (and its root hash)

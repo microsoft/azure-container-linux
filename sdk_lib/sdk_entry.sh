@@ -161,7 +161,23 @@ case "${ACL_IPE_SIGNING_MODE}" in
         exit 1
         ;;
 esac
-export ACL_IPE_MODE ACL_IPE_SIGNING_MODE ACL_IPE_CAPABLE
+ACL_ROOT_HASH_SIGNING_ENABLED="${ACL_ROOT_HASH_SIGNING_ENABLED:-false}"
+case "${ACL_ROOT_HASH_SIGNING_ENABLED}" in
+    true|false) ;;
+    *)
+        echo "ERROR: ACL_ROOT_HASH_SIGNING_ENABLED must be true or false" >&2
+        exit 1
+        ;;
+esac
+case "${ACL_ROOT_HASH_SIGNING_ENABLED}:${ACL_IPE_CAPABLE}:${BOOTLOADER_MODE:-uki}" in
+    false:*) ;;
+    true:true:uki) ;;
+    *)
+        echo "ERROR: ACL_ROOT_HASH_SIGNING_ENABLED must be false, or true on an IPE-capable UKI build" >&2
+        exit 1
+        ;;
+esac
+export ACL_IPE_MODE ACL_IPE_SIGNING_MODE ACL_IPE_CAPABLE ACL_ROOT_HASH_SIGNING_ENABLED
 
 # We need to sudo -u sdk with bash -l so that the SDK user gets a fresh login.
 # sudo has an -i option to get a login shell, but that cannot be combined with
