@@ -15,6 +15,18 @@ if [[ -f "${rootfs}/usr/lib/systemd/system/waagent.service" ]]; then
         "${rootfs}/usr/lib/systemd/system/waagent.service"
 fi
 
+# CIS 6.1.3.1: Restrict existing logs and new files created by waagent.
+if [[ -f "${rootfs}/usr/lib/systemd/system/waagent.service" ]]; then
+    mkdir -p "${rootfs}/usr/lib/systemd/system/waagent.service.d"
+    cat > "${rootfs}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf" <<'EOF'
+[Service]
+UMask=0027
+# Ignore missing paths and leave directory modes unchanged.
+ExecStartPre=-/bin/sh -c 'for path in /var/log/waagent.log /var/log/azure; do [ -e "$$path" ] || continue; /usr/bin/find "$$path" -xdev -type f -exec /usr/bin/chmod g-wx,o-rwx {} +; done'
+EOF
+    chmod 0644 "${rootfs}/usr/lib/systemd/system/waagent.service.d/cis-umask.conf"
+fi
+
 # Patch waagent service file to create symlink back to /etc/waagent.conf at ExecStartPre
 if [[ -f "${rootfs}/usr/lib/systemd/system/waagent.service" ]]; then
     # Insert ExecStartPre lines after the [Service] header
