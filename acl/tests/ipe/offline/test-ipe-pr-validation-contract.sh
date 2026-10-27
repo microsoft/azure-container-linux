@@ -14,7 +14,7 @@ assert_contract() {
     fi
 }
 
-assert_contract "audit default with only disabled/audit overrides" "$(cat <<'YAML'
+assert_contract "audit and signed-root defaults with explicit overrides" "$(cat <<'YAML'
 parameters:
   - name: ipeMode
     displayName: '[IPE] Runtime mode'
@@ -23,6 +23,10 @@ parameters:
     values:
       - 'disabled'
       - 'audit'
+  - name: rootHashSigningEnabled
+    displayName: '[Build] Sign /usr root hash (IPE audit builds)'
+    type: boolean
+    default: true
 
 pr:
 YAML
@@ -73,6 +77,7 @@ extends:
     mantleRef: 'aclmain'
     ipeMode: ${{ parameters.ipeMode }}
     ipeSigningMode: 'ephemeral'
+    rootHashSigningEnabled: ${{ and(parameters.rootHashSigningEnabled, eq(parameters.ipeMode, 'audit')) }}
     testGeneratePackageManifest: true
 YAML
 )"

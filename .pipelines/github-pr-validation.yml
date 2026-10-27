@@ -7,7 +7,8 @@
 # acl-pipelines ADO repo, which runs the actual build and test.                 #
 #                                                                               #
 # Azure builds run IPE audit validation with ephemeral signing on both         #
-# architectures. Manual runs can select ipeMode=disabled; QEMU is unchanged.   #
+# architectures, with signed /usr roots by default on aclmain.                 #
+# Manual runs can opt out of root signing or disable IPE; QEMU is unchanged.   #
 #                                                                               #
 # Security:                                                                     #
 #   - Fork PRs do NOT get secrets by default (ADO default behavior)             #
@@ -25,6 +26,10 @@ parameters:
     values:
       - 'disabled'
       - 'audit'
+  - name: rootHashSigningEnabled
+    displayName: '[Build] Sign /usr root hash (IPE audit builds)'
+    type: boolean
+    default: true
 
 pr:
   branches:
@@ -60,4 +65,5 @@ extends:
     mantleRef: 'aclmain'
     ipeMode: ${{ parameters.ipeMode }}
     ipeSigningMode: 'ephemeral'
+    rootHashSigningEnabled: ${{ and(parameters.rootHashSigningEnabled, eq(parameters.ipeMode, 'audit')) }}
     testGeneratePackageManifest: true
