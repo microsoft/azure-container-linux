@@ -143,6 +143,7 @@ assert_ipe_assets_present() {
 }
 
 run_audit_validation() {
+    info "IPE audit phase: ${1:-standalone}"
     ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
         "sudo bash -s -- --expected-usr-signature-mode '${EXPECTED_USR_SIGNATURE_MODE}'" \
         < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh"
@@ -242,7 +243,7 @@ main() {
     assert_ipe_mode "${initial_expected}"
     if [[ "${initial_expected}" == "audit" ]]; then
         assert_ipe_assets_present 1
-        run_audit_validation
+        run_audit_validation initial-audit
     else
         assert_ipe_assets_present 0
     fi
@@ -262,11 +263,11 @@ main() {
     set_security_profile_key_and_reboot "ipe" "audit"
     assert_ipe_mode "audit"
     assert_ipe_assets_present 1
-    run_audit_validation
+    run_audit_validation reenabled-audit
 
     info "Verifying containerd base fallback while IPE remains in audit mode"
     run_audit_fallback_validation
-    run_audit_validation
+    run_audit_validation post-containerd-fallback
 
     section "Step 4: Disable IPE through the canonical 'disabled' value"
     set_security_profile_key_and_reboot "ipe" "disabled"

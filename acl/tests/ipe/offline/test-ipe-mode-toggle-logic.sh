@@ -306,8 +306,8 @@ test_toggle_accepts_caller_expectation() (
 
 test_signed_and_unsigned_probe_expectations() {
     local usr_event writable_event
-    usr_event='type=1420 ipe_op=EXECUTE enforcing=0 pid=123 path="/usr/bin/true" rule="DEFAULT op=EXECUTE action=DENY"'
-    writable_event='type=1420 ipe_op=EXECUTE enforcing=0 pid=456 path="/var/tmp/probe" rule="DEFAULT op=EXECUTE action=DENY"'
+    usr_event='type=1420 ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=123 path="/usr/bin/true" rule="DEFAULT op=EXECUTE action=DENY"'
+    writable_event='type=1420 ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=456 path="/var/tmp/probe" rule="DEFAULT op=EXECUTE action=DENY"'
     ipe_assert_probe_audit "${writable_event}" /usr/bin/true 123 allow
     ipe_assert_probe_audit "${usr_event}" /usr/bin/true 123 deny
     ipe_assert_probe_audit "${writable_event}" /var/tmp/probe 456 deny
@@ -320,12 +320,14 @@ test_signed_and_unsigned_probe_expectations() {
     fi
 }
 
-test_signed_btrfs_probe_defers_no_denial_assertion() (
-    local event output
-    event='type=1420 ipe_op=EXECUTE enforcing=0 pid=123 path="/usr/bin/true" rule="DEFAULT op=EXECUTE action=DENY"'
+test_signed_btrfs_probe_requires_no_denial() (
+    local event
+    event='type=1420 ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=123 path="/usr/bin/true" rule="DEFAULT op=EXECUTE action=DENY"'
     blkid() { echo btrfs; }
-    output="$(ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 required)"
-    grep -Fq "WARN: Skipping signed /usr no-denial assertion" <<< "${output}"
+    if ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 required; then
+        echo "Signed btrfs /usr denial was waived" >&2
+        return 1
+    fi
     ipe_assert_usr_probe_audit "" /usr/bin/true 123 required
     ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 none
     if ipe_assert_usr_probe_audit "" /usr/bin/true 123 none; then
@@ -337,11 +339,6 @@ test_signed_btrfs_probe_defers_no_denial_assertion() (
     ipe_assert_usr_probe_audit "" /usr/bin/true 123 required
     if ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 required; then
         echo "Signed non-btrfs /usr lost its no-denial assertion" >&2
-        return 1
-    fi
-    blkid() { return 1; }
-    if ipe_assert_usr_probe_audit "${event}" /usr/bin/true 123 required; then
-        echo "Filesystem detection failure bypassed the audit assertion" >&2
         return 1
     fi
 )
@@ -566,7 +563,7 @@ for option_key in systemd.verity_usr_options systemd.verity-usr-options \
     test_toggle_preserves_usr_signature_mode "${option_key}"
 done
 test_signed_and_unsigned_probe_expectations
-test_signed_btrfs_probe_defers_no_denial_assertion
+test_signed_btrfs_probe_requires_no_denial
 test_probe_denial_correlation
 test_host_imds_matches_guest_parser
 test_streamed_guest_contains_cmdline_parser
