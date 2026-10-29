@@ -14,23 +14,11 @@ assert_contract() {
     fi
 }
 
-assert_contract "audit and signed-root defaults with explicit overrides" "$(cat <<'YAML'
-parameters:
-  - name: ipeMode
-    displayName: '[IPE] Runtime mode'
-    type: string
-    default: 'audit'
-    values:
-      - 'disabled'
-      - 'audit'
-  - name: rootHashSigningEnabled
-    displayName: '[Build] Sign /usr root hash (IPE audit builds)'
-    type: boolean
-    default: true
-
-pr:
-YAML
-)"
+if grep -Eq '^parameters[[:space:]]*:' <<< "${ENTRYPOINT}" ||
+    grep -Eq '\$\{\{[[:space:]]*parameters(\.|\[)' <<< "${ENTRYPOINT}"; then
+    echo "GitHub PR validation must use fixed settings without queue-time parameters" >&2
+    exit 1
+fi
 
 assert_contract "unchanged PR triggers" "$(cat <<'YAML'
 trigger: none
@@ -75,9 +63,9 @@ extends:
   parameters:
     aclRef: $(Build.SourceBranch)
     mantleRef: 'aclmain'
-    ipeMode: ${{ parameters.ipeMode }}
+    ipeMode: 'audit'
     ipeSigningMode: 'ephemeral'
-    rootHashSigningEnabled: ${{ and(parameters.rootHashSigningEnabled, eq(parameters.ipeMode, 'audit')) }}
+    rootHashSigningEnabled: true
     testGeneratePackageManifest: true
 YAML
 )"

@@ -241,13 +241,11 @@ checks policy activation, execution-correlated audit events, and reboot-based
 mode changes. IPE validation failures fail the pipeline; QEMU remains
 IPE-disabled. This does not enable production signing or enforcing mode.
 
-On `aclmain`, this entrypoint also defaults to signed `/usr` roots. Set
-`rootHashSigningEnabled=false` to exercise unsigned roots while retaining IPE
-audit, or select build-time `ipeMode=disabled` to disable both. Runtime IPE mode
-changes on an already signed image do not remove its root-signature requirement.
-
-Manually queued pipeline runs default to IPE audit, just like automatic PR runs.
-Normal manual validation should also include the full smoke suite, including IPE.
+On `aclmain`, this entrypoint uses fixed IPE audit, ephemeral signing, and signed
+`/usr` roots for both automatic PR runs and manually queued runs. It exposes no
+queue-time parameters; unsigned-root or IPE-disabled build validation requires
+a YAML change. Runtime IPE mode changes on an already signed image do not remove
+its root-signature requirement.
 
 Release branches use their own entrypoint YAML. Their unsigned-root default
 remains unchanged until signed-root support and a separate entrypoint update
