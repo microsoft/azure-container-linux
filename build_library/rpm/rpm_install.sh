@@ -236,14 +236,23 @@ remove_denylist_rpm_packages() {
     local dbpath_root="/var/lib/rpm"
     local -a denylist_globs=("perl*" "ncurses-term" "texinfo" "rpm" "rpm-libs" "libarchive")
 
-    if [[ "${RPM_PRESERVE_PYTHON:-0}" != "1" ]]; then
-        denylist_globs+=("python3" "python3-*")
-    fi
-
     info "RPM mode: Removing denylisted rpm packages"
     if [[ ! -d "${dbpath_fs}" ]]; then
         warn "RPM mode: No RPM database found at ${dbpath_fs}"
         return 0
+    fi
+
+    if [[ "${RPM_PRESERVE_PYTHON:-0}" != "1" ]]; then
+        local walinuxagent
+        if ! walinuxagent=$(sudo rpm --dbpath="${dbpath_fs}" -qa --qf '%{NAME}\n' WALinuxAgent); then
+            error "RPM mode: Failed to query WALinuxAgent before Python cleanup"
+            return 1
+        fi
+        if [[ -z "${walinuxagent}" ]]; then
+            denylist_globs+=("python3" "python3-*")
+        else
+            info "RPM mode: Preserving Python runtime for WALinuxAgent"
+        fi
     fi
 
     local denylist_packages
@@ -308,11 +317,8 @@ remove_orphaned_perl_scripts() {
     sudo rm -rf "${root_fs_dir}/usr/share/gitweb"
 }
 
-# Remove Python scripts orphaned by force-removing the python denylist.
-# Several packages ship optional helper scripts that depend on python3, but
-# python3 is removed via --nodeps in remove_denylist_rpm_packages for the base
-# image. The scripts below are non-functional without the python interpreter and
-# must be deleted explicitly.
+# Remove optional Python helpers that ACL does not need, even when Python is
+# retained for WALinuxAgent. Without Python, these would also be orphaned.
 remove_orphaned_python_scripts() {
     local root_fs_dir="$1"
     info "RPM mode: Removing optional python helper scripts"
@@ -437,7 +443,7 @@ rpm_install_package() {
         return 1
     fi
 
-    remove_denylist_rpm_packages "${root_fs_dir}"
+    remove_denylist_rpm_packages "${root_fs_dir}" || return 1
 
     remove_orphaned_perl_scripts "${root_fs_dir}"
 

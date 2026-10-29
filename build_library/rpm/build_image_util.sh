@@ -535,6 +535,24 @@ SSHD_KEYGEN_DROPIN
     sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/sshd.service"
 }
 
+_configure_walinuxagent_rpm() {
+    local root_fs_dir="$1"
+
+    [[ -x "${root_fs_dir}/usr/bin/python3" ]] ||
+        die "RPM mode: Python 3 runtime missing from the WALinuxAgent base image"
+    # OEM mangling cannot see the base-layer interpreter after unmounting overlayfs.
+    sudo ln -sf python3 "${root_fs_dir}/usr/bin/python"
+
+    info "RPM mode: Leaving WALinuxAgent configuration and activation to oem-azure"
+    # The generic RPM config would prevent the OEM service from linking its ACL config.
+    sudo rm -f "${root_fs_dir}/etc/waagent.conf"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/systemd/system-preset"
+    printf "disable waagent.service\n" | \
+        sudo tee "${root_fs_dir}/usr/lib/systemd/system-preset/50-acl-walinuxagent.preset" > /dev/null
+    sudo rm -f "${root_fs_dir}/etc/systemd/system/multi-user.target.wants/waagent.service"
+    sudo rm -f "${root_fs_dir}/usr/lib/systemd/system/multi-user.target.wants/waagent.service"
+}
+
 # ── Sudo: Flatcar-compatible sudoers policy ──────────────────────────────────
 _configure_sudo_rpm() {
     local root_fs_dir="$1"
@@ -1417,6 +1435,7 @@ finish_image_post_tmpfiles_rpm() {
 
     _remove_machine_id_rpm "${root_fs_dir}"
     _configure_ssh_rpm "${root_fs_dir}"
+    _configure_walinuxagent_rpm "${root_fs_dir}"
     _configure_sudo_rpm "${root_fs_dir}"
     _fix_ntp_nfs_services_rpm "${root_fs_dir}"
     _remove_unused_flatcar_components_rpm "${root_fs_dir}"

@@ -38,6 +38,8 @@ packages:
     - ca-certificates
     - irqbalance
     - rsyslog
+    # Ship the agent and its runtime in the base; oem-azure supplies ACL config.
+    - WALinuxAgent
     # trident-acl is bootloader-filtered out of this list at resolution time
     # in get_rpm_package_name() (package_catalog.sh) when BOOTLOADER_MODE !=
     # uki: GRUB-ACL cannot do Trident A/B updates (no addon-swap

@@ -143,11 +143,17 @@ Build custom RPM packages using the Azure Linux toolkit:
 This step:
 
 - Clones Azure Linux 3.0 toolkit if not present
-- Builds packages defined in `acl/SPECS/`
+- Builds packages selected by [`acl/packages.yaml`](../packages.yaml) from `acl/SPECS/`
 - Copies built RPMs to the staging directory
 - Updates repository metadata automatically
 
 **Build output:** Custom RPMs are added to `__build__/rpm-staging/`.
+
+`WALinuxAgent` is built from the local spec and installed in the base image,
+including its Python dependencies and Azure storage dracut module. The base also
+provides `/usr/bin/python -> python3` for the Azure OEM service. Azure-specific
+configuration and service activation remain in the `oem-azure` extension; the
+agent is not started on non-Azure images.
 
 **Compression Failure Tip**
 
@@ -169,6 +175,9 @@ Build the ACL production image using RPM package sources.
 ```bash
 # Build image
 ./acl/build_rpm_image.sh --rebuild
+
+# Build custom RPMs, including WALinuxAgent, and incorporate them into a new image
+./acl/build_rpm_image.sh --build-rpms --rebuild
 ```
 
 **Optional IPE audit (UKI images)**
