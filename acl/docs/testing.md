@@ -53,6 +53,33 @@ Additional tests live in `acl/tests/`:
 
 ### Recaptured and prefetch-optimized images
 
+ACL provides `acl-image-prepare` in `coreos-init` 0.0.1-5 and later for image
+builders. Run it as root immediately before capture, with `/boot` mounted.
+It restores the signed first-boot addon for the explicit default UKI selected
+in `loader.conf`, restores the legacy marker, and flushes the boot filesystem.
+It supports the `acl.efi` and `vmlinuz-<version>.efi` names, is safe to repeat,
+and rejects missing or ambiguous boot assets. It does not wipe the OS, remove
+preloaded container images, clear machine identity, or replace VM deprovisioning.
+Do not invoke it during normal customer reboots.
+
+The existing Flatcar reset utility is removed from ACL images and is not the
+image-capture interface. Image builders must continue their normal removal of
+build credentials and machine-specific state.
+
+Azure Image Builder documents a
+[Linux deprovisioning override](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/image-builder-json#overriding-the-commands):
+create `/tmp/DeprovisioningScript.sh` during customization. Image Builder runs
+it at the end of customization to generalize the image. Include
+`acl-image-prepare` in that script, preserving `waagent -force -deprovision+user`
+and error propagation. This is a supported pre-capture integration point, not
+a post-optimization hook.
+
+The [2025-10-01 API](https://github.com/Azure/azure-rest-api-specs/blob/main/specification/imagebuilder/resource-manager/Microsoft.VirtualMachineImages/ImageBuilder/stable/2025-10-01/imagebuilder.json)
+exposes boot/workload optimization but no separate post-optimization finalizer.
+Its workload script contract does not promise that disk edits persist in the
+distributed image. Correctness must not depend on such edits. This conclusion
+is based on the public contract, not a claim about undocumented service internals.
+
 An intermediate boot consumes both the legacy first-boot marker and, on UKI
 images, the firstboot EFI addon. Generalization must rearm the final image, not
 just an earlier Packer capture. Restoring only `/boot/flatcar/first_boot` does
@@ -89,4 +116,9 @@ Run the local fixture tests with:
 
 ```bash
 bash acl/tests/test-firstboot-state.sh
+bash acl/SPECS/coreos-init/test-acl-image-prepare.sh
 ```
+
+The preparation fixtures also run in the RPM's `%check` phase. Passing these
+fixtures does not replace building an ACL image with the new package and testing
+first boot and reboot of the final Image Builder output.

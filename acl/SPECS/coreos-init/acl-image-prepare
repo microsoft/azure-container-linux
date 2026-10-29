@@ -1,0 +1,70 @@
+#!/bin/bash
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+set -euo pipefail
+
+acl_image_prepare() {
+    local root="${1:-}" ID VARIANT_ID
+    local boot="${root}/boot" uki template addon staged
+    # shellcheck source=/dev/null
+    source "${root}/etc/os-release" || return 1
+    if [[ "${ID:-}" != azurecontainerlinux ]] &&
+        ! [[ "${ID:-}" == azurelinux && "${VARIANT_ID:-}" == azurecontainerlinux ]]; then
+        echo "acl-image-prepare: this operation requires ACL" >&2
+        return 1
+    fi
+    if ! mountpoint -q "${boot}"; then
+        echo "acl-image-prepare: /boot must be mounted before preparing an image" >&2
+        return 1
+    fi
+
+    template="${boot}/acl/uki-addons/firstboot.addon.efi"
+    if [[ ! -s "${template}" ]]; then
+        echo "acl-image-prepare: missing signed first-boot addon template" >&2
+        return 1
+    fi
+    uki="$(awk '$1 == "default" { print $2 }' "${boot}/loader/loader.conf")" || return 1
+    if [[ ! "${uki}" =~ ^(acl|vmlinuz-[[:alnum:]_.+-]+)\.efi$ ]] ||
+        [[ ! -s "${boot}/EFI/Linux/${uki}" ]]; then
+        echo "acl-image-prepare: expected one explicit, existing default UKI in loader.conf" >&2
+        return 1
+    fi
+
+    addon="${boot}/EFI/Linux/${uki}.extra.d/firstboot.addon.efi"
+    mkdir -p "${addon%/*}" "${boot}/flatcar" || return 1
+    staged="$(mktemp "${addon%/*}/.firstboot.addon.XXXXXX")" || return 1
+    if ! install -m 0644 "${template}" "${staged}" || ! cmp -s "${template}" "${staged}"; then
+        rm -f -- "${staged}"
+        echo "acl-image-prepare: could not stage an exact copy of the signed addon" >&2
+        return 1
+    fi
+    if ! mv -fT -- "${staged}" "${addon}"; then
+        rm -f -- "${staged}"
+        echo "acl-image-prepare: could not restore the first-boot addon" >&2
+        return 1
+    fi
+    touch "${boot}/flatcar/first_boot" || return 1
+    sync -f "${boot}" || return 1
+    echo "acl-image-prepare: next boot will run first-time provisioning"
+}
+
+main() {
+    if [[ $# -eq 1 && "$1" == --help ]]; then
+        echo "Usage: acl-image-prepare"
+        echo "Restore first-time provisioning before image capture. Does not erase data or deprovision the VM."
+        return 0
+    fi
+    if [[ $# -ne 0 ]]; then
+        echo "Usage: acl-image-prepare" >&2
+        return 2
+    fi
+    if [[ "${EUID}" -ne 0 ]]; then
+        echo "acl-image-prepare: run as root on the image-build VM" >&2
+        return 1
+    fi
+    acl_image_prepare
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

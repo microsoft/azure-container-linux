@@ -1,9 +1,9 @@
 Name:           coreos-init
 Version:        0.0.1
-Release:        4%{?dist}
+Release:        5%{?dist}
 Summary:        Init scripts for Flatcar (systemd units, scripts, configs)
 
-License:        BSD-3-Clause
+License:        BSD-3-Clause AND MIT
 URL:            https://github.com/flatcar/init
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
@@ -15,6 +15,9 @@ BuildArch:      noarch
 
 # tarball matches the ebuild SRC_URI pattern:
 Source0:        https://github.com/flatcar/init/archive/%{commit}/init-%{commit}.tar.gz#/%{name}-%{version}-%{shortcommit}.tar.gz
+Source1:        acl-image-prepare
+Source2:        test-acl-image-prepare.sh
+Source3:        LICENSE-ACL
 Patch0:         support-UKI-mode-by-restoring-firstboot-addon.patch
 Patch1:         Add-noop-sysupdate-transfer-config.patch
 Patch2:         autologin-use-provisioned-user.patch
@@ -38,6 +41,9 @@ Requires:       parted
 Requires:       gptfdisk
 Requires:       systemd >= 207
 Requires:       coreos-cloudinit
+Requires:       coreutils
+Requires:       gawk
+Requires:       util-linux
 
 %if %{with tests}
 BuildRequires:  python3
@@ -50,12 +56,14 @@ organizes content under configs/, scripts/, systemd/, udev/, etc. [1](https://gi
 
 %prep
 %autosetup -p1 -n init-%{commit}
+cp %{SOURCE3} LICENSE-ACL
 
 %install
 rm -rf %{buildroot}
 
 # ebuild: emake DESTDIR="${D}" install
 %{__make} DESTDIR=%{buildroot} install
+install -D -m 0755 %{SOURCE1} %{buildroot}%{_bindir}/acl-image-prepare
 
 # ebuild: systemd_enable_service rpcbind.target rpcbind.service
 # In systemd, enabling a unit is implemented by creating symlinks in a target’s .wants dir. [3](https://www.flatcar.org/docs/latest/setup/systemd/getting-started/)
@@ -80,6 +88,7 @@ find %{buildroot} -type f -o -type l \
 # Upstream includes a tests/ directory; if tests are wired via Makefile, run them.
 # If this fails in Azure Linux, replace with the repo’s actual test invocation.
 %{__make} test
+bash %{SOURCE2} %{SOURCE1}
 %endif
 
 %post
@@ -96,10 +105,14 @@ find %{buildroot} -type f -o -type l \
 %systemd_postun rpcbind.service
 
 %files -f %{name}.files
-%license LICENSE NOTICE
+%license LICENSE NOTICE LICENSE-ACL
 %doc README.md
 
 %changelog
+* Thu Oct 29 2026 Sean Dougherty - 0.0.1-5
+- Add acl-image-prepare to restore first-time provisioning before image capture
+  without resetting the OS or removing preloaded workloads.
+
 * Mon Jun 29 2026 Jiri Appl <jiria@microsoft.com> - 0.0.1-4
 - Fix support-UKI-mode-by-restoring-firstboot-addon patch to derive the UKI
   addon directory from the kernel version (vmlinuz-<version>.efi.extra.d)

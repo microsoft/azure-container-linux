@@ -1,5 +1,8 @@
 {
  "Signatures": {
-  "coreos-init-0.0.1-8bd8a82.tar.gz": "8a512599c00629a9b1a3dfa55b3edb6ce6ddf57bd5418c6a7acc0160127113ad"
+  "coreos-init-0.0.1-8bd8a82.tar.gz": "8a512599c00629a9b1a3dfa55b3edb6ce6ddf57bd5418c6a7acc0160127113ad",
+  "acl-image-prepare": "d930c2652be6a73c0210b47fc355c444800e14f7f87be3a4cdc8968f0e4b9476",
+  "test-acl-image-prepare.sh": "250e924407e260a4a8f29fa362ac975669f62ebe7cbea537520369c9fdafb78c",
+  "LICENSE-ACL": "646f8936b8ddcd14e13e578ff6857e368780b0d1a4f6066bee89211923a373e2"
  }
 }
