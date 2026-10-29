@@ -241,11 +241,15 @@ checks policy activation, execution-correlated audit events, and reboot-based
 mode changes. IPE validation failures fail the pipeline; QEMU remains
 IPE-disabled. This does not enable production signing or enforcing mode.
 
-Manually queued pipeline runs default to IPE audit, just like automatic PR runs.
-Normal manual validation should also include the full smoke suite, including IPE.
+On `aclmain`, this entrypoint uses fixed IPE audit, ephemeral signing, and signed
+`/usr` roots for both automatic PR runs and manually queued runs. It exposes no
+queue-time parameters; unsigned-root or IPE-disabled build validation requires
+a YAML change. Runtime IPE mode changes on an already signed image do not remove
+its root-signature requirement.
 
-Release branches need the entrypoint change too, since their PRs use their own
-YAML.
+Release branches use their own entrypoint YAML. Their unsigned-root default
+remains unchanged until signed-root support and a separate entrypoint update
+land there; this change does not enable release-branch signing.
 
 **Build output location:** `__build__/images/images/amd64-usr/latest/`
 
