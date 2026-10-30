@@ -291,6 +291,24 @@ test_toggle_preserves_usr_signature_mode() (
         echo "Unsigned-root baseline changed during IPE toggling" >&2
         return 1
     fi
+
+    ssh() {
+        cat > /dev/null
+        echo required
+        echo "deliberate signature-check failure" >&2
+        return 7
+    }
+    EXPECTED_USR_SIGNATURE_MODE=required
+    if failure="$(assert_ipe_assets_present 0 2>&1)"; then
+        echo "Failed SSH signature check produced a successful asset assertion" >&2
+        return 1
+    else
+        [[ "$?" -eq 1 ]]
+    fi
+    [[ "${failure}" == *"deliberate signature-check failure"* ]]
+    [[ "${failure}" == *"/usr dm-verity state changed or is invalid"* ]]
+    [[ "${failure}" != *"IPE /usr dm-verity validation: PASS"* ]]
+    [[ "${failure}" != *"IPE assets are present"* ]]
 )
 
 test_toggle_accepts_caller_expectation() (

@@ -133,12 +133,15 @@ assert_ipe_assets_present() {
             EXPECTED_USR_SIGNATURE_MODE=required
         fi
     fi
-    usr_signature_mode="$(ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
-        "sudo bash -s -- --verity-only '${EXPECTED_USR_SIGNATURE_MODE}'" \
-        < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh")" || {
-        error "/usr dm-verity state changed or is invalid"
-        return 1
-    }
+    # The smoke preflight recognizes this inner SSH invocation and error handler.
+    usr_signature_mode="$(
+        ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
+            "sudo bash -s -- --verity-only '${EXPECTED_USR_SIGNATURE_MODE}'" \
+            < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh" || {
+            error "/usr dm-verity state changed or is invalid"
+            return 1
+        }
+    )" || return 1
     info "IPE /usr dm-verity validation: PASS (signature mode='${usr_signature_mode}')"
     info "IPE assets are present and policy active state is '${policy_active}'"
 }
