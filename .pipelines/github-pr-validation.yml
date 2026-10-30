@@ -18,6 +18,16 @@
 
 trigger: none
 
+parameters:
+  - name: packageOperation
+    displayName: '[Build] Package operation'
+    type: string
+    default: report-and-remove
+    values:
+      - report-and-remove
+      - report-only
+      - disabled
+
 pr:
   branches:
     include:
@@ -48,6 +58,7 @@ variables:
 extends:
   template: pipelines/ACL-GitHub-PR.yml@acl_pipelines
   parameters:
+    packageOperation: ${{ parameters.packageOperation }}
     aclRef: $(Build.SourceBranch)
     mantleRef: 'aclmain'
     ipeMode: 'audit'

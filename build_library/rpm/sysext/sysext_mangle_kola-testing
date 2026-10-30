@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Mangle script for kola-testing sysext
+# Relocates Kola test prerequisites to /usr to comply with sysext requirements
+
+set -euo pipefail
+
+ROOT="$1"
+
+echo "Starting kola-testing sysext mangle process for ${ROOT}"
+
+# Remove unnecessary debug files and static libraries to reduce size.
+echo "Cleaning debug files and static libraries..."
+find "${ROOT}" \( -type f -o -type l \) \( -name '*.a' -o -path '*/debug/*' -o -name '*-debug-*' \) -delete
+
+# Preserve reference configs without replacing the production host's /etc.
+if [[ -d "${ROOT}/etc" ]]; then
+    echo "Relocating /etc files to /usr/lib/kola-testing/etc..."
+    mkdir -p "${ROOT}/usr/lib/kola-testing"
+    mv "${ROOT}/etc" "${ROOT}/usr/lib/kola-testing/etc"
+fi
+
+# RPMs can install outside /usr, but only /usr survives sysext packaging.
+for directory in bin sbin lib lib64; do
+    if [[ -d "${ROOT}/${directory}" && ! -L "${ROOT}/${directory}" ]]; then
+        echo "Moving /${directory} to /usr/${directory}..."
+        mkdir -p "${ROOT}/usr/${directory}"
+        cp -a "${ROOT}/${directory}/." "${ROOT}/usr/${directory}/"
+        rm -rf "${ROOT:?}/${directory}"
+    fi
+done
+
+# Installing test tools must not enable their daemons by default.
+echo "Disabling automatic startup of test services..."
+mkdir -p "${ROOT}/usr/lib/systemd/system-preset"
+cat > "${ROOT}/usr/lib/systemd/system-preset/10-kola-testing.preset" <<'EOF'
+disable ntpd.service
+disable ntpdate.service
+EOF
+
+echo "Kola testing sysext mangle completed successfully"

@@ -111,6 +111,18 @@ sysexts:
       - gpu
 
   # --- Testing framework sysexts ----------------------------------------
+  - name: kola-testing
+    mode: standalone
+    tags:
+      - kola
+    packages:
+      - git                     # sysext.custom-docker.sysext
+      - glib-devel              # acl.basic/DbusPerms
+      - net-tools               # cl.network.listeners
+      - ntp                     # acl.internet/NTPDate
+      - rsync                   # docker.userns
+      - wget                    # coreos.tls.fetch-urls
+
   - name: lisa-testing
     mode: standalone
     tags:
