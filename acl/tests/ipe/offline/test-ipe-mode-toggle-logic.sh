@@ -212,7 +212,7 @@ test_usr_verity_signature_contract() {
 }
 
 test_toggle_preserves_usr_signature_mode() (
-    local hash unsigned_cmdline unsigned_table option_key="${1:-systemd.verity_usr_options}"
+    local hash unsigned_cmdline unsigned_table output option_key="${1:-systemd.verity_usr_options}"
     hash="$(printf '%064d' 1)"
     unsigned_cmdline="usrhash=${hash} acl.ipe.policy_sha256=${hash} ${option_key}=panic-on-corruption"
     unsigned_table="0 2097152 verity 1 8:2 8:3 4096 4096 262144 1 sha256 ${hash} abcd 1 panic_on_corruption"
@@ -254,7 +254,12 @@ test_toggle_preserves_usr_signature_mode() (
     assert_ipe_assets_present 1
     [[ "${EXPECTED_USR_SIGNATURE_MODE}" == required ]]
     mock_active=0
-    assert_ipe_assets_present 0
+    output="$(assert_ipe_assets_present 0)"
+    [[ "${output}" == *"IPE /usr dm-verity validation: PASS (signature mode='required')"* ]]
+    if grep -xq required <<< "${output}"; then
+        echo "Signature mode was printed without its IPE label" >&2
+        return 1
+    fi
     MOCK_CMDLINE="${unsigned_cmdline}"
     MOCK_TABLE="${unsigned_table}"
     if assert_ipe_assets_present 0; then
@@ -275,7 +280,8 @@ test_toggle_preserves_usr_signature_mode() (
     fi
     [[ "${failure}" == *"expected required, got none"* ]]
     EXPECTED_USR_SIGNATURE_MODE=none
-    assert_ipe_assets_present 0
+    output="$(assert_ipe_assets_present 0)"
+    [[ "${output}" == *"IPE /usr dm-verity validation: PASS (signature mode='none')"* ]]
     EXPECTED_USR_SIGNATURE_MODE=auto
     assert_ipe_assets_present 0
     [[ "${EXPECTED_USR_SIGNATURE_MODE}" == none ]]
@@ -459,8 +465,37 @@ test_copied_guest_script_needs_no_sibling_file() (
     [[ "${SCRIPT_RESULTS_STATUS[0]}" -eq 1 ]]
 )
 
+test_audit_phase_logging() (
+    local test_dir mock_ssh_status actual output
+    test_dir="$(mktemp -d)"
+    trap 'rm -rf "${test_dir}"' EXIT
+    VM_SSH_USER=tester
+    VM_IP=test-vm
+    SSH_OPTS=()
+    ssh() {
+        cat > /dev/null
+        echo "guest diagnostic" >&2
+        return "${mock_ssh_status}"
+    }
+    for mock_ssh_status in 0 7; do
+        set +e
+        (set -e; run_audit_validation initial-audit) > "${test_dir}/output" 2>&1
+        actual=$?
+        set -e
+        [[ "${actual}" -eq "${mock_ssh_status}" ]]
+        output="$(cat "${test_dir}/output")"
+        [[ "${output}" == *'initial-audit (BEGIN)'*'guest diagnostic'* ]]
+        if [[ "${mock_ssh_status}" -eq 0 ]]; then
+            [[ "${output}" == *'initial-audit (PASS)'* ]]
+        else
+            [[ "${output}" == *'initial-audit (FAIL, exit=7)'* ]]
+            [[ "${output}" != *'initial-audit (PASS)'* ]]
+        fi
+    done
+)
+
 test_audit_fallback_restores_containerd() (
-    local test_dir expected actual
+    local test_dir expected actual setup_status restore_status output
     test_dir="$(mktemp -d)"
     trap 'rm -rf "${test_dir}"' EXIT
     get_ipe_mode() { echo audit; }
@@ -470,21 +505,40 @@ test_audit_fallback_restores_containerd() (
             *"sudo bash -s"*)
                 cat > "${test_dir}/setup"
                 echo setup >> "${test_dir}/calls"
-                return "${expected}"
+                return "${setup_status}"
                 ;;
-            *"sudo rm -f"*) echo restore >> "${test_dir}/calls" ;;
+            *"sudo rm -f"*)
+                echo restore >> "${test_dir}/calls"
+                return "${restore_status}"
+                ;;
             *) echo "Unexpected guest command: $*" >&2; return 1 ;;
         esac
     }
-    for expected in 0 7; do
-        : > "${test_dir}/calls"
-        set +e
-        (set -e; run_audit_fallback_validation)
-        actual=$?
-        set -e
-        [[ "${actual}" -eq "${expected}" ]]
-        [[ "$(cat "${test_dir}/calls")" == $'setup\nrestore' ]]
-        bash -n "${test_dir}/setup"
+    for setup_status in 0 7; do
+        for restore_status in 0 9; do
+            expected="${setup_status}"
+            [[ "${restore_status}" -eq 0 ]] || expected=1
+            : > "${test_dir}/calls"
+            set +e
+            (set -e; run_audit_fallback_validation) > "${test_dir}/output" 2>&1
+            actual=$?
+            set -e
+            [[ "${actual}" -eq "${expected}" ]]
+            [[ "$(cat "${test_dir}/calls")" == $'setup\nrestore' ]]
+            bash -n "${test_dir}/setup"
+            output="$(cat "${test_dir}/output")"
+            if [[ "${setup_status}" -eq 0 ]]; then
+                [[ "${output}" == *'IPE containerd fallback: PASS'* ]]
+            else
+                [[ "${output}" != *'IPE containerd fallback: PASS'* ]]
+            fi
+            if [[ "${restore_status}" -eq 0 ]]; then
+                [[ "${output}" == *'IPE containerd fallback cleanup: PASS'* ]]
+            else
+                [[ "${output}" == *'Could not restore containerd'* ]]
+                [[ "${output}" != *'IPE containerd fallback cleanup: PASS'* ]]
+            fi
+        done
     done
 )
 
@@ -568,6 +622,7 @@ test_probe_denial_correlation
 test_host_imds_matches_guest_parser
 test_streamed_guest_contains_cmdline_parser
 test_copied_guest_script_needs_no_sibling_file
+test_audit_phase_logging
 test_audit_fallback_restores_containerd
 test_cleanup_preserves_primary_failure
 test_cleanup_reboots_after_any_mutation

@@ -350,7 +350,7 @@ ipe_report_probe() {
     local directory="$1" name="$2" target="$3" expected="$4" telemetry="$5"
     local pid status events dependencies observed=NO_DENIAL_OBSERVED result=PASS hooks=- message
     local command stream line execution=PASS verification=UNVERIFIED
-    printf '%-18s %-11s %s\n' "${name}" ERROR UNVERIFIED \
+    printf '%-18s %-11s %-9s %-20s %s\n' "${name}" ERROR "${expected}" UNKNOWN UNVERIFIED \
         > "${directory}/${name}.summary" || return 1
     if ! command="$(cat "${directory}/${name}.command")"; then
         echo "IPE_PROBE name=${name} result=FAIL reason=missing-command"
@@ -358,16 +358,14 @@ ipe_report_probe() {
     fi
     printf '\n=== Probe: %s ===\nCommand: %s\n' "${name}" "${command}"
     for stream in stdout stderr; do
-        printf '%s:\n' "${stream}"
         if [[ ! -r "${directory}/${name}.${stream}" ]]; then
             echo "IPE_PROBE name=${name} result=FAIL reason=missing-${stream}"
             return 1
         elif [[ -s "${directory}/${name}.${stream}" ]]; then
+            printf '%s:\n' "${stream}"
             while IFS= read -r line || [[ -n "${line}" ]]; do
                 printf '  %s\n' "${line}"
             done < "${directory}/${name}.${stream}" || return 1
-        else
-            printf '  <empty>\n'
         fi
     done
     if ! pid="$(cat "${directory}/${name}.pid")"; then
@@ -380,13 +378,13 @@ ipe_report_probe() {
         observed=WOULD_DENY
         hooks="$(sed -n 's/.*ipe_hook=\([^ ]*\).*/\1/p' <<< "${events}" | sort -u | paste -sd,)"
     fi
+    [[ "${telemetry}" == pass ]] || observed=UNKNOWN
     if [[ "${status}" != 0 ]]; then
         execution=FAIL
         result=FAIL
         message="execution failed (exit=${status})"
     elif [[ "${telemetry}" != pass ]]; then
         result=FAIL
-        observed=UNKNOWN
         message=""
     elif ! message="$(ipe_assert_probe_audit "$(cat "${directory}/audit.log")" "${target}" "${pid}" "${expected}" 2>&1)"; then
         verification=FAIL
@@ -394,18 +392,23 @@ ipe_report_probe() {
     else
         verification=PASS
     fi
-    printf '%-18s %-11s %s\n' "${name}" "${execution}" "${verification}" \
+    printf '%-18s %-11s %-9s %-20s %s\n' "${name}" "${execution}" "${expected}" "${observed}" "${verification}" \
         > "${directory}/${name}.summary" || return 1
     echo "IPE_PROBE name=${name} target=${target} pid=${pid} exit=${status} expected=${expected} observed=${observed} hooks=${hooks} result=${result}"
-    [[ -z "${events}" ]] || printf '  %s\n' "${events}"
+    if [[ -n "${events}" ]]; then
+        echo "Audit evidence (target):"
+        sed 's/^/  /' <<< "${events}" || return 1
+    fi
     dependencies="$(ipe_find_process_denials "$(cat "${directory}/audit.log")" "${pid}" |
         grep -Fv "path=\"${target}\"" || true)"
     if [[ -n "${dependencies}" ]]; then
-        echo "  IPE dependency denials (not target-file verdicts):"
-        printf '  %s\n' "${dependencies}"
+        echo "Audit evidence (dependencies; not target-file verdicts):"
+        sed 's/^/  /' <<< "${dependencies}" || return 1
     fi
     if [[ "${result}" != PASS ]]; then
-        [[ -z "${message}" ]] || echo "  ${message}"
+        if [[ -n "${message}" ]]; then
+            sed 's/^/  /' <<< "${message}" || return 1
+        fi
         return 1
     fi
 }
@@ -436,10 +439,12 @@ ipe_report_probe_matrix() {
     else
         echo "OVERALL: ${result}"
     fi
-    printf '\n%-18s %-11s %s\n' Probe Execution 'IPE verification'
+    printf '\n%-18s %-11s %-9s %-20s %s\n' Probe Execution Expected 'Target audit' 'IPE verification'
     for name in "${names[@]}"; do
         cat "${directory}/${name}.summary" || return 1
     done
+    echo "allow PASS: no target/dependency denial in a control-validated window; not an ALLOW record."
+    echo "deny PASS: target BPRM_CHECK denial observed; execution still succeeded in audit mode."
     for name in "${names[@]}"; do
         cat "${directory}/${name}.report" || return 1
     done

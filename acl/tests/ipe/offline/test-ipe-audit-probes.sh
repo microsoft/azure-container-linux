@@ -135,7 +135,8 @@ test_execution_and_reporting() (
     [[ "$(cat "${directory}/version.status")" == 0 ]]
     : > "${directory}/audit.log"
     output="$(ipe_report_probe "${directory}" version /usr/bin/version allow pass)"
-    [[ "${output}" == $'\n=== Probe: version ===\nCommand: '*$'\nstdout:\n  version output\nstderr:\n  <empty>\nIPE_PROBE '* ]]
+    [[ "${output}" == $'\n=== Probe: version ===\nCommand: '*$'\nstdout:\n  version output\nIPE_PROBE '* ]]
+    [[ "${output}" != *$'\nstderr:\n'* && "${output}" != *'<empty>'* ]]
     grep -Fq 'observed=NO_DENIAL_OBSERVED hooks=- result=PASS' <<< "${output}"
     if output="$(ipe_report_probe "${directory}" version /usr/bin/version allow fail)"; then
         echo "Missing telemetry turned absence into a pass" >&2
@@ -144,19 +145,27 @@ test_execution_and_reporting() (
     grep -Fq 'observed=UNKNOWN' <<< "${output}"
     printf 'IPE_ACCESS ipe_op=EXECUTE ipe_hook=MMAP enforcing=0 pid=%s path="/usr/lib64/libc.so.6" rule="DEFAULT op=EXECUTE action=DENY"\n' \
         "${pid}" > "${directory}/audit.log"
+    printf 'IPE_ACCESS ipe_op=EXECUTE ipe_hook=MMAP enforcing=0 pid=%s path="/usr/lib64/libexample.so" rule="DEFAULT op=EXECUTE action=DENY"\n' \
+        "${pid}" >> "${directory}/audit.log"
     if output="$(ipe_report_probe "${directory}" version /usr/bin/version allow pass)"; then
         echo "Dependency denial did not fail the signed probe report" >&2
         return 1
     fi
     grep -Fq 'result=FAIL' <<< "${output}"
     grep -Fq 'path="/usr/lib64/libc.so.6"' <<< "${output}"
+    grep -Fq 'Audit evidence (dependencies; not target-file verdicts):' <<< "${output}"
+    if grep -q '^IPE_ACCESS' <<< "${output}"; then
+        echo "Multiline dependency evidence was not fully indented" >&2
+        return 1
+    fi
     ipe_run_probe "${directory}" failure bash -c 'echo deliberate-failure >&2; exit 7'
     if output="$(ipe_report_probe "${directory}" failure /usr/bin/failure deny pass)"; then
         echo "Failed execution passed" >&2
         return 1
     fi
     grep -Fq 'exit=7' <<< "${output}"
-    [[ "${output}" == *$'\nstdout:\n  <empty>\nstderr:\n  deliberate-failure\nIPE_PROBE '* ]]
+    [[ "${output}" == *$'\nstderr:\n  deliberate-failure\nIPE_PROBE '* ]]
+    [[ "${output}" != *$'\nstdout:\n'* && "${output}" != *'<empty>'* ]]
     [[ "$(grep -c '^ *deliberate-failure$' <<< "${output}")" == 1 ]]
 )
 
@@ -210,10 +219,11 @@ EOF
         [[ "${pid}" =~ ^[1-9][0-9]*$ && "$(cat "${directory}/${name}.status")" == 0 ]]
         : > "${directory}/audit.log"
         output="$(ipe_report_probe "${directory}" "${name}" "${target}" allow pass)"
+        [[ "${output}" != *$'\nstderr:\n'* && "${output}" != *'<empty>'* ]]
         if [[ "${name}" == base || "${name}" == base-bash ]]; then
-            [[ "${output}" == *$'\nstdout:\n  <empty>\nstderr:\n  <empty>\nIPE_PROBE '* ]]
+            [[ "${output}" != *$'\nstdout:\n'* ]]
         else
-            [[ "${output}" == *$'\nstdout:\n  systemd test version\nstderr:\n  <empty>\nIPE_PROBE '* ]]
+            [[ "${output}" == *$'\nstdout:\n  systemd test version\nIPE_PROBE '* ]]
         fi
         if ipe_report_probe "${directory}" "${name}" "${target}" deny pass; then
             echo "Unsigned ${name} passed without its target denial" >&2
@@ -241,17 +251,25 @@ test_probe_matrix_summary() (
     pid="$(cat "${directory}/writable.pid")"
     printf 'IPE_ACCESS ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=%s path="/var/tmp/probe" rule="DEFAULT op=EXECUTE action=DENY"\n' \
         "${pid}" > "${directory}/audit.log"
+    printf 'IPE_ACCESS ipe_op=EXECUTE ipe_hook=MMAP enforcing=0 pid=%s path="/var/tmp/probe" rule="DEFAULT op=EXECUTE action=DENY"\n' \
+        "${pid}" >> "${directory}/audit.log"
     output="$(ipe_report_probe_matrix "${directory}" pass base /usr/bin/bash allow writable /var/tmp/probe deny)"
     [[ "${output}" == *'OVERALL: PASS'*'IPE verification'*'=== Probe: base ==='*'=== Probe: writable ==='* ]]
-    grep -Eq '^base +PASS +PASS$' <<< "${output}"
-    grep -Eq '^writable +PASS +PASS$' <<< "${output}"
+    grep -Eq '^base +PASS +allow +NO_DENIAL_OBSERVED +PASS$' <<< "${output}"
+    grep -Eq '^writable +PASS +deny +WOULD_DENY +PASS$' <<< "${output}"
+    grep -Fq 'Audit evidence (target):' <<< "${output}"
+    [[ "$(grep -c '^  IPE_ACCESS' <<< "${output}")" == 2 ]]
+    if grep -q '^IPE_ACCESS' <<< "${output}"; then
+        echo "Multiline target evidence was not fully indented" >&2
+        return 1
+    fi
 
     : > "${directory}/audit.log"
     if output="$(ipe_report_probe_matrix "${directory}" pass base /usr/bin/bash allow writable /var/tmp/probe deny)"; then
         echo "Matrix passed without an expected denial" >&2
         return 1
     fi
-    grep -Eq '^writable +PASS +FAIL$' <<< "${output}"
+    grep -Eq '^writable +PASS +deny +NO_DENIAL_OBSERVED +FAIL$' <<< "${output}"
 
     printf "Failed to parse boot descriptor 'example'\n" > "${directory}/audit-error.log"
     if output="$(ipe_report_probe_matrix "${directory}" fail base /usr/bin/bash allow writable /var/tmp/probe deny)"; then
@@ -260,8 +278,8 @@ test_probe_matrix_summary() (
     fi
     [[ "${output}" == *'OVERALL: FAIL - audit collection failed'*'Failed to parse boot descriptor'*'IPE verification'*'=== Probe: base ==='* ]]
     [[ "$(grep -c 'Failed to parse boot descriptor' <<< "${output}")" == 1 ]]
-    grep -Eq '^base +PASS +UNVERIFIED$' <<< "${output}"
-    grep -Eq '^writable +PASS +UNVERIFIED$' <<< "${output}"
+    grep -Eq '^base +PASS +allow +UNKNOWN +UNVERIFIED$' <<< "${output}"
+    grep -Eq '^writable +PASS +deny +UNKNOWN +UNVERIFIED$' <<< "${output}"
     grep -Fq 'observed=UNKNOWN' <<< "${output}"
 
     ipe_run_probe "${directory}" failure bash -c 'exit 7'
@@ -269,13 +287,18 @@ test_probe_matrix_summary() (
         echo "Matrix passed with failed execution" >&2
         return 1
     fi
-    grep -Eq '^failure +FAIL +UNVERIFIED$' <<< "${output}"
+    grep -Eq '^failure +FAIL +allow +NO_DENIAL_OBSERVED +UNVERIFIED$' <<< "${output}"
+    if output="$(ipe_report_probe_matrix "${directory}" fail failure /usr/bin/bash allow)"; then
+        echo "Matrix passed with failed execution and missing telemetry" >&2
+        return 1
+    fi
+    grep -Eq '^failure +FAIL +allow +UNKNOWN +UNVERIFIED$' <<< "${output}"
     rm "${directory}/base.stdout"
     if output="$(ipe_report_probe_matrix "${directory}" pass base /usr/bin/bash allow)"; then
         echo "Matrix passed with missing output" >&2
         return 1
     fi
-    grep -Eq '^base +ERROR +UNVERIFIED$' <<< "${output}"
+    grep -Eq '^base +ERROR +allow +UNKNOWN +UNVERIFIED$' <<< "${output}"
     grep -Fq 'reason=missing-stdout' <<< "${output}"
 )
 

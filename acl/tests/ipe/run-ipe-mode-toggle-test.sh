@@ -96,7 +96,7 @@ assert_ipe_mode() {
 
 assert_ipe_assets_present() {
     local expected_active="${1:-0}"
-    local cmdline usr_hash policy_hash policy_active
+    local cmdline usr_hash policy_hash policy_active usr_signature_mode
     cmdline=$(ssh_cmd "cat /proc/cmdline")
 
     if [[ " ${cmdline} " == *" ipe.enforce="* ]]; then
@@ -133,20 +133,28 @@ assert_ipe_assets_present() {
             EXPECTED_USR_SIGNATURE_MODE=required
         fi
     fi
-    ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
+    usr_signature_mode="$(ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
         "sudo bash -s -- --verity-only '${EXPECTED_USR_SIGNATURE_MODE}'" \
-        < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh" || {
+        < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh")" || {
         error "/usr dm-verity state changed or is invalid"
         return 1
     }
+    info "IPE /usr dm-verity validation: PASS (signature mode='${usr_signature_mode}')"
     info "IPE assets are present and policy active state is '${policy_active}'"
 }
 
 run_audit_validation() {
-    info "IPE audit phase: ${1:-standalone}"
+    local phase="${1:-standalone}" status=0
+    info "IPE audit phase: ${phase} (BEGIN)"
     ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" \
         "sudo bash -s -- --expected-usr-signature-mode '${EXPECTED_USR_SIGNATURE_MODE}'" \
-        < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh"
+        < "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh" || status=$?
+    if [[ "${status}" -ne 0 ]]; then
+        error "IPE audit phase: ${phase} (FAIL, exit=${status})"
+    else
+        info "IPE audit phase: ${phase} (PASS)"
+    fi
+    return "${status}"
 }
 
 run_audit_fallback_validation() (
@@ -164,6 +172,8 @@ run_audit_fallback_validation() (
             sudo systemctl daemon-reload && sudo systemctl restart containerd"; then
             error "Could not restore containerd after the IPE fallback test"
             status=1
+        else
+            info "IPE containerd fallback cleanup: PASS (temporary overrides removed; containerd restarted)"
         fi
         exit "${status}"
     ' EXIT
@@ -192,7 +202,8 @@ effective="$(/usr/bin/containerd --config /run/containerd/acl-config.toml config
     exit 1
 }
 EOF
-    assert_ipe_mode "audit"
+    assert_ipe_mode "audit" || return
+    info "IPE containerd fallback: PASS (/run/containerd/acl-config.toml matches the test base configuration)"
 )
 
 main() {
