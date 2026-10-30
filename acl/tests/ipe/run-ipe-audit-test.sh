@@ -282,8 +282,10 @@ EOF
 }
 
 ipe_run_probe() {
-    local directory="$1" name="$2" status=0
+    local directory="$1" name="$2" status=0 command
     shift 2
+    printf -v command '%q ' "$@"
+    printf '%s\n' "${command% }" > "${directory}/${name}.command" || return 1
     timeout --signal=KILL 15s bash --noprofile --norc -p -c \
         'printf "%s\n" "$$" > "$1"; shift; exec "$@"' -- \
         "${directory}/${name}.pid" "$@" \
@@ -336,6 +338,25 @@ ipe_collect_probe_audit() {
 ipe_report_probe() {
     local directory="$1" name="$2" target="$3" expected="$4" telemetry="$5"
     local pid status events dependencies observed=NO_DENIAL_OBSERVED result=PASS hooks=- message
+    local command stream line
+    if ! command="$(cat "${directory}/${name}.command")"; then
+        echo "IPE_PROBE name=${name} result=FAIL reason=missing-command"
+        return 1
+    fi
+    printf 'Probe: %s\nCommand: %s\n' "${name}" "${command}"
+    for stream in stdout stderr; do
+        printf '%s:\n' "${stream}"
+        if [[ ! -r "${directory}/${name}.${stream}" ]]; then
+            echo "IPE_PROBE name=${name} result=FAIL reason=missing-${stream}"
+            return 1
+        elif [[ -s "${directory}/${name}.${stream}" ]]; then
+            while IFS= read -r line || [[ -n "${line}" ]]; do
+                printf '  %s\n' "${line}"
+            done < "${directory}/${name}.${stream}" || return 1
+        else
+            printf '  <empty>\n'
+        fi
+    done
     if ! pid="$(cat "${directory}/${name}.pid")"; then
         echo "IPE_PROBE name=${name} result=FAIL reason=missing-execution-pid"
         return 1
@@ -366,7 +387,6 @@ ipe_report_probe() {
     fi
     if [[ "${result}" != PASS ]]; then
         echo "  ${message}"
-        cat "${directory}/${name}.stdout" "${directory}/${name}.stderr"
         return 1
     fi
 }

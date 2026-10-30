@@ -118,6 +118,7 @@ test_execution_and_reporting() (
     [[ "$(cat "${directory}/version.status")" == 0 ]]
     : > "${directory}/audit.log"
     output="$(ipe_report_probe "${directory}" version /usr/bin/version allow pass)"
+    [[ "${output}" == $'Probe: version\nCommand: '*$'\nstdout:\n  version output\nstderr:\n  <empty>\nIPE_PROBE '* ]]
     grep -Fq 'observed=NO_DENIAL_OBSERVED hooks=- result=PASS' <<< "${output}"
     if output="$(ipe_report_probe "${directory}" version /usr/bin/version allow fail)"; then
         echo "Missing telemetry turned absence into a pass" >&2
@@ -138,7 +139,34 @@ test_execution_and_reporting() (
         return 1
     fi
     grep -Fq 'exit=7' <<< "${output}"
-    grep -Fq 'deliberate-failure' <<< "${output}"
+    [[ "${output}" == *$'\nstdout:\n  <empty>\nstderr:\n  deliberate-failure\nIPE_PROBE '* ]]
+    [[ "$(grep -c '^ *deliberate-failure$' <<< "${output}")" == 1 ]]
+)
+
+test_probe_command_and_output_logging() (
+    local directory output command expected
+    directory="$(mktemp -d)"
+    trap 'rm -rf -- "${directory}"' EXIT
+    ipe_run_probe "${directory}" quoted bash -c 'printf "<%s>\n" "$@"' -- \
+        'two words' '' "a'b" '$HOME; $(false)' $'line1\nline2'
+    command="$(cat "${directory}/quoted.command")"
+    expected="$(cat "${directory}/quoted.stdout")"
+    [[ "${command}" != *$'\n'* ]]
+    [[ "$(bash --noprofile --norc -p -c "${command}")" == "${expected}" ]]
+    : > "${directory}/audit.log"
+    output="$(ipe_report_probe "${directory}" quoted /usr/bin/bash allow pass)"
+    grep -Fxq "Command: ${command}" <<< "${output}"
+
+    ipe_run_probe "${directory}" unterminated bash -c 'printf "last line"; printf "warning" >&2'
+    output="$(ipe_report_probe "${directory}" unterminated /usr/bin/bash allow pass)"
+    [[ "${output}" == *$'\nstdout:\n  last line\nstderr:\n  warning\nIPE_PROBE '* ]]
+    grep -Fq 'result=PASS' <<< "${output}"
+    rm "${directory}/unterminated.stderr"
+    if output="$(ipe_report_probe "${directory}" unterminated /usr/bin/bash allow pass)"; then
+        echo "Missing output was treated as an empty successful stream" >&2
+        return 1
+    fi
+    grep -Fq 'result=FAIL reason=missing-stderr' <<< "${output}"
 )
 
 test_base_probes() (
@@ -164,7 +192,12 @@ EOF
         pid="$(cat "${directory}/${name}.pid")"
         [[ "${pid}" =~ ^[1-9][0-9]*$ && "$(cat "${directory}/${name}.status")" == 0 ]]
         : > "${directory}/audit.log"
-        ipe_report_probe "${directory}" "${name}" "${target}" allow pass
+        output="$(ipe_report_probe "${directory}" "${name}" "${target}" allow pass)"
+        if [[ "${name}" == base || "${name}" == base-bash ]]; then
+            [[ "${output}" == *$'\nstdout:\n  <empty>\nstderr:\n  <empty>\nIPE_PROBE '* ]]
+        else
+            [[ "${output}" == *$'\nstdout:\n  systemd test version\nstderr:\n  <empty>\nIPE_PROBE '* ]]
+        fi
         if ipe_report_probe "${directory}" "${name}" "${target}" deny pass; then
             echo "Unsigned ${name} passed without its target denial" >&2
             return 1
@@ -187,5 +220,6 @@ test_target_events
 test_probe_payload
 test_capture
 test_execution_and_reporting
+test_probe_command_and_output_logging
 test_base_probes
 echo "IPE audit probe tests passed"
