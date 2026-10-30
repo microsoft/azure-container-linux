@@ -118,17 +118,21 @@ ipe_check_usr_verity() {
     ipe_validate_usr_verity_table "${cmdline}" "${verity_table}" "${expected_mode}"
 }
 
-ipe_find_denial_event() {
-    local logs="$1" executable="$2" pid="$3"
+ipe_find_process_denials() {
+    local logs="$1" pid="$2"
     [[ "${pid}" =~ ^[1-9][0-9]*$ ]] || {
         echo "Invalid IPE probe PID: ${pid}" >&2
         return 1
     }
-    grep -F "path=\"${executable}\"" <<< "${logs}" |
-        grep -E "(^|[[:space:]])pid=${pid}([[:space:]]|$)" |
+    grep -E "(^|[[:space:]])pid=${pid}([[:space:]]|$)" <<< "${logs}" |
+        grep -E '(^|[[:space:]])(IPE_ACCESS|type=1420)([[:space:]]|$)' |
         grep -E 'ipe_op=EXECUTE([[:space:]]|$)' |
         grep -E 'enforcing=0([[:space:]]|$)' |
         grep -E 'rule="[^"]*action=DENY"'
+}
+
+ipe_find_denial_event() {
+    ipe_find_process_denials "$1" "$3" | grep -F "path=\"$2\""
 }
 
 ipe_assert_probe_audit() {
@@ -137,38 +141,314 @@ ipe_assert_probe_audit() {
         echo "Invalid IPE probe expectation or PID: ${expected}, ${pid}" >&2
         return 1
     fi
-    if event="$(ipe_find_denial_event "${logs}" "${executable}" "${pid}")"; then
-        if [[ "${expected}" == allow ]]; then
-            echo "Trusted ${executable} (pid=${pid}) produced an unexpected IPE denial: ${event}" >&2
+    if [[ "${expected}" == allow ]]; then
+        if event="$(ipe_find_process_denials "${logs}" "${pid}")"; then
+            echo "Trusted ${executable} (pid=${pid}) produced an unexpected IPE denial (target or dependency): ${event}" >&2
             return 1
         fi
-        echo "Observed IPE audit event for ${executable}:"
+        echo "No IPE denial observed for trusted ${executable} (pid=${pid}) or its dependencies"
+        return 0
+    fi
+    if event="$(ipe_find_denial_event "${logs}" "${executable}" "${pid}")"; then
+        if ! grep -Eq 'ipe_hook=BPRM_CHECK([[:space:]]|$)' <<< "${event}"; then
+            echo "${executable} (pid=${pid}) has no target BPRM_CHECK denial" >&2
+            return 1
+        fi
+        echo "Expected IPE would-deny event for ${executable} (execution succeeded in audit mode):"
         echo "${event}"
-    elif [[ "${expected}" == deny ]]; then
+    else
         echo "${executable} (pid=${pid}) succeeded without its expected IPE denial audit event" >&2
         return 1
-    else
-        echo "No IPE denial for trusted ${executable} (pid=${pid})"
     fi
 }
 
 ipe_assert_usr_probe_audit() {
     local logs="$1" executable="$2" pid="$3" signature_mode="$4"
-    local expected=deny usr_fstype
+    local expected=deny
     if [[ "${signature_mode}" == required ]]; then
-        usr_fstype="$(blkid -s TYPE -o value /dev/mapper/usr)" || {
-            echo "Could not identify the /usr dm-verity filesystem" >&2
-            return 1
-        }
-        if [[ "${usr_fstype}" == btrfs ]]; then
-            # TODO: Restore the no-denial assertion once the known IPE/dm-verity/
-            # btrfs trust issue is fixed. A valid signed mapping can still audit DENY.
-            echo "WARN: Skipping signed /usr no-denial assertion for the known IPE/dm-verity/btrfs issue"
-            return 0
-        fi
         expected=allow
     fi
     ipe_assert_probe_audit "${logs}" "${executable}" "${pid}" "${expected}"
+}
+
+ipe_check_sysext_inventory() {
+    local available="$1" status="$2" name
+    jq -e 'type == "array" and all(.[];
+        (.name | type == "string") and (.path | type == "string"))' \
+        <<< "${available}" >/dev/null || {
+        echo "Invalid systemd-sysext image inventory" >&2
+        return 1
+    }
+    jq -e '[.[] | select(.hierarchy == "/usr")] |
+        length == 1 and (.[0].extensions | type == "array" and all(.[]; type == "string"))' \
+        <<< "${status}" >/dev/null || {
+        echo "No valid active /usr sysext inventory" >&2
+        return 1
+    }
+    for name in containerd oem-azure; do
+        jq -e --arg name "${name}" \
+            '[.[] | select(.name == $name)] | length == 1 and
+             (.[0].type == "raw") and (.[0].path | startswith("/"))' \
+            <<< "${available}" >/dev/null || {
+            echo "Required sysext ${name} is missing, ambiguous, or not a raw image" >&2
+            return 1
+        }
+        jq -e --arg name "${name}" \
+            '.[] | select(.hierarchy == "/usr") | .extensions | index($name) != null' \
+            <<< "${status}" >/dev/null || {
+            echo "Required sysext ${name} is not active on /usr" >&2
+            return 1
+        }
+        echo "IPE_SYSEXT name=${name} active=true probe=planned"
+    done
+    while IFS= read -r name; do
+        echo "WARN: IPE_SYSEXT name=${name} active=true coverage=UNPROBED (no safe probe defined)"
+    done < <(jq -r '.[] | select(.hierarchy == "/usr") | .extensions[] |
+        select(. != "containerd" and . != "oem-azure")' <<< "${status}")
+}
+
+ipe_check_probe_payload() {
+    local directory="$1" origin="$2" relative="$3" target="$4"
+    local provider payload count=0
+    for provider in base containerd oem-azure; do
+        payload="${directory}/${provider}/usr/${relative}"
+        [[ "${provider}" != base ]] || payload="${directory}/base/${relative}"
+        if [[ -e "${payload}" || -L "${payload}" ]]; then
+            [[ "${provider}" == "${origin}" && ! -L "${payload}" && -f "${payload}" ]] || {
+                echo "Ambiguous probe provider: ${target} also exists in ${provider}" >&2
+                return 1
+            }
+            cmp -- "${target}" "${payload}" || {
+                echo "Probe content does not match ${origin}: ${target}" >&2
+                return 1
+            }
+            [[ "$(stat -Lc %i "${target}")" == "$(stat -Lc %i "${payload}")" ]] || {
+                echo "Probe inode does not match ${origin}: ${target}" >&2
+                return 1
+            }
+            count=$((count + 1))
+        fi
+    done
+    [[ "${count}" == 1 ]] || { echo "Missing payload for ${origin}:${target}" >&2; return 1; }
+    echo "IPE_ORIGIN expected=${origin} target=${target} payload=matched"
+}
+
+ipe_verify_probe_payloads() {
+    local directory="$1" available="$2" containerd_image oem_image
+    containerd_image="$(jq -r '.[] | select(.name == "containerd") | .path' <<< "${available}")"
+    oem_image="$(jq -r '.[] | select(.name == "oem-azure") | .path' <<< "${available}")"
+    export -f ipe_check_probe_payload
+    # Sysext lowerdirs are in a private namespace; inspect fixed payloads in
+    # our own namespace, without unmerging /usr or changing the host mounts.
+    unshare --mount --propagation private bash -s -- \
+        "${directory}" "${containerd_image}" "${oem_image}" <<'EOF'
+set -euo pipefail
+directory="$1"
+mkdir "${directory}/base" "${directory}/containerd" "${directory}/oem-azure"
+mount -o ro,nosuid,nodev,noexec /dev/mapper/usr "${directory}/base"
+for name in containerd oem-azure; do
+    image="$2"
+    [[ "${name}" != oem-azure ]] || image="$3"
+    image="$(readlink -f "${image}")"
+    source_image="${image}"
+    if [[ "${image}" == /usr/* ]]; then
+        source_image="${directory}/base/${image#/usr/}"
+        cmp -- "${image}" "${source_image}"
+    fi
+    # Looking up a loop by the merged /usr pathname can miss its real inode.
+    loop="$(losetup -j "${source_image}" --noheadings --output NAME)"
+    [[ "${loop}" =~ ^/dev/loop[0-9]+$ ]] || {
+        echo "Could not uniquely resolve the active ${name} loop device" >&2
+        exit 1
+    }
+    [[ "$(blkid -s TYPE -o value "${loop}")" == squashfs ]] || {
+        echo "${name} does not have the expected unsigned squashfs backing" >&2
+        exit 1
+    }
+    echo "IPE_BACKING name=${name} image=${image} device=${loop} expected=unsigned"
+    mount -t squashfs -o ro,nosuid,nodev,noexec "${loop}" "${directory}/${name}"
+done
+for spec in base:/usr/bin/true base:/usr/bin/bash base:/usr/bin/systemctl \
+    containerd:/usr/bin/containerd oem-azure:/usr/sbin/chronyd; do
+    origin="${spec%%:*}"
+    target="$(readlink -f "${spec#*:}")"
+    [[ "${target}" == /usr/* && -f "${target}" && -x "${target}" ]] || {
+        echo "Invalid executable probe target: ${spec}" >&2
+        exit 1
+    }
+    ipe_check_probe_payload "${directory}" "${origin}" "${target#/usr/}" "${target}"
+done
+EOF
+}
+
+ipe_run_probe() {
+    local directory="$1" name="$2" status=0 command
+    shift 2
+    printf -v command '%q ' "$@"
+    printf '%s\n' "${command% }" > "${directory}/${name}.command" || return 1
+    timeout --signal=KILL 15s bash --noprofile --norc -p -c \
+        'printf "%s\n" "$$" > "$1"; shift; exec "$@"' -- \
+        "${directory}/${name}.pid" "$@" \
+        > "${directory}/${name}.stdout" 2> "${directory}/${name}.stderr" || status=$?
+    printf '%s\n' "${status}" > "${directory}/${name}.status"
+}
+
+ipe_run_base_probes() {
+    local directory="$1" true_probe="$2" bash_probe="$3" systemctl_probe="$4"
+    ipe_run_probe "${directory}" base "${true_probe}"
+    # Privileged mode ignores BASH_ENV and imported functions/options.
+    ipe_run_probe "${directory}" base-bash "${bash_probe}" --noprofile --norc -p -c ':'
+    ipe_run_probe "${directory}" base-systemctl "${systemctl_probe}" --version
+}
+
+ipe_collect_probe_audit() {
+    local directory="$1" boot_id="$2" cursor="$3" control="$4" pid="$5"
+    local attempt logs journal_boot_id="${boot_id//-/}"
+    # journalctl expects 32 hex digits, unlike the UUID from /proc.
+    [[ "${journal_boot_id}" =~ ^[[:xdigit:]]{32}$ ]] || {
+        echo "Invalid boot ID for IPE audit capture: ${boot_id}" >&2
+        return 1
+    }
+    for ((attempt = 0; attempt < 15; attempt++)); do
+        [[ "$(cat /proc/sys/kernel/random/boot_id)" == "${boot_id}" ]] || {
+            echo "Boot changed during IPE audit capture" >&2
+            return 1
+        }
+        journalctl --boot="${journal_boot_id}" --after-cursor="${cursor}" \
+            _TRANSPORT=audit --no-pager -o cat > "${directory}/audit.log" || {
+            echo "Could not read the probe audit window" >&2
+            return 1
+        }
+        logs="$(cat "${directory}/audit.log")"
+        if ipe_find_denial_event "${logs}" "${control}" "${pid}" |
+            grep -Eq 'ipe_hook=BPRM_CHECK([[:space:]]|$)'; then
+            # Drain delayed records before judging absence for earlier probes.
+            sleep 2
+            journalctl --boot="${journal_boot_id}" --after-cursor="${cursor}" \
+                _TRANSPORT=audit --no-pager -o cat > "${directory}/audit.log" || {
+                echo "Could not read the final probe audit window" >&2
+                return 1
+            }
+            [[ "$(cat /proc/sys/kernel/random/boot_id)" == "${boot_id}" ]] || {
+                echo "Boot changed during final IPE audit capture" >&2
+                return 1
+            }
+            ipe_find_denial_event "$(cat "${directory}/audit.log")" "${control}" "${pid}" |
+                grep -Eq 'ipe_hook=BPRM_CHECK([[:space:]]|$)' || {
+                echo "Final control record disappeared during audit collection" >&2
+                return 1
+            }
+            return 0
+        fi
+        sleep 1
+    done
+    echo "Audit telemetry failed: no fresh target BPRM_CHECK denial for the final writable control" >&2
+    return 1
+}
+
+ipe_report_probe() {
+    local directory="$1" name="$2" target="$3" expected="$4" telemetry="$5"
+    local pid status events dependencies observed=NO_DENIAL_OBSERVED result=PASS hooks=- message
+    local command stream line execution=PASS verification=UNVERIFIED
+    printf '%-18s %-11s %-9s %-20s %s\n' "${name}" ERROR "${expected}" UNKNOWN UNVERIFIED \
+        > "${directory}/${name}.summary" || return 1
+    if ! command="$(cat "${directory}/${name}.command")"; then
+        echo "IPE_PROBE name=${name} result=FAIL reason=missing-command"
+        return 1
+    fi
+    printf '\n=== Probe: %s ===\nCommand: %s\n' "${name}" "${command}"
+    for stream in stdout stderr; do
+        if [[ ! -r "${directory}/${name}.${stream}" ]]; then
+            echo "IPE_PROBE name=${name} result=FAIL reason=missing-${stream}"
+            return 1
+        elif [[ -s "${directory}/${name}.${stream}" ]]; then
+            printf '%s:\n' "${stream}"
+            while IFS= read -r line || [[ -n "${line}" ]]; do
+                printf '  %s\n' "${line}"
+            done < "${directory}/${name}.${stream}" || return 1
+        fi
+    done
+    if ! pid="$(cat "${directory}/${name}.pid")"; then
+        echo "IPE_PROBE name=${name} result=FAIL reason=missing-execution-pid"
+        return 1
+    fi
+    status="$(cat "${directory}/${name}.status")" || return 1
+    events="$(ipe_find_denial_event "$(cat "${directory}/audit.log")" "${target}" "${pid}" || true)"
+    if [[ -n "${events}" ]]; then
+        observed=WOULD_DENY
+        hooks="$(sed -n 's/.*ipe_hook=\([^ ]*\).*/\1/p' <<< "${events}" | sort -u | paste -sd,)"
+    fi
+    [[ "${telemetry}" == pass ]] || observed=UNKNOWN
+    if [[ "${status}" != 0 ]]; then
+        execution=FAIL
+        result=FAIL
+        message="execution failed (exit=${status})"
+    elif [[ "${telemetry}" != pass ]]; then
+        result=FAIL
+        message=""
+    elif ! message="$(ipe_assert_probe_audit "$(cat "${directory}/audit.log")" "${target}" "${pid}" "${expected}" 2>&1)"; then
+        verification=FAIL
+        result=FAIL
+    else
+        verification=PASS
+    fi
+    printf '%-18s %-11s %-9s %-20s %s\n' "${name}" "${execution}" "${expected}" "${observed}" "${verification}" \
+        > "${directory}/${name}.summary" || return 1
+    echo "IPE_PROBE name=${name} target=${target} pid=${pid} exit=${status} expected=${expected} observed=${observed} hooks=${hooks} result=${result}"
+    if [[ -n "${events}" ]]; then
+        echo "Audit evidence (target):"
+        sed 's/^/  /' <<< "${events}" || return 1
+    fi
+    dependencies="$(ipe_find_process_denials "$(cat "${directory}/audit.log")" "${pid}" |
+        grep -Fv "path=\"${target}\"" || true)"
+    if [[ -n "${dependencies}" ]]; then
+        echo "Audit evidence (dependencies; not target-file verdicts):"
+        sed 's/^/  /' <<< "${dependencies}" || return 1
+    fi
+    if [[ "${result}" != PASS ]]; then
+        if [[ -n "${message}" ]]; then
+            sed 's/^/  /' <<< "${message}" || return 1
+        fi
+        return 1
+    fi
+}
+
+ipe_report_probe_matrix() {
+    local directory="$1" telemetry="$2" name result=PASS
+    local -a names=()
+    shift 2
+    if [[ "$#" -eq 0 || $(( $# % 3 )) -ne 0 ]]; then
+        echo "Expected probe name, target and audit expectation triplets" >&2
+        return 1
+    fi
+    while [[ "$#" -gt 0 ]]; do
+        name="$1"
+        names+=("${name}")
+        if ! ipe_report_probe "${directory}" "${name}" "$2" "$3" "${telemetry}" \
+            > "${directory}/${name}.report" 2>&1; then
+            result=FAIL
+        fi
+        shift 3
+    done
+    printf '\n=== IPE probe summary ===\n'
+    if [[ "${telemetry}" != pass ]]; then
+        result=FAIL
+        echo "OVERALL: FAIL - audit collection failed; IPE verification is unavailable"
+        echo "Audit collection error:"
+        cat "${directory}/audit-error.log" || return 1
+    else
+        echo "OVERALL: ${result}"
+    fi
+    printf '\n%-18s %-11s %-9s %-20s %s\n' Probe Execution Expected 'Target audit' 'IPE verification'
+    for name in "${names[@]}"; do
+        cat "${directory}/${name}.summary" || return 1
+    done
+    echo "allow PASS: no target/dependency denial in a control-validated window; not an ALLOW record."
+    echo "deny PASS: target BPRM_CHECK denial observed; execution still succeeded in audit mode."
+    for name in "${names[@]}"; do
+        cat "${directory}/${name}.report" || return 1
+    done
+    [[ "${result}" == PASS ]]
 }
 
 # Sourcing exposes the helpers to host tests without running guest assertions.
@@ -285,26 +565,63 @@ if grep -Fq "dmverity_roothash=" <<< "${policy}"; then
     fail "active policy must not contain dmverity_roothash rules"
 fi
 
-# Writable storage must audit DENY; signed /usr has a known btrfs exception below.
-# Record each exec PID so older audit events cannot satisfy these probes.
+probe_dir="$(mktemp -d /var/tmp/acl-ipe-audit.XXXXXX)" ||
+    fail "could not create the probe workspace"
+trap 'rm -rf -- "${probe_dir}"' EXIT
+available_sysexts="$(systemd-sysext list --json=short)" ||
+    fail "could not discover available sysexts"
+active_sysexts="$(systemd-sysext status --json=short)" ||
+    fail "could not discover active sysexts"
+ipe_check_sysext_inventory "${available_sysexts}" "${active_sysexts}" ||
+    fail "required sysext coverage is unavailable"
+ipe_verify_probe_payloads "${probe_dir}" "${available_sysexts}" ||
+    fail "could not verify the fixed probe payloads"
+
 usr_probe="$(readlink -f /usr/bin/true)" || fail "could not resolve /usr probe"
-[[ "${usr_probe}" == /usr/* ]] || fail "probe executable is not on /usr"
-usr_probe_pid="$(bash -c 'printf "%s\n" "$$"; exec "$1"' -- "${usr_probe}")" ||
-    fail "/usr execution was blocked in audit mode"
-probe="$(mktemp /var/tmp/acl-ipe-audit-probe.XXXXXX)" ||
-    fail "could not create writable-storage probe"
-trap 'rm -f "${probe}"' EXIT
+bash_probe="$(readlink -f /usr/bin/bash)" || fail "could not resolve base Bash probe"
+systemctl_probe="$(readlink -f /usr/bin/systemctl)" || fail "could not resolve base systemctl probe"
+containerd_probe="$(readlink -f /usr/bin/containerd)" || fail "could not resolve containerd probe"
+oem_probe="$(readlink -f /usr/sbin/chronyd)" || fail "could not resolve OEM probe"
+probe="${probe_dir}/writable-true"
 cp "${usr_probe}" "${probe}"
 chmod 0755 "${probe}"
-probe_pid="$(bash -c 'printf "%s\n" "$$"; exec "$1"' -- "${probe}")" ||
-    fail "writable-storage execution was blocked in audit mode"
+boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+cursor_output="$(journalctl -b -n 0 --show-cursor --no-pager)" ||
+    fail "could not establish the journal cursor"
+cursor="$(sed -n 's/^-- cursor: //p' <<< "${cursor_output}")"
+[[ -n "${cursor}" ]] || fail "journal did not return a cursor"
+echo "IPE_REPORT schema=1 boot=${boot_id} kernel=$(uname -r) policy=${POLICY_NAME} enforce=0 usr_signature=${usr_signature_mode}"
+echo "IPE_CAPTURE transport=audit after_cursor=${cursor}"
+# The final known-denial control establishes collection health for earlier probes.
+ipe_run_base_probes "${probe_dir}" "${usr_probe}" "${bash_probe}" "${systemctl_probe}"
+ipe_run_probe "${probe_dir}" containerd "${containerd_probe}" --version
+ipe_run_probe "${probe_dir}" oem-azure "${oem_probe}" -v
+ipe_run_probe "${probe_dir}" writable "${probe}"
+telemetry=fail
+if [[ -r "${probe_dir}/writable.pid" ]]; then
+    if ipe_collect_probe_audit "${probe_dir}" "${boot_id}" "${cursor}" \
+        "${probe}" "$(cat "${probe_dir}/writable.pid")" 2> "${probe_dir}/audit-error.log"; then
+        telemetry=pass
+    fi
+else
+    echo "Missing execution PID for the final writable control" > "${probe_dir}/audit-error.log"
+fi
+[[ -f "${probe_dir}/audit.log" ]] || : > "${probe_dir}/audit.log"
+usr_expected=deny
+[[ "${usr_signature_mode}" != required ]] || usr_expected=allow
+ipe_report_probe_matrix "${probe_dir}" "${telemetry}" \
+    base "${usr_probe}" "${usr_expected}" \
+    base-bash "${bash_probe}" "${usr_expected}" \
+    base-systemctl "${systemctl_probe}" "${usr_expected}" \
+    containerd "${containerd_probe}" deny \
+    oem-azure "${oem_probe}" deny \
+    writable "${probe}" deny || fail "IPE probe matrix failed"
+[[ "$(tr -d '[:space:]' < "${IPE_DIR}/enforce")" == 0 &&
+   "$(tr -d '[:space:]' < "${POLICY_DIR}/active")" == 1 ]] ||
+    fail "IPE state changed during the probe matrix"
 
-boot_logs="$(
-    {
-        dmesg 2>/dev/null || true
-        journalctl -b --no-pager 2>/dev/null || true
-    } | tail -n 20000
-)"
+# Boot diagnostics are separate from the cursor-bound probe evidence.
+boot_logs="$(journalctl -b --no-pager -o cat)" || fail "could not read boot diagnostics"
 loader_errors="$(
     grep -Ei \
         'acl-ipe-load: (failed|warning)|root hash verification failed|root[- ]hash signature.*(failed|invalid|error)|failed to (set up|activate).*verity|ENOKEY|required key not available' \
@@ -314,11 +631,6 @@ if [[ -n "${loader_errors}" ]]; then
     echo "${loader_errors}" >&2
     fail "IPE or dm-verity boot errors were detected"
 fi
-ipe_assert_probe_audit "${boot_logs}" "${probe}" "${probe_pid}" deny ||
-    fail "writable-storage audit probe failed"
-ipe_assert_usr_probe_audit "${boot_logs}" "${usr_probe}" "${usr_probe_pid}" "${usr_signature_mode}" ||
-    fail "/usr audit probe failed"
-
 echo ""
 echo "IPE policy: ${POLICY_NAME}"
 echo "IPE enforce state: 0 (audit)"
