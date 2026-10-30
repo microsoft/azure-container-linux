@@ -67,19 +67,28 @@ test_probe_payload() (
 
 test_capture() (
     local directory event count=0 mode=delayed
+    local boot_id=fa8a7b1c-0c08-4915-9707-3d3ce9879c4e
     directory="$(mktemp -d)"
     trap 'rm -rf -- "${directory}"' EXIT
     event='IPE_ACCESS ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=123 path="/var/tmp/probe" rule="DEFAULT op=EXECUTE action=DENY"'
     sleep() { :; }
     cat() {
         if [[ "$1" == /proc/sys/kernel/random/boot_id ]]; then
-            printf 'boot-id\n'
+            if [[ "${mode}" == reboot-after-control && "${count}" -gt 0 ]]; then
+                printf '11111111-2222-3333-4444-555555555555\n'
+            else
+                printf '%s\n' "${boot_id}"
+            fi
         else
             command cat "$@"
         fi
     }
     journalctl() {
-        [[ "$*" == *"--boot=boot-id --after-cursor=cursor _TRANSPORT=audit"* ]] || return 1
+        if ! [[ "$1" =~ ^--boot=[[:xdigit:]]{32}$ ]]; then
+            echo "Failed to parse boot descriptor '${1#--boot=}'" >&2
+            return 1
+        fi
+        [[ "$*" == "--boot=fa8a7b1c0c08491597073d3ce9879c4e --after-cursor=cursor _TRANSPORT=audit --no-pager -o cat" ]] || return 1
         count=$((count + 1))
         case "${mode}" in
             delayed) [[ "${count}" -lt 3 ]] || printf '%s\n' "${event}" ;;
@@ -88,21 +97,29 @@ test_capture() (
             mmap) printf '%s\n' "${event/BPRM_CHECK/MMAP}" ;;
             unreadable) return 1 ;;
             lost-after-control) [[ "${count}" -ne 1 ]] || printf '%s\n' "${event}" ;;
+            unreadable-after-control)
+                [[ "${count}" -eq 1 ]] || return 1
+                printf '%s\n' "${event}"
+                ;;
+            reboot-after-control) printf '%s\n' "${event}" ;;
         esac
         return 0
     }
-    ipe_collect_probe_audit "${directory}" boot-id cursor /var/tmp/probe 123
+    ipe_collect_probe_audit "${directory}" "${boot_id}" cursor /var/tmp/probe 123
     [[ "${count}" == 4 ]]
-    for mode in missing stale mmap unreadable lost-after-control; do
+    for mode in missing stale mmap unreadable lost-after-control unreadable-after-control reboot-after-control; do
         count=0
-        if ipe_collect_probe_audit "${directory}" boot-id cursor /var/tmp/probe 123; then
+        if ipe_collect_probe_audit "${directory}" "${boot_id}" cursor /var/tmp/probe 123; then
             echo "Invalid ${mode} telemetry passed collection" >&2
             return 1
         fi
     done
-    if ipe_collect_probe_audit "${directory}" different-boot cursor /var/tmp/probe 123 ||
-        ipe_collect_probe_audit "${directory}" boot-id stale-cursor /var/tmp/probe 123; then
-        echo "Wrong boot or unreadable cursor passed collection" >&2
+    mode=delayed
+    count=0
+    if ipe_collect_probe_audit "${directory}" 11111111-2222-3333-4444-555555555555 cursor /var/tmp/probe 123 ||
+        ipe_collect_probe_audit "${directory}" "${boot_id}" stale-cursor /var/tmp/probe 123 ||
+        ipe_collect_probe_audit "${directory}" not-a-boot-id cursor /var/tmp/probe 123; then
+        echo "Wrong/invalid boot or unreadable cursor passed collection" >&2
         return 1
     fi
 )
@@ -118,7 +135,7 @@ test_execution_and_reporting() (
     [[ "$(cat "${directory}/version.status")" == 0 ]]
     : > "${directory}/audit.log"
     output="$(ipe_report_probe "${directory}" version /usr/bin/version allow pass)"
-    [[ "${output}" == $'Probe: version\nCommand: '*$'\nstdout:\n  version output\nstderr:\n  <empty>\nIPE_PROBE '* ]]
+    [[ "${output}" == $'\n=== Probe: version ===\nCommand: '*$'\nstdout:\n  version output\nstderr:\n  <empty>\nIPE_PROBE '* ]]
     grep -Fq 'observed=NO_DENIAL_OBSERVED hooks=- result=PASS' <<< "${output}"
     if output="$(ipe_report_probe "${directory}" version /usr/bin/version allow fail)"; then
         echo "Missing telemetry turned absence into a pass" >&2
@@ -215,6 +232,53 @@ EOF
     done
 )
 
+test_probe_matrix_summary() (
+    local directory output pid
+    directory="$(mktemp -d)"
+    trap 'rm -rf -- "${directory}"' EXIT
+    ipe_run_probe "${directory}" base bash -c ':'
+    ipe_run_probe "${directory}" writable bash -c ':'
+    pid="$(cat "${directory}/writable.pid")"
+    printf 'IPE_ACCESS ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=%s path="/var/tmp/probe" rule="DEFAULT op=EXECUTE action=DENY"\n' \
+        "${pid}" > "${directory}/audit.log"
+    output="$(ipe_report_probe_matrix "${directory}" pass base /usr/bin/bash allow writable /var/tmp/probe deny)"
+    [[ "${output}" == *'OVERALL: PASS'*'IPE verification'*'=== Probe: base ==='*'=== Probe: writable ==='* ]]
+    grep -Eq '^base +PASS +PASS$' <<< "${output}"
+    grep -Eq '^writable +PASS +PASS$' <<< "${output}"
+
+    : > "${directory}/audit.log"
+    if output="$(ipe_report_probe_matrix "${directory}" pass base /usr/bin/bash allow writable /var/tmp/probe deny)"; then
+        echo "Matrix passed without an expected denial" >&2
+        return 1
+    fi
+    grep -Eq '^writable +PASS +FAIL$' <<< "${output}"
+
+    printf "Failed to parse boot descriptor 'example'\n" > "${directory}/audit-error.log"
+    if output="$(ipe_report_probe_matrix "${directory}" fail base /usr/bin/bash allow writable /var/tmp/probe deny)"; then
+        echo "Matrix passed without audit telemetry" >&2
+        return 1
+    fi
+    [[ "${output}" == *'OVERALL: FAIL - audit collection failed'*'Failed to parse boot descriptor'*'IPE verification'*'=== Probe: base ==='* ]]
+    [[ "$(grep -c 'Failed to parse boot descriptor' <<< "${output}")" == 1 ]]
+    grep -Eq '^base +PASS +UNVERIFIED$' <<< "${output}"
+    grep -Eq '^writable +PASS +UNVERIFIED$' <<< "${output}"
+    grep -Fq 'observed=UNKNOWN' <<< "${output}"
+
+    ipe_run_probe "${directory}" failure bash -c 'exit 7'
+    if output="$(ipe_report_probe_matrix "${directory}" pass failure /usr/bin/bash allow)"; then
+        echo "Matrix passed with failed execution" >&2
+        return 1
+    fi
+    grep -Eq '^failure +FAIL +UNVERIFIED$' <<< "${output}"
+    rm "${directory}/base.stdout"
+    if output="$(ipe_report_probe_matrix "${directory}" pass base /usr/bin/bash allow)"; then
+        echo "Matrix passed with missing output" >&2
+        return 1
+    fi
+    grep -Eq '^base +ERROR +UNVERIFIED$' <<< "${output}"
+    grep -Fq 'reason=missing-stdout' <<< "${output}"
+)
+
 test_inventory
 test_target_events
 test_probe_payload
@@ -222,4 +286,5 @@ test_capture
 test_execution_and_reporting
 test_probe_command_and_output_logging
 test_base_probes
+test_probe_matrix_summary
 echo "IPE audit probe tests passed"
