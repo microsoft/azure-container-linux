@@ -268,7 +268,8 @@ for name in containerd oem-azure; do
     echo "IPE_BACKING name=${name} image=${image} device=${loop} expected=unsigned"
     mount -t squashfs -o ro,nosuid,nodev,noexec "${loop}" "${directory}/${name}"
 done
-for spec in base:/usr/bin/true containerd:/usr/bin/containerd oem-azure:/usr/sbin/chronyd; do
+for spec in base:/usr/bin/true base:/usr/bin/bash base:/usr/bin/systemctl \
+    containerd:/usr/bin/containerd oem-azure:/usr/sbin/chronyd; do
     origin="${spec%%:*}"
     target="$(readlink -f "${spec#*:}")"
     [[ "${target}" == /usr/* && -f "${target}" && -x "${target}" ]] || {
@@ -283,11 +284,19 @@ EOF
 ipe_run_probe() {
     local directory="$1" name="$2" status=0
     shift 2
-    timeout --signal=KILL 15s bash -c \
+    timeout --signal=KILL 15s bash --noprofile --norc -p -c \
         'printf "%s\n" "$$" > "$1"; shift; exec "$@"' -- \
         "${directory}/${name}.pid" "$@" \
         > "${directory}/${name}.stdout" 2> "${directory}/${name}.stderr" || status=$?
     printf '%s\n' "${status}" > "${directory}/${name}.status"
+}
+
+ipe_run_base_probes() {
+    local directory="$1" true_probe="$2" bash_probe="$3" systemctl_probe="$4"
+    ipe_run_probe "${directory}" base "${true_probe}"
+    # Privileged mode ignores BASH_ENV and imported functions/options.
+    ipe_run_probe "${directory}" base-bash "${bash_probe}" --noprofile --norc -p -c ':'
+    ipe_run_probe "${directory}" base-systemctl "${systemctl_probe}" --version
 }
 
 ipe_collect_probe_audit() {
@@ -489,6 +498,8 @@ ipe_verify_probe_payloads "${probe_dir}" "${available_sysexts}" ||
     fail "could not verify the fixed probe payloads"
 
 usr_probe="$(readlink -f /usr/bin/true)" || fail "could not resolve /usr probe"
+bash_probe="$(readlink -f /usr/bin/bash)" || fail "could not resolve base Bash probe"
+systemctl_probe="$(readlink -f /usr/bin/systemctl)" || fail "could not resolve base systemctl probe"
 containerd_probe="$(readlink -f /usr/bin/containerd)" || fail "could not resolve containerd probe"
 oem_probe="$(readlink -f /usr/sbin/chronyd)" || fail "could not resolve OEM probe"
 probe="${probe_dir}/writable-true"
@@ -502,7 +513,7 @@ cursor="$(sed -n 's/^-- cursor: //p' <<< "${cursor_output}")"
 echo "IPE_REPORT schema=1 boot=${boot_id} kernel=$(uname -r) policy=${POLICY_NAME} enforce=0 usr_signature=${usr_signature_mode}"
 echo "IPE_CAPTURE transport=audit after_cursor=${cursor}"
 # The final known-denial control establishes collection health for earlier probes.
-ipe_run_probe "${probe_dir}" base "${usr_probe}"
+ipe_run_base_probes "${probe_dir}" "${usr_probe}" "${bash_probe}" "${systemctl_probe}"
 ipe_run_probe "${probe_dir}" containerd "${containerd_probe}" --version
 ipe_run_probe "${probe_dir}" oem-azure "${oem_probe}" -v
 ipe_run_probe "${probe_dir}" writable "${probe}"
@@ -517,6 +528,8 @@ usr_expected=deny
 [[ "${usr_signature_mode}" != required ]] || usr_expected=allow
 probe_failures=0
 ipe_report_probe "${probe_dir}" base "${usr_probe}" "${usr_expected}" "${telemetry}" || probe_failures=1
+ipe_report_probe "${probe_dir}" base-bash "${bash_probe}" "${usr_expected}" "${telemetry}" || probe_failures=1
+ipe_report_probe "${probe_dir}" base-systemctl "${systemctl_probe}" "${usr_expected}" "${telemetry}" || probe_failures=1
 ipe_report_probe "${probe_dir}" containerd "${containerd_probe}" deny "${telemetry}" || probe_failures=1
 ipe_report_probe "${probe_dir}" oem-azure "${oem_probe}" deny "${telemetry}" || probe_failures=1
 ipe_report_probe "${probe_dir}" writable "${probe}" deny "${telemetry}" || probe_failures=1

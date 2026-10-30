@@ -141,9 +141,51 @@ test_execution_and_reporting() (
     grep -Fq 'deliberate-failure' <<< "${output}"
 )
 
+test_base_probes() (
+    local directory true_probe bash_probe name target pid output spec
+    directory="$(mktemp -d)"
+    trap 'rm -rf -- "${directory}"' EXIT
+    true_probe="$(type -P true)"
+    bash_probe="$(type -P bash)"
+    cat > "${directory}/systemctl" <<'EOF'
+#!/bin/bash -p
+[[ "$#" == 1 && "$1" == --version ]] || exit 1
+printf 'systemd test version\n'
+EOF
+    chmod +x "${directory}/systemctl"
+    printf 'exit 99\n' > "${directory}/startup"
+    export BASH_ENV="${directory}/startup"
+    ipe_run_base_probes "${directory}" "${true_probe}" "${bash_probe}" "${directory}/systemctl"
+    [[ ! -s "${directory}/base.stdout" && ! -s "${directory}/base-bash.stdout" ]]
+    [[ "$(cat "${directory}/base-systemctl.stdout")" == 'systemd test version' ]]
+    for spec in "base:${true_probe}" "base-bash:${bash_probe}" "base-systemctl:${directory}/systemctl"; do
+        name="${spec%%:*}"
+        target="${spec#*:}"
+        pid="$(cat "${directory}/${name}.pid")"
+        [[ "${pid}" =~ ^[1-9][0-9]*$ && "$(cat "${directory}/${name}.status")" == 0 ]]
+        : > "${directory}/audit.log"
+        ipe_report_probe "${directory}" "${name}" "${target}" allow pass
+        if ipe_report_probe "${directory}" "${name}" "${target}" deny pass; then
+            echo "Unsigned ${name} passed without its target denial" >&2
+            return 1
+        fi
+        printf 'IPE_ACCESS ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=%s path="%s" rule="DEFAULT op=EXECUTE action=DENY"\n' \
+            "${pid}" "${target}" > "${directory}/audit.log"
+        ipe_report_probe "${directory}" "${name}" "${target}" deny pass
+        printf 'IPE_ACCESS ipe_op=EXECUTE ipe_hook=MMAP enforcing=0 pid=%s path="/usr/lib64/libc.so.6" rule="DEFAULT op=EXECUTE action=DENY"\n' \
+            "${pid}" > "${directory}/audit.log"
+        if output="$(ipe_report_probe "${directory}" "${name}" "${target}" allow pass)"; then
+            echo "Signed ${name} passed with a dependency denial" >&2
+            return 1
+        fi
+        grep -Fq 'result=FAIL' <<< "${output}"
+    done
+)
+
 test_inventory
 test_target_events
 test_probe_payload
 test_capture
 test_execution_and_reporting
+test_base_probes
 echo "IPE audit probe tests passed"
