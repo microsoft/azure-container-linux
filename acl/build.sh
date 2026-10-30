@@ -45,6 +45,7 @@ function build_specs() {
     local SPECS_DIR="$1"
 
     local -a snapshot_args=()
+    local snapshot_mode="${ACL_RPM_SNAPSHOT_MODE:-materialized}"
     if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" ]]; then
         if [[ ! "${PACKAGE_SNAPSHOT_TIME}" =~ ^[1-9][0-9]{9}$ ]]; then
             log "!!! ERROR: PACKAGE_SNAPSHOT_TIME must be a ten-digit Unix UTC timestamp"
@@ -52,21 +53,40 @@ function build_specs() {
         fi
         snapshot_args=(REPO_SNAPSHOT_TIME="${PACKAGE_SNAPSHOT_TIME}")
         log "Building RPM dependencies as of ${PACKAGE_SNAPSHOT_TIME}"
+        if [[ "$snapshot_mode" != "materialized" && "$snapshot_mode" != "tdnf" ]]; then
+            log "!!! ERROR: ACL_RPM_SNAPSHOT_MODE must be materialized or tdnf"
+            exit 1
+        fi
     fi
     pushd "${BUILD_DIR}/azurelinux/toolkit"
-    sudo make build-packages \
-        -j"$(nproc)" \
-        SRPM_PACK_LIST="${package_build_list[*]}" \
-        SPECS_DIR="${SPECS_DIR}" \
-        QUICK_REBUILD_PACKAGES=y \
-        PRECACHE=n \
-        CONFIG_FILE= \
-        REBUILD_TOOLS=y \
-        GOFLAGS="-buildvcs=false" \
-        BUILD_DIR="$BUILD_DIR" \
-        OUT_DIR="$OUT_DIR" \
-        "${snapshot_args[@]}" \
+    local -a make_args=(
+        -j"$(nproc)"
+        SRPM_PACK_LIST="${package_build_list[*]}"
+        SPECS_DIR="${SPECS_DIR}"
+        QUICK_REBUILD_PACKAGES=y
+        PRECACHE=n
+        CONFIG_FILE=
+        REBUILD_TOOLS=y
+        GOFLAGS="-buildvcs=false"
+        BUILD_DIR="$BUILD_DIR"
+        OUT_DIR="$OUT_DIR"
         LOG_LEVEL=info
+    )
+    if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" && "$snapshot_mode" == "materialized" ]]; then
+        if [[ -n "${REPO_LIST:-}" || -n "${PACKAGE_CACHE_SUMMARY:-}" ]]; then
+            log "!!! ERROR: Materialized snapshots do not support external REPO_LIST or PACKAGE_CACHE_SUMMARY"
+            exit 1
+        fi
+        sudo make chroot-tools "${make_args[@]}"
+        sudo python3 "${ACL_DIR}/materialize_rpm_snapshot.py" \
+            --worker-tar "${BUILD_DIR}/worker/worker_chroot.tar.gz" \
+            --cutoff "${PACKAGE_SNAPSHOT_TIME}" \
+            --architecture "$(uname -m)" \
+            --cache-dir "${BUILD_DIR}/snapshot-repositories" \
+            -- make build-packages "${make_args[@]}"
+    else
+        sudo make build-packages "${make_args[@]}" "${snapshot_args[@]}"
+    fi
     MAKE_STATUS=${PIPESTATUS[0]}
 
     if [ "$MAKE_STATUS" -ne 0 ]; then
