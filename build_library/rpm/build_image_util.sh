@@ -1481,6 +1481,63 @@ finish_image_backup_etc_rpm() {
     sudo cp -a "${root_fs_dir}/etc" "${ETC_FULL_PATH}"
 }
 
+report_and_remove_image_packages_rpm() {
+    local root_fs_dir="$1"
+    local package_operation="${PACKAGE_OPERATION:-report-and-remove}"
+
+    case "${package_operation}" in
+        report-and-remove|report-only) ;;
+        disabled)
+            info "RPM mode: Image package reporting and selected-package removal disabled"
+            return 0
+            ;;
+        *)
+            error "Invalid PACKAGE_OPERATION: ${package_operation} (expected report-and-remove, report-only, or disabled)"
+            return 1
+            ;;
+    esac
+
+    info "RPM mode: Collecting current image package reports"
+    if [[ -z "${BUILD_DIR:-}" ]]; then
+        die "RPM mode: BUILD_DIR is not set — cannot write the image package reports"
+    fi
+
+    local report_script="${BUILD_LIBRARY_DIR}/rpm/report_image_packages.py"
+    local output_dir="${BUILD_DIR}/package-reports"
+    local packages_selected_for_removal_file="${output_dir}/packages-selected-for-removal.txt"
+    sudo python3 -B "${report_script}" \
+        --root-dir "${root_fs_dir}" \
+        --work-dir "${BUILD_DIR}/.package-report-work" \
+        --package-decisions-file "${SCRIPT_ROOT}/acl/package-decisions.toml" \
+        --output-dir "${output_dir}" || return 1
+
+    sudo chmod 0755 "${output_dir}" || return 1
+    sudo chmod 0644 "${output_dir}/package-decisions.csv" || return 1
+    sudo chmod 0644 "${output_dir}/package-decisions.md" || return 1
+    sudo chmod 0644 "${packages_selected_for_removal_file}" || return 1
+    sudo chmod 0644 "${output_dir}/package-decisions-provenance.json" || return 1
+
+    if [[ "${package_operation}" == "report-only" ]]; then
+        info "RPM mode: Image package reports written; selected-package removal skipped"
+        return 0
+    fi
+
+    local -a packages_to_remove=()
+    mapfile -t packages_to_remove < "${packages_selected_for_removal_file}" || return 1
+    if [[ ${#packages_to_remove[@]} -eq 0 ]]; then
+        info "RPM mode: No packages were selected for removal"
+        return 0
+    fi
+
+    info "RPM mode: Removing ${#packages_to_remove[@]} packages selected by ${report_script##*/}"
+    local package
+    for package in "${packages_to_remove[@]}"; do
+        info "- ${package}"
+    done
+
+    sudo rpm --root="${root_fs_dir}" --dbpath="/var/lib/rpm" -e "${packages_to_remove[@]}" || return 1
+}
+
 # Write the image's package list and SPDX 2.2 package manifest from the final rpmdb.
 finish_image_package_manifest_rpm() {
     local root_fs_dir="$1"

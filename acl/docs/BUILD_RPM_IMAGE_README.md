@@ -171,6 +171,16 @@ Build the ACL production image using RPM package sources.
 ./acl/build_rpm_image.sh --rebuild
 ```
 
+#### Image package operation
+
+Set `PACKAGE_OPERATION` to control the package-decision step:
+
+- `report-and-remove`: Default. Run dependency checks and cycle validation, generate reports, then erase selected packages.
+- `report-only`: Run dependency checks and cycle validation and generate reports, but skip selected-package removal.
+- `disabled`: Skip dependency checks, cycle validation, reporting, and selected-package removal.
+
+See [Package Reports](package-reports.md) for more details.
+
 **Optional IPE audit (UKI images)**
 
 Use `ephemeral` for dev/test or `esrp` for later production signing by

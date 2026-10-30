@@ -79,6 +79,15 @@ while [[ $# -gt 0 ]] ; do
     esac
 done
 
+PACKAGE_OPERATION="${PACKAGE_OPERATION:-report-and-remove}"
+case "${PACKAGE_OPERATION}" in
+    report-and-remove|report-only|disabled) ;;
+    *)
+        echo "Invalid PACKAGE_OPERATION: ${PACKAGE_OPERATION} (expected report-and-remove, report-only, or disabled)" >&2
+        exit 1
+        ;;
+esac
+
 ACL_IPE_MODE="${ACL_IPE_MODE:-disabled}"
 case "${ACL_IPE_MODE}" in
     disabled|audit) ;;
@@ -175,6 +184,7 @@ if [[ -z ${stat} ]] ; then
         -e SDK_GROUP_ID="$(id -g)"
         -e PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-}"
         -e PACKAGE_SNAPSHOT_TIME="${PACKAGE_SNAPSHOT_TIME:-}"
+        -e PACKAGE_OPERATION="${PACKAGE_OPERATION}"
         -e BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
         -e RPM_STAGING_DIR="/mnt/host/source/src/scripts/__build__/rpm-staging"
         -e SYSEXT_COMPRESSION="${SYSEXT_COMPRESSION:-}"
@@ -210,6 +220,7 @@ call_docker exec "${name}" sh -c 'cp /etc/hosts /etc/hosts2; umount /etc/hosts ;
 call_docker exec "${tty[@]}" -i \
     -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" \
     -e PACKAGE_SNAPSHOT_TIME="${PACKAGE_SNAPSHOT_TIME:-}" \
+    -e PACKAGE_OPERATION="${PACKAGE_OPERATION}" \
     -e ACL_IPE_MODE="${ACL_IPE_MODE}" \
     -e ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE}" \
     -e ACL_ROOT_HASH_SIGNING_ENABLED="${ACL_ROOT_HASH_SIGNING_ENABLED:-false}" \

@@ -1,5 +1,18 @@
 #!/bin/bash
 
+PACKAGE_OPERATION="${PACKAGE_OPERATION:-report-and-remove}"
+case "${PACKAGE_OPERATION}" in
+    report-and-remove|report-only|disabled) ;;
+    *)
+        echo "Invalid PACKAGE_OPERATION: ${PACKAGE_OPERATION} (expected report-and-remove, report-only, or disabled)" >&2
+        exit 1
+        ;;
+esac
+
+# The SDK login shell clears the environment; replace any previous selection.
+sed -i '/^export PACKAGE_OPERATION=/d' /home/sdk/.bashrc || exit 1
+printf "export PACKAGE_OPERATION='%s'\n" "${PACKAGE_OPERATION}" >> /home/sdk/.bashrc
+
 # su starts a fresh SDK login shell, so forward the cutoff through .bashrc.
 # Clear it even when the current Docker invocation did not request a snapshot.
 sed -i '/^export PACKAGE_SNAPSHOT_TIME=/d' /home/sdk/.bashrc || exit 1

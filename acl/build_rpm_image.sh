@@ -110,6 +110,8 @@
 #   SYSEXT_COMPRESSION      Sysext compression algorithm (default: zstd)
 #   PACKAGE_SNAPSHOT_TIME   Ten-digit Unix UTC cutoff for RPM and image package resolution;
 #                           requires an SDK with DNF5 snapshot support
+#   PACKAGE_OPERATION       Image package handling: report-and-remove (default), report-only,
+#                           or disabled (skip package reports and selected-package removal)
 #   USE_SERIAL_CONSOLE      Use serial console (true) or SSH (false) - default: false
 #   VM_CONSOLE_USER         Serial console login user (default: root)
 #   VM_CONSOLE_PASSWORD     Serial console login password
@@ -178,6 +180,7 @@ RETRY_ATTEMPTS=0  # Number of retry attempts (0 = no retry)
 
 # Set envi var-s required for RPM mode
 export PACKAGE_SOURCE_MODE=RPM
+export PACKAGE_OPERATION="${PACKAGE_OPERATION:-report-and-remove}"
 export RPM_STAGING_DIR="${STAGING_DIR}"
 # Bootloader mode: 'uki' (default, systemd-boot + UKI) or 'grub'
 export BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
@@ -827,6 +830,14 @@ parse_args() {
                 ;;
         esac
     done
+
+    case "${PACKAGE_OPERATION}" in
+        report-and-remove|report-only|disabled) ;;
+        *)
+            error "Invalid PACKAGE_OPERATION: ${PACKAGE_OPERATION} (expected report-and-remove, report-only, or disabled)"
+            exit 1
+            ;;
+    esac
 
     # Fail unsupported IPE modes as early as possible, before any
     # staging/build work (including artifact/gallery-image inspection below).
