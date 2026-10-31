@@ -203,6 +203,8 @@ ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE:-ephemeral}"
 ROOT_HASH_SIGNING_OVERRIDE_SET=false
 [[ ! -v ACL_ROOT_HASH_SIGNING_ENABLED ]] || ROOT_HASH_SIGNING_OVERRIDE_SET=true
 ACL_ROOT_HASH_SIGNING_ENABLED="${ACL_ROOT_HASH_SIGNING_ENABLED:-false}"
+# FastTrack preview repo file - forwarded into the SDK container for CVE RPM resolution
+export FASTTRACK_REPO_FILE="${FASTTRACK_REPO_FILE:-}"
 
 # Pipeline build identifier — used for deterministic gallery image versions in CI.
 BUILD_ID="${BUILD_ID:-}"

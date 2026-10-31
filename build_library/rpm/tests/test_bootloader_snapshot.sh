@@ -59,3 +59,30 @@ touch "${download_dir}/grub2-2-1.x86_64.rpm"
 if (rpm_bootloader_package_file "${work_dir}/disk.img" grub2 x86_64) >/dev/null 2>&1; then
     die "Multiple bootloader RPM versions must fail"
 fi
+
+# FastTrack diagnostic queries must resolve the same snapshot as the install.
+fasttrack_repo="${work_dir}/fasttrack-preview.repo"
+fasttrack_root="${work_dir}/fasttrack-root"
+mkdir -p "${fasttrack_root}/etc/yum.repos.d" "${work_dir}/build"
+touch "${fasttrack_repo}" "${fasttrack_root}/etc/yum.repos.d/$(basename "${fasttrack_repo}")"
+dnf_trace="${work_dir}/fasttrack-dnf-args"
+sudo() {
+    if [[ "${1:-}" == "/usr/bin/dnf5" ]]; then
+        shift
+        printf '%s\n' "$@" >> "${dnf_trace}"
+        return 0
+    fi
+    "$@"
+}
+rpm_mount_pseudofs() { :; }
+rpm_umount_pseudofs() { :; }
+remove_denylist_rpm_packages() { :; }
+remove_orphaned_perl_scripts() { :; }
+remove_orphaned_python_scripts() { :; }
+FASTTRACK_REPO_FILE="${fasttrack_repo}"
+BUILD_DIR="${work_dir}/build"
+rpm_install_package "${fasttrack_root}" snapshot-test-package
+[[ "$(grep -Fxc -- '--snapshot-time=1700000000' "${dnf_trace}")" -eq 3 ]] ||
+    die "FastTrack diagnostic queries and install must all preserve PACKAGE_SNAPSHOT_TIME"
+[[ "$(grep -Fxc -- 'repoquery' "${dnf_trace}")" -eq 2 ]] ||
+    die "Expected both FastTrack diagnostic repoqueries to run"

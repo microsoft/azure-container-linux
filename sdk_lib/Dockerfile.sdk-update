@@ -60,6 +60,7 @@ RUN cp /etc/dnf/libdnf5-plugins/repo_snapshot.conf /tmp/repo_snapshot.conf.orig 
     mv /tmp/repo_snapshot.conf.orig /etc/dnf/libdnf5-plugins/repo_snapshot.conf
 RUN /usr/bin/python3 /mnt/host/source/src/scripts/sdk_lib/test_snapshot_packages.py
 RUN bash /mnt/host/source/src/scripts/build_library/rpm/tests/test_bootloader_snapshot.sh
+RUN bash /mnt/host/source/src/scripts/build_library/rpm/tests/test_pmc_staleness.sh
 
 # Remove problematic compatibility alias that references missing builddep plugin
 RUN sudo rm -f /usr/share/dnf5/aliases.d/compatibility-plugins.conf
@@ -71,6 +72,7 @@ RUN sudo mkdir -p /etc/pki/rpm-gpg && \
     sudo cp /tmp/MICROSOFT-RPM-GPG-KEY /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY && \
     sudo chmod 644 /etc/pki/rpm-gpg/MICROSOFT-RPM-GPG-KEY && \
     rm -f /tmp/MICROSOFT-RPM-GPG-KEY
+RUN bash /mnt/host/source/src/scripts/build_library/rpm/tests/test_rpm_bootstrap_gpg.sh
 
 # Verify ukify is available from systemd[boot,ukify]
 RUN ukify --help >/dev/null 2>&1 || (echo "ERROR: ukify not found or broken" && exit 1)
