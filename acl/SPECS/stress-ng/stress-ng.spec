@@ -1,3 +1,8 @@
+# PMC rebase tracking - update these after incorporating upstream PMC changes.
+# check_pmc_staleness.sh compares these against the current PMC release.
+%define pmc_base_version 0.18.02
+%define pmc_base_release 2
+
 Name:		stress-ng
 Version:	0.18.02
 Release:	2%{?dist}	

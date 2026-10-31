@@ -7,6 +7,12 @@
 %define POLICYCOREUTILSVER 3.2
 %define CHECKPOLICYVER 3.2
 %define LIBSEPOLVER 3.6-2
+
+# PMC rebase tracking - update these after incorporating upstream PMC changes.
+# check_pmc_staleness.sh compares these against the current PMC release.
+%define pmc_base_version 2.20240226
+%define pmc_base_release 8
+
 Summary:        SELinux policy
 Name:           selinux-policy
 Version:        %{refpolicy_major}.%{refpolicy_minor}

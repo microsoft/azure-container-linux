@@ -1,5 +1,7 @@
 %global debug_package %{nil}
 %define upstream_name containerd
+%define pmc_base_version 2.3.7
+%define pmc_base_release 1
 %define commit_hash 6f589cf13dc01a5b493911355427e05b2ff005d7
 
 Summary: Industry-standard container runtime
