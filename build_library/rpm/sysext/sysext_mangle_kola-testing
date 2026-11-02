@@ -3,8 +3,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# Mangle script for kola-testing sysext
-# Relocates Kola test prerequisites to /usr to comply with sysext requirements
+# Move Kola test prerequisites under /usr for sysext packaging.
 
 set -euo pipefail
 

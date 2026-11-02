@@ -9,7 +9,8 @@ case "${PACKAGE_OPERATION}" in
         ;;
 esac
 
-# The SDK login shell clears the environment; replace any previous selection.
+# Forward PACKAGE_OPERATION through .bashrc when switching to the SDK user.
+# Replace any previous selection.
 sed -i '/^export PACKAGE_OPERATION=/d' /home/sdk/.bashrc || exit 1
 printf "export PACKAGE_OPERATION='%s'\n" "${PACKAGE_OPERATION}" >> /home/sdk/.bashrc
 

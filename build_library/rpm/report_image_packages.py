@@ -554,8 +554,8 @@ def current_image_snapshot(
 
         yield snapshot, provenance
 
-        # This deliberately invalidates WAL appends/checkpoints as well as
-        # database replacements; a main-file-only hash can miss committed WAL.
+        # Invalidate WAL appends/checkpoints and database replacements.
+        # Hashing only the main file can miss committed WAL.
         if current_fingerprint(root) != before_by_filename:
             raise InventoryError("Current image inputs changed during collection; rerun")
 
