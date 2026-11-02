@@ -9,16 +9,16 @@
 # Keep means required in the production base. Optional extensions have separate requirements.
 # Sysext-only RPM dependencies belong in the rebuilt sysext, including OEM dependencies.
 # Rebuild extensions against the reduced build-base with matching RPM records.
-# A sysext RPM requirement alone never justifies keep: true. Independent host
-# boot, provisioning, and support callers provide separate reasons to keep a package.
+# A sysext RPM requirement alone never justifies keep: true. Independent host boot, provisioning, and support callers
+# provide separate reasons to keep a package.
 
 ["abseil-cpp"]
 keep = false
 # Payload: versioned libabsl libraries; abseil-cpp-devel owns development files.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/abseil-cpp/abseil-cpp.spec
 reason = """\
-    Contains versioned Abseil C++ utility shared libraries. \
-    No retained base-image or oem-azure package requirement was found."""
+    Contains versioned Abseil C++ utility shared libraries. No retained base-image or oem-azure package requirement \
+    was found."""
 
 ["acl"]
 keep = true
@@ -30,9 +30,8 @@ keep = true
 # https://github.com/flatcar/bootengine/blob/daf43bf9c1ca45bf1a43566c3a6f96ec0cb44a36/dracut/99setup-root/module-setup.sh
 # https://github.com/flatcar/bootengine/blob/daf43bf9c1ca45bf1a43566c3a6f96ec0cb44a36/dracut/99setup-root/initrd-setup-root.service
 reason = """\
-    Contains getfacl and setfacl. \
-    The bootengine package compares real-root getfacl output while cleaning \
-    the /etc overlay during boot, when overlay cleanup is enabled."""
+    Contains getfacl and setfacl. The bootengine package compares real-root getfacl output while cleaning the /etc \
+    overlay during boot, when overlay cleanup is enabled."""
 
 ["afterburn"]
 keep = true
@@ -48,9 +47,8 @@ keep = true
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/vm_image_util.sh
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/uki_addon.sh
 reason = """\
-    Contains the afterburn package's cloud-metadata executable, \
-    coreos-metadata. \
-    ACL's Azure first-boot hostname service invokes it."""
+    Contains the afterburn package's cloud-metadata executable, coreos-metadata. ACL's Azure first-boot hostname \
+    service invokes it."""
 
 ["azure-vm-utils"]
 keep = true
@@ -62,35 +60,29 @@ keep = true
 # The shared nodePrep caller guards it with SHOULD_CONFIG_SWAP_FILE.
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/cse_config.sh
 reason = """\
-    Contains azure-nvme-id and Azure disk-identification udev rules. \
-    These supply device links used by AKS provisioning, including the \
-    resource-disk path when swap is configured on that disk."""
+    Contains azure-nvme-id and Azure disk-identification udev rules. These supply device links used by AKS \
+    provisioning, including the resource-disk path when swap is configured on that disk."""
 
 ["azurelinux-repos-cloud-native"]
 keep = true
 reason = """\
-    Needed during image construction. \
-    Removed at the end of the image build."""
+    Needed during image construction. Removed at the end of the image build."""
 
 ["bc"]
 keep = false
 reason = """\
-    Contains the bc calculator command. \
-    The \
+    Contains the bc calculator command. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
-    maps sys-devel/bc and app-alternatives/bc to bc; the original \
-    requesting parent is unverified. \
-    No required AKS host invocation was found."""
+    maps sys-devel/bc and app-alternatives/bc to bc; the original requesting parent is unverified. No required AKS \
+    host invocation was found."""
 
 ["bind"]
 keep = false
 reason = """\
-    Contains named and DNS-server administration tools. \
-    The \
+    Contains named and DNS-server administration tools. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
-    selects bind alongside bind-utils for net-dns/bind and also maps \
-    bind-tools to bind. \
-    AKS uses CoreDNS. No required host use of named was found."""
+    selects bind alongside bind-utils for net-dns/bind and also maps bind-tools to bind. AKS uses CoreDNS. No required \
+    host use of named was found."""
 
 ["bind-utils"]
 keep = true
@@ -103,15 +95,13 @@ keep = true
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/localdns.service
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/localdns.sh
 reason = """\
-    Contains nslookup and dig. \
-    AKS provisioning calls nslookup for FQDN API-server checks; \
-    enabled LocalDNS watchdogs call dig."""
+    Contains nslookup and dig. AKS provisioning calls nslookup for FQDN API-server checks; enabled LocalDNS watchdogs \
+    call dig."""
 
 ["bison"]
 keep = false
 reason = """\
-    Contains bison and parser-generation support files. \
-    These are needed during builds only."""
+    Contains bison and parser-generation support files. These are needed during builds only."""
 
 ["bootengine"]
 keep = true
@@ -123,9 +113,8 @@ keep = true
 # https://github.com/flatcar/bootengine/blob/daf43bf9c1ca45bf1a43566c3a6f96ec0cb44a36/dracut/30ignition/ignition-generator
 # https://github.com/flatcar/bootengine/blob/daf43bf9c1ca45bf1a43566c3a6f96ec0cb44a36/dracut/31decrypt-root/64-decrypt-root.rules
 reason = """\
-    Contains update-bootengine, dracut modules, boot services, generators, \
-    and helper scripts. ACL patches and consumes these modules to construct \
-    its initramfs for Ignition, root setup, and encrypted-root activation. \
+    Contains update-bootengine, dracut modules, boot services, generators, and helper scripts. ACL patches and \
+    consumes these modules to construct its initramfs for Ignition, root setup, and encrypted-root activation. \
     Removing module sources after assembly remains unvalidated."""
 
 ["bpftool"]
@@ -133,20 +122,17 @@ keep = false
 reason = """\
     The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes dev-util/bpftool. \
-    Contains bpftool, including prog show (list loaded BPF programs), \
-    prog load (load programs), map dump (read map entries), and \
-    map update (write map entries). \
-    No mandatory host invocation was found."""
+    directly includes dev-util/bpftool. Contains bpftool, including prog show (list loaded BPF programs), prog load \
+    (load programs), map dump (read map entries), and map update (write map entries). No mandatory host invocation was \
+    found."""
 
 ["brotli"]
 keep = false
 # The brotli RPM owns the CLI and three versioned Brotli libraries.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/brotli/brotli.spec
 reason = """\
-    Contains brotli and the libbrotlicommon, libbrotlidec, and libbrotlienc \
-    shared libraries. \
-    No retained consumer was found."""
+    Contains brotli and the libbrotlicommon, libbrotlidec, and libbrotlienc shared libraries. No retained consumer was \
+    found."""
 
 ["btrfs-progs"]
 keep = true
@@ -158,22 +144,19 @@ keep = true
 # Activation: first-boot disks stage; see bootengine's generator.
 # https://github.com/flatcar/bootengine/blob/daf43bf9c1ca45bf1a43566c3a6f96ec0cb44a36/dracut/30ignition/ignition-disks.service
 reason = """\
-    Contains btrfs, mkfs.btrfs, fsck.btrfs, administration tools, and \
-    Btrfs libraries. Ignition executes mkfs.btrfs when first-boot \
-    configuration requests Btrfs formatting. Keep for that supported \
-    storage path even when the image's own filesystems use ext4."""
+    Contains btrfs, mkfs.btrfs, fsck.btrfs, administration tools, and Btrfs libraries. Ignition executes mkfs.btrfs \
+    when first-boot configuration requests Btrfs formatting. Keep for that supported storage path even when the \
+    image's own filesystems use ext4."""
 
 ["bzip2"]
 keep = false
 # Payload: compression commands; bzip2-libs separately owns libbz2.so.*.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/bzip2/bzip2.spec
 reason = """\
-    Contains bzip2, bunzip2, bzcat, and related compression commands. \
-    The \
+    Contains bzip2, bunzip2, bzcat, and related compression commands. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/d93eab8bb13e571da5139054906f71b3fb65f14b/build_library/rpm/package_catalog.yaml) \
-    explicitly selects bzip2 under systemd to supply tar's compression \
-    commands. \
-    No required production-host invocation was found."""
+    explicitly selects bzip2 under systemd to supply tar's compression commands. No required production-host \
+    invocation was found."""
 
 ["checkpolicy"]
 keep = false
@@ -183,21 +166,17 @@ keep = false
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/rpm_install.sh
 # https://github.com/SELinuxProject/selinux/blob/3.6/libsemanage/src/direct_api.c
 reason = """\
-    Contains checkpolicy, checkmodule, sedismod, and sedispol. \
-    The inherited \
+    Contains checkpolicy, checkmodule, sedismod, and sedispol. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes sys-apps/checkpolicy. \
-    ACL's CIL hotfix uses semodule and library compilation APIs. \
-    No activated host caller of these compilers or inspectors was found."""
+    directly includes sys-apps/checkpolicy. ACL's CIL hotfix uses semodule and library compilation APIs. No activated \
+    host caller of these compilers or inspectors was found."""
 
 ["cifs-utils"]
 keep = false
 reason = """\
-    Contains mount.cifs and CIFS authentication helpers. \
-    The inherited \
+    Contains mount.cifs and CIFS authentication helpers. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes net-fs/cifs-utils. \
-    Standard Azure Files CSI supplies its own mount tools."""
+    directly includes net-fs/cifs-utils. Standard Azure Files CSI supplies its own mount tools."""
 
 ["conntrack-tools"]
 keep = true
@@ -210,17 +189,16 @@ keep = true
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/aks-log-collector.service
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/aks-log-collector.timer
 reason = """\
-    Contains conntrack, conntrackd, and nfct. \
-    Keep for AKS support diagnostics: with sysinfo collection enabled, \
-    the automatic log collector runs conntrack -L to capture tracked \
-    connections and conntrack -S to capture connection-tracking statistics."""
+    Contains conntrack, conntrackd, and nfct. Keep for AKS support diagnostics: with sysinfo collection enabled, the \
+    automatic log collector runs conntrack -L to capture tracked connections and conntrack -S to capture \
+    connection-tracking statistics."""
 
 ["cri-tools"]
 keep = true
 # Payload: %files owns crictl.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/cri-tools/cri-tools.spec
-# Consumer: getInstallModeAndCleanupContainerImages calls cleanUpImages,
-# which calls removeContainerImage. Enumeration may use ctr; removal uses crictl.
+# Consumer: getInstallModeAndCleanupContainerImages calls cleanUpImages, which calls removeContainerImage. Enumeration
+# may use ctr; removal uses crictl.
 # Shared basePrep calls this unless skipped or the VHD marker is absent.
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/cse_install.sh
 # Collector: crictl queries are optional when the command is unavailable.
@@ -228,10 +206,8 @@ keep = true
 # Collector installation and service/timer activation; see zip too.
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/vhdbuilder/packer/packer_source.sh
 reason = """\
-    Contains crictl. \
-    AKS VHD provisioning cleanup calls crictl rmi for matching stale \
-    images even when enumeration uses ctr. The automatic log collector \
-    also invokes crictl when available."""
+    Contains crictl. AKS VHD provisioning cleanup calls crictl rmi for matching stale images even when enumeration \
+    uses ctr. The automatic log collector also invokes crictl when available."""
 
 ["cryptsetup"]
 keep = true
@@ -244,10 +220,9 @@ keep = true
 # https://github.com/flatcar/bootengine/blob/daf43bf9c1ca45bf1a43566c3a6f96ec0cb44a36/dracut/30ignition/ignition-disks.service
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/additional_files/99-acl.conf
 reason = """\
-    Contains cryptsetup for managing encrypted disks. \
-    Ignition executes it to inspect, format, and open configured LUKS \
-    volumes, and ACL explicitly includes it in the initramfs. \
-    Preserve the separately packaged cryptsetup-libs runtime too."""
+    Contains cryptsetup for managing encrypted disks. Ignition executes it to inspect, format, and open configured \
+    LUKS volumes, and ACL explicitly includes it in the initramfs. Preserve the separately packaged cryptsetup-libs \
+    runtime too."""
 
 ["dbus-glib"]
 keep = false
@@ -256,21 +231,17 @@ keep = false
 # GLib/D-Bus use alone does not establish use of this separate binding.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/polkit/polkit.spec
 reason = """\
-    Contains the older GLib D-Bus binding libraries and support tools. \
-    The inherited \
+    Contains the older GLib D-Bus binding libraries and support tools. The inherited \
     [Update Engine recipe](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/update_engine/update_engine-0.4.10-r25.ebuild) \
-    lists dev-libs/dbus-glib in RDEPEND; ACL skips Update Engine itself. \
-    No required retained consumer was found."""
+    lists dev-libs/dbus-glib in RDEPEND; ACL skips Update Engine itself. No required retained consumer was found."""
 
 ["device-mapper-event"]
 keep = false
 # The device-mapper RPM owns dmsetup; device-mapper-libs owns libdevmapper.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/lvm2/lvm2.spec
 reason = """\
-    Contains dmeventd for monitoring device-mapper devices, plus its \
-    systemd service and socket. \
-    No required ACL/AKS host LVM role was found. \
-    No independent required dmeventd consumer was found."""
+    Contains dmeventd for monitoring device-mapper devices, plus its systemd service and socket. No required ACL/AKS \
+    host LVM role was found. No independent required dmeventd consumer was found."""
 
 ["device-mapper-event-libs"]
 keep = false
@@ -283,8 +254,7 @@ keep = false
 # Headers and unversioned linker symlinks belong to duktape-devel; no CLI is packaged.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/duktape/duktape.spec
 reason = """\
-    Contains Duktape JavaScript-engine shared libraries. \
-    No required remaining production-base consumer was found."""
+    Contains Duktape JavaScript-engine shared libraries. No required remaining production-base consumer was found."""
 
 ["ebtables-legacy"]
 keep = true
@@ -300,14 +270,13 @@ keep = true
 # https://github.com/Azure/azure-container-networking/blob/bb15e59e7e7c4c90f97a45484474c7dff271dd7a/network/bridge_networkclient_linux.go
 # https://github.com/Azure/azure-container-networking/blob/bb15e59e7e7c4c90f97a45484474c7dff271dd7a/ebtables/ebtables.go
 reason = """\
-    Contains legacy ebtables commands, registered as ebtables by the RPM. \
-    Supported Azure CNI bridge/tunnel paths invoke ebtables for L2 rules."""
+    Contains legacy ebtables commands, registered as ebtables by the RPM. Supported Azure CNI bridge/tunnel paths \
+    invoke ebtables for L2 rules."""
 
 ["flex"]
 keep = false
 reason = """\
-    Contains flex and supporting lexer-generation files. \
-    These are needed during builds only."""
+    Contains flex and supporting lexer-generation files. These are needed during builds only."""
 
 ["gdbm"]
 keep = false
@@ -321,13 +290,10 @@ keep = false
 # Rebuilding OEM against the reduced base installs this dependency into its layer.
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_sysext
 reason = """\
-    Contains GDBM database libraries and database-management commands. \
-    The \
+    Contains GDBM database libraries and database-management commands. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
-    maps sys-libs/gdbm to gdbm; the original base-image requester is \
-    unverified. \
-    No captured base-image package requires it. The OEM python3-libs RPM needs \
-    gdbm; the rebuilt oem-azure extension supplies that dependency."""
+    maps sys-libs/gdbm to gdbm; the original base-image requester is unverified. No captured base-image package \
+    requires it. The OEM python3-libs RPM needs gdbm; the rebuilt oem-azure extension supplies that dependency."""
 
 ["gettext"]
 keep = false
@@ -339,19 +305,16 @@ keep = false
 reason = """\
     The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    explicitly selects sys-devel/gettext for envsubst file templating. \
-    Contains gettext, ngettext, envsubst, message-catalog tools, bundled \
-    libraries, headers, and localization support. No activated \
-    host consumer was found."""
+    explicitly selects sys-devel/gettext for envsubst file templating. Contains gettext, ngettext, envsubst, \
+    message-catalog tools, bundled libraries, headers, and localization support. No activated host consumer was \
+    found."""
 
 ["git"]
 keep = false
 reason = """\
-    Contains git and supporting repository-management commands. \
-    The inherited \
+    Contains git and supporting repository-management commands. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes dev-vcs/git. \
-    No required AKS host provisioning caller was found."""
+    directly includes dev-vcs/git. No required AKS host provisioning caller was found."""
 
 ["glib-devel"]
 keep = false
@@ -363,19 +326,15 @@ keep = false
 reason = """\
     The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
-    explicitly adds glib-devel alongside dbus-glib. \
-    Contains GLib headers, static libraries, development metadata, and \
-    commands including gio-querymodules and gdbus. No required \
-    production caller of these commands was found. Preserve the separate glib \
-    runtime package; sysext-only tool requirements belong in rebuilt sysexts."""
+    explicitly adds glib-devel alongside dbus-glib. Contains GLib headers, static libraries, development metadata, and \
+    commands including gio-querymodules and gdbus. No required production caller of these commands was found. Preserve \
+    the separate glib runtime package; sysext-only tool requirements belong in rebuilt sysexts."""
 
 ["glib-schemas"]
 keep = false
 reason = """\
-    Contains gsettings, glib-compile-schemas, and schema-support files. \
-    No required consumer was found on the headless AKS host; \
-    revisit if production-base applications or host installation hooks \
-    require glib-schemas."""
+    Contains gsettings, glib-compile-schemas, and schema-support files. No required consumer was found on the headless \
+    AKS host; revisit if production-base applications or host installation hooks require glib-schemas."""
 
 ["gmock"]
 keep = false
@@ -383,18 +342,16 @@ keep = false
 # Headers and unversioned linker symlinks belong to gmock-devel.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/gtest/gtest.spec
 reason = """\
-    Contains the GoogleMock libgmock and libgmock_main shared libraries. \
-    No retained base-image or oem-azure package requirement was found."""
+    Contains the GoogleMock libgmock and libgmock_main shared libraries. No retained base-image or oem-azure package \
+    requirement was found."""
 
 ["groff"]
 keep = false
 reason = """\
-    Contains groff and document-formatting support files. \
-    The \
+    Contains groff and document-formatting support files. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
-    maps sys-apps/groff to groff; the original requesting parent is \
-    unverified. \
-    No required provisioning or runtime caller was found."""
+    maps sys-apps/groff to groff; the original requesting parent is unverified. No required provisioning or runtime \
+    caller was found."""
 
 ["gtest"]
 keep = false
@@ -402,12 +359,10 @@ keep = false
 # Headers and unversioned linker symlinks belong to gtest-devel.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/gtest/gtest.spec
 reason = """\
-    Contains the GoogleTest libgtest and libgtest_main shared libraries. \
-    The inherited \
+    Contains the GoogleTest libgtest and libgtest_main shared libraries. The inherited \
     [Update Engine recipe](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/update_engine/update_engine-0.4.10-r25.ebuild) \
-    lists dev-cpp/gtest in its build DEPEND; ACL skips Update Engine \
-    itself. \
-    No retained base-image or oem-azure package requirement was found."""
+    lists dev-cpp/gtest in its build DEPEND; ACL skips Update Engine itself. No retained base-image or oem-azure \
+    package requirement was found."""
 
 ["hwdata"]
 keep = false
@@ -418,9 +373,8 @@ keep = false
 # https://github.com/pciutils/pciutils/blob/v3.11.1/Makefile
 # https://github.com/pciutils/pciutils/blob/v3.11.1/lib/init.c
 reason = """\
-    Contains PCI/USB identification databases and dist-blacklist.conf. \
-    Retained pciutils supplies its own PCI IDs under /usr/share/misc. \
-    No additional database consumer was found."""
+    Contains PCI/USB identification databases and dist-blacklist.conf. Retained pciutils supplies its own PCI IDs \
+    under /usr/share/misc. No additional database consumer was found."""
 
 ["ignition-flatcar"]
 keep = true
@@ -434,8 +388,8 @@ keep = true
 # ACL emits flatcar.first_boot=detected; see shared initramfs activation.
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/uki_install.sh
 reason = """\
-    Contains Ignition's provisioning executable. \
-    ACL's initramfs services need it to apply first-boot node configuration."""
+    Contains Ignition's provisioning executable. ACL's initramfs services need it to apply first-boot node \
+    configuration."""
 
 ["integritysetup"]
 keep = false
@@ -446,12 +400,10 @@ keep = false
 # systemd-integritysetup is a different executable and uses libcryptsetup APIs.
 # https://github.com/systemd/systemd-stable/blob/v255/src/integritysetup/integritysetup.c
 reason = """\
-    Contains the standalone integritysetup dm-integrity command. \
-    The \
+    Contains the standalone integritysetup dm-integrity command. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
-    adds integritysetup alongside cryptsetup and veritysetup for \
-    sys-fs/cryptsetup. \
-    No required ACL boot or AKS provisioning caller was found."""
+    adds integritysetup alongside cryptsetup and veritysetup for sys-fs/cryptsetup. No required ACL boot or AKS \
+    provisioning caller was found."""
 
 ["iproute-tc"]
 keep = false
@@ -464,10 +416,9 @@ keep = false
 reason = """\
     The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
-    adds iproute-tc alongside iproute for sys-apps/iproute2. \
-    Contains tc and traffic-control plugins. The reviewed CNI bandwidth \
-    plugin programs queueing disciplines and filters through Go netlink \
-    calls. No required ACL/AKS host invocation of tc was found."""
+    adds iproute-tc alongside iproute for sys-apps/iproute2. Contains tc and traffic-control plugins. The reviewed CNI \
+    bandwidth plugin programs queueing disciplines and filters through Go netlink calls. No required ACL/AKS host \
+    invocation of tc was found."""
 
 ["ipset"]
 keep = true
@@ -480,21 +431,17 @@ keep = true
 # https://github.com/Azure/azure-container-networking/blob/bb15e59e7e7c4c90f97a45484474c7dff271dd7a/network/transparent_tunnel_ipset_linux.go
 # https://github.com/Azure/azure-container-networking/blob/bb15e59e7e7c4c90f97a45484474c7dff271dd7a/platform/os_linux.go
 reason = """\
-    Contains ipset and the libipset shared library. \
-    Azure CNI's transparent-tunnel endpoint path executes ipset create, \
-    add, and del for its local-pod address set. Keep for that supported \
-    networking mode. Kube-proxy has separate container tools."""
+    Contains ipset and the libipset shared library. Azure CNI's transparent-tunnel endpoint path executes ipset \
+    create, add, and del for its local-pod address set. Keep for that supported networking mode. Kube-proxy has \
+    separate container tools."""
 
 ["ipvsadm"]
 keep = false
 reason = """\
-    Contains IPVS administration commands. \
-    The inherited \
+    Contains IPVS administration commands. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes sys-cluster/ipvsadm. \
-    Kube-proxy programs IPVS through netlink; \
-    retain ipvsadm only for an explicitly supported host \
-    administration workflow."""
+    directly includes sys-cluster/ipvsadm. Kube-proxy programs IPVS through netlink; retain ipvsadm only for an \
+    explicitly supported host administration workflow."""
 
 ["jq"]
 keep = true
@@ -507,9 +454,8 @@ keep = true
 # Provisioning-result/event JSON also uses jq -n.
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/cse_start.sh
 reason = """\
-    Contains jq and its runtime library. \
-    AKS provisioning needs jq to validate metadata, process configuration, \
-    obtain registry credentials, and emit events."""
+    Contains jq and its runtime library. AKS provisioning needs jq to validate metadata, process configuration, obtain \
+    registry credentials, and emit events."""
 
 ["kexec-tools"]
 keep = true
@@ -522,10 +468,9 @@ keep = true
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/uki_install.sh
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/acl/docs/kdump.md
 reason = """\
-    Contains kexec, kdumpctl, makedumpfile, mkdumprd, and crash-capture \
-    services. ACL supports optional crash capture through kdump.service \
-    and a prepared crashkernel UKI addon. Keep for those diagnostics, \
-    even though capture memory is not reserved by default."""
+    Contains kexec, kdumpctl, makedumpfile, mkdumprd, and crash-capture services. ACL supports optional crash capture \
+    through kdump.service and a prepared crashkernel UKI addon. Keep for those diagnostics, even though capture memory \
+    is not reserved by default."""
 
 ["less"]
 keep = false
@@ -536,28 +481,23 @@ keep = false
 # https://github.com/systemd/systemd/blob/v255/src/journal/journalctl.c
 # https://github.com/systemd/systemd/blob/v255/src/shared/pager.c
 reason = """\
-    Contains less, lesskey, and lessecho. \
-    The inherited \
+    Contains less, lesskey, and lessecho. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes sys-apps/less. \
-    No retained package dependency was found. \
-    Used for administrative log paging; automated AKS log \
-    collection uses --no-pager."""
+    directly includes sys-apps/less. No retained package dependency was found. Used for administrative log paging; \
+    automated AKS log collection uses --no-pager."""
 
 ["libaio"]
 keep = false
 # Payload: versioned Linux asynchronous-I/O libraries.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/libaio/libaio.spec
 reason = """\
-    Contains versioned libaio asynchronous-I/O libraries. \
-    No required remaining consumer was found."""
+    Contains versioned libaio asynchronous-I/O libraries. No required remaining consumer was found."""
 
 ["libffi-devel"]
 keep = false
 reason = """\
-    Contains libffi headers and development metadata. \
-    These are required for compilation only; preserve the separate libffi \
-    runtime package."""
+    Contains libffi headers and development metadata. These are required for compilation only; preserve the separate \
+    libffi runtime package."""
 
 ["libgomp"]
 keep = false
@@ -570,10 +510,8 @@ keep = false
 # Dependency-resolving install places missing libgomp in the extension upper layer.
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/rpm_install.sh
 reason = """\
-    Contains the GNU OpenMP shared runtime library. \
-    Not required in the production base. \
-    LISA's gcc package requires it through libgomp-devel; supply it in \
-    the rebuilt testing extension for its OpenMP toolchain."""
+    Contains the GNU OpenMP shared runtime library. Not required in the production base. LISA's gcc package requires \
+    it through libgomp-devel; supply it in the rebuilt testing extension for its OpenMP toolchain."""
 
 ["libmd"]
 keep = false
@@ -583,12 +521,10 @@ keep = false
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/acl/SPECS/libbsd/libbsd.spec
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml
 reason = """\
-    Contains libmd.so.0 message-digest functions. \
-    The inherited \
+    Contains libmd.so.0 message-digest functions. The inherited \
     [libbsd recipe](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/portage-stable/dev-libs/libbsd/libbsd-0.12.1.ebuild) \
-    lists app-crypt/libmd in RDEPEND. \
-    ACL skips the identified libbsd consumer. No required \
-    remaining native consumer was found."""
+    lists app-crypt/libmd in RDEPEND. ACL skips the identified libbsd consumer. No required remaining native consumer \
+    was found."""
 
 ["libnl3"]
 keep = false
@@ -599,9 +535,8 @@ keep = false
 # The systemd-networkd executable uses native netlink. It doesn't use libnl3 libraries.
 # https://github.com/systemd/systemd-stable/blob/v255/src/network/networkd-manager.c
 reason = """\
-    Contains libnl shared libraries, netlink command-line tools, and \
-    configuration. No retained consumer was found in the reviewed \
-    systemd-networkd and azure-vm-utils code paths."""
+    Contains libnl shared libraries, netlink command-line tools, and configuration. No retained consumer was found in \
+    the reviewed systemd-networkd and azure-vm-utils code paths."""
 
 ["libnvme"]
 keep = false
@@ -619,10 +554,8 @@ keep = false
 reason = """\
     The \
     [glib recipe](https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/glib/glib.spec) \
-    declares libselinux-devel as a build dependency. \
-    Contains SELinux headers, libselinux.a, the unversioned linker \
-    symlink, and pkg-config metadata. No on-node compilation or \
-    consumer of these development files was found."""
+    declares libselinux-devel as a build dependency. Contains SELinux headers, libselinux.a, the unversioned linker \
+    symlink, and pkg-config metadata. No on-node compilation or consumer of these development files was found."""
 
 ["libsepol-devel"]
 keep = false
@@ -631,8 +564,8 @@ keep = false
 # ACL's policy build sets CHKCON=/bin/true.
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/acl/SPECS/selinux-policy/selinux-policy.spec
 reason = """\
-    Contains chkcon, sepol headers, libsepol.a, the unversioned linker \
-    symlink, and pkg-config metadata. No required on-node consumer was found."""
+    Contains chkcon, sepol headers, libsepol.a, the unversioned linker symlink, and pkg-config metadata. No required \
+    on-node consumer was found."""
 
 ["libsodium"]
 keep = false
@@ -641,12 +574,10 @@ keep = false
 # The reviewed zeromq build explicitly configures --with-libsodium=no.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/zeromq/zeromq.spec
 reason = """\
-    Contains the versioned libsodium cryptography library. \
-    The inherited \
+    Contains the versioned libsodium cryptography library. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes dev-libs/libsodium. \
-    No required retained host consumer was found; the reviewed \
-    zeromq build disables libsodium."""
+    directly includes dev-libs/libsodium. No required retained host consumer was found; the reviewed zeromq build \
+    disables libsodium."""
 
 ["libstdc++-devel"]
 keep = false
@@ -662,30 +593,25 @@ keep = false
 # LISA cleanup deletes static archives; validate final headers/linker files too.
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/sysext/sysext_mangle_lisa-testing
 reason = """\
-    Contains C++ headers, static libraries, and unversioned linker files. \
-    Preserve the separate libstdc++ \
-    runtime package. Not required in the production base. \
-    LISA's gcc and gcc-c++ packages require the development \
-    files in its rebuilt extension; its cleanup deletes static archives, \
-    so static linking needs separate preservation and validation."""
+    Contains C++ headers, static libraries, and unversioned linker files. Preserve the separate libstdc++ runtime \
+    package. Not required in the production base. LISA's gcc and gcc-c++ packages require the development files in its \
+    rebuilt extension; its cleanup deletes static archives, so static linking needs separate preservation and \
+    validation."""
 
 ["libtalloc"]
 keep = false
 reason = """\
-    Contains the libtalloc memory-allocation shared library. \
-    No retained package requirement was found."""
+    Contains the libtalloc memory-allocation shared library. No retained package requirement was found."""
 
 ["libtdb"]
 keep = false
 # Payload: libtdb.so.*; tdb-tools and python3-tdb are separate RPMs.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/libtdb/libtdb.spec
 reason = """\
-    Contains the libtdb trivial-database shared library. \
-    The inherited \
+    Contains the libtdb trivial-database shared library. The inherited \
     [Samba recipe](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/portage-stable/net-fs/samba/samba-4.22.3.ebuild) \
-    includes sys-libs/tdb in COMMON_DEPEND, shared by DEPEND and RDEPEND; \
-    ACL skips Samba itself. \
-    No required retained consumer was found."""
+    includes sys-libs/tdb in COMMON_DEPEND, shared by DEPEND and RDEPEND; ACL skips Samba itself. No required retained \
+    consumer was found."""
 
 ["libunwind"]
 keep = false
@@ -694,13 +620,10 @@ keep = false
 # No libunwind requirement was found in the reviewed systemd configuration.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/systemd/systemd.spec
 reason = """\
-    Contains versioned libunwind stack-unwinding libraries. \
-    The inherited \
+    Contains versioned libunwind stack-unwinding libraries. The inherited \
     [Samba recipe](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/portage-stable/net-fs/samba/samba-4.22.3.ebuild) \
-    conditionally requests sys-libs/libunwind with its unwind flag; \
-    that flag and the original installation path are unverified. \
-    No required retained consumer was found in the reviewed build \
-    configurations."""
+    conditionally requests sys-libs/libunwind with its unwind flag; that flag and the original installation path are \
+    unverified. No required retained consumer was found in the reviewed build configurations."""
 
 ["liburing"]
 keep = false
@@ -710,28 +633,23 @@ keep = false
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/qemu/qemu.spec
 # The base removal plan has no dependents. The combined base/OEM graph has no consumers.
 reason = """\
-    Contains liburing and liburing-ffi shared libraries for io_uring. \
-    The inherited \
+    Contains liburing and liburing-ffi shared libraries for io_uring. The inherited \
     [Samba recipe](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/portage-stable/net-fs/samba/samba-4.22.3.ebuild) \
-    includes sys-libs/liburing in COMMON_DEPEND, shared by DEPEND and \
-    RDEPEND; ACL skips Samba itself. \
-    No package in the captured base or oem-azure inventory depends on \
-    these libraries. The qemu package is absent from both inventories."""
+    includes sys-libs/liburing in COMMON_DEPEND, shared by DEPEND and RDEPEND; ACL skips Samba itself. No package in \
+    the captured base or oem-azure inventory depends on these libraries. The qemu package is absent from both \
+    inventories."""
 
 ["libusb"]
 keep = false
 reason = """\
-    Contains userspace USB-access shared libraries. \
-    No required remaining AKS host consumer was found."""
+    Contains userspace USB-access shared libraries. No required remaining AKS host consumer was found."""
 
 ["lshw"]
 keep = false
 reason = """\
-    Contains the lshw hardware-inventory command. \
-    The inherited \
+    Contains the lshw hardware-inventory command. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes sys-apps/lshw. \
-    No required provisioning or runtime caller was found."""
+    directly includes sys-apps/lshw. No required provisioning or runtime caller was found."""
 
 ["lsscsi"]
 keep = true
@@ -741,76 +659,62 @@ keep = true
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/aks-log-collector.sh
 # Service/timer activation is shared with conntrack-tools and zip.
 reason = """\
-    Contains lsscsi for listing SCSI devices and their attributes. \
-    Keep for AKS support diagnostics: the host log collector executes \
-    lsscsi -vv when sysinfo collection is enabled."""
+    Contains lsscsi for listing SCSI devices and their attributes. Keep for AKS support diagnostics: the host log \
+    collector executes lsscsi -vv when sysinfo collection is enabled."""
 
 ["lvm2"]
 keep = false
 reason = """\
-    Contains LVM volume-management commands and service configuration. \
-    The inherited \
+    Contains LVM volume-management commands and service configuration. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes sys-fs/lvm2. \
-    No default AKS host LVM role was found. ACL omits its initramfs module."""
+    directly includes sys-fs/lvm2. No default AKS host LVM role was found. ACL omits its initramfs module."""
 
 ["m4"]
 keep = false
 reason = """\
-    Contains the m4 macro processor. \
-    No required node-runtime invocation was found."""
+    Contains the m4 macro processor. No required node-runtime invocation was found."""
 
 ["make"]
 keep = false
 reason = """\
-    Contains GNU make. \
-    The \
+    Contains GNU make. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
-    maps sys-devel/make and dev-build/make to make; the original \
-    requesting parent is unverified. \
-    No normal AKS node-runtime caller was found."""
+    maps sys-devel/make and dev-build/make to make; the original requesting parent is unverified. No normal AKS \
+    node-runtime caller was found."""
 
 ["mariadb-connector-c"]
 keep = false
 reason = """\
-    Contains libmariadb and client plugins. \
-    No required host database-client consumer was found."""
+    Contains libmariadb and client plugins. No required host database-client consumer was found."""
 
 ["mariadb-connector-c-config"]
 keep = false
 reason = """\
-    Contains /etc/my.cnf, /etc/my.cnf.d/client.cnf, and their configuration \
-    directory. No remaining host consumer was found."""
+    Contains /etc/my.cnf, /etc/my.cnf.d/client.cnf, and their configuration directory. No remaining host consumer was \
+    found."""
 
 ["microcode_ctl"]
 keep = false
 reason = """\
-    Contains guest CPU-microcode update support. \
-    Not installed in the captured base inventory. Historical inclusion \
-    remains unverified. \
-    Azure manages physical CPU microcode, \
-    and ACL's \
+    Contains guest CPU-microcode update support. Not installed in the captured base inventory. Historical inclusion \
+    remains unverified. Azure manages physical CPU microcode, and ACL's \
     [dracut configuration](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/additional_files/99-acl.conf) \
     explicitly disables early microcode loading in the guest."""
 
 ["mokutil"]
 keep = false
 reason = """\
-    Contains mokutil for Secure Boot and MOK settings. \
-    The inherited \
+    Contains mokutil for Secure Boot and MOK settings. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes sys-boot/mokutil. \
-    No required AKS provisioning invocation was found; \
-    normal Secure Boot verification does not require on-node MOK management."""
+    directly includes sys-boot/mokutil. No required AKS provisioning invocation was found; normal Secure Boot \
+    verification does not require on-node MOK management."""
 
 ["net-tools"]
 keep = false
 reason = """\
-    Contains ifconfig, netstat, and related legacy networking commands. \
-    The inherited \
+    Contains ifconfig, netstat, and related legacy networking commands. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes sys-apps/net-tools. \
-    The reviewed provisioning code invokes the ip and systemd-networkd \
+    directly includes sys-apps/net-tools. The reviewed provisioning code invokes the ip and systemd-networkd \
     executables."""
 
 ["nfs-utils"]
@@ -823,8 +727,7 @@ keep = true
 # https://github.com/kubernetes/kubernetes/blob/93248f9ae092f571eb870b7664c534bfc7d00f03/pkg/volume/nfs/nfs.go
 # https://github.com/kubernetes/kubernetes/blob/93248f9ae092f571eb870b7664c534bfc7d00f03/staging/src/k8s.io/mount-utils/mount_linux.go
 reason = """\
-    Contains mount.nfs and related NFS utilities. \
-    Supporting kubelet's generic NFS volume path with the normal host \
+    Contains mount.nfs and related NFS utilities. Supporting kubelet's generic NFS volume path with the normal host \
     mounter needs mount.nfs; CSI-container tools do not cover that path."""
 
 ["nftables"]
@@ -835,9 +738,8 @@ keep = true
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/aks-log-collector.sh
 # Host service/timer activation is shared with conntrack-tools and zip.
 reason = """\
-    Contains nft, the libnftables shared library, and firewall service \
-    configuration. Keep for AKS support diagnostics: the host collector \
-    executes nft -n list ruleset when nftables collection is enabled."""
+    Contains nft, the libnftables shared library, and firewall service configuration. Keep for AKS support \
+    diagnostics: the host collector executes nft -n list ruleset when nftables collection is enabled."""
 
 ["nmap"]
 keep = false
@@ -845,11 +747,9 @@ keep = false
 reason = """\
     The \
     [nmap recipe](https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/nmap/nmap.spec) \
-    packages nmap, nping, and scanning support separately from nmap-ncat. \
-    Not installed in the captured base or oem-azure inventory. \
-    Historical inclusion remains unverified. \
-    No required provisioning or runtime caller was found; \
-    preserve the separately packaged nmap-ncat connectivity tools."""
+    packages nmap, nping, and scanning support separately from nmap-ncat. Not installed in the captured base or \
+    oem-azure inventory. Historical inclusion remains unverified. No required provisioning or runtime caller was \
+    found; preserve the separately packaged nmap-ncat connectivity tools."""
 
 ["nmap-ncat"]
 keep = true
@@ -858,9 +758,8 @@ keep = true
 # Consumer: nodePrep's IPv4 API-server branch runs nc -vz on port 443.
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/cse_main.sh
 reason = """\
-    Contains ncat and the nc entry point. \
-    AKS provisioning invokes nc for connectivity checks when the \
-    API-server endpoint is an IPv4 address."""
+    Contains ncat and the nc entry point. AKS provisioning invokes nc for connectivity checks when the API-server \
+    endpoint is an IPv4 address."""
 
 ["ntp"]
 keep = false
@@ -874,12 +773,10 @@ keep = false
 # Its ntpdate drop-in adjusts ordering/retries; it does not enable the unit.
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/build_image_util.sh
 reason = """\
-    Contains ntpd, ntpdate, ntpq, and related time-service tools and units. \
-    The inherited \
+    Contains ntpd, ntpdate, ntpq, and related time-service tools and units. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes net-misc/ntp. \
-    Not required for ACL's Azure time synchronization: the oem-azure \
-    extension enables chronyd from the separate chrony package."""
+    directly includes net-misc/ntp. Not required for ACL's Azure time synchronization: the oem-azure extension enables \
+    chronyd from the separate chrony package."""
 
 ["nvme-cli"]
 keep = false
@@ -891,12 +788,10 @@ keep = false
 # There is a packaged fabric-service caller. ACL activation remains unverified.
 # https://github.com/linux-nvme/nvme-cli/blob/v2.8/nvmf-autoconnect/systemd/nvmf-connect%40.service.in
 reason = """\
-    Contains nvme and NVMe-fabrics rules, configuration, and services. \
-    The inherited \
+    Contains nvme and NVMe-fabrics rules, configuration, and services. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes sys-apps/nvme-cli. \
-    No enabled ACL/AKS caller was found; Azure disk identification \
-    uses azure-nvme-id directly."""
+    directly includes sys-apps/nvme-cli. No enabled ACL/AKS caller was found; Azure disk identification uses \
+    azure-nvme-id directly."""
 
 ["openssh"]
 # The openssh RPM owns the umbrella license payload.
@@ -908,13 +803,10 @@ reason = """\
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/cse_main.sh
 keep = true
 reason = """\
-    Contains only the umbrella OpenSSH license payload. \
-    Also pulls in openssh-server, which contains sshd, sshd-session, \
-    sftp-server, and server configuration. \
-    ACL enables socket-activated SSH, whose per-connection service \
-    executes sshd. Keep for supported SSH access; a conditional \
-    DISABLE_SSH provisioning option in AgentBaker does not justify global \
-    removal."""
+    Contains only the umbrella OpenSSH license payload. Also pulls in openssh-server, which contains sshd, \
+    sshd-session, sftp-server, and server configuration. ACL enables socket-activated SSH, whose per-connection \
+    service executes sshd. Keep for supported SSH access; a conditional DISABLE_SSH provisioning option in AgentBaker \
+    does not justify global removal."""
 
 ["pciutils"]
 keep = true
@@ -925,10 +817,9 @@ keep = true
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/aks-log-collector.sh
 # Host service/timer activation is shared with conntrack-tools and zip.
 reason = """\
-    Contains lspci, additional PCI administration tools, and PCI IDs. \
-    Keep for AKS support diagnostics: the host collector runs lspci -vkPP \
-    when sysinfo collection is enabled. Preserve its separately packaged \
-    pciutils-libs dependency too."""
+    Contains lspci, additional PCI administration tools, and PCI IDs. Keep for AKS support diagnostics: the host \
+    collector runs lspci -vkPP when sysinfo collection is enabled. Preserve its separately packaged pciutils-libs \
+    dependency too."""
 
 ["pcre2-devel"]
 keep = false
@@ -937,9 +828,8 @@ keep = false
 # The pcre2-devel-static RPM owns static archives.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/pcre2/pcre2.spec
 reason = """\
-    Contains pcre2-config, headers, unversioned linker symlinks, \
-    and pkg-config metadata. No required production on-node \
-    build caller was found."""
+    Contains pcre2-config, headers, unversioned linker symlinks, and pkg-config metadata. No required production \
+    on-node build caller was found."""
 
 ["pigz"]
 keep = true
@@ -951,10 +841,9 @@ keep = true
 # https://github.com/containerd/containerd/blob/v1.7.22/archive/compression/compression.go
 # https://github.com/containerd/containerd/blob/v2.0.5/pkg/archive/compression/compression.go
 reason = """\
-    Contains pigz and unpigz for gzip compression and decompression. \
-    Keep for containerd's optional unpigz -d -c decompression path when \
-    unpigz is available and enabled and igzip is not selected. \
-    Containerd retains a built-in gzip fallback."""
+    Contains pigz and unpigz for gzip compression and decompression. Keep for containerd's optional unpigz -d -c \
+    decompression path when unpigz is available and enabled and igzip is not selected. Containerd retains a built-in \
+    gzip fallback."""
 
 ["polkit"]
 keep = false
@@ -968,10 +857,8 @@ keep = false
 reason = """\
     The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/d93eab8bb13e571da5139054906f71b3fb65f14b/build_library/rpm/package_catalog.yaml) \
-    explicitly selects polkit under sys-apps/systemd. \
-    Contains polkitd, pkexec, authorization tools and libraries, and \
-    D-Bus policies. No required ACL/AKS PolicyKit delegation \
-    workflow was found; host administration uses sudo."""
+    explicitly selects polkit under sys-apps/systemd. Contains polkitd, pkexec, authorization tools and libraries, and \
+    D-Bus policies. No required ACL/AKS PolicyKit delegation workflow was found; host administration uses sudo."""
 
 ["protobuf"]
 keep = false
@@ -981,49 +868,39 @@ keep = false
 # The grpc package is a known consumer, absent from the base inventory.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/grpc/grpc.spec
 reason = """\
-    Contains protoc and versioned Protobuf runtime/compiler libraries. \
-    The inherited \
+    Contains protoc and versioned Protobuf runtime/compiler libraries. The inherited \
     [Update Engine recipe](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/update_engine/update_engine-0.4.10-r25.ebuild) \
-    lists dev-libs/protobuf in RDEPEND; ACL skips Update Engine itself. \
-    No retained base-image consumer was found. The grpc package is a known \
-    consumer. A required production-base caller remains unverified. \
-    Sysext-only consumers need protobuf in the rebuilt sysext."""
+    lists dev-libs/protobuf in RDEPEND; ACL skips Update Engine itself. No retained base-image consumer was found. The \
+    grpc package is a known consumer. A required production-base caller remains unverified. Sysext-only consumers need \
+    protobuf in the rebuilt sysext."""
 
 ["quota"]
 keep = false
 reason = """\
-    Contains quota-management commands such as quota and setquota. \
-    The inherited \
+    Contains quota-management commands such as quota and setquota. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes sys-fs/quota. \
-    The reviewed kubelet project-quota path uses xfs_quota and lsattr; \
-    no required caller of these commands was found."""
+    directly includes sys-fs/quota. The reviewed kubelet project-quota path uses xfs_quota and lsattr; no required \
+    caller of these commands was found."""
 
 ["quota-nls"]
 keep = false
 reason = """\
-    Contains quota translation catalogs. \
-    Quota enforcement does not need them."""
+    Contains quota translation catalogs. Quota enforcement does not need them."""
 
 ["rpcsvc-proto"]
 keep = false
 reason = """\
-    Contains rpcgen and RPC interface definitions. \
-    The inherited \
-    [Samba recipe](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/portage-stable/net-fs/samba/samba-4.22.3.ebuild) \
-    lists net-libs/rpcsvc-proto in its build DEPEND; ACL skips Samba \
-    itself. \
-    These are build inputs; ordinary NFS mounts use nfs-utils and do not \
-    need them."""
+    Contains rpcgen and RPC interface definitions. The inherited \
+    [Samba recipe](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/portage-stable/net-fs/samba/samba/samba-4.22.3.ebuild) \
+    lists net-libs/rpcsvc-proto in its build DEPEND; ACL skips Samba itself. These are build inputs; ordinary NFS \
+    mounts use nfs-utils and do not need them."""
 
 ["rsync"]
 keep = false
 reason = """\
-    Contains rsync for file synchronization. \
-    The inherited \
+    Contains rsync for file synchronization. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes net-misc/rsync. \
-    No required AKS provisioning or runtime caller was found."""
+    directly includes net-misc/rsync. No required AKS provisioning or runtime caller was found."""
 
 ["rsyslog"]
 keep = true
@@ -1035,31 +912,25 @@ keep = true
 # imjournal reads journald independently of ForwardToSyslog=no and writes host log files.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/rsyslog/rsyslog.conf
 reason = """\
-    Contains rsyslogd, logging modules, and host logging configuration. \
-    Keep the distro-enabled journal-to-file path that writes \
-    /var/log/messages and /var/log/secure. Its imjournal input still works \
-    with ForwardToSyslog=no; journald alone does not produce \
-    these text files."""
+    Contains rsyslogd, logging modules, and host logging configuration. Keep the distro-enabled journal-to-file path \
+    that writes /var/log/messages and /var/log/secure. Its imjournal input still works with ForwardToSyslog=no; \
+    journald alone does not produce these text files."""
 
 ["socat"]
 keep = false
 reason = """\
-    Contains socat for relaying between sockets and streams. \
-    The inherited \
+    Contains socat for relaying between sockets and streams. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes net-misc/socat. \
-    The reviewed containerd port-forwarding code uses Go networking \
-    directly. No required host invocation was found."""
+    directly includes net-misc/socat. The reviewed containerd port-forwarding code uses Go networking directly. No \
+    required host invocation was found."""
 
 ["strace"]
 keep = false
 reason = """\
-    Contains strace for tracing system calls. \
-    The inherited \
+    Contains strace for tracing system calls. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes dev-debug/strace. \
-    It is needed for on-demand troubleshooting; ACL's testing extension \
-    already includes it."""
+    directly includes dev-debug/strace. It is needed for on-demand troubleshooting; ACL's testing extension already \
+    includes it."""
 
 ["systemd-boot"]
 keep = true
@@ -1073,8 +944,8 @@ keep = true
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/common.sh
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/build_image_util.sh
 reason = """\
-    Contains the systemd EFI bootloader and UKI stub. \
-    ACL's UKI assembly consumes both to deploy its EFI/UKI boot chain."""
+    Contains the systemd EFI bootloader and UKI stub. ACL's UKI assembly consumes both to deploy its EFI/UKI boot \
+    chain."""
 
 ["systemd-container"]
 keep = false
@@ -1087,23 +958,18 @@ keep = false
 reason = """\
     The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/d93eab8bb13e571da5139054906f71b3fb65f14b/build_library/rpm/package_catalog.yaml) \
-    explicitly selects systemd-container under sys-apps/systemd. \
-    Contains systemd-nspawn, systemd-vmspawn, machinectl, and machine \
-    management and image-import services. ACL's RPM-mode workload runtime \
-    is containerd. No required production-base caller of these \
-    separate tools was found."""
+    explicitly selects systemd-container under sys-apps/systemd. Contains systemd-nspawn, systemd-vmspawn, machinectl, \
+    and machine management and image-import services. ACL's RPM-mode workload runtime is containerd. No required \
+    production-base caller of these separate tools was found."""
 
 ["systemd-journal-remote"]
 keep = true
 reason = """\
-    Contains remote-journal receiving, gateway, and upload services. \
-    The \
+    Contains remote-journal receiving, gateway, and upload services. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
-    explicitly selects systemd-journal-remote under sys-apps/systemd. \
-    Keep conservatively to preserve ACL's existing remote-journal \
-    capabilities pending an explicit compatibility decision. Local \
-    journald and AKS log collection do not replace these interfaces. \
-    Keeping the package doesn't require enabling the services by default."""
+    explicitly selects systemd-journal-remote under sys-apps/systemd. Keep conservatively to preserve ACL's existing \
+    remote-journal capabilities pending an explicit compatibility decision. Local journald and AKS log collection do \
+    not replace these interfaces. Keeping the package doesn't require enabling the services by default."""
 
 ["tar"]
 keep = true
@@ -1116,18 +982,15 @@ keep = true
 # If that fails, it can download binary archives and extract them with tar.
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/cse_install.sh
 reason = """\
-    Contains GNU tar. \
-    AKS provisioning uses it to validate and extract cached or downloaded \
-    artifacts, including ACL's download fallback paths."""
+    Contains GNU tar. AKS provisioning uses it to validate and extract cached or downloaded artifacts, including ACL's \
+    download fallback paths."""
 
 ["tcpdump"]
 keep = false
 reason = """\
-    Contains the tcpdump packet-capture command. \
-    The inherited \
+    Contains the tcpdump packet-capture command. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes net-analyzer/tcpdump. \
-    No required provisioning or runtime caller was found."""
+    directly includes net-analyzer/tcpdump. No required provisioning or runtime caller was found."""
 
 ["tpm2-tools"]
 keep = true
@@ -1138,18 +1001,15 @@ keep = true
 # ACL removes Clevis-related wrappers but preserves tpm2.
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/dracut_install.sh
 reason = """\
-    Contains tpm2 and TPM2 administration commands. \
-    ACL's Ignition module creates an initramfs launch script that runs \
+    Contains tpm2 and TPM2 administration commands. ACL's Ignition module creates an initramfs launch script that runs \
     /sysusr/usr/bin/tpm2."""
 
 ["traceroute"]
 keep = false
 reason = """\
-    Contains traceroute for network-path probing. \
-    The inherited \
+    Contains traceroute for network-path probing. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes net-analyzer/traceroute. \
-    No required provisioning or runtime invocation was found."""
+    directly includes net-analyzer/traceroute. No required provisioning or runtime invocation was found."""
 
 ["trident-acl"]
 keep = true
@@ -1161,10 +1021,9 @@ keep = true
 # Activation scope: catalog selects trident-acl for UKI images and filters it from GRUB.
 # https://github.com/microsoft/azure-container-linux/blob/d93eab8bb13e571da5139054906f71b3fb65f14b/build_library/rpm/package_catalog.sh
 reason = """\
-    Contains trident-acl-agent and its systemd service. Keep for \
-    UKI-ACL host servicing: the agent watches Kubernetes update-request \
-    annotations and drives Trident staging, finalization, rollback, and \
-    commit. GRUB images exclude this package through the catalog."""
+    Contains trident-acl-agent and its systemd service. Keep for UKI-ACL host servicing: the agent watches Kubernetes \
+    update-request annotations and drives Trident staging, finalization, rollback, and commit. GRUB images exclude \
+    this package through the catalog."""
 
 ["tzdata"]
 keep = true
@@ -1179,10 +1038,9 @@ keep = true
 # https://github.com/python/cpython/blob/v3.12.15/Lib/zoneinfo/_tzpath.py
 # https://github.com/python/cpython/blob/v3.12.15/Lib/zoneinfo/_common.py
 reason = """\
-    Contains timezone and daylight-saving data and the default UTC \
-    localtime symlink. Keep to preserve configured host timezone data and \
-    named-zone support in the systemd package. This is a conservative \
-    capability decision. A required non-UTC host caller remains unverified."""
+    Contains timezone and daylight-saving data and the default UTC localtime symlink. Keep to preserve configured host \
+    timezone data and named-zone support in the systemd package. This is a conservative capability decision. A \
+    required non-UTC host caller remains unverified."""
 
 ["unzip"]
 keep = false
@@ -1193,12 +1051,10 @@ keep = false
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/cse_install.sh
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/cse_helpers.sh
 reason = """\
-    Contains unzip, funzip, unzipsfx, zipgrep, and zipinfo. \
-    The inherited \
+    Contains unzip, funzip, unzipsfx, zipgrep, and zipinfo. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes app-arch/unzip. \
-    The reviewed Azure CNI provisioning code extracts tar archives. \
-    No activated ZIP-extraction caller was found."""
+    directly includes app-arch/unzip. The reviewed Azure CNI provisioning code extracts tar archives. No activated \
+    ZIP-extraction caller was found."""
 
 ["update-ssh-keys"]
 keep = true
@@ -1210,30 +1066,24 @@ keep = true
 # Guarded post-Ignition service runs update-ssh-keys -u per user.
 # https://github.com/flatcar/init/blob/8bd8a82fb22bc46ea2cf7da94d58655e102ca26d/systemd/system/update-ssh-keys-after-ignition.service
 reason = """\
-    Contains update-ssh-keys for managing authorized public keys. \
-    ACL's enabled post-Ignition service invokes it for users with an \
-    authorized_keys.d directory when provisioning-result conditions \
-    match."""
+    Contains update-ssh-keys for managing authorized public keys. ACL's enabled post-Ignition service invokes it for \
+    users with an authorized_keys.d directory when provisioning-result conditions match."""
 
 ["usbutils"]
 keep = false
 reason = """\
-    Contains lsusb and USB inspection commands. \
-    The inherited \
+    Contains lsusb and USB inspection commands. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes sys-apps/usbutils. \
-    No required AKS host caller was found."""
+    directly includes sys-apps/usbutils. No required AKS host caller was found."""
 
 ["util-linux-devel"]
 keep = false
 reason = """\
     The \
     [util-linux recipe](https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/util-linux/util-linux.spec) \
-    packages these development files separately from util-linux and \
-    util-linux-libs; the original installing parent is unverified. \
-    Contains util-linux headers, development metadata, and programming \
-    manuals. \
-    These are needed for compilation only."""
+    packages these development files separately from util-linux and util-linux-libs; the original installing parent is \
+    unverified. Contains util-linux headers, development metadata, and programming manuals. These are needed for \
+    compilation only."""
 
 ["veritysetup"]
 keep = true
@@ -1244,28 +1094,23 @@ keep = true
 # Normal systemd activation uses library APIs. It doesn't use this standalone command.
 # https://github.com/systemd/systemd/blob/v255/src/veritysetup/veritysetup.c
 reason = """\
-    Contains the standalone veritysetup dm-verity command. \
-    Keep provisionally because ACL's current initramfs recipe explicitly \
-    includes it. Normal systemd verity activation uses library APIs; \
-    A runtime caller of this separate CLI remains unestablished."""
+    Contains the standalone veritysetup dm-verity command. Keep provisionally because ACL's current initramfs recipe \
+    explicitly includes it. Normal systemd verity activation uses library APIs; A runtime caller of this separate CLI \
+    remains unestablished."""
 
 ["vim"]
 keep = false
 reason = """\
-    Contains Vim and editor runtime files. \
-    The inherited \
+    Contains Vim and editor runtime files. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes app-editors/vim. \
-    No required provisioning or node-runtime caller was found."""
+    directly includes app-editors/vim. No required provisioning or node-runtime caller was found."""
 
 ["wget"]
 keep = false
 reason = """\
-    Contains the wget download command. \
-    The inherited \
+    Contains the wget download command. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes net-misc/wget. \
-    The reviewed ACL download paths use curl and ORAS."""
+    directly includes net-misc/wget. The reviewed ACL download paths use curl and ORAS."""
 
 ["wget-libs"]
 keep = false
@@ -1276,8 +1121,7 @@ keep = false
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/acl/sysexts.yaml
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_sysext
 reason = """\
-    Contains libwget.so.2. \
-    Supply wget and wget-libs in the rebuilt lisa-testing sysext."""
+    Contains libwget.so.2. Supply wget and wget-libs in the rebuilt lisa-testing sysext."""
 
 ["which"]
 keep = true
@@ -1287,11 +1131,10 @@ keep = true
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/cse_main.sh
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/acl/cse_install_acl.sh
 reason = """\
-    Contains which for locating executables on PATH. \
-    Shared GPU provisioning calls which nvidia-smi in validateGPUDrivers \
-    when ensureGPUDrivers selects validation. ACL's installation stubs \
-    do not replace this function. Keep for that supported host provisioning \
-    path until the caller uses command -v or supplies another replacement."""
+    Contains which for locating executables on PATH. Shared GPU provisioning calls which nvidia-smi in \
+    validateGPUDrivers when ensureGPUDrivers selects validation. ACL's installation stubs do not replace this \
+    function. Keep for that supported host provisioning path until the caller uses command -v or supplies another \
+    replacement."""
 
 ["wireguard-tools"]
 keep = true
@@ -1302,14 +1145,11 @@ keep = true
 # Networkd's native implementation does not supply the wg-quick interface.
 # https://github.com/systemd/systemd-stable/blob/v255/src/network/netdev/wireguard.c
 reason = """\
-    Contains wg, wg-quick, service templates, and module-load settings. \
-    The inherited \
+    Contains wg, wg-quick, service templates, and module-load settings. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes net-vpn/wireguard-tools. \
-    Keep conservatively to preserve ACL's existing wg and wg-quick \
-    interfaces, including units enabled through Ignition provisioning. \
-    Networkd's native WireGuard implementation does not replace these \
-    interfaces. A default AKS invocation remains unverified."""
+    directly includes net-vpn/wireguard-tools. Keep conservatively to preserve ACL's existing wg and wg-quick \
+    interfaces, including units enabled through Ignition provisioning. Networkd's native WireGuard implementation does \
+    not replace these interfaces. A default AKS invocation remains unverified."""
 
 ["xfsprogs"]
 keep = true
@@ -1327,11 +1167,9 @@ keep = true
 # https://github.com/kubernetes/kubernetes/blob/93248f9ae092f571eb870b7664c534bfc7d00f03/pkg/volume/util/fsquota/quota_linux.go
 # https://github.com/kubernetes/kubernetes/blob/93248f9ae092f571eb870b7664c534bfc7d00f03/pkg/volume/util/fsquota/common/quota_common_linux_impl.go
 reason = """\
-    Contains xfs_db, xfs_repair, and xfs_quota. \
-    ACL builds Ignition wrappers for xfs_db and xfs_repair that execute \
-    real-root binaries when invoked. Actual Ignition callers remain \
-    unverified. Kubelet project-quota monitoring uses host xfs_quota when \
-    the feature, user namespaces, and filesystem support are enabled."""
+    Contains xfs_db, xfs_repair, and xfs_quota. ACL builds Ignition wrappers for xfs_db and xfs_repair that execute \
+    real-root binaries when invoked. Actual Ignition callers remain unverified. Kubelet project-quota monitoring uses \
+    host xfs_quota when the feature, user namespaces, and filesystem support are enabled."""
 
 ["zip"]
 keep = true
@@ -1343,20 +1181,16 @@ keep = true
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/aks-log-collector.service
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/aks-log-collector.timer
 reason = """\
-    Contains the zip command. \
-    Enabled runs of the automatic AKS log collector require it to create \
-    support bundles and exit with code 255 if it is missing."""
+    Contains the zip command. Enabled runs of the automatic AKS log collector require it to create support bundles and \
+    exit with code 255 if it is missing."""
 
 ["zlib-devel"]
 keep = false
 reason = """\
     The \
     [pcre2 recipe](https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/pcre2/pcre2.spec) \
-    declares zlib-devel as a build dependency; the original base-image \
-    installing parent is unverified. \
-    Contains zlib headers, libz.a, the development linker symlink, and \
-    build metadata. \
-    These are required for compilation only."""
+    declares zlib-devel as a build dependency; the original base-image installing parent is unverified. Contains zlib \
+    headers, libz.a, the development linker symlink, and build metadata. These are required for compilation only."""
 
 ["zstd"]
 keep = true
@@ -1371,9 +1205,8 @@ keep = true
 # dracut executes zstd -15 -q -T0 and can fall back if the compressor is absent.
 # https://github.com/dracut-ng/dracut-ng/blob/102/dracut.sh
 reason = """\
-    Contains zstd and compression/decompression helpers. Keep to preserve \
-    ACL's configured Zstandard compression when optional kdump rebuilds \
-    its capture initramfs on the host."""
+    Contains zstd and compression/decompression helpers. Keep to preserve ACL's configured Zstandard compression when \
+    optional kdump rebuilds its capture initramfs on the host."""
 
 # Frozen minimal-os baseline: Azure Linux 3.0, snapshot date 2026-09-23.
 # Original immutable image reference:
