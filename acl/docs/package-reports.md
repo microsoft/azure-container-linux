@@ -79,9 +79,9 @@ All pipelines that build RPM base images expose `packageOperation` at queue time
 
 | `packageOperation` / `PACKAGE_OPERATION` | Behavior |
 | --- | --- |
-| `report-and-remove` | Default. Run dependency checks and cycle validation, generate reports, then erase selected packages. |
-| `report-only` | Run dependency checks and cycle validation and generate reports, but skip selected-package removal. |
-| `disabled` | Skip dependency checks, cycle validation, reporting, and selected-package removal. |
+| `report-and-remove` | Default. Run dependency checks, generate reports, then erase selected packages. |
+| `report-only` | Run dependency checks and generate reports, but skip selected-package removal. |
+| `disabled` | Skip dependency checks, reporting, and selected-package removal. |
 
 The default is `report-and-remove`. An unset or empty environment value also selects that default.
 

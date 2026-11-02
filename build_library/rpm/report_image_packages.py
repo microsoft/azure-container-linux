@@ -27,7 +27,6 @@ from collections import deque
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
-from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
@@ -641,6 +640,7 @@ def extract_image_database(image: Path, work: Path) -> Path:
     destination = work / "acl-t-rpmdb.sqlite"
     mount = work / "acl-t-mount"
     mount.mkdir(exist_ok=True)
+    mount = mount.resolve(strict=True)
 
     copied = work / "acl-t-rpmdb-source"
     copied.mkdir(exist_ok=True)
@@ -692,28 +692,43 @@ def extract_image_database(image: Path, work: Path) -> Path:
                 candidate_database_paths: list[Path] = []
 
                 for relative in database_paths:
-                    candidate = mount / relative
-                    if not candidate.is_file():
+                    try:
+                        candidate = image_path(mount, relative)
+                    except FileNotFoundError:
                         continue
 
-                    if not candidate.resolve().is_relative_to(mount.resolve()):
+                    if not stat.S_ISREG(candidate.lstat().st_mode):
                         continue
 
                     candidate_database_paths.append(candidate)
 
-                unique_database_paths = {path.resolve() for path in candidate_database_paths}
+                unique_database_paths = set(candidate_database_paths)
                 if len(unique_database_paths) > 1:
                     raise InventoryError("Multiple RPM databases on image root partition")
 
                 if unique_database_paths:
                     source = unique_database_paths.pop()
+                    sources_by_suffix: dict[str, Path] = {}
 
                     for suffix in ("", "-wal"):
-                        original = Path(str(source) + suffix)
-                        if original.exists():
-                            copy = copied / ("rpmdb.sqlite" + suffix)
-                            root_run(["cp", str(original), str(copy)])
-                            root_run(["chown", f"{os.getuid()}:{os.getgid()}", str(copy)])
+                        try:
+                            original = image_path(mount, str(source.relative_to(mount)) + suffix)
+                        except FileNotFoundError:
+                            if suffix == "-wal":
+                                continue
+
+                            raise
+
+                        if not original.is_relative_to(mount) or not stat.S_ISREG(original.lstat().st_mode):
+                            raise InventoryError(f"Image RPM database input must be a contained regular file: {original}")
+
+                        sources_by_suffix[suffix] = original
+
+                    # Every input is resolved and validated before privileged copying.
+                    for suffix, original in sources_by_suffix.items():
+                        copy = copied / ("rpmdb.sqlite" + suffix)
+                        root_run(["cp", str(original), str(copy)])
+                        root_run(["chown", f"{os.getuid()}:{os.getgid()}", str(copy)])
 
                     found += 1
             finally:
@@ -1329,27 +1344,19 @@ def write_inventory(
         temporary.unlink(missing_ok=True)
 
 
-def validate_no_dependency_cycles(dependents_by_nvra: dict[str, set[str]]) -> None:
-    """Reject cycles in the complete inventory before removal-policy filtering."""
-    try:
-        TopologicalSorter(dependents_by_nvra).prepare()
-    except CycleError as error:
-        cycle_nvras = cast(list[str], error.args[1])
-        # The sorter takes predecessors, so reverse its path to follow dependents.
-        raise InventoryError("Dependency cycle detected: " + " -> ".join(reversed(cycle_nvras))) from error
-
-
 def report_dependents(
     packages: list[Package],
     dependents_by_nvra: dict[str, set[str]],
     explicit_keep_decisions_by_pkgname: dict[str, bool],
 ) -> dict[str, set[str]]:
-    """Filter removal plans and reject removals with remaining dependents."""
+    """Policy removals are rejected when solver plans include retained packages."""
     excluded_nvras = {package.nvra for package in packages
                 if explicit_keep_decisions_by_pkgname.get(package.name) is False}
     remaining_dependents_by_nvra = {package.nvra: dependents_by_nvra[package.nvra] - excluded_nvras - {package.nvra}
                   for package in packages}
 
+    # Solver removal plans include transitive dependents and mutually dependent RPMs.
+    # Removal requires every affected dependent to be explicitly selected too.
     conflict_messages: list[str] = []
 
     for package in packages:
@@ -1753,8 +1760,6 @@ def main(argv: list[str] | None = None) -> None:
                     "packages": len(packages),
                     "cached": cached is not None,
                 }
-
-            validate_no_dependency_cycles(dependents_by_nvra)
 
             explicit_keep_decisions_by_pkgname = dict.fromkeys(do_not_keep_pkgnames, False)
             explicit_keep_decisions_by_pkgname.update(dict.fromkeys(keep_pkgnames, True))
