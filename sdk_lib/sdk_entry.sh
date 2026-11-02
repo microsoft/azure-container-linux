@@ -171,6 +171,16 @@ echo "export ACL_IPE_SIGNING_MODE='${ACL_IPE_SIGNING_MODE}'" >> /home/sdk/.bashr
 echo "export ACL_IPE_CAPABLE='${ACL_IPE_CAPABLE}'" >> /home/sdk/.bashrc
 echo "export ACL_ROOT_HASH_SIGNING_ENABLED='${ACL_ROOT_HASH_SIGNING_ENABLED}'" >> /home/sdk/.bashrc
 
+case "${ACL_SMBIOS_PROFILE_SELECTOR:-false}" in
+    true|false) ;;
+    *)
+        echo "ERROR: ACL_SMBIOS_PROFILE_SELECTOR must be true or false" >&2
+        exit 1
+        ;;
+esac
+sed -i '/^export ACL_SMBIOS_PROFILE_SELECTOR=/d' /home/sdk/.bashrc || exit 1
+printf "export ACL_SMBIOS_PROFILE_SELECTOR='%s'\n" "${ACL_SMBIOS_PROFILE_SELECTOR:-false}" >> /home/sdk/.bashrc || exit 1
+
 if [ $# -gt 0 ] ; then
     cmd="/home/sdk/.cmd"
     echo -n "exec bash -l -i -c '" >"$cmd"

@@ -10,7 +10,7 @@ Summary:        Declarative, security-first OS lifecycle agent designed primaril
 Name:           trident
 # Use hard-coded versions for distro build
 Version:        0.30.0
-Release:        1%{?dist}
+Release:        2%{?dist}
 License:        MIT
 Vendor:         Microsoft Corporation
 Group:          Applications/System
@@ -29,6 +29,7 @@ Source0:        https://github.com/microsoft/trident/archive/refs/tags/v%{versio
 #   tar -czf %%{name}-%%{version}-cargo.tar.gz vendor/
 #
 Source1:        %{name}-%{version}-cargo.tar.gz
+Patch0:         0001-preserve-efi-boot-resources.patch
 %endif
 
 BuildRequires:  openssl-devel

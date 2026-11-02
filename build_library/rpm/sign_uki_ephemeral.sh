@@ -127,7 +127,12 @@ done < <(
     # name). Match grub*.efi explicitly and skip BOOT<ARCH>.EFI (shim itself).
     find \
         "${ESP_DIR}/EFI/BOOT" \
-        -maxdepth 1 -type f -iname 'grub*.efi' -print0 2>/dev/null
+        -maxdepth 1 -type f \
+        \( -iname 'grub*.efi' -o -iname '3rd*.efi' -o -name 'smbios-profile-selector.efi' \) \
+        -print0 2>/dev/null
+    if [[ -f "${ESP_DIR}/EFI/BOOT/profiles/nvidia-grace.addon.efi" ]]; then
+        printf '%s\0' "${ESP_DIR}/EFI/BOOT/profiles/nvidia-grace.addon.efi"
+    fi
 )
 
 if [[ ${#efi_files[@]} -eq 0 ]]; then

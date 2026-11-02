@@ -335,6 +335,10 @@ OSREL
     _uki_build_kdump_addon "${ESP_DIR}"
     _uki_build_debug_addon "${ESP_DIR}" "${uki_name}"
 
+    if [[ "${ACL_SMBIOS_PROFILE_SELECTOR:-false}" == "true" ]]; then
+        _uki_install_smbios_selector "${ESP_DIR}" "${efi_stub}" "${sd_boot_efi}"
+    fi
+
     # Build A/B verity slot addons — slot A is active by default
     if [[ ${FLAGS_verity} -eq ${FLAGS_TRUE} ]]; then
         _uki_build_verity_addons "${ESP_DIR}" "${uki_name}"
@@ -342,6 +346,26 @@ OSREL
 
     # Clean up
     sudo rm -rf "${uki_temp_dir}"
+}
+
+_uki_install_smbios_selector() {
+    local esp_dir="$1" efi_stub="$2" systemd_boot="$3"
+    local selector_dir="${SCRIPT_ROOT}/acl/smbios-profile-selector"
+    local binaries="${selector_dir}/target/boot"
+    [[ "${EFI_ARCH}" == "aa64" ]] || die "SMBIOS profile selection requires ARM64"
+    for name in smbios-profile-selector.efi efitreeloader.efi; do
+        [[ -s "${binaries}/${name}" ]] || die "Missing selector build output: ${binaries}/${name}"
+    done
+
+    sudo mkdir -p "${esp_dir}/EFI/BOOT/profiles" "${esp_dir}/loader/addons"
+    sudo cp "${systemd_boot}" "${esp_dir}/EFI/BOOT/3rdaa64.efi"
+    sudo cp "${binaries}/efitreeloader.efi" "${esp_dir}/EFI/BOOT/grubaa64.efi"
+    sudo cp "${binaries}/smbios-profile-selector.efi" "${esp_dir}/EFI/BOOT/"
+    sudo ukify build \
+        --cmdline=@"${selector_dir}/boot/nvidia-grace-kernel-parameters.txt" \
+        --stub="${efi_stub}" \
+        --output="${esp_dir}/EFI/BOOT/profiles/nvidia-grace.addon.efi"
+    info "UKI/RPM: Installed SMBIOS selector; NVIDIA Grace addon remains inactive"
 }
 
 # Build a self-removing firstboot addon that triggers Ignition on first boot.

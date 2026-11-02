@@ -18,7 +18,6 @@ assert_inside_chroot
 assert_not_root_user
 
 . "${BUILD_LIBRARY_DIR}/toolchain_util.sh" || exit 1
-. "${BUILD_LIBRARY_DIR}/build_image_util.sh" || exit 1
 . "${BUILD_LIBRARY_DIR}/vm_image_util.sh" || exit 1
 . "${BUILD_LIBRARY_DIR}/cros_vm_constants.sh" || exit 1
 # shellcheck disable=SC1091 # BUILD_LIBRARY_DIR is initialized by common.sh.
@@ -88,6 +87,7 @@ fi
 
 # Loaded late because board_options depends on setup_board
 . "${BUILD_LIBRARY_DIR}/board_options.sh" || exit 1
+. "${BUILD_LIBRARY_DIR}/build_image_util.sh" || exit 1
 
 # Override image name if provided via flag
 if [[ -n "${FLAGS_image_name}" ]]; then

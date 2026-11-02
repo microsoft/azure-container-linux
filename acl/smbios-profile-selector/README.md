@@ -17,6 +17,7 @@ so its UEFI workspace settings apply.
 
 ```sh
 cargo test --locked --lib
+bash tests/image.sh
 cargo build --locked --release --target aarch64-unknown-uefi
 cargo build --locked --release --target x86_64-unknown-uefi
 ```
@@ -34,6 +35,25 @@ Source layout:
 - [smbios.rs](src/smbios.rs): reads and parses SMBIOS processor information.
 - [uki.rs](src/uki.rs): selects the boot profile and manages its signed addon.
 - [tests.rs](src/tests.rs): native unit tests.
+
+To build an ARM64 validation image, prepare the SDK as described in the
+[image build guide](../docs/BUILD_RPM_IMAGE_README.md), install the pinned Rust
+toolchain, and run from the repository root:
+
+```sh
+ACL_SMBIOS_PROFILE_SELECTOR=true BOOTLOADER_MODE=uki \
+  EFITREELOADER_DIR=/path/to/efitreeloader \
+  ./acl/build_rpm_image.sh --build-rpms --build-image --build-vm-image \
+    --board=arm64-usr --vm-type=azure
+```
+
+This opt-in selects `kernel-hwe` and builds the selector and configured
+efitreeloader from source. The dependency checkout is not modified. Normal
+builds remain unchanged when the option is off.
+
+Validation images use ephemeral signing keys, not production trust. Existing
+installations need the Trident boot-resource update before adopting this boot
+chain.
 
 ## Boot integration
 
