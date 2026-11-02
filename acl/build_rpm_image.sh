@@ -851,12 +851,6 @@ parse_args() {
             "${SCRIPT_DIR}/__build__/images/images/${BOARD}/latest" ||
             exit 1
     fi
-    if operation_uses_gallery_image &&
-        [[ "${START_VM}" == "true" || "${RUN_KOLA_TESTS}" == "true" ]] &&
-        [[ "${IPE_MODE_OVERRIDE_SET}" == "false" ]]; then
-        warn "ACL_IPE_MODE is not set for gallery image validation; defaulting to disabled"
-    fi
-
     configure_ipe_mode || exit 1
 
     # Normalize group name
@@ -1124,7 +1118,7 @@ build_image() {
     info "  Output:          ${OUTPUT_ROOT}"
     info "  Staging Dir:     ${STAGING_DIR}"
     info "  Force Rebuild:   ${FORCE_REBUILD}"
-    info "  IPE Mode:        ${ACL_IPE_MODE} (signing: ${ACL_IPE_SIGNING_MODE})"
+    info "  IPE build configuration: ${ACL_IPE_MODE} (signing: ${ACL_IPE_SIGNING_MODE})"
     echo
 
     # Count RPMs
@@ -1513,13 +1507,33 @@ run_with_retry() {
     fi
 }
 
+print_ipe_context() {
+    if [[ "${BUILD_IMAGE}" == true || "${BUILD_VM_IMAGE}" == true ||
+          "${BUILD_TEST_IMAGE}" == true ]] ||
+        { [[ "${REUSE_VM}" != true ]] && ! operation_uses_gallery_image; }; then
+        info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"
+        info "IPE build configuration: ${ACL_IPE_MODE} (signing: ${ACL_IPE_SIGNING_MODE})"
+    fi
+
+    if [[ "${REUSE_VM}" == true ]]; then
+        info "Validating an existing VM"
+    elif operation_uses_gallery_image; then
+        info "Validating an existing gallery image"
+    else
+        return 0
+    fi
+    if [[ "${IPE_MODE_OVERRIDE_SET}" == true ]]; then
+        info "Requested IPE setting: ${ACL_IPE_MODE} (not observed guest state)"
+    fi
+    info "IPE runtime mode: not queried by the builder"
+}
+
 # Main entry point
 main() {
     parse_args "$@"
 
     section "Azure Container Linux Image Builder"
-    info "Building ${BOARD} ${GROUP} image using Azure Linux RPMs"
-    info "IPE mode: ${ACL_IPE_MODE} (signing: ${ACL_IPE_SIGNING_MODE})"
+    print_ipe_context
 
     check_prerequisites
     print_summary
