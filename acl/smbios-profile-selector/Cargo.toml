@@ -1,0 +1,25 @@
+[package]
+name = "smbios-profile-selector"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+autotests = false
+
+[lib]
+path = "lib/lib.rs"
+
+[dependencies]
+uefi = { version = "0.41.0", features = ["alloc"] }
+
+[target.'cfg(target_os = "uefi")'.dependencies]
+uefi = { version = "0.41.0", features = ["global_allocator", "panic_handler"] }
+
+[[bin]]
+name = "smbios-profile-selector"
+path = "src/main.rs"
+test = false
+bench = false
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
