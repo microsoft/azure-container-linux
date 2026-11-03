@@ -27,13 +27,14 @@ from collections import deque
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
 TOOLS_IMAGE = "mcr.microsoft.com/azurelinux/base/core:3.0"
 OCI_ARCHES_BY_NATIVE_ARCH = {"x86_64": "amd64", "aarch64": "arm64"}
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
-CSV_HEADER = ("NVRA", "Size (MiB)", "Keep", "Reason", "Dependants Count", "Top-level Dependents")
+CSV_HEADER = ("NVRA", "Size (MiB)", "Decision", "Reason", "Dependants Count", "Top-level Dependents")
 RPM_FORMAT = "%{NAME}\\t%{VERSION}\\t%{RELEASE}\\t%{ARCH}\\t%{SIZE}\\n"
 MAX_DB_BYTES = 256 * 1024 * 1024
 MAX_IMAGE_BYTES = 128 * 1024 ** 3
@@ -42,6 +43,12 @@ MAX_OS_RELEASE_BYTES = 64 * 1024
 
 class InventoryError(ValueError):
     """An input or external tool cannot support this inventory."""
+
+
+class Decision(StrEnum):
+    KEEP = "keep"
+    REMOVE_TOP_LEVEL = "remove-top-level"
+    REMOVE_DEPENDENCY = "remove-dependency"
 
 
 def run(
@@ -1311,6 +1318,7 @@ def read_inventory(
 
                 dependent_nvras.add(value)
 
+            dependent_nvras.discard(nvra)
             dependents_by_nvra[nvra] = dependent_nvras
 
         return packages, dependents_by_nvra
@@ -1326,7 +1334,7 @@ def write_inventory(
     *,
     cache_key: dict[str, object] | None = None,
 ) -> None:
-    """Persist collected data before report-only Keep rules and filtering."""
+    """Persist collected data before report-only decision rules and filtering."""
     data: dict[str, object] = {
         "packages": [{"nvra": package.nvra, **asdict(package)} for package in packages],
         "dependents": {nvra: sorted(dependent_nvras) for nvra, dependent_nvras in dependents_by_nvra.items()},
@@ -1344,59 +1352,140 @@ def write_inventory(
         temporary.unlink(missing_ok=True)
 
 
+def validate_package_presence(
+    decisions_by_pkgname: Mapping[str, Decision],
+    packages: Sequence[Package],
+) -> None:
+    absent_pkgnames = sorted(decisions_by_pkgname.keys() - {package.name for package in packages})
+    if absent_pkgnames:
+        raise InventoryError(
+            f"Decision file entries refer to packages not installed in the image: {', '.join(absent_pkgnames)}"
+        )
+
+
 def report_dependents(
     packages: list[Package],
     dependents_by_nvra: dict[str, set[str]],
-    explicit_keep_decisions_by_pkgname: dict[str, bool],
+    decisions_by_pkgname: dict[str, Decision],
 ) -> dict[str, set[str]]:
-    """Policy removals are rejected when solver plans include retained packages."""
-    excluded_nvras = {package.nvra for package in packages
-                if explicit_keep_decisions_by_pkgname.get(package.name) is False}
-    remaining_dependents_by_nvra = {package.nvra: dependents_by_nvra[package.nvra] - excluded_nvras - {package.nvra}
-                  for package in packages}
-
-    # Solver removal plans include transitive dependents and mutually dependent RPMs.
-    # Removal requires every affected dependent to be explicitly selected too.
+    """Validate the complete installed graph before filtering report counts."""
     conflict_messages: list[str] = []
+    nvras_to_remove = {package.nvra for package in packages
+                       if decisions_by_pkgname.get(package.name, Decision.KEEP) != Decision.KEEP}
 
     for package in packages:
-        if explicit_keep_decisions_by_pkgname.get(package.name) is False and remaining_dependents_by_nvra[package.nvra]:
+        dependent_nvras = dependents_by_nvra[package.nvra]
+        decision = decisions_by_pkgname.get(package.name)
+        if decision == Decision.REMOVE_TOP_LEVEL and dependent_nvras:
             conflict_messages.append(
-            f"Package {package.name!r} ({package.nvra}) is marked for removal "
-                f"but has Dependants Count={len(remaining_dependents_by_nvra[package.nvra])}; "
-                f"Dependents: {', '.join(sorted(remaining_dependents_by_nvra[package.nvra]))}"
+                f"Package {package.name!r} ({package.nvra}) has decision 'remove-top-level' "
+                f"but has Dependants Count={len(dependent_nvras)} in the complete installed graph; "
+                f"Dependents: {', '.join(sorted(dependent_nvras))}"
             )
+        elif decision == Decision.REMOVE_DEPENDENCY and not dependent_nvras:
+            conflict_messages.append(
+                f"Package {package.name!r} ({package.nvra}) has decision 'remove-dependency' "
+                "but has no dependants in the complete installed graph"
+            )
+        elif decision == Decision.REMOVE_DEPENDENCY:
+            blocking_nvras = dependent_nvras - nvras_to_remove
+            if blocking_nvras:
+                conflict_messages.append(
+                    f"Package {package.name!r} ({package.nvra}) has decision 'remove-dependency' "
+                    "but has retained or undecided dependents in the complete installed graph; "
+                    "all packages that depend on it must also be marked for removal; "
+                    f"Dependents: {', '.join(sorted(blocking_nvras))}"
+                )
 
     if conflict_messages:
         raise InventoryError("\n".join(conflict_messages))
 
-    return remaining_dependents_by_nvra
+    return {package.nvra: dependents_by_nvra[package.nvra] - nvras_to_remove
+            for package in packages}
+
+
+def top_level_groups(dependents_by_nvra: Mapping[str, set[str]]) -> list[set[str]]:
+    """Find single packages or cycles with no dependents outside their group."""
+    # Follow edges from each package to its dependents, including indirect ones.
+    # Here A -> B means B depends on A. For A -> B -> C, the walk from A
+    # reaches {A, B, C}, even if C is not listed directly under A.
+    reachable_by_nvra: dict[str, set[str]] = {}
+
+    for nvra in dependents_by_nvra:
+        reachable: set[str] = set()
+
+        # Include the starting package so a leaf can form a one-package group.
+        # If A has no dependents, its reachable set is still {A}.
+        pending = [nvra]
+
+        while pending:
+            current = pending.pop()
+
+            # Visit each package once per walk so cycles cannot loop forever.
+            # A -> B -> A stops after visiting A and B.
+            if current not in reachable:
+                reachable.add(current)
+                pending.extend(dependents_by_nvra[current] - reachable)
+
+        reachable_by_nvra[nvra] = reachable
+
+    groups: list[set[str]] = []
+    ungrouped = set(dependents_by_nvra)
+
+    while ungrouped:
+        # Choose a stable starting point so group order is deterministic.
+        # Disjoint groups {A, B} and {C, D} are processed starting with A, then C.
+        nvra = min(ungrouped)
+
+        reachable = reachable_by_nvra[nvra]
+
+        # A reachable package belongs to the same cycle group if it can also
+        # reach the starting package. Without a cycle, only the start qualifies.
+        # A <-> B forms {A, B}; A -> B alone leaves A in the singleton {A}.
+        group = {
+            dependent for dependent in reachable
+            if nvra in reachable_by_nvra[dependent]
+        }
+
+        # Process each group only once.
+        ungrouped -= group
+
+        # Any reachable package outside the group is an outside dependent.
+        # Keep only leaf packages and cycles with no such outside dependents.
+        # A <-> B with B -> C reaches {A, B, C}, so {A, B} is not top-level.
+        # If C has no dependents, only {C} is returned. Without B -> C,
+        # the closed cycle {A, B} would itself be a top-level group.
+        if reachable == group:
+            groups.append(group)
+
+    return groups
 
 
 def write_csv(
     path: Path,
     packages: list[Package],
     dependents_by_nvra: dict[str, set[str]],
-    effective_keep_decisions_by_pkgname: dict[str, bool],
-    explicit_keep_decisions_by_pkgname: dict[str, bool] | None = None,
-    keep_reasons_by_pkgname: dict[str, str] | None = None,
+    decisions_by_pkgname: dict[str, Decision],
+    reasons_by_pkgname: dict[str, str] | None = None,
     *,
     remaining_dependents_by_nvra: dict[str, set[str]] | None = None,
 ) -> None:
-    reasons_by_pkgname = keep_reasons_by_pkgname or {}
+    reasons_by_pkgname = reasons_by_pkgname or {}
     if remaining_dependents_by_nvra is None:
         remaining_dependents_by_nvra = report_dependents(
             packages,
             dependents_by_nvra,
-            explicit_keep_decisions_by_pkgname or {},
+            decisions_by_pkgname,
         )
 
     sizes_by_nvra = {package.nvra: package.size for package in packages}
     pkgnames_by_nvra = {package.nvra: package.name for package in packages}
-    removed_pkgnames_by_nvra = {package.nvra: package.name for package in packages
-                     if effective_keep_decisions_by_pkgname.get(package.name) is False}
 
-    top_level_nvras = {nvra for nvra, dependent_nvras in remaining_dependents_by_nvra.items() if not dependent_nvras}
+    top_level_nvras = {
+        nvra
+        for group in top_level_groups(remaining_dependents_by_nvra)
+        for nvra in group
+    }
 
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".csv.partial")
@@ -1411,11 +1500,9 @@ def write_csv(
             for package in packages:
                 dependent_nvras = remaining_dependents_by_nvra[package.nvra]
                 top_level_dependent_nvras = sorted(dependent_nvras & top_level_nvras)
-                keep = ""
-                if package.name in effective_keep_decisions_by_pkgname:
-                    keep = "YES" if effective_keep_decisions_by_pkgname[package.name] else "NO"
-
-                reason = reasons_by_pkgname.get(package.name, "") if keep else ""
+                decision = decisions_by_pkgname.get(package.name)
+                decision_text = decision.value if decision is not None else ""
+                reason = reasons_by_pkgname.get(package.name, "") if decision is not None else ""
                 if top_level_dependent_nvras:
                     top_level_dependent_pkgnames = sorted({
                         pkgnames_by_nvra[nvra] for nvra in top_level_dependent_nvras
@@ -1423,21 +1510,10 @@ def write_csv(
                     required_by = "Required by another package: " + ", ".join(top_level_dependent_pkgnames)
                     reason = required_by + (f"; {reason}" if reason else "")
 
-                if keep == "NO":
-                    removed_dependent_pkgnames = sorted({
-                        removed_pkgnames_by_nvra[nvra] for nvra in dependents_by_nvra[package.nvra]
-                        if nvra in removed_pkgnames_by_nvra and removed_pkgnames_by_nvra[nvra] != package.name
-                    })
-                    if removed_dependent_pkgnames:
-                        reason = (f"{reason} " if reason else "") + (
-                            "Dependents also selected for removal: "
-                            + ", ".join(removed_dependent_pkgnames) + "."
-                        )
-
                 row = (
                     package.nvra,
                     f"{package.size / (1024 ** 2):.2f}",
-                    keep,
+                    decision_text,
                     reason,
                     len(dependent_nvras),
                     "\n".join(f"- {nvra}" for nvra in top_level_dependent_nvras),
@@ -1445,7 +1521,7 @@ def write_csv(
                 csv_rows.append(row)
 
             # Sort by Top-level Dependents text, ascending with empty lists first;
-            # then Keep (blank, NO, YES), byte size descending, and NVRA ascending.
+            # then Decision text, byte size descending, and NVRA ascending.
             for row in sorted(csv_rows, key=lambda row: (row[5], row[2], -sizes_by_nvra[row[0]], row[0])):
                 writer.writerow(row)
 
@@ -1508,13 +1584,13 @@ def write_markdown(csv_path: Path, title: str) -> Path:
 def write_removal_list(
     path: Path,
     packages: list[Package],
-    explicit_keep_decisions_by_pkgname: dict[str, bool],
+    decisions_by_pkgname: dict[str, Decision],
 ) -> None:
-    """Write unique installed package names whose final Keep decision is NO."""
+    """Write unique installed names explicitly classified as remove-top-level or remove-dependency."""
     removal_pkgnames: set[str] = set()
 
     for package in packages:
-        if explicit_keep_decisions_by_pkgname.get(package.name) is False:
+        if decisions_by_pkgname.get(package.name, Decision.KEEP) != Decision.KEEP:
             removal_pkgnames.add(package.name)
 
     sorted_removal_pkgnames = sorted(removal_pkgnames)
@@ -1528,20 +1604,30 @@ def write_removal_list(
         temporary.unlink(missing_ok=True)
 
 
-def warn_blank_keep(
+def warn_unclassified(
     packages: Sequence[Package],
-    effective_keep_decisions_by_pkgname: dict[str, bool],
+    decisions_by_pkgname: dict[str, Decision],
     remaining_dependents_by_nvra: dict[str, set[str]],
 ) -> None:
-    """Warn for undecided ACL packages with no remaining dependents."""
-    for package in sorted(packages, key=lambda item: item.nvra):
-        if package.name in effective_keep_decisions_by_pkgname:
+    """Warn for undecided top-level packages, including dependency cycles."""
+    pkgnames_by_nvra = {package.nvra: package.name for package in packages}
+
+    for group in top_level_groups(remaining_dependents_by_nvra):
+        undecided = sorted(
+            nvra for nvra in group
+            if pkgnames_by_nvra[nvra] not in decisions_by_pkgname
+        )
+        if not undecided:
             continue
 
-        if remaining_dependents_by_nvra[package.nvra]:
-            continue
+        if len(group) == 1:
+            message = f"Package {undecided[0]} does not have any remaining dependents but has no decision."
+        else:
+            message = (
+                f"Dependency cycle {', '.join(sorted(group))} has no outside remaining dependents; "
+                f"packages without a decision: {', '.join(undecided)}."
+            )
 
-        message = f"Package {package.nvra} does not have any remaining dependents but has no Keep decision."
         message = message.replace("%", "%AZP25").replace("\r", "%0D").replace("\n", "%0A")
         print(f"##vso[task.logissue type=warning]{message}", flush=True)
 
@@ -1550,43 +1636,63 @@ def format_size(size: int) -> str:
     return f"{size / (1024 ** 2):,.2f} MiB"
 
 
-def load_keep_file(path: Path) -> tuple[set[str], set[str], dict[str, str]]:
-    """Read TOML package selections without collecting or changing inventories."""
+def load_decision_file(path: Path) -> tuple[dict[str, Decision], dict[str, str]]:
+    """Read strict TOML decisions without collecting or changing inventories."""
     data_by_pkgname: dict[Any, Any] = tomllib.loads(path.read_text(encoding="utf-8"))
-    selections_by_pkgname: dict[str, tuple[bool, str]] = {}
+    decisions_by_pkgname: dict[str, Decision] = {}
+    reasons_by_pkgname: dict[str, str] = {}
 
     for name, value in data_by_pkgname.items():
-        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_+][A-Za-z0-9_.+-]*", name.strip()):
-            raise InventoryError("keep file keys must be valid package-name strings")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_+][A-Za-z0-9_.+-]*", name):
+            raise InventoryError("decision file keys must be valid package-name strings")
 
         if not isinstance(value, dict):
-            raise InventoryError(f"keep file entry for {name!r} must be a map with keep and reason keys")
+            raise InventoryError(f"decision file entry for {name!r} must be a map with decision and optional reason keys")
 
         entry = cast(dict[object, object], value)
-        if entry.keys() != {"keep", "reason"}:
-            raise InventoryError(f"keep file entry for {name!r} must have exactly keep and reason keys")
+        if "decision" not in entry or entry.keys() - {"decision", "reason"}:
+            raise InventoryError(f"decision file entry for {name!r} must have decision and only optional reason keys")
 
-        keep, reason = entry["keep"], entry["reason"]
-        if not isinstance(keep, bool):
-            raise InventoryError(f"keep for {name!r} must be true or false")
+        decision, reason = entry["decision"], entry.get("reason", "")
+        if not isinstance(decision, str):
+            raise InventoryError(f"decision for {name!r} must be a string: keep, remove-top-level, or remove-dependency")
+
+        try:
+            parsed_decision = Decision(decision)
+        except ValueError:
+            raise InventoryError(f"decision for {name!r} must be keep, remove-top-level, or remove-dependency") from None
+
+        if parsed_decision == Decision.KEEP and "reason" not in entry:
+            raise InventoryError(f"reason for {name!r} is required for keep")
 
         if not isinstance(reason, str):
             raise InventoryError(f"reason for {name!r} must be a string")
 
-        selections_by_pkgname[name.strip()] = keep, reason
+        decisions_by_pkgname[name] = parsed_decision
+        reasons_by_pkgname[name] = reason
 
-    keep_pkgnames: set[str] = set()
-    do_not_keep_pkgnames: set[str] = set()
-    keep_reasons_by_pkgname: dict[str, str] = {}
+    return decisions_by_pkgname, reasons_by_pkgname
 
-    for name, (keep, reason) in selections_by_pkgname.items():
-        if keep:
-            keep_pkgnames.add(name)
-        else:
-            do_not_keep_pkgnames.add(name)
-        keep_reasons_by_pkgname[name] = reason
 
-    return keep_pkgnames, do_not_keep_pkgnames, keep_reasons_by_pkgname
+def validate_removal(
+    pkgnames_to_remove: Sequence[str],
+    rpm: str,
+    snapshot: Path,
+    tools: Path | None,
+) -> None:
+    """Check the complete removal transaction without erasing any packages."""
+    if pkgnames_to_remove:
+        root = snapshot if tools is None else Path("/") / snapshot.relative_to(tools)
+        rpm_command = [
+            rpm,
+            "--root", str(root),
+            "--dbpath", "/var/lib/rpm",
+        ]
+
+        if tools is not None:
+            rpm_command = ["chroot", str(tools), *rpm_command]
+
+        root_run([*rpm_command, "--test", "-e", *pkgnames_to_remove])
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -1628,7 +1734,8 @@ def main(argv: list[str] | None = None) -> None:
         "--package-decisions-file",
         type=Path,
         metavar="TOML",
-        help="TOML package tables containing explicit keep (bool) and reason (string) decisions",
+           help="TOML package tables with decision (keep, remove-top-level, or remove-dependency) "
+               "and string reason (required for keep, optional for removal decisions)",
     )
 
     args = parser.parse_args(argv)
@@ -1646,13 +1753,12 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("--package-manager is forbidden with a numeric --build-id")
 
     package_manager: str = args.package_manager or "dnf5"
-    keep_pkgnames: set[str] = set()
-    do_not_keep_pkgnames: set[str] = set()
-    keep_reasons_by_pkgname: dict[str, str] = {}
+    decisions_by_pkgname: dict[str, Decision] = {}
+    reasons_by_pkgname: dict[str, str] = {}
 
     if args.package_decisions_file is not None:
         try:
-            keep_pkgnames, do_not_keep_pkgnames, keep_reasons_by_pkgname = load_keep_file(args.package_decisions_file)
+            decisions_by_pkgname, reasons_by_pkgname = load_decision_file(args.package_decisions_file)
         except (InventoryError, OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
             parser.error(f"--package-decisions-file: {error}")
 
@@ -1678,7 +1784,9 @@ def main(argv: list[str] | None = None) -> None:
 
             if root is not None:
                 print(f"Querying current ACL image at {root}...", flush=True)
-                with current_image_snapshot(root, work) as (snapshot, source):
+
+                # The context protects the temporary snapshot and checks the original after querying.
+                with current_image_snapshot(root, work) as (snapshot, snapshot_metadata):
                     packages, dependents_by_nvra, architecture = query_database(
                         tools=None,
                         database=None,
@@ -1688,12 +1796,26 @@ def main(argv: list[str] | None = None) -> None:
                         package_manager=package_manager,
                     )
 
-                source.update({"packages": len(packages), "architecture": architecture})
-                build_id = os.environ.get("BUILD_BUILDID", "")
-                if build_id.isdecimal() and int(build_id) > 0:
-                    source["build_id"] = int(build_id)
+                    validate_package_presence(decisions_by_pkgname, packages)
 
-                provenance.update({"mode": "current", "package_manager": package_manager, "acl": source})
+                    pkgnames_to_remove = sorted({
+                        package.name for package in packages
+                        if decisions_by_pkgname.get(package.name, Decision.KEEP) != Decision.KEEP
+                    })
+                    if pkgnames_to_remove:
+                        validate_removal(
+                            pkgnames_to_remove,
+                            rpm,
+                            snapshot,
+                            None,
+                        )
+
+                    snapshot_metadata.update({"packages": len(packages), "architecture": architecture})
+                    build_id = os.environ.get("BUILD_BUILDID", "")
+                    if build_id.isdecimal() and int(build_id) > 0:
+                        snapshot_metadata["build_id"] = int(build_id)
+
+                    provenance.update({"mode": "current", "package_manager": package_manager, "acl": snapshot_metadata})
 
                 inventory_path = work / "inventories" / "acl-current.json"
                 write_inventory(inventory_path, packages, dependents_by_nvra)
@@ -1729,6 +1851,7 @@ def main(argv: list[str] | None = None) -> None:
 
                 if cached is not None:
                     packages, dependents_by_nvra = cached
+                    validate_package_architectures(packages, architecture)
                     print(f"Reusing cached {image_name} inventory {inventory_path}", flush=True)
                 else:
                     print("Preparing Azure Linux tools directory...", flush=True)
@@ -1748,7 +1871,7 @@ def main(argv: list[str] | None = None) -> None:
                     if sha256(build_rpmdb) != database_digest:
                         raise InventoryError(f"{image_name} RPM database changed during collection; rerun")
 
-                validate_package_architectures(packages, architecture)
+                validate_package_presence(decisions_by_pkgname, packages)
 
                 if cached is None:
                     write_inventory(inventory_path, packages, dependents_by_nvra, cache_key=cache_key)
@@ -1761,15 +1884,32 @@ def main(argv: list[str] | None = None) -> None:
                     "cached": cached is not None,
                 }
 
-            explicit_keep_decisions_by_pkgname = dict.fromkeys(do_not_keep_pkgnames, False)
-            explicit_keep_decisions_by_pkgname.update(dict.fromkeys(keep_pkgnames, True))
-            remaining_dependents_by_nvra = report_dependents(packages, dependents_by_nvra, explicit_keep_decisions_by_pkgname)
+                pkgnames_to_remove = sorted({
+                    package.name
+                    for package in packages
+                    if decisions_by_pkgname.get(package.name, Decision.KEEP) != Decision.KEEP
+                })
+                if pkgnames_to_remove:
+                    tools = prepare_tools(work, args.tools_image)
+                    with tempfile.TemporaryDirectory(prefix=".acl-removal-", dir=tools) as temporary:
+                        snapshot = Path(temporary)
+                        private_database = snapshot / "var/lib/rpm/rpmdb.sqlite"
+                        private_database.parent.mkdir(parents=True)
+                        shutil.copyfile(build_rpmdb, private_database)
+
+                        validate_removal(
+                            pkgnames_to_remove,
+                            "rpm",
+                            snapshot,
+                            tools,
+                        )
+
+            remaining_dependents_by_nvra = report_dependents(packages, dependents_by_nvra, decisions_by_pkgname)
 
             if args.package_decisions_file is not None:
-                provenance["keep_file"] = str(args.package_decisions_file.resolve())
+                provenance["decision_file"] = str(args.package_decisions_file.resolve())
 
-            provenance["keep"] = sorted(keep_pkgnames)
-            provenance["do_not_keep"] = sorted(do_not_keep_pkgnames)
+            provenance["decisions"] = {name: decision.value for name, decision in sorted(decisions_by_pkgname.items())}
 
             output.mkdir(parents=True, exist_ok=True)
 
@@ -1778,9 +1918,8 @@ def main(argv: list[str] | None = None) -> None:
                 csv_path,
                 packages,
                 dependents_by_nvra,
-                effective_keep_decisions_by_pkgname=explicit_keep_decisions_by_pkgname,
-                explicit_keep_decisions_by_pkgname=explicit_keep_decisions_by_pkgname,
-                keep_reasons_by_pkgname=keep_reasons_by_pkgname,
+                decisions_by_pkgname=decisions_by_pkgname,
+                reasons_by_pkgname=reasons_by_pkgname,
                 remaining_dependents_by_nvra=remaining_dependents_by_nvra,
             )
             print(f"Wrote {csv_path} ({len(packages)} packages)")
@@ -1789,25 +1928,25 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Wrote {markdown_path}")
 
             removal_path = output / "packages-selected-for-removal.txt"
-            write_removal_list(removal_path, packages, explicit_keep_decisions_by_pkgname)
+            write_removal_list(removal_path, packages, decisions_by_pkgname)
             print(f"Wrote {removal_path}")
 
             total_size = sum(package.size for package in packages)
             kept_size = sum(
                 package.size for package in packages
-                if explicit_keep_decisions_by_pkgname.get(package.name) is not False
+                if decisions_by_pkgname.get(package.name, Decision.KEEP) == Decision.KEEP
             )
             saved_size = total_size - kept_size
             savings_percent = saved_size / total_size * 100 if total_size else 0.0
 
             print(f"{image_title} total package size: {format_size(total_size)}", flush=True)
             print(f"{image_title} package size excluding removal candidates: {format_size(kept_size)}", flush=True)
-            print(f"{image_title} savings: {format_size(saved_size)} ({savings_percent:.2f}%)", flush=True)
+            print(f"{image_title} estimated savings: {format_size(saved_size)} ({savings_percent:.2f}%)", flush=True)
 
             provenance_filename = "package-decisions-provenance.json"
             (output / provenance_filename).write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
 
-            warn_blank_keep(packages, explicit_keep_decisions_by_pkgname, remaining_dependents_by_nvra)
+            warn_unclassified(packages, decisions_by_pkgname, remaining_dependents_by_nvra)
     except (InventoryError, OSError, subprocess.SubprocessError, sqlite3.Error,
             KeyError, json.JSONDecodeError) as error:
         parser.exit(1, f"Error: {error}\n")

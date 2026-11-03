@@ -9,19 +9,14 @@
 # Keep means required in the production base. Optional extensions have separate requirements.
 # Sysext-only RPM dependencies belong in the rebuilt sysext, including OEM dependencies.
 # Rebuild extensions against the reduced build-base with matching RPM records.
-# A sysext RPM requirement alone never justifies keep: true. Independent host boot, provisioning, and support callers
+# A sysext RPM requirement alone never justifies decision = "keep". Independent host boot, provisioning, and support callers
 # provide separate reasons to keep a package.
 
 ["abseil-cpp"]
-keep = false
-# Payload: versioned libabsl libraries; abseil-cpp-devel owns development files.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/abseil-cpp/abseil-cpp.spec
-reason = """\
-    Contains versioned Abseil C++ utility shared libraries. No retained base-image or oem-azure package requirement \
-    was found."""
+decision = "remove-dependency"
 
 ["acl"]
-keep = true
+decision = "keep"
 # Payload: %files owns getfacl and setfacl.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/acl/acl.spec
 # Consumer: overlaycleanup calls usrbin getfacl; .no-dup-update skips cleanup.
@@ -34,7 +29,7 @@ reason = """\
     overlay during boot, when overlay cleanup is enabled."""
 
 ["afterburn"]
-keep = true
+decision = "keep"
 # Payload: afterburn subpackage owns the renamed coreos-metadata binary.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/rust-afterburn/rust-afterburn.spec
 # Consumer: ExecStart uses coreos-metadata; conditions include Azure.
@@ -51,7 +46,7 @@ reason = """\
     service invokes it."""
 
 ["azure-vm-utils"]
-keep = true
+decision = "keep"
 # Payload: azure-nvme-id and 80-azure-disk.rules.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/azure-vm-utils/azure-vm-utils.spec
 # Producer: block-device rules invoke azure-nvme-id and create Azure links.
@@ -64,12 +59,12 @@ reason = """\
     provisioning, including the resource-disk path when swap is configured on that disk."""
 
 ["azurelinux-repos-cloud-native"]
-keep = true
+decision = "keep"
 reason = """\
     Needed during image construction. Removed at the end of the image build."""
 
 ["bc"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains the bc calculator command. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
@@ -77,7 +72,7 @@ reason = """\
     host invocation was found."""
 
 ["bind"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains named and DNS-server administration tools. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
@@ -85,7 +80,7 @@ reason = """\
     host use of named was found."""
 
 ["bind-utils"]
-keep = true
+decision = "keep"
 # Payload: %files utils owns nslookup and dig.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/bind/bind.spec
 # Consumer: retrycmd_nslookup; shared nodePrep selects FQDN checks.
@@ -99,12 +94,12 @@ reason = """\
     call dig."""
 
 ["bison"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains bison and parser-generation support files. These are needed during builds only."""
 
 ["bootengine"]
-keep = true
+decision = "keep"
 # Payload: ACL's 0.0.38-2 overlay. The base SPEC is release 1.
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/acl/SPECS/bootengine/bootengine.spec
 # ACL patches and consumes the modules to generate its initramfs.
@@ -118,7 +113,7 @@ reason = """\
     Removing module sources after assembly remains unvalidated."""
 
 ["bpftool"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
@@ -127,15 +122,10 @@ reason = """\
     found."""
 
 ["brotli"]
-keep = false
-# The brotli RPM owns the CLI and three versioned Brotli libraries.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/brotli/brotli.spec
-reason = """\
-    Contains brotli and the libbrotlicommon, libbrotlidec, and libbrotlienc shared libraries. No retained consumer was \
-    found."""
+decision = "remove-dependency"
 
 ["btrfs-progs"]
-keep = true
+decision = "keep"
 # Payload: filesystem tools and versioned libbtrfs/libbtrfsutil.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/btrfs-progs/btrfs-progs.spec
 # Configured Btrfs formatting selects and executes mkfs.btrfs.
@@ -149,7 +139,7 @@ reason = """\
     image's own filesystems use ext4."""
 
 ["bzip2"]
-keep = false
+decision = "remove-top-level"
 # Payload: compression commands; bzip2-libs separately owns libbz2.so.*.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/bzip2/bzip2.spec
 reason = """\
@@ -159,7 +149,7 @@ reason = """\
     invocation was found."""
 
 ["checkpolicy"]
-keep = false
+decision = "remove-top-level"
 # Payload: checkpolicy, checkmodule, sedismod, and sedispol.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/checkpolicy/checkpolicy.spec
 # ACL installs CIL with semodule; libsemanage uses CIL compilation APIs.
@@ -172,14 +162,14 @@ reason = """\
     host caller of these compilers or inspectors was found."""
 
 ["cifs-utils"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains mount.cifs and CIFS authentication helpers. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
     directly includes net-fs/cifs-utils. Standard Azure Files CSI supplies its own mount tools."""
 
 ["conntrack-tools"]
-keep = true
+decision = "keep"
 # Payload: %files owns conntrack, conntrackd, and nfct.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/conntrack-tools/conntrack-tools.spec
 # Consumer: COLLECT_SYSINFO enables conntrack -L and conntrack -S.
@@ -194,7 +184,7 @@ reason = """\
     connection-tracking statistics."""
 
 ["cri-tools"]
-keep = true
+decision = "keep"
 # Payload: %files owns crictl.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/cri-tools/cri-tools.spec
 # Consumer: getInstallModeAndCleanupContainerImages calls cleanUpImages, which calls removeContainerImage. Enumeration
@@ -210,7 +200,7 @@ reason = """\
     uses ctr. The automatic log collector also invokes crictl when available."""
 
 ["cryptsetup"]
-keep = true
+decision = "keep"
 # The cryptsetup RPM owns cryptsetup; cryptsetup-libs owns libcryptsetup.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/cryptsetup/cryptsetup.spec
 # Ignition inspects, formats, and opens configured LUKS volumes.
@@ -225,7 +215,7 @@ reason = """\
     runtime too."""
 
 ["dbus-glib"]
-keep = false
+decision = "remove-top-level"
 # Payload: versioned binding libraries and helper/support files.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/dbus-glib/dbus-glib.spec
 # GLib/D-Bus use alone does not establish use of this separate binding.
@@ -236,28 +226,16 @@ reason = """\
     lists dev-libs/dbus-glib in RDEPEND; ACL skips Update Engine itself. No required retained consumer was found."""
 
 ["device-mapper-event"]
-keep = false
-# The device-mapper RPM owns dmsetup; device-mapper-libs owns libdevmapper.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/lvm2/lvm2.spec
-reason = """\
-    Contains dmeventd for monitoring device-mapper devices, plus its systemd service and socket. No required ACL/AKS \
-    host LVM role was found. No independent required dmeventd consumer was found."""
+decision = "remove-dependency"
 
 ["device-mapper-event-libs"]
-keep = false
-reason = """\
-    Contains the versioned libdevmapper-event shared library."""
+decision = "remove-dependency"
 
 ["duktape"]
-keep = false
-# Payload: versioned libduktape.so.* and libduktaped.so.* shared libraries.
-# Headers and unversioned linker symlinks belong to duktape-devel; no CLI is packaged.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/duktape/duktape.spec
-reason = """\
-    Contains Duktape JavaScript-engine shared libraries. No required remaining production-base consumer was found."""
+decision = "remove-dependency"
 
 ["ebtables-legacy"]
-keep = true
+decision = "keep"
 # Payload: %files legacy and %post legacy's ebtables alternatives entry.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/ebtables/ebtables.spec
 # ACL maps its ebtables request to ebtables-legacy.
@@ -274,12 +252,12 @@ reason = """\
     invoke ebtables for L2 rules."""
 
 ["flex"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains flex and supporting lexer-generation files. These are needed during builds only."""
 
 ["gdbm"]
-keep = false
+decision = "remove-top-level"
 # Payload: GDBM/compatibility libraries and database-management commands.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/gdbm/gdbm.spec
 # The only captured consumer is OEM python3-libs-3.12.15-1.azl3.x86_64.
@@ -296,28 +274,17 @@ reason = """\
     requires it. The OEM python3-libs RPM needs gdbm; the rebuilt oem-azure extension supplies that dependency."""
 
 ["gettext"]
-keep = false
-# Payload: commands, libraries, headers, and localization support.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/gettext/gettext.spec
-# LocalDNS rendering uses base64 and sed in the reviewed code. It doesn't use envsubst.
-# https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/cse_config_localdns.sh
-# https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/localdns.sh
-reason = """\
-    The inherited \
-    [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    explicitly selects sys-devel/gettext for envsubst file templating. Contains gettext, ngettext, envsubst, \
-    message-catalog tools, bundled libraries, headers, and localization support. No activated host consumer was \
-    found."""
+decision = "remove-dependency"
 
 ["git"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains git and supporting repository-management commands. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
     directly includes dev-vcs/git. No required AKS host provisioning caller was found."""
 
 ["glib-devel"]
-keep = false
+decision = "remove-top-level"
 # The glib-devel RPM owns most GLib commands as well as development files.
 # The glib-schemas RPM separately owns gsettings and glib-compile-schemas.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/glib/glib.spec
@@ -331,22 +298,13 @@ reason = """\
     the separate glib runtime package; sysext-only tool requirements belong in rebuilt sysexts."""
 
 ["glib-schemas"]
-keep = false
-reason = """\
-    Contains gsettings, glib-compile-schemas, and schema-support files. No required consumer was found on the headless \
-    AKS host; revisit if production-base applications or host installation hooks require glib-schemas."""
+decision = "remove-dependency"
 
 ["gmock"]
-keep = false
-# Payload: versioned libgmock and libgmock_main shared libraries.
-# Headers and unversioned linker symlinks belong to gmock-devel.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/gtest/gtest.spec
-reason = """\
-    Contains the GoogleMock libgmock and libgmock_main shared libraries. No retained base-image or oem-azure package \
-    requirement was found."""
+decision = "remove-dependency"
 
 ["groff"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains groff and document-formatting support files. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
@@ -354,18 +312,10 @@ reason = """\
     caller was found."""
 
 ["gtest"]
-keep = false
-# Payload: versioned libgtest and libgtest_main shared libraries.
-# Headers and unversioned linker symlinks belong to gtest-devel.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/gtest/gtest.spec
-reason = """\
-    Contains the GoogleTest libgtest and libgtest_main shared libraries. The inherited \
-    [Update Engine recipe](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/update_engine/update_engine-0.4.10-r25.ebuild) \
-    lists dev-cpp/gtest in its build DEPEND; ACL skips Update Engine itself. No retained base-image or oem-azure \
-    package requirement was found."""
+decision = "remove-dependency"
 
 ["hwdata"]
-keep = false
+decision = "remove-top-level"
 # Payload: hardware databases and dist-blacklist.conf.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/hwdata/hwdata.spec
 # Retained pciutils installs and uses its own PCI IDs in /usr/share/misc.
@@ -377,7 +327,7 @@ reason = """\
     under /usr/share/misc. No additional database consumer was found."""
 
 ["ignition-flatcar"]
-keep = true
+decision = "keep"
 # Payload: %files owns /usr/bin/ignition.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/ignition-flatcar/ignition-flatcar.spec
 # Consumer: ignition-files.service executes the files stage.
@@ -392,7 +342,7 @@ reason = """\
     configuration."""
 
 ["integritysetup"]
-keep = false
+decision = "remove-top-level"
 # Payload: standalone integritysetup command; libcryptsetup belongs to cryptsetup-libs.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/cryptsetup/cryptsetup.spec
 # ACL explicitly installs cryptsetup and veritysetup in initramfs. It omits integritysetup.
@@ -406,7 +356,7 @@ reason = """\
     provisioning caller was found."""
 
 ["iproute-tc"]
-keep = false
+decision = "remove-top-level"
 # Payload: tc and its plugins; the ip command belongs to the separate iproute RPM.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/iproute/iproute.spec
 # CNI bandwidth v1.1.1 uses netlink.QdiscAdd and FilterAdd in the reviewed code.
@@ -421,7 +371,7 @@ reason = """\
     invocation of tc was found."""
 
 ["ipset"]
-keep = true
+decision = "keep"
 # Payload: ipset and versioned libipset; service files are separate.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/ipset/ipset.spec
 # Activation: transparent-tunnel endpoint selection without a VLAN ID.
@@ -436,7 +386,7 @@ reason = """\
     separate container tools."""
 
 ["ipvsadm"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains IPVS administration commands. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
@@ -444,7 +394,7 @@ reason = """\
     explicitly supported host administration workflow."""
 
 ["jq"]
-keep = true
+decision = "keep"
 # Payload: the jq RPM owns jq and versioned libjq.so.*.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/jq/jq.spec
 # Consumers: metadata validation, registry tokens, and logs_to_events.
@@ -458,7 +408,7 @@ reason = """\
     registry credentials, and emit events."""
 
 ["kexec-tools"]
-keep = true
+decision = "keep"
 # Payload: kexec, kdumpctl, makedumpfile, mkdumprd, crash-capture units.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/kexec-tools/kexec-tools.spec
 # kdump.service executes kdumpctl start.
@@ -473,48 +423,19 @@ reason = """\
     is not reserved by default."""
 
 ["less"]
-keep = false
-# Payload: less, lesskey, and lessecho.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/less/less.spec
-# https://github.com/gwsw/less/blob/v643/Makefile.in
-# Interactive journalctl -> pager_open -> pager/less selection.
-# https://github.com/systemd/systemd/blob/v255/src/journal/journalctl.c
-# https://github.com/systemd/systemd/blob/v255/src/shared/pager.c
-reason = """\
-    Contains less, lesskey, and lessecho. The inherited \
-    [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes sys-apps/less. No retained package dependency was found. Used for administrative log paging; \
-    automated AKS log collection uses --no-pager."""
+decision = "remove-dependency"
 
 ["libaio"]
-keep = false
-# Payload: versioned Linux asynchronous-I/O libraries.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/libaio/libaio.spec
-reason = """\
-    Contains versioned libaio asynchronous-I/O libraries. No required remaining consumer was found."""
+decision = "remove-dependency"
 
 ["libffi-devel"]
-keep = false
-reason = """\
-    Contains libffi headers and development metadata. These are required for compilation only; preserve the separate \
-    libffi runtime package."""
+decision = "remove-dependency"
 
 ["libgomp"]
-keep = false
-# Payload: GNU OpenMP runtime libgomp.so.1, separate from compiler files.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/gcc/gcc.spec
-# LISA requests gcc, which requires libgomp-devel, which requires libgomp.
-# Rebuild against the reduced base.
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/acl/sysexts.yaml
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_sysext
-# Dependency-resolving install places missing libgomp in the extension upper layer.
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/rpm_install.sh
-reason = """\
-    Contains the GNU OpenMP shared runtime library. Not required in the production base. LISA's gcc package requires \
-    it through libgomp-devel; supply it in the rebuilt testing extension for its OpenMP toolchain."""
+decision = "remove-dependency"
 
 ["libmd"]
-keep = false
+decision = "remove-top-level"
 # Payload: libmd.so.0; headers and linker symlink are development payload.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/libmd/libmd.spec
 # ACL's catalog skips the identified libbsd build consumer.
@@ -527,48 +448,19 @@ reason = """\
     was found."""
 
 ["libnl3"]
-keep = false
-# Payload: versioned libnl libraries, tools, and configuration.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/libnl3/libnl3.spec
-# The reviewed firewall inputs use libmnl and libnftnl, which are different RPMs.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/iptables/iptables.spec
-# The systemd-networkd executable uses native netlink. It doesn't use libnl3 libraries.
-# https://github.com/systemd/systemd-stable/blob/v255/src/network/networkd-manager.c
-reason = """\
-    Contains libnl shared libraries, netlink command-line tools, and configuration. No retained consumer was found in \
-    the reviewed systemd-networkd and azure-vm-utils code paths."""
+decision = "remove-dependency"
 
 ["libnvme"]
-keep = false
-# Payload: libnvme.so.1 and libnvme-mi.so.1.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/libnvme/libnvme.spec
-# Azure disk identification issues NVMe ioctl commands directly.
-# https://github.com/Azure/azure-vm-utils/blob/v0.7.0/src/nvme.c
-reason = """\
-    Contains the libnvme and libnvme-mi shared libraries."""
+decision = "remove-dependency"
 
 ["libselinux-devel"]
-keep = false
-# Runtime libselinux.so.1 belongs to the separate libselinux RPM.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/libselinux/libselinux.spec
-reason = """\
-    The \
-    [glib recipe](https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/glib/glib.spec) \
-    declares libselinux-devel as a build dependency. Contains SELinux headers, libselinux.a, the unversioned linker \
-    symlink, and pkg-config metadata. No on-node compilation or consumer of these development files was found."""
+decision = "remove-dependency"
 
 ["libsepol-devel"]
-keep = false
-# Payload includes chkcon; runtime libsepol.so.2 belongs to libsepol.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/libsepol/libsepol.spec
-# ACL's policy build sets CHKCON=/bin/true.
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/acl/SPECS/selinux-policy/selinux-policy.spec
-reason = """\
-    Contains chkcon, sepol headers, libsepol.a, the unversioned linker symlink, and pkg-config metadata. No required \
-    on-node consumer was found."""
+decision = "remove-dependency"
 
 ["libsodium"]
-keep = false
+decision = "remove-top-level"
 # Payload: versioned libsodium cryptography library.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/libsodium/libsodium.spec
 # The reviewed zeromq build explicitly configures --with-libsodium=no.
@@ -580,31 +472,13 @@ reason = """\
     disables libsodium."""
 
 ["libstdc++-devel"]
-keep = false
-# Payload: C++ headers, static libraries, and unversioned linker files.
-# Versioned libstdc++.so runtime libraries belong to the separate libstdc++ RPM.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/gcc/gcc.spec
-# LISA requests gcc and gcc-c++, which require libstdc++-devel.
-# Existing extensions can reuse these files from their build's base image.
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/acl/sysexts.yaml
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_sysext
-# The build-base snapshot happens before production /usr/include deletion.
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/prod_image_util.sh
-# LISA cleanup deletes static archives; validate final headers/linker files too.
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/sysext/sysext_mangle_lisa-testing
-reason = """\
-    Contains C++ headers, static libraries, and unversioned linker files. Preserve the separate libstdc++ runtime \
-    package. Not required in the production base. LISA's gcc and gcc-c++ packages require the development files in its \
-    rebuilt extension; its cleanup deletes static archives, so static linking needs separate preservation and \
-    validation."""
+decision = "remove-dependency"
 
 ["libtalloc"]
-keep = false
-reason = """\
-    Contains the libtalloc memory-allocation shared library. No retained package requirement was found."""
+decision = "remove-dependency"
 
 ["libtdb"]
-keep = false
+decision = "remove-top-level"
 # Payload: libtdb.so.*; tdb-tools and python3-tdb are separate RPMs.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/libtdb/libtdb.spec
 reason = """\
@@ -614,7 +488,7 @@ reason = """\
     consumer was found."""
 
 ["libunwind"]
-keep = false
+decision = "remove-top-level"
 # Payload: versioned libunwind stack-unwinding libraries.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/libunwind/libunwind.spec
 # No libunwind requirement was found in the reviewed systemd configuration.
@@ -626,7 +500,7 @@ reason = """\
     unverified. No required retained consumer was found in the reviewed build configurations."""
 
 ["liburing"]
-keep = false
+decision = "remove-top-level"
 # Payload: versioned liburing and liburing-ffi shared libraries.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/liburing/liburing.spec
 # The qemu build enables io_uring; qemu is absent from both base/OEM inventories.
@@ -640,19 +514,17 @@ reason = """\
     inventories."""
 
 ["libusb"]
-keep = false
-reason = """\
-    Contains userspace USB-access shared libraries. No required remaining AKS host consumer was found."""
+decision = "remove-dependency"
 
 ["lshw"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains the lshw hardware-inventory command. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
     directly includes sys-apps/lshw. No required provisioning or runtime caller was found."""
 
 ["lsscsi"]
-keep = true
+decision = "keep"
 # Payload: lsscsi command; collector runs on the host.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/lsscsi/lsscsi.spec
 # With COLLECT_SYSINFO, collectToZip runs lsscsi -vv.
@@ -663,19 +535,17 @@ reason = """\
     collector executes lsscsi -vv when sysinfo collection is enabled."""
 
 ["lvm2"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains LVM volume-management commands and service configuration. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
     directly includes sys-fs/lvm2. No default AKS host LVM role was found. ACL omits its initramfs module."""
 
 ["m4"]
-keep = false
-reason = """\
-    Contains the m4 macro processor. No required node-runtime invocation was found."""
+decision = "remove-dependency"
 
 ["make"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains GNU make. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
@@ -683,18 +553,13 @@ reason = """\
     node-runtime caller was found."""
 
 ["mariadb-connector-c"]
-keep = false
-reason = """\
-    Contains libmariadb and client plugins. No required host database-client consumer was found."""
+decision = "remove-dependency"
 
 ["mariadb-connector-c-config"]
-keep = false
-reason = """\
-    Contains /etc/my.cnf, /etc/my.cnf.d/client.cnf, and their configuration directory. No remaining host consumer was \
-    found."""
+decision = "remove-dependency"
 
 ["microcode_ctl"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains guest CPU-microcode update support. Not installed in the captured base inventory. Historical inclusion \
     remains unverified. Azure manages physical CPU microcode, and ACL's \
@@ -702,7 +567,7 @@ reason = """\
     explicitly disables early microcode loading in the guest."""
 
 ["mokutil"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains mokutil for Secure Boot and MOK settings. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
@@ -710,7 +575,7 @@ reason = """\
     verification does not require on-node MOK management."""
 
 ["net-tools"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains ifconfig, netstat, and related legacy networking commands. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
@@ -718,7 +583,7 @@ reason = """\
     executables."""
 
 ["nfs-utils"]
-keep = true
+decision = "keep"
 # Payload: spec packages installed sbin helpers; upstream names mount.nfs.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/nfs-utils/nfs-utils.spec
 # https://github.com/linux-nfs/nfs-utils/blob/cc5cccbb9f24a2324f50a5cb4c29d83fdf6b1f90/utils/mount/Makefile.am
@@ -731,7 +596,7 @@ reason = """\
     mounter needs mount.nfs; CSI-container tools do not cover that path."""
 
 ["nftables"]
-keep = true
+decision = "keep"
 # Payload: nft, versioned libnftables, and service configuration.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/nftables/nftables.spec
 # With COLLECT_NFTABLES, collectToZip runs nft -n list ruleset.
@@ -742,7 +607,7 @@ reason = """\
     diagnostics: the host collector executes nft -n list ruleset when nftables collection is enabled."""
 
 ["nmap"]
-keep = false
+decision = "remove-top-level"
 # Absent from the captured base and oem-azure inventories; nmap-ncat is separate.
 reason = """\
     The \
@@ -752,7 +617,7 @@ reason = """\
     found; preserve the separately packaged nmap-ncat connectivity tools."""
 
 ["nmap-ncat"]
-keep = true
+decision = "keep"
 # Payload: %files ncat owns ncat and its nc symlink.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/nmap/nmap.spec
 # Consumer: nodePrep's IPv4 API-server branch runs nc -vz on port 443.
@@ -762,7 +627,7 @@ reason = """\
     endpoint is an IPv4 address."""
 
 ["ntp"]
-keep = false
+decision = "remove-top-level"
 # Payload: ntpd, ntpdate, query utilities, and service units.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/ntp/ntp.spec
 # Azure OEM enables chronyd from the separate chrony package.
@@ -779,7 +644,7 @@ reason = """\
     chronyd from the separate chrony package."""
 
 ["nvme-cli"]
-keep = false
+decision = "remove-top-level"
 # Payload: nvme, NVMe-fabrics rules, configuration, and connection services.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/nvme-cli/nvme-cli.spec
 # Azure identification uses ioctl; ephemeral setup uses other disk tools.
@@ -801,7 +666,7 @@ reason = """\
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/build_image_util.sh
 # DISABLE_SSH is conditional. It doesn't set a global removal policy.
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/cse_main.sh
-keep = true
+decision = "keep"
 reason = """\
     Contains only the umbrella OpenSSH license payload. Also pulls in openssh-server, which contains sshd, \
     sshd-session, sftp-server, and server configuration. ACL enables socket-activated SSH, whose per-connection \
@@ -809,7 +674,7 @@ reason = """\
     does not justify global removal."""
 
 ["pciutils"]
-keep = true
+decision = "keep"
 # Payload: lspci, PCI administration utilities, and bundled PCI IDs.
 # The pciutils RPM separately requires pciutils-libs for versioned libpci.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/pciutils/pciutils.spec
@@ -822,17 +687,10 @@ reason = """\
     dependency too."""
 
 ["pcre2-devel"]
-keep = false
-# Runtime RPMs: libpcre2-8-0, libpcre2-16-0, libpcre2-32-0, libpcre2-posix2.
-# The pcre2-tools RPM owns pcre2grep and pcre2test.
-# The pcre2-devel-static RPM owns static archives.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/pcre2/pcre2.spec
-reason = """\
-    Contains pcre2-config, headers, unversioned linker symlinks, and pkg-config metadata. No required production \
-    on-node build caller was found."""
+decision = "remove-dependency"
 
 ["pigz"]
-keep = true
+decision = "keep"
 # Payload: %files owns pigz and unpigz.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/pigz/pigz.spec
 # Consumer: DecompressStream calls gzipDecompress, which runs unpigz -d -c.
@@ -846,7 +704,7 @@ reason = """\
     gzip fallback."""
 
 ["polkit"]
-keep = false
+decision = "remove-top-level"
 # Payload: polkitd, pk* tools, authorization libraries, D-Bus service and policies.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/polkit/polkit.spec
 # D-Bus can activate it without an explicit service start.
@@ -861,7 +719,7 @@ reason = """\
     D-Bus policies. No required ACL/AKS PolicyKit delegation workflow was found; host administration uses sudo."""
 
 ["protobuf"]
-keep = false
+decision = "remove-top-level"
 # The protobuf RPM owns protoc and versioned runtime/compiler libraries.
 # Headers, linker symlinks, and build metadata are in protobuf-devel.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/protobuf/protobuf.spec
@@ -875,7 +733,7 @@ reason = """\
     protobuf in the rebuilt sysext."""
 
 ["quota"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains quota-management commands such as quota and setquota. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
@@ -883,12 +741,10 @@ reason = """\
     caller of these commands was found."""
 
 ["quota-nls"]
-keep = false
-reason = """\
-    Contains quota translation catalogs. Quota enforcement does not need them."""
+decision = "remove-dependency"
 
 ["rpcsvc-proto"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains rpcgen and RPC interface definitions. The inherited \
     [Samba recipe](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/portage-stable/net-fs/samba/samba/samba-4.22.3.ebuild) \
@@ -896,14 +752,14 @@ reason = """\
     mounts use nfs-utils and do not need them."""
 
 ["rsync"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains rsync for file synchronization. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
     directly includes net-misc/rsync. No required AKS provisioning or runtime caller was found."""
 
 ["rsyslog"]
-keep = true
+decision = "keep"
 # Payload: rsyslogd, input/output modules, rsyslog.conf and rsyslog.service.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/rsyslog/rsyslog.spec
 # Activation: distro preset enables rsyslog.*; service executes rsyslogd -n.
@@ -917,7 +773,7 @@ reason = """\
     journald alone does not produce these text files."""
 
 ["socat"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains socat for relaying between sockets and streams. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
@@ -925,7 +781,7 @@ reason = """\
     required host invocation was found."""
 
 ["strace"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains strace for tracing system calls. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
@@ -933,7 +789,7 @@ reason = """\
     includes it."""
 
 ["systemd-boot"]
-keep = true
+decision = "keep"
 # Payload: %files boot and its file splitter include bootloader and stub.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/systemd/systemd.spec
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/systemd/split-files.py
@@ -948,7 +804,7 @@ reason = """\
     chain."""
 
 ["systemd-container"]
-keep = false
+decision = "remove-top-level"
 # Payload: nspawn/vmspawn, machinectl, machined, import/pull tools and related units.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/systemd/systemd.spec
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/systemd/split-files.py
@@ -963,7 +819,7 @@ reason = """\
     production-base caller of these separate tools was found."""
 
 ["systemd-journal-remote"]
-keep = true
+decision = "keep"
 reason = """\
     Contains remote-journal receiving, gateway, and upload services. The \
     [RPM catalog](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/package_catalog.yaml) \
@@ -972,7 +828,7 @@ reason = """\
     not replace these interfaces. Keeping the package doesn't require enabling the services by default."""
 
 ["tar"]
-keep = true
+decision = "keep"
 # Payload: %files owns /bin/tar and /bin/gtar.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/tar/tar.spec
 # Consumers: retrycmd_get_tarball validation and extract_tarball extraction.
@@ -986,14 +842,14 @@ reason = """\
     download fallback paths."""
 
 ["tcpdump"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains the tcpdump packet-capture command. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
     directly includes net-analyzer/tcpdump. No required provisioning or runtime caller was found."""
 
 ["tpm2-tools"]
-keep = true
+decision = "keep"
 # Payload: TPM2 command-line programs including the tpm2 entry point.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/tpm2-tools/tpm2-tools.spec
 # Mandatory executable-wrapper loop includes /usr/bin/tpm2.
@@ -1005,14 +861,14 @@ reason = """\
     /sysusr/usr/bin/tpm2."""
 
 ["traceroute"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains traceroute for network-path probing. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
     directly includes net-analyzer/traceroute. No required provisioning or runtime invocation was found."""
 
 ["trident-acl"]
-keep = true
+decision = "keep"
 # Payload: trident-acl-agent and its service; trident owns tridentd.socket.
 # https://github.com/microsoft/azure-container-linux/blob/d93eab8bb13e571da5139054906f71b3fb65f14b/acl/SPECS/trident/trident.spec
 # Consumer: the service executes the agent, which drives stage/finalize/rollback/commit.
@@ -1026,7 +882,7 @@ reason = """\
     this package through the catalog."""
 
 ["tzdata"]
-keep = true
+decision = "keep"
 # Payload: compiled timezone/DST database and /etc/localtime -> zoneinfo/UTC.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/tzdata/tzdata.spec
 # Declared consumers abseil-cpp and protobuf are NO. File uses don't appear as RPM edges.
@@ -1043,7 +899,7 @@ reason = """\
     required non-UTC host caller remains unverified."""
 
 ["unzip"]
-keep = false
+decision = "remove-top-level"
 # Payload: unzip, funzip, unzipsfx, zipgrep, and zipinfo.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/unzip/unzip.spec
 # In the reviewed code, installAzureCNI calls extract_tarball, which uses tar.
@@ -1057,7 +913,7 @@ reason = """\
     ZIP-extraction caller was found."""
 
 ["update-ssh-keys"]
-keep = true
+decision = "keep"
 # Payload: authorized-key management executable.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/update-ssh-keys/update-ssh-keys.spec
 # ACL coreos-init installs this pinned Flatcar service and enablement.
@@ -1070,23 +926,17 @@ reason = """\
     users with an authorized_keys.d directory when provisioning-result conditions match."""
 
 ["usbutils"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains lsusb and USB inspection commands. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
     directly includes sys-apps/usbutils. No required AKS host caller was found."""
 
 ["util-linux-devel"]
-keep = false
-reason = """\
-    The \
-    [util-linux recipe](https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/util-linux/util-linux.spec) \
-    packages these development files separately from util-linux and util-linux-libs; the original installing parent is \
-    unverified. Contains util-linux headers, development metadata, and programming manuals. These are needed for \
-    compilation only."""
+decision = "remove-dependency"
 
 ["veritysetup"]
-keep = true
+decision = "keep"
 # Payload: standalone veritysetup CLI; cryptsetup-libs owns libcryptsetup.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/cryptsetup/cryptsetup.spec
 # Current ACL recipe explicitly includes the CLI in its initramfs.
@@ -1099,32 +949,24 @@ reason = """\
     remains unestablished."""
 
 ["vim"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains Vim and editor runtime files. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
     directly includes app-editors/vim. No required provisioning or node-runtime caller was found."""
 
 ["wget"]
-keep = false
+decision = "remove-top-level"
 reason = """\
     Contains the wget download command. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
     directly includes net-misc/wget. The reviewed ACL download paths use curl and ORAS."""
 
 ["wget-libs"]
-keep = false
-# Payload: versioned libwget.so.2.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/wget/wget.spec
-# The review covered pinned recipes. An exhaustive source or ELF scan remains undone.
-# LISA testing explicitly requests wget; extensions can reuse base files.
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/acl/sysexts.yaml
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_sysext
-reason = """\
-    Contains libwget.so.2. Supply wget and wget-libs in the rebuilt lisa-testing sysext."""
+decision = "remove-dependency"
 
 ["which"]
-keep = true
+decision = "keep"
 # Shared GPU validation is not overridden by ACL's installation stubs.
 # https://github.com/Azure/AgentBaker/blob/b82d9e42d09ce0aa8939e54d3ba5f5a7dc2fda5b/parts/linux/cloud-init/artifacts/cse_config_gpu.sh
 # GPU_NODE and skip_nvidia_driver_install guard ensureGPUDrivers.
@@ -1137,7 +979,7 @@ reason = """\
     replacement."""
 
 ["wireguard-tools"]
-keep = true
+decision = "keep"
 # Payload: wg, wg-quick, service templates, and module-loading settings.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/wireguard-tools/wireguard-tools.spec
 # The service template runs wg-quick for explicitly configured interfaces.
@@ -1152,7 +994,7 @@ reason = """\
     not replace these interfaces. A default AKS invocation remains unverified."""
 
 ["xfsprogs"]
-keep = true
+decision = "keep"
 # Payload: spec installs upstream tools and packages sbin paths.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/xfsprogs/xfsprogs.spec
 # Matching upstream install rules name the three executables.
@@ -1172,7 +1014,7 @@ reason = """\
     host xfs_quota when the feature, user namespaces, and filesystem support are enabled."""
 
 ["zip"]
-keep = true
+decision = "keep"
 # Payload: zip build/install and %files' executable ownership.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/zip/zip.spec
 # Consumer: enabled collector exits 255 without zip, then archives with it.
@@ -1185,15 +1027,10 @@ reason = """\
     exit with code 255 if it is missing."""
 
 ["zlib-devel"]
-keep = false
-reason = """\
-    The \
-    [pcre2 recipe](https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/pcre2/pcre2.spec) \
-    declares zlib-devel as a build dependency; the original base-image installing parent is unverified. Contains zlib \
-    headers, libz.a, the development linker symlink, and build metadata. These are required for compilation only."""
+decision = "remove-dependency"
 
 ["zstd"]
-keep = true
+decision = "keep"
 # Payload: zstd, unzstd, pzstd and helpers; zstd-libs separately owns libzstd.so.1*.
 # https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/zstd/zstd.spec
 # Runtime: kdumpctl calls mkdumprd, which calls dracut when the capture initramfs needs rebuilding.
@@ -1214,569 +1051,569 @@ reason = """\
 # RPMDB SHA256: 5c39ee2806fb7bdd44ea02b3bc57d674f2687521612e441d4dd7cf0c2aaa2a7e
 
 ["SymCrypt"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["SymCrypt-OpenSSL"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["attr"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["audit-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["azurelinux-release"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["azurelinux-repos"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["azurelinux-repos-shared"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["azurelinux-rpm-macros"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["bash"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["bzip2-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["ca-certificates"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["ca-certificates-base"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["ca-certificates-shared"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["ca-certificates-tools"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["chkconfig"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["coreutils"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["cpio"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["cracklib"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["cracklib-dicts"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["cryptsetup-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["curl-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["cyrus-sasl-lib"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["dbus"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["device-mapper"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["device-mapper-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["diffutils"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["dracut"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["dracut-hostonly"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["e2fsprogs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["e2fsprogs-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["elfutils"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["elfutils-default-yama-scope"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["elfutils-libelf"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["expat"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["expat-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["file-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["filesystem"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["findutils"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["glib"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["glibc"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["gmp"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["gnupg2"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["gpgme"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["grep"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["grub2"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["grub2-configuration"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["grub2-efi-binary"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["grub2-tools-minimal"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["gzip"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["iana-etc"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["initramfs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["iproute"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["iputils"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["irqbalance"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["json-c"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["kbd"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["kernel"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["kmod"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["krb5"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libacl"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libarchive"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libassuan"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libattr"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libbpf"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libcap"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libcap-ng"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libdb"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libffi"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libgcc"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libgcrypt"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libgpg-error"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libidn2"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libksba"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libmnl"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libpcre2-16-0"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libpcre2-32-0"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libpcre2-8-0"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libpcre2-posix2"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libpkgconf"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libpwquality"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libseccomp"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libselinux"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libsemanage"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libsepol"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libsolv"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libssh2"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libstdc++"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libtasn1"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libunistring"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libxcrypt"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libxkbcommon"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libxml2"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["lua-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["lz4"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["ncurses"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["ncurses-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["newt"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["nghttp2"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["npth"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["openldap"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["openssl"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["openssl-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["p11-kit"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["p11-kit-trust"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["pam"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["pcre2"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["pcre2-tools"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["pinentry"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["pkgconf"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["pkgconf-m4"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["pkgconf-pkg-config"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["popt"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["procps-ng"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["psmisc"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["readline"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["rpm"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["rpm-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["sed"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["shadow-utils"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["shadow-utils-subid"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["shim"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["slang"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["sqlite-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["sudo"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["systemd"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["systemd-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["systemd-networkd"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["systemd-pam"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["systemd-resolved"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["systemd-rpm-macros"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["systemd-udev"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["tdnf"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["tdnf-cli-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["tdnf-plugin-repogpgcheck"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["tpm2-tss"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["util-linux"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["util-linux-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["xkeyboard-config"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["xz"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["xz-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["zlib"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["zstd-libs"]
-keep = true
+decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'

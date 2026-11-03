@@ -6,34 +6,35 @@ RPM image builds also use the reporter. A separate build hook reads its removal 
 
 ## Why this exists
 
-1. **Remove unnecessary packages with dependency checks.** Removing unused packages reduces the software shipped on every node, along with its maintenance and vulnerability-tracking burden. Package sizes and top-level dependents help identify what can be removed and which applications keep libraries installed. The build fails if a package being kept depends on a package selected for removal. Runtime testing is still necessary for uses that RPM dependencies do not describe.
+1. **Remove unnecessary packages with dependency checks.** Removing unused packages reduces the software shipped on every node, along with its maintenance and vulnerability-tracking burden. Package sizes and top-level dependents help identify what can be removed and which applications keep libraries installed. The build fails if a package is selected for removal but is required by another package being kept. Runtime testing is still necessary for uses that RPM dependencies do not describe.
 
-2. **Make package decisions reviewable.** The checked-in TOML policy records each explicit keep or remove decision and its reason. Reviewers can see why a package ships, challenge that decision, and preserve the rationale for future changes. The reports connect those decisions to the installed package versions.
+2. **Make package decisions reviewable.** The checked-in TOML policy records each explicit `keep`, `remove-top-level`, or `remove-dependency` decision. Reasons are required for `keep` and optional for removal decisions. Reviewers can see why a package ships, challenge that decision, and preserve the available rationale for future changes. The reports connect those decisions to the installed package versions.
 
 3. **Surface new removal candidates during builds.** A package with no remaining dependents and no policy entry produces a warning. This gives maintainers a prompt to review unexplained packages as the image changes.
 
 ## Policy and outputs
 
-The build uses [`acl/package-decisions.toml`](../package-decisions.toml). Each package table has a Boolean `keep` and a string `reason`:
+The build uses [`acl/package-decisions.toml`](../package-decisions.toml). Each package table requires a string `decision`: `keep`, `remove-top-level`, or `remove-dependency`. A string `reason` is required for `keep` and optional for both removal classes.
 
 | Decision | Behavior |
 | --- | --- |
-| `keep = true` | Keep the installed package. |
-| `keep = false` | Select the installed package for removal. |
-| No entry | Keep the package, but warn if it has no remaining dependents. |
+| `decision = "keep"` | Keep the installed package with or without dependents. |
+| `decision = "remove-top-level"` | Remove the top-level package. |
+| `decision = "remove-dependency"` | Remove the package because it was a dependency of a top-level package that is selected for removal. |
+| No entry | Keep the package; warn if no dependents remain after excluding packages selected for removal. |
 
-A package with no remaining dependents is a candidate for removal, but it may still be needed directly at runtime. If it has no TOML entry, the reporter warns so you can record an explicit keep or remove decision and its reason. The warning alone does not select the package for removal.
+A package with no remaining dependents is a candidate for review, but it may still be needed directly at runtime. If it has no TOML entry, the reporter warns so you can record an explicit decision, with a reason when required or available. Warnings use the remaining graph after excluding packages selected for removal. The warning never selects the package for removal.
 
 The reporter writes these files under `--output-dir`:
 
 | File | Contents |
 | --- | --- |
-| `package-decisions.csv` | Installed package identities, sizes, decisions, reasons, and remaining dependents. |
+| `package-decisions.csv` | Installed package identities, sizes, decision, reasons, and remaining dependents. |
 | `package-decisions.md` | The same report as a Markdown table. |
-| `packages-selected-for-removal.txt` | Sorted installed package names selected for removal, one per line. |
-| `package-decisions-provenance.json` | Collection inputs, database identity, and applied decisions. |
+| `packages-selected-for-removal.txt` | Sorted unique installed package names explicitly marked for removal, one per line. |
+| `package-decisions-provenance.json` | Collection inputs, database identity, and explicit decision keyed by package name. |
 
-It also prints package-size totals and estimated savings. These are RPM package sizes, not measured disk-image savings.
+It also prints package-size totals and estimated savings, excluding entries selected for removal from the remaining package size. These are RPM package sizes, not measured disk-image savings.
 
 ## Analyze a mounted image
 
@@ -75,7 +76,9 @@ The script exports the tools image into a work-directory chroot and uses its RPM
 
 ## Build and pipeline modes
 
-All pipelines that build RPM base images expose `packageOperation` at queue time, including development, official, nightly, production, fast-track, and PR validation pipelines. They forward the selection as `PACKAGE_OPERATION` through base-image assembly and the SDK login shell.
+Non-production pipelines that build RPM base images expose `packageOperation` at queue time and forward the selection as `PACKAGE_OPERATION` through base-image assembly and the SDK login shell. Production pipelines always use `report-and-remove`.
+
+The following modes apply to non-production pipelines and local builds:
 
 | `packageOperation` / `PACKAGE_OPERATION` | Behavior |
 | --- | --- |
