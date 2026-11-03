@@ -8,6 +8,7 @@ Detailed documentation for Azure Container Linux.
 | [System Extensions](sysexts.md) | Base and standalone sysexts, GPU drivers                                     |
 | [Platforms](platforms.md)       | Supported platforms and OEM packages                                         |
 | [Testing](testing.md)           | Kola/Mantle framework, test categories, enforcing tests                      |
+| [RPM snapshot benchmark](tdnf-snapshot-benchmark.md) | ARM64 tdnf timestamp-snapshot measurements, methodology, and limitations |
 | [Kdump](kdump.md)               | Enabling crash dump (kdump) collection via the UKI addon                     |
 | [SELinux](selinux.md)           | Container workload domains, privilege boundaries, and selection guidance     |
 
