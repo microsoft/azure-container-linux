@@ -6,9 +6,6 @@ license = "MIT"
 publish = false
 autotests = false
 
-[lib]
-path = "lib/lib.rs"
-
 [dependencies]
 uefi = { version = "0.41.0", features = ["alloc"] }
 

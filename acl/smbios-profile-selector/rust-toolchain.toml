@@ -1,4 +1,5 @@
 [toolchain]
+components = ["rust-src"]
 targets = ["aarch64-unknown-uefi", "x86_64-unknown-uefi"]
 # https://github.com/rust-lang/rust/issues/160827
 channel = "1.98"

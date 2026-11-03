@@ -8,7 +8,8 @@ use uefi::{ResultExt, Status, entry, println};
 
 #[unsafe(link_section = ".sbat")]
 #[used]
-static SBAT: [u8; include_bytes!("sbat.csv").len()] = *include_bytes!("sbat.csv");
+static SBAT: [u8; include_bytes!(concat!(env!("OUT_DIR"), "/sbat.csv")).len()] =
+    *include_bytes!(concat!(env!("OUT_DIR"), "/sbat.csv"));
 
 /// Run the selector, print any failure, and return a UEFI status to the calling loader.
 #[entry]
