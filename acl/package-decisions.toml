@@ -58,11 +58,6 @@ reason = """\
     Contains azure-nvme-id and Azure disk-identification udev rules. These supply device links used by AKS \
     provisioning, including the resource-disk path when swap is configured on that disk."""
 
-["azurelinux-repos-cloud-native"]
-decision = "keep"
-reason = """\
-    Needed during image construction. Removed at the end of the image build."""
-
 ["bc"]
 decision = "remove-top-level"
 reason = """\
@@ -558,14 +553,6 @@ decision = "remove-dependency"
 ["mariadb-connector-c-config"]
 decision = "remove-dependency"
 
-["microcode_ctl"]
-decision = "remove-top-level"
-reason = """\
-    Contains guest CPU-microcode update support. Not installed in the captured base inventory. Historical inclusion \
-    remains unverified. Azure manages physical CPU microcode, and ACL's \
-    [dracut configuration](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/additional_files/99-acl.conf) \
-    explicitly disables early microcode loading in the guest."""
-
 ["mokutil"]
 decision = "remove-top-level"
 reason = """\
@@ -605,16 +592,6 @@ decision = "keep"
 reason = """\
     Contains nft, the libnftables shared library, and firewall service configuration. Keep for AKS support \
     diagnostics: the host collector executes nft -n list ruleset when nftables collection is enabled."""
-
-["nmap"]
-decision = "remove-top-level"
-# Absent from the captured base and oem-azure inventories; nmap-ncat is separate.
-reason = """\
-    The \
-    [nmap recipe](https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/nmap/nmap.spec) \
-    packages nmap, nping, and scanning support separately from nmap-ncat. Not installed in the captured base or \
-    oem-azure inventory. Historical inclusion remains unverified. No required provisioning or runtime caller was \
-    found; preserve the separately packaged nmap-ncat connectivity tools."""
 
 ["nmap-ncat"]
 decision = "keep"
@@ -1070,18 +1047,6 @@ reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
-["azurelinux-repos"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["azurelinux-repos-shared"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["azurelinux-rpm-macros"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
 ["bash"]
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
@@ -1091,10 +1056,6 @@ decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["ca-certificates"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["ca-certificates-base"]
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
@@ -1155,10 +1116,6 @@ decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["dracut"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["dracut-hostonly"]
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
@@ -1226,19 +1183,7 @@ reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
-["grub2"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
 ["grub2-configuration"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["grub2-efi-binary"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["grub2-tools-minimal"]
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
@@ -1247,10 +1192,6 @@ decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["iana-etc"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["initramfs"]
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
@@ -1287,10 +1228,6 @@ decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libacl"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["libarchive"]
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
@@ -1383,10 +1320,6 @@ decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["libsepol"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["libsolv"]
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
@@ -1510,14 +1443,6 @@ reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
-["rpm"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["rpm-libs"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
 ["sed"]
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
@@ -1571,18 +1496,6 @@ decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["systemd-udev"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["tdnf"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["tdnf-cli-libs"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["tdnf-plugin-repogpgcheck"]
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
