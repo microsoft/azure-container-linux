@@ -88,6 +88,28 @@ reason = """\
     Contains nslookup and dig. AKS provisioning calls nslookup for FQDN API-server checks; enabled LocalDNS watchdogs \
     call dig."""
 
+["binutils"]
+decision = "remove-dependency"
+# Payload: linker, assembler, objcopy, objdump, strip, and versioned libbfd/libopcodes.
+# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/binutils/binutils.spec
+# Captured 2.41-13.azl3 dependents: binutils-devel and bpftool, both selected for removal.
+# Remove both cycle members together; no required production-host caller was found.
+# ACL disables dracut stripping with do_strip="no".
+# https://github.com/microsoft/azure-container-linux/blob/d93eab8bb13e571da5139054906f71b3fb65f14b/build_library/rpm/additional_files/99-acl.conf
+# dracut 102 uses objcopy/objdump for UEFI output; ordinary initramfs output skips that path.
+# https://github.com/dracut-ng/dracut-ng/blob/102/dracut.sh
+# Reviewed mkdumprd arguments do not request UEFI output or enable stripping.
+# User-supplied dracut_args can override those defaults; that custom workflow is not covered.
+# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/kexec-tools/mkdumprd
+
+["binutils-devel"]
+decision = "remove-dependency"
+# Payload: headers, static libraries, and runtime libctf, libsframe, and libgprofng libraries.
+# This is not a headers-only RPM. Its explicit binutils requirement and main's library requirements form a cycle.
+# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/binutils/binutils.spec
+# Captured 2.41-13.azl3 dependents: binutils and bpftool, both selected for removal.
+# Remove with binutils and bpftool in one transaction; no retained RPM consumer appears in the captured graph.
+
 ["bison"]
 decision = "remove-top-level"
 reason = """\
@@ -387,6 +409,35 @@ reason = """\
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
     directly includes sys-cluster/ipvsadm. Kube-proxy programs IPVS through netlink; retain ipvsadm only for an \
     explicitly supported host administration workflow."""
+
+["iscsi-initiator-utils"]
+decision = "keep"
+# Payload: iscsiadm, iscsid, iscsistart, libraries, and iSCSI service/socket units.
+# The main RPM unconditionally requires iscsi-initiator-utils-iscsiuio.
+# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/iscsi-initiator-utils/iscsi-initiator-utils.spec
+# Activation: kubelet registers iscsi.ProbeVolumePlugins; CanSupport selects iSCSI volumes.
+# https://github.com/kubernetes/kubernetes/blob/93248f9ae092f571eb870b7664c534bfc7d00f03/cmd/kubelet/app/plugins.go
+# https://github.com/kubernetes/kubernetes/blob/93248f9ae092f571eb870b7664c534bfc7d00f03/pkg/volume/iscsi/iscsi.go
+# Consumer: host exec runs iscsiadm for discovery, node configuration, login, and logout.
+# https://github.com/kubernetes/kubernetes/blob/93248f9ae092f571eb870b7664c534bfc7d00f03/pkg/volume/iscsi/iscsi_util.go
+# Actual node version and deployed iSCSI workloads remain unverified.
+reason = """\
+    Contains iscsiadm and iscsid for iSCSI session management. Keep to preserve kubelet's generic iSCSI volume path, \
+    which executes host iscsiadm for discovery, configuration, login, and logout when a Pod or PersistentVolume \
+    requests iSCSI storage. RPM reverse dependencies do not capture this runtime caller. Preserve the required \
+    iscsi-initiator-utils-iscsiuio subpackage too."""
+
+["iscsi-initiator-utils-iscsiuio"]
+decision = "keep"
+# Payload: iscsiuio and its service/socket units for certain iSCSI offload adapters.
+# Packaging: main requires this subpackage >= its version-release; this requires main = its version-release.
+# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/iscsi-initiator-utils/iscsi-initiator-utils.spec
+# Installed 2.1.12-1.azl3 requirements confirm the mutual dependency.
+# No ACL hardware-offload consumer was verified; retention follows the main RPM's requirement.
+reason = """\
+    Contains iscsiuio and its service/socket units for certain iSCSI offload adapters. The retained \
+    iscsi-initiator-utils RPM unconditionally requires this subpackage, including for software iSCSI installations. \
+    Keep to satisfy that packaging requirement; ordinary software iSCSI does not itself need this hardware helper."""
 
 ["jq"]
 decision = "keep"

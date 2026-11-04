@@ -111,6 +111,8 @@ def artifact_files(
     artifact_nodes: object,
     filename: str | None,
     max_bytes: int,
+    *,
+    context: str = "artifact",
 ) -> list[tuple[str, int]]:
     """Read the ADO artifact-browser tree; this read-only UI API is undocumented."""
     if not isinstance(artifact_nodes, list):
@@ -129,14 +131,14 @@ def artifact_files(
             size = node.get("size")
             if not isinstance(size, int) or not 16 <= size <= max_bytes:
                 file_kind = "RPM database" if filename is None else "file"
-                raise InventoryError(f"Unexpected {file_kind} size in artifact")
+                raise InventoryError(f"Unexpected {file_kind} size in {context}: {source}")
 
             matched_files.append((str(source), size))
 
         child_nodes: object = node.get("items", [])
         if child_nodes is None and isinstance(source, str):
             child_nodes = []  # Azure DevOps emits items:null on file nodes.
-        matched_files.extend(artifact_files(child_nodes, filename, max_bytes))
+        matched_files.extend(artifact_files(child_nodes, filename, max_bytes, context=context))
 
     return matched_files
 
@@ -209,18 +211,24 @@ def download_acl(
     build: int,
     *,
     acl_template: bool = False,
+    qemu: bool = False,
 ) -> tuple[Path, dict[str, object]]:
     if type(build) is not int or build <= 0:
         raise InventoryError("Downloading requires a positive numeric build ID")
 
-    download_kind = "image" if acl_template else "RPM database"
+    if acl_template and qemu:
+        raise InventoryError("ACL-T downloads support only Azure images")
+
+    image_platform = "QEMU" if qemu else "Azure"
+    download_kind = f"ACL-T {image_platform} image" if acl_template else f"{image_platform} RPM database"
+
     print(f"Downloading {download_kind} from build {build}...", flush=True)
 
     oci_arch = OCI_ARCHES_BY_NATIVE_ARCH[native_architecture()]
     if acl_template:
         artifact_name = f"drop_build_acl_template_{oci_arch}_customize_and_sign"
     else:
-        artifact_name = f"drop_build_rpm_image_{oci_arch}_build_azure"
+        artifact_name = f"drop_build_rpm_image_{oci_arch}_build_{'qemu' if qemu else 'azure'}"
 
     token_command = [
         "az",
@@ -272,16 +280,23 @@ def download_acl(
             provider["items"],
             selected_file,
             MAX_IMAGE_BYTES,
+            context=f"{image_platform} artifact {artifact_name}",
         )
     else:
         selected_file = "*_rpmdb.sqlite"
-        matched_files = artifact_files(provider["items"], None, MAX_DB_BYTES)
+        matched_files = artifact_files(
+            provider["items"], None, MAX_DB_BYTES,
+            context=f"{image_platform} artifact {artifact_name}",
+        )
 
     if len(matched_files) != 1:
         raise InventoryError(f"Expected one {selected_file} in {artifact_name}; got {matched_files}")
 
     source, size = matched_files[0]
-    target = work / ("acl-t-image.vhdx" if acl_template else "acl-rpmdb.sqlite")
+    target = work / ("acl-t-azure-image.vhdx" if acl_template else "acl-azure-rpmdb.sqlite")
+    if qemu:
+        target = work / "acl-qemu-rpmdb.sqlite"
+
     url = single_file_url(str(resource["downloadUrl"]), source)
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     temporary = target.with_suffix(".partial")
@@ -292,12 +307,12 @@ def download_acl(
             while chunk := response.read(1024 * 1024):
                 total += len(chunk)
                 if total > size:
-                    raise InventoryError("Artifact response exceeds expected file size")
+                    raise InventoryError(f"{download_kind} response exceeds expected file size: {source}")
 
                 stream.write(chunk)
 
         if total != size:
-            raise InventoryError("Truncated artifact download")
+            raise InventoryError(f"Truncated {download_kind} download: {source}")
 
         if not acl_template:
             validate_database(temporary)
@@ -309,6 +324,7 @@ def download_acl(
     provenance: dict[str, object] = {
         "build_id": build,
         "build_number": build_info["buildNumber"],
+        "image_platform": image_platform.lower(),
         "artifact": artifact_name,
         "source_path": source,
     }
@@ -643,13 +659,13 @@ def nbd_image(image: Path) -> Generator[str, None, None]:
 
 
 def extract_image_database(image: Path, work: Path) -> Path:
-    """Copy a VHDX image's RPM database using read-only partition mounts."""
-    destination = work / "acl-t-rpmdb.sqlite"
-    mount = work / "acl-t-mount"
+    """Copy an ACL-T Azure VHDX image's RPM database using read-only mounts."""
+    destination = work / "acl-t-azure-rpmdb.sqlite"
+    mount = work / "acl-t-azure-mount"
     mount.mkdir(exist_ok=True)
     mount = mount.resolve(strict=True)
 
-    copied = work / "acl-t-rpmdb-source"
+    copied = work / "acl-t-azure-rpmdb-source"
     copied.mkdir(exist_ok=True)
 
     for filename in ("rpmdb.sqlite", "rpmdb.sqlite-wal", "rpmdb.sqlite-shm"):
@@ -711,7 +727,7 @@ def extract_image_database(image: Path, work: Path) -> Path:
 
                 unique_database_paths = set(candidate_database_paths)
                 if len(unique_database_paths) > 1:
-                    raise InventoryError("Multiple RPM databases on image root partition")
+                    raise InventoryError("Multiple RPM databases on ACL-T Azure image root partition")
 
                 if unique_database_paths:
                     source = unique_database_paths.pop()
@@ -727,7 +743,7 @@ def extract_image_database(image: Path, work: Path) -> Path:
                             raise
 
                         if not original.is_relative_to(mount) or not stat.S_ISREG(original.lstat().st_mode):
-                            raise InventoryError(f"Image RPM database input must be a contained regular file: {original}")
+                            raise InventoryError(f"ACL-T Azure RPM database input must be a contained regular file: {original}")
 
                         sources_by_suffix[suffix] = original
 
@@ -742,7 +758,7 @@ def extract_image_database(image: Path, work: Path) -> Path:
                 root_run(["umount", str(mount)])
 
         if found != 1:
-            raise InventoryError(f"Expected exactly one image root RPM database; found {found}")
+            raise InventoryError(f"Expected exactly one ACL-T Azure image root RPM database; found {found}")
 
     backup_database(copied / "rpmdb.sqlite", destination)
 
@@ -955,6 +971,7 @@ def query_database(
     rpm_executable: str,
     package_manager_executable: str | None,
     package_manager: str,
+    database_label: str = "mounted image",
 ) -> tuple[list[Package], dict[str, set[str]], str]:
     """Query a copied database in chroot tools or an already-private native snapshot."""
     runner: Callable[[Sequence[str]], str]
@@ -968,7 +985,7 @@ def query_database(
         if rpm_executable != "rpm" or package_manager_executable is not None or package_manager != "tdnf":
             raise InventoryError("Chroot queries support only tdnf without native options")
 
-        print("Validating and copying RPM database...", flush=True)
+        print(f"Validating and copying {database_label} RPM database {database}...", flush=True)
         validate_database(database)
 
         target = tools / inside.lstrip("/")
@@ -979,7 +996,7 @@ def query_database(
         root_run(["cp", str(database), str(target / "var/lib/rpm/rpmdb.sqlite")])
         root_run(["cp", str(tools / "etc/os-release"), str(target / "etc/os-release")])
 
-        print("Reading installed RPM packages...", flush=True)
+        print(f"Reading installed {database_label} RPM packages...", flush=True)
         rpm_command = ["chroot", str(tools), "rpm", "--root", inside, "--dbpath", "/var/lib/rpm"]
         runner = root_run
     else:
@@ -995,7 +1012,7 @@ def query_database(
     packages = [package for package in parse_packages(runner([*rpm_command, "-qa", "--qf", RPM_FORMAT]))
                 if package.name != "gpg-pubkey"]
     if not packages:
-        raise InventoryError("RPM database contains no installed packages (only signing keys)")
+        raise InventoryError(f"{database_label} RPM database contains no installed packages (only signing keys)")
 
     validate_unique_package_names(packages)
 
@@ -1729,7 +1746,12 @@ def main(argv: list[str] | None = None) -> None:
         help="native solver for current build ID only (default: dnf5)",
     )
     parser.add_argument("--tools-image", default=TOOLS_IMAGE)
-    parser.add_argument("--build-rpmdb", type=Path, help="use a local ACL/ACL-T database instead of downloading")
+    parser.add_argument("--build-rpmdb", type=Path, help="use a local Azure or QEMU RPM database instead of downloading")
+    parser.add_argument(
+        "--image-platform",
+        choices=("azure", "qemu"),
+        help="Azure or QEMU RPM database to analyze (default: azure); both platforms are downloaded",
+    )
     parser.add_argument(
         "--package-decisions-file",
         type=Path,
@@ -1752,6 +1774,21 @@ def main(argv: list[str] | None = None) -> None:
     if args.build_id is not None and args.package_manager is not None:
         parser.error("--package-manager is forbidden with a numeric --build-id")
 
+    if args.image_platform is not None and (
+        args.build_id is None or args.build_rpmdb is not None or args.acl_template
+    ):
+        parser.error("--image-platform requires --build-id without --build-rpmdb or --acl-template")
+
+    image_platform: str = args.image_platform or "azure"
+    database_label = "ACL-T Azure" if args.acl_template else f"ACL {'QEMU' if image_platform == 'qemu' else 'Azure'}"
+    inventory_name = f"{image_name}-{image_platform}"
+    if args.root_dir is not None:
+        database_label = "ACL mounted image"
+    elif args.build_rpmdb is not None:
+        database_label = f"{image_title} local file {args.build_rpmdb}"
+        inventory_name = f"{image_name}-local"
+
+    image_title = database_label
     package_manager: str = args.package_manager or "dnf5"
     decisions_by_pkgname: dict[str, Decision] = {}
     reasons_by_pkgname: dict[str, str] = {}
@@ -1829,36 +1866,47 @@ def main(argv: list[str] | None = None) -> None:
                     if args.acl_template:
                         build_rpmdb, provenance[image_name] = download_acl(work, args.build_id, acl_template=True)
                     else:
-                        build_rpmdb, provenance[image_name] = download_acl(work, args.build_id)
+                        downloaded_databases = {
+                            "azure": download_acl(work, args.build_id),
+                            "qemu": download_acl(work, args.build_id, qemu=True),
+                        }
+                        build_rpmdb, provenance[image_name] = downloaded_databases[image_platform]
+                        provenance["image_platform"] = image_platform
+                        for download_platform, (database, source) in downloaded_databases.items():
+                            if download_platform != image_platform:
+                                provenance[f"acl_{download_platform}_download"] = {**source, "path": str(database)}
+                                print(f"Downloaded {download_platform.upper()} RPM database {database} (not analyzed)", flush=True)
 
                 reuse_arguments = [
                     "--build-rpmdb",
                     str(build_rpmdb.resolve()),
                 ]
+                reuse_instruction = "add" if args.image_platform is None else "omit --image-platform and add"
                 print(
-                    "To skip the database download on the next run, add:\n  " + shlex.join(reuse_arguments),
+                    f"To reuse the {database_label} RPM database without downloading, {reuse_instruction}:\n  " + shlex.join(reuse_arguments),
                     flush=True,
                 )
 
-                inventory_path = work / "inventories" / f"{image_name}.json"
+                inventory_path = work / "inventories" / f"{inventory_name}.json"
                 database_digest = sha256(build_rpmdb)
                 cache_key: dict[str, object] = {
                     "version": 1,
                     "rpmdb_sha256": database_digest,
                     "tools_image": args.tools_image,
+                    "database_label": database_label,
                 }
                 cached = read_inventory(inventory_path, cache_key)
 
                 if cached is not None:
                     packages, dependents_by_nvra = cached
                     validate_package_architectures(packages, architecture)
-                    print(f"Reusing cached {image_name} inventory {inventory_path}", flush=True)
+                    print(f"Reusing cached {database_label} inventory {inventory_path}", flush=True)
                 else:
                     print("Preparing Azure Linux tools directory...", flush=True)
                     tools = prepare_tools(work, args.tools_image)
                     provenance["tools_inspect"] = json.loads(root_run(["docker", "image", "inspect", args.tools_image]))
 
-                    print(f"Querying {image_name} RPM database...", flush=True)
+                    print(f"Querying {database_label} RPM database {build_rpmdb}...", flush=True)
                     packages, dependents_by_nvra, _ = query_database(
                         tools,
                         build_rpmdb.resolve(),
@@ -1866,18 +1914,20 @@ def main(argv: list[str] | None = None) -> None:
                         rpm_executable="rpm",
                         package_manager_executable=None,
                         package_manager="tdnf",
+                        database_label=database_label,
                     )
 
                     if sha256(build_rpmdb) != database_digest:
-                        raise InventoryError(f"{image_name} RPM database changed during collection; rerun")
+                        raise InventoryError(f"{database_label} RPM database changed during collection; rerun")
 
                 validate_package_presence(decisions_by_pkgname, packages)
 
                 if cached is None:
                     write_inventory(inventory_path, packages, dependents_by_nvra, cache_key=cache_key)
-                    print(f"Wrote raw inventory {inventory_path}", flush=True)
+                    print(f"Wrote raw {database_label} inventory {inventory_path}", flush=True)
 
                 provenance[image_name + "_database"] = {
+                    "database_label": database_label,
                     "path": str(build_rpmdb),
                     "sha256": database_digest,
                     "packages": len(packages),

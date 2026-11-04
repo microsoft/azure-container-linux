@@ -70,7 +70,10 @@ python3 -B build_library/rpm/report_image_packages.py \
 | --- | --- |
 | `--acl-template` | Download the build's ACL-T VHDX and extract its RPM database using read-only mounts. Requires `qemu-nbd`, partition tools, and an available NBD device. |
 | `--build-rpmdb PATH` | Use an existing SQLite RPM database and skip the artifact download. Azure CLI authentication is then unnecessary. |
+| `--image-platform azure\|qemu` | Select which downloaded ACL RPM database to analyze. Defaults to `azure`. Cannot be combined with `--root-dir`, `--build-rpmdb`, or `--acl-template`. |
 | `--tools-image IMAGE` | Override the tools image, defaulting to `mcr.microsoft.com/azurelinux/base/core:3.0`. |
+
+For standard ACL artifact analysis, the script downloads the Azure RPM database to `acl-azure-rpmdb.sqlite` and the QEMU alternative to `acl-qemu-rpmdb.sqlite` under `--work-dir`. Only the selected database is analyzed. Add `--image-platform qemu` to the build-ID example above to analyze QEMU. Provenance identifies the selected platform and records the other database as download-only. `--build-rpmdb` skips both downloads, and `--acl-template` uses the ACL-T Azure image path.
 
 The script exports the tools image into a work-directory chroot and uses its RPM and tdnf tools.
 
