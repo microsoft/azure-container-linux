@@ -1,4 +1,4 @@
-"""Report ACL/ACL-T package decisions and removal candidates from an explicit TOML policy."""
+"""Report ACL/ACL-T package decisions and removal candidates from explicit TOML policies."""
 
 from __future__ import annotations
 
@@ -1691,6 +1691,26 @@ def load_decision_file(path: Path) -> tuple[dict[str, Decision], dict[str, str]]
     return decisions_by_pkgname, reasons_by_pkgname
 
 
+def load_decision_files(paths: Sequence[Path]) -> tuple[dict[str, Decision], dict[str, str]]:
+    """Combine strict policies, rejecting any package defined in multiple files."""
+    decisions_by_pkgname: dict[str, Decision] = {}
+    reasons_by_pkgname: dict[str, str] = {}
+
+    for path in paths:
+        decisions, reasons = load_decision_file(path)
+        overlapping_pkgnames = sorted(decisions_by_pkgname.keys() & decisions.keys())
+        if overlapping_pkgnames:
+            raise InventoryError(
+                f"Overlapping package decisions in {path}: {', '.join(overlapping_pkgnames)}; "
+                "each package must appear in only one policy file"
+            )
+
+        decisions_by_pkgname.update(decisions)
+        reasons_by_pkgname.update(reasons)
+
+    return decisions_by_pkgname, reasons_by_pkgname
+
+
 def validate_removal(
     pkgnames_to_remove: Sequence[str],
     rpm: str,
@@ -1755,9 +1775,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--package-decisions-file",
         type=Path,
+        action="append",
+        default=[],
         metavar="TOML",
-           help="TOML package tables with decision (keep, remove-top-level, or remove-dependency) "
-               "and string reason (required for keep, optional for removal decisions)",
+        help="TOML package tables with decision (keep, remove-top-level, or remove-dependency) "
+             "and string reason (required for keep, optional for removal decisions); "
+             "repeat for additional files with nonoverlapping package names",
     )
 
     args = parser.parse_args(argv)
@@ -1793,11 +1816,11 @@ def main(argv: list[str] | None = None) -> None:
     decisions_by_pkgname: dict[str, Decision] = {}
     reasons_by_pkgname: dict[str, str] = {}
 
-    if args.package_decisions_file is not None:
-        try:
-            decisions_by_pkgname, reasons_by_pkgname = load_decision_file(args.package_decisions_file)
-        except (InventoryError, OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
-            parser.error(f"--package-decisions-file: {error}")
+    decision_files: list[Path] = args.package_decisions_file
+    try:
+        decisions_by_pkgname, reasons_by_pkgname = load_decision_files(decision_files)
+    except (InventoryError, OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
+        parser.error(f"--package-decisions-file: {error}")
 
     try:
         architecture = native_architecture()
@@ -1956,9 +1979,7 @@ def main(argv: list[str] | None = None) -> None:
 
             remaining_dependents_by_nvra = report_dependents(packages, dependents_by_nvra, decisions_by_pkgname)
 
-            if args.package_decisions_file is not None:
-                provenance["decision_file"] = str(args.package_decisions_file.resolve())
-
+            provenance["decision_files"] = [str(path.resolve()) for path in decision_files]
             provenance["decisions"] = {name: decision.value for name, decision in sorted(decisions_by_pkgname.items())}
 
             output.mkdir(parents=True, exist_ok=True)

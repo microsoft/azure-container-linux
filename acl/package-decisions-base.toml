@@ -816,21 +816,6 @@ reason = """\
     directly includes dev-debug/strace. It is needed for on-demand troubleshooting; ACL's testing extension already \
     includes it."""
 
-["systemd-boot"]
-decision = "keep"
-# Payload: %files boot and its file splitter include bootloader and stub.
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/systemd/systemd.spec
-# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/systemd/split-files.py
-# Consumers: UKI-mode package installation, stub input, and EFI loader copy.
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/prod_image_util.sh
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/uki_install.sh
-# Activation: default UKI mode and finalizer selection of the UKI installer.
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/common.sh
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/build_image_util.sh
-reason = """\
-    Contains the systemd EFI bootloader and UKI stub. ACL's UKI assembly consumes both to deploy its EFI/UKI boot \
-    chain."""
-
 ["systemd-container"]
 decision = "remove-top-level"
 # Payload: nspawn/vmspawn, machinectl, machined, import/pull tools and related units.
@@ -894,20 +879,6 @@ reason = """\
     Contains traceroute for network-path probing. The inherited \
     [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
     directly includes net-analyzer/traceroute. No required provisioning or runtime invocation was found."""
-
-["trident-acl"]
-decision = "keep"
-# Payload: trident-acl-agent and its service; trident owns tridentd.socket.
-# https://github.com/microsoft/azure-container-linux/blob/d93eab8bb13e571da5139054906f71b3fb65f14b/acl/SPECS/trident/trident.spec
-# Consumer: the service executes the agent, which drives stage/finalize/rollback/commit.
-# https://github.com/microsoft/trident/blob/v0.30.0/packaging/systemd/trident-acl-agent.service
-# https://github.com/microsoft/trident/blob/v0.30.0/crates/trident-acl-agent/src/main.rs
-# Activation scope: catalog selects trident-acl for UKI images and filters it from GRUB.
-# https://github.com/microsoft/azure-container-linux/blob/d93eab8bb13e571da5139054906f71b3fb65f14b/build_library/rpm/package_catalog.sh
-reason = """\
-    Contains trident-acl-agent and its systemd service. Keep for UKI-ACL host servicing: the agent watches Kubernetes \
-    update-request annotations and drives Trident staging, finalization, rollback, and commit. GRUB images exclude \
-    this package through the catalog."""
 
 ["tzdata"]
 decision = "keep"
@@ -1503,10 +1474,6 @@ decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 
 ["shadow-utils-subid"]
-decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
-
-["shim"]
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 

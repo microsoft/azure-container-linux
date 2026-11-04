@@ -14,7 +14,7 @@ RPM image builds also use the reporter. A separate build hook reads its removal 
 
 ## Policy and outputs
 
-The build uses [`acl/package-decisions.toml`](../package-decisions.toml). Each package table requires a string `decision`: `keep`, `remove-top-level`, or `remove-dependency`. A string `reason` is required for `keep` and optional for both removal classes.
+All builds use [`acl/package-decisions-base.toml`](../package-decisions-base.toml). UKI builds also use [`acl/package-decisions-uki.toml`](../package-decisions-uki.toml), which contains `shim`, `systemd-boot`, and `trident-acl`. GRUB builds use only the base policy.
 
 | Decision | Behavior |
 | --- | --- |
@@ -45,12 +45,14 @@ Replace `/path/to/mounted-image` with the mounted image root:
 ```bash
 python3 -B build_library/rpm/report_image_packages.py \
   --root-dir /path/to/mounted-image \
-  --package-decisions-file acl/package-decisions.toml \
+  --package-decisions-file acl/package-decisions-base.toml \
   --work-dir _tmp/package-report-work \
   --output-dir _tmp/package-reports
 ```
 
 DNF5 is the default solver and supports cross-architecture image analysis. `--package-manager tdnf` selects the alternative native solver, which requires matching host and image package architectures.
+
+For UKI images, also pass `--package-decisions-file acl/package-decisions-uki.toml`. Use only the base policy for GRUB images. The same selection applies to build-artifact analysis below.
 
 ## Analyze a build artifact
 
@@ -61,7 +63,7 @@ Downloading also requires Azure CLI authentication and access to the selected Az
 ```bash
 python3 -B build_library/rpm/report_image_packages.py \
   --build-id 1237844 \
-  --package-decisions-file acl/package-decisions.toml \
+  --package-decisions-file acl/package-decisions-base.toml \
   --work-dir _tmp/build-package-report-work \
   --output-dir _tmp/build-package-reports
 ```

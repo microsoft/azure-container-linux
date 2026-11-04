@@ -1522,10 +1522,15 @@ report_and_remove_image_packages_rpm() {
     local report_script="${BUILD_LIBRARY_DIR}/rpm/report_image_packages.py"
     local output_dir="${BUILD_DIR}/package-reports"
     local packages_selected_for_removal_file="${output_dir}/packages-selected-for-removal.txt"
+    local -a policy_args=(--package-decisions-file "${SCRIPT_ROOT}/acl/package-decisions-base.toml")
+    if [[ "${BOOTLOADER_MODE:-}" == "uki" ]]; then
+        policy_args+=(--package-decisions-file "${SCRIPT_ROOT}/acl/package-decisions-uki.toml")
+    fi
+
     sudo python3 -B "${report_script}" \
         --root-dir "${root_fs_dir}" \
         --work-dir "${BUILD_DIR}/.package-report-work" \
-        --package-decisions-file "${SCRIPT_ROOT}/acl/package-decisions.toml" \
+        "${policy_args[@]}" \
         --output-dir "${output_dir}" || return 1
 
     sudo chmod 0755 "${output_dir}" || return 1
