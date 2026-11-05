@@ -1,46 +1,55 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#[cfg(test)]
+mod tests;
+
 use alloc::vec::Vec;
 use core::{ops::Range, ptr, slice, str};
 use uefi::{
     Result as EfiResult, Status, boot, mem::memory_map::MemoryMap, println, system, table::cfg::ConfigTableEntry,
 };
 
-pub(super) const MAX_SMBIOS_TABLE_BYTES: usize = 1024 * 1024;
+const MAX_SMBIOS_TABLE_BYTES: usize = 1024 * 1024;
 
-pub(super) const SMBIOS2_ENTRY_POINT_BYTES: usize = 31;
-pub(super) const SMBIOS2_LENGTH_OFFSET: usize = 5;
-pub(super) const SMBIOS2_MAJOR_VERSION_OFFSET: usize = 6;
-pub(super) const SMBIOS2_MIN_MAJOR_VERSION: u8 = 2;
-pub(super) const SMBIOS2_INTERMEDIATE_ANCHOR_RANGE: Range<usize> = 16..21;
-pub(super) const SMBIOS2_INTERMEDIATE_HEADER_RANGE: Range<usize> = 16..31;
-pub(super) const SMBIOS2_TABLE_LENGTH_RANGE: Range<usize> = 22..24;
-pub(super) const SMBIOS2_TABLE_ADDRESS_RANGE: Range<usize> = 24..28;
+// SMBIOS 3.8.0 (DSP0134), section 5.2.1, Table 1: 32-bit entry point.
+// https://www.dmtf.org/sites/default/files/standards/documents/DSP0134_3.8.0.pdf
+const SMBIOS2_ENTRY_POINT_BYTES: usize = 31;
+const SMBIOS2_LENGTH_OFFSET: usize = 5;
+const SMBIOS2_MAJOR_VERSION_OFFSET: usize = 6;
+const SMBIOS2_MIN_MAJOR_VERSION: u8 = 2;
+const SMBIOS2_INTERMEDIATE_ANCHOR_RANGE: Range<usize> = 16..21;
+const SMBIOS2_INTERMEDIATE_HEADER_RANGE: Range<usize> = 16..31;
+const SMBIOS2_TABLE_LENGTH_RANGE: Range<usize> = 22..24;
+const SMBIOS2_TABLE_ADDRESS_RANGE: Range<usize> = 24..28;
 
-pub(super) const SMBIOS3_ENTRY_POINT_BYTES: usize = 24;
-pub(super) const SMBIOS3_LENGTH_OFFSET: usize = 6;
-pub(super) const SMBIOS3_MAJOR_VERSION_OFFSET: usize = 7;
-pub(super) const SMBIOS3_MIN_MAJOR_VERSION: u8 = 3;
-pub(super) const SMBIOS3_TABLE_MAX_SIZE_RANGE: Range<usize> = 12..16;
-pub(super) const SMBIOS3_TABLE_ADDRESS_RANGE: Range<usize> = 16..24;
-pub(super) const ENTRY_POINT_PREFIX_BYTES: usize = SMBIOS3_LENGTH_OFFSET + 1;
+// Section 5.2.2, Table 2: 64-bit entry point.
+const SMBIOS3_ENTRY_POINT_BYTES: usize = 24;
+const SMBIOS3_LENGTH_OFFSET: usize = 6;
+const SMBIOS3_MAJOR_VERSION_OFFSET: usize = 7;
+const SMBIOS3_MIN_MAJOR_VERSION: u8 = 3;
+const SMBIOS3_TABLE_MAX_SIZE_RANGE: Range<usize> = 12..16;
+const SMBIOS3_TABLE_ADDRESS_RANGE: Range<usize> = 16..24;
+const ENTRY_POINT_PREFIX_BYTES: usize = SMBIOS3_LENGTH_OFFSET + 1;
 
-pub(super) const RECORD_HEADER_BYTES: usize = 4;
-pub(super) const RECORD_TYPE_OFFSET: usize = 0;
-pub(super) const RECORD_LENGTH_OFFSET: usize = 1;
-pub(super) const PROCESSOR_RECORD_TYPE: u8 = 4;
-pub(super) const END_OF_TABLE_RECORD_TYPE: u8 = 127;
-pub(super) const PROCESSOR_MIN_BYTES: usize = 26;
-pub(super) const PROCESSOR_MANUFACTURER_OFFSET: usize = 7;
-pub(super) const PROCESSOR_STATUS_OFFSET: usize = 24;
-pub(super) const PROCESSOR_POPULATED_MASK: u8 = 0x40;
-pub(super) const STRING_SET_TERMINATOR: [u8; 2] = [0, 0];
+// Structure header: section 6.1.2, Table 3.
+// Processor fields: section 7.5, Table 21; end marker: section 7.49, Table 141.
+// String-set termination: section 6.1.3.
+const RECORD_HEADER_BYTES: usize = 4;
+const RECORD_TYPE_OFFSET: usize = 0;
+const RECORD_LENGTH_OFFSET: usize = 1;
+const PROCESSOR_RECORD_TYPE: u8 = 4;
+const END_OF_TABLE_RECORD_TYPE: u8 = 127;
+const PROCESSOR_MIN_BYTES: usize = 26;
+const PROCESSOR_MANUFACTURER_OFFSET: usize = 7;
+const PROCESSOR_STATUS_OFFSET: usize = 24;
+const PROCESSOR_POPULATED_MASK: u8 = 0x40;
+const STRING_SET_TERMINATOR: [u8; 2] = [0, 0];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct SmbiosTableLocation {
-    pub(super) address: u64,
-    pub(super) length: usize,
+struct SmbiosTableLocation {
+    address: u64,
+    length: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +62,7 @@ pub(super) enum SmbiosDetectionError {
 /// Use SMBIOS 3 by default; fall back to SMBIOS 2 if the SMBIOS 3 entry is not found.
 pub(super) fn read_smbios() -> EfiResult<Vec<u8>> {
     // Find the preferred SMBIOS entry-point header in the firmware configuration tables.
-    let (pointer, smbios3) = system::with_config_table(|entries| {
+    let (pointer, is_smbios3) = system::with_config_table(|entries| {
         entries
             .iter()
             .find(|entry| entry.guid == ConfigTableEntry::SMBIOS3_GUID)
@@ -72,7 +81,7 @@ pub(super) fn read_smbios() -> EfiResult<Vec<u8>> {
     // Read the header prefix to determine how many entry-point bytes to copy.
     let header = read_firmware_memory(pointer, ENTRY_POINT_PREFIX_BYTES, false)?;
     let length = usize::from(
-        header[if smbios3 {
+        header[if is_smbios3 {
             SMBIOS3_LENGTH_OFFSET
         } else {
             SMBIOS2_LENGTH_OFFSET
@@ -80,7 +89,7 @@ pub(super) fn read_smbios() -> EfiResult<Vec<u8>> {
     );
     // Validate the full header, then copy the table from its reported memory range.
     let entry = read_firmware_memory(pointer, length, false)?;
-    let location = parse_smbios_entry_point(&entry, smbios3).map_err(|error| {
+    let location = parse_smbios_entry_point(&entry, is_smbios3).map_err(|error| {
         println!("Invalid SMBIOS entry-point header at {pointer:p}: {error:?}");
         Status::COMPROMISED_DATA
     })?;
@@ -91,22 +100,19 @@ pub(super) fn read_smbios() -> EfiResult<Vec<u8>> {
     // The SMBIOS header gives a physical address, convert it to a pointer first.
     let table_pointer = ptr::with_exposed_provenance::<u8>(address);
     // SMBIOS 3 reports an upper bound; the parser still requires a complete Type 127 end marker.
-    read_firmware_memory(table_pointer, location.length, smbios3)
+    read_firmware_memory(table_pointer, location.length, is_smbios3)
 }
 
 /// Validate an SMBIOS 2 or 3 header and return the table's memory address and read bound.
 /// Reject invalid header markers, checksums, versions, or table ranges.
-pub(super) fn parse_smbios_entry_point(
-    entry: &[u8],
-    smbios3: bool,
-) -> Result<SmbiosTableLocation, SmbiosDetectionError> {
+fn parse_smbios_entry_point(entry: &[u8], is_smbios3: bool) -> Result<SmbiosTableLocation, SmbiosDetectionError> {
     // Validate the minimum header size, format marker, and declared length.
-    let minimum = if smbios3 {
+    let minimum = if is_smbios3 {
         SMBIOS3_ENTRY_POINT_BYTES
     } else {
         SMBIOS2_ENTRY_POINT_BYTES
     };
-    let length_offset = if smbios3 {
+    let length_offset = if is_smbios3 {
         SMBIOS3_LENGTH_OFFSET
     } else {
         SMBIOS2_LENGTH_OFFSET
@@ -114,7 +120,7 @@ pub(super) fn parse_smbios_entry_point(
     if entry.len() < minimum {
         return Err(SmbiosDetectionError::InvalidSmbios);
     }
-    let anchor: &[u8] = if smbios3 { b"_SM3_" } else { b"_SM_" };
+    let anchor: &[u8] = if is_smbios3 { b"_SM3_" } else { b"_SM_" };
     let length = usize::from(entry[length_offset]);
     if !entry.starts_with(anchor) || length < minimum || length > entry.len() {
         return Err(SmbiosDetectionError::InvalidSmbios);
@@ -124,7 +130,7 @@ pub(super) fn parse_smbios_entry_point(
         return Err(SmbiosDetectionError::InvalidSmbios);
     }
     // Decode the version-specific address and length; the field bounds were checked above.
-    let (address, length) = if smbios3 {
+    let (address, length) = if is_smbios3 {
         if entry[SMBIOS3_MAJOR_VERSION_OFFSET] < SMBIOS3_MIN_MAJOR_VERSION {
             return Err(SmbiosDetectionError::InvalidSmbios);
         }
@@ -212,7 +218,7 @@ pub(super) fn parse_processors(mut table: &[u8]) -> Result<Vec<&str>, SmbiosDete
 
 /// Bound the slice length to readable firmware bytes before constructing it.
 /// Exact-read bounds are checked on the slice afterward.
-pub(super) fn firmware_read_length(address: usize, length: usize, region_end: u64) -> Option<usize> {
+fn firmware_read_length(address: usize, length: usize, region_end: u64) -> Option<usize> {
     let available = region_end.checked_sub(address as u64)?;
     if address == 0 || length == 0 || available == 0 {
         return None;
