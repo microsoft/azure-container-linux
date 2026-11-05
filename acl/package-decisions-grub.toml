@@ -1,0 +1,19 @@
+# Use alongside package-decisions-base.toml for GRUB only.
+
+["efibootmgr"]
+decision = "keep"
+reason = """\
+    Contains EFI boot-entry administration tools. Keep in GRUB for parity with UKI images, where Trident \
+    requires efibootmgr. Its reported RPM size is only 0.10 MiB on AMD64 and 0.15 MiB on ARM64."""
+
+["lsof"]
+decision = "keep"
+reason = """\
+    Provides open-file diagnostics. Keep in GRUB for parity with UKI images, where Trident requires lsof. \
+    Its reported RPM size is only 0.32 MiB on AMD64 and 0.35 MiB on ARM64."""
+
+["policycoreutils"]
+decision = "keep"
+reason = """\
+    Contains SELinux policy-management utilities. Keep in GRUB for parity with UKI images, where Trident requires \
+    policycoreutils. Its reported RPM size is only 3.13 MiB on AMD64 and 3.49 MiB on ARM64."""

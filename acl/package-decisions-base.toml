@@ -613,12 +613,17 @@ reason = """\
     verification does not require on-node MOK management."""
 
 ["net-tools"]
-decision = "remove-top-level"
+decision = "keep"
+# Payload: %files owns hostname, netstat, ifconfig, route, and arp; the spec provides hostname.
+# https://github.com/microsoft/azurelinux/blob/a526a629b8ff3db2ec8a9633803506bd61118bca/SPECS/net-tools/net-tools.spec
+# Selection: the inherited Flatcar base package list directly includes sys-apps/net-tools.
+# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild
+# Consumer: Kola cl.install.cloudinit runs hostname; cl.network.listeners runs netstat.
+# https://github.com/microsoft/azure-container-linux-mantle/blob/2aae01cee1fe1293d210462ca2e39ec6700e08b7/kola/tests/misc/install.go
+# https://github.com/microsoft/azure-container-linux-mantle/blob/2aae01cee1fe1293d210462ca2e39ec6700e08b7/kola/tests/misc/network.go
 reason = """\
-    Contains ifconfig, netstat, and related legacy networking commands. The inherited \
-    [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
-    directly includes sys-apps/net-tools. The reviewed provisioning code invokes the ip and systemd-networkd \
-    executables."""
+    Contains essential network tools such as hostname, plus netstat and ifconfig. Its reported RPM size is only \
+    0.62 MiB on AMD64 and 1.04 MiB on ARM64."""
 
 ["nfs-utils"]
 decision = "keep"
@@ -1468,6 +1473,19 @@ reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
 ["sed"]
 decision = "keep"
 reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+
+["selinux-policy"]
+decision = "keep"
+# Selection: the image package catalog explicitly installs selinux-policy and policycoreutils.
+# https://github.com/microsoft/azure-container-linux/blob/1dd377f3840bf5e81b74fc0034b50232a5d8536b/build_library/rpm/package_catalog.yaml
+# Consumer: rpm_configure_selinux configures the targeted policy and sets SELinux to enforcing.
+# https://github.com/microsoft/azure-container-linux/blob/1dd377f3840bf5e81b74fc0034b50232a5d8536b/build_library/rpm/rpm_install.sh
+# UKI: the spec provides selinux-policy-targeted, which activates Trident's conditional trident-selinux requirement.
+# https://github.com/microsoft/azure-container-linux/blob/1dd377f3840bf5e81b74fc0034b50232a5d8536b/acl/SPECS/selinux-policy/selinux-policy.spec
+# https://github.com/microsoft/azure-container-linux/blob/1dd377f3840bf5e81b74fc0034b50232a5d8536b/acl/SPECS/trident/trident.spec
+reason = """\
+    Supplies the ACL SELinux policy, which UKI and GRUB image builds both install and set to enforcing. On UKI \
+    images, its presence also makes Trident install trident-selinux."""
 
 ["shadow-utils"]
 decision = "keep"

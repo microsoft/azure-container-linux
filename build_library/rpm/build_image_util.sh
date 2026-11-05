@@ -1525,6 +1525,11 @@ report_and_remove_image_packages_rpm() {
     local -a policy_args=(--package-decisions-file "${SCRIPT_ROOT}/acl/package-decisions-base.toml")
     if [[ "${BOOTLOADER_MODE:-}" == "uki" ]]; then
         policy_args+=(--package-decisions-file "${SCRIPT_ROOT}/acl/package-decisions-uki.toml")
+    elif [[ "${BOOTLOADER_MODE:-}" == "grub" ]]; then
+        policy_args+=(--package-decisions-file "${SCRIPT_ROOT}/acl/package-decisions-grub.toml")
+    else
+        error "Invalid BOOTLOADER_MODE: '${BOOTLOADER_MODE:-}' (expected uki or grub)"
+        return 1
     fi
 
     sudo python3 -B "${report_script}" \

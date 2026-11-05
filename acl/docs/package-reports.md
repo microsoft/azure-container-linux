@@ -14,7 +14,12 @@ RPM image builds also use the reporter. A separate build hook reads its removal 
 
 ## Policy and outputs
 
-All builds use [`acl/package-decisions-base.toml`](../package-decisions-base.toml). UKI builds also use [`acl/package-decisions-uki.toml`](../package-decisions-uki.toml), which contains `shim`, `systemd-boot`, and `trident-acl`. GRUB builds use only the base policy.
+All builds use [`acl/package-decisions-base.toml`](../package-decisions-base.toml) and the policy for their boot mode:
+
+- UKI adds [`acl/package-decisions-uki.toml`](../package-decisions-uki.toml)
+- GRUB adds [`acl/package-decisions-grub.toml`](../package-decisions-grub.toml)
+
+The selected files must not contain overlapping package names.
 
 | Decision | Behavior |
 | --- | --- |
@@ -52,7 +57,7 @@ python3 -B build_library/rpm/report_image_packages.py \
 
 DNF5 is the default solver and supports cross-architecture image analysis. `--package-manager tdnf` selects the alternative native solver, which requires matching host and image package architectures.
 
-For UKI images, also pass `--package-decisions-file acl/package-decisions-uki.toml`. Use only the base policy for GRUB images. The same selection applies to build-artifact analysis below.
+For UKI images, also pass `--package-decisions-file acl/package-decisions-uki.toml`. For GRUB images, also pass `--package-decisions-file acl/package-decisions-grub.toml`. The same selection applies to build-artifact analysis below.
 
 ## Analyze a build artifact
 
