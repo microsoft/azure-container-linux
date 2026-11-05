@@ -1,0 +1,7 @@
+#!/bin/bash
+
+# Keep confext aliases and explicit caller settings unchanged.
+if [[ "${0##*/}" == systemd-sysext ]]; then
+    export SYSTEMD_LOOP_DIRECT_IO="${SYSTEMD_LOOP_DIRECT_IO-0}"
+fi
+exec -a "$0" /usr/bin/systemd-sysext.acl-real "$@"
