@@ -7,30 +7,36 @@ source "${SCRIPT_ROOT}/build_library/rpm/rpm_install.sh"
 
 die() { echo "$*" >&2; exit 1; }
 info() { :; }
+warn() { echo "$*" >&2; }
 sudo() { "$@"; }
 
 work_dir="$(mktemp -d)"
 trap 'rm -rf -- "${work_dir}"' EXIT
 root_fs="${work_dir}/root"
+repo_dir="${root_fs}/etc/yum.repos.d"
 local_repo="${work_dir}/local"
-mkdir -p "${local_repo}/repodata"
-touch "${local_repo}/repodata/repomd.xml"
+pipeline_repo="${work_dir}/pipeline-rpms"
+mkdir -p "${local_repo}/repodata" "${pipeline_repo}/repodata"
+touch "${local_repo}/repodata/repomd.xml" "${pipeline_repo}/repodata/repomd.xml"
 touch "${local_repo}/grub2-9-1.x86_64.rpm"
 
 PACKAGE_SNAPSHOT_TIME=1700000000
-rpm_setup_repos "${root_fs}" 3.0 "${local_repo}"
+rpm_setup_repos "${root_fs}" 3.0 "${local_repo}" "${pipeline_repo}"
 grep -qx 'excludepkgs=grub2 grub2-efi grub2-efi-binary shim systemd-boot' \
-    "${root_fs}/etc/yum.repos.d/azurelinux-local.repo"
+    "${repo_dir}/azurelinux-local.repo"
+grep -Fxq 'excludepkgs=trident* grub2 grub2-efi grub2-efi-binary shim systemd-boot' \
+    "${repo_dir}/azurelinux-pipeline.repo"
 
 unset PACKAGE_SNAPSHOT_TIME
-rpm_setup_repos "${root_fs}" 3.0 "${local_repo}"
-if grep -q '^excludepkgs=' "${root_fs}/etc/yum.repos.d/azurelinux-local.repo"; then
+rpm_setup_repos "${root_fs}" 3.0 "${local_repo}" "${pipeline_repo}"
+if grep -q '^excludepkgs=' "${repo_dir}/azurelinux-local.repo"; then
     die "Bootloader exclusions must only apply to snapshot builds"
 fi
+grep -Fxq 'excludepkgs=trident*' "${repo_dir}/azurelinux-pipeline.repo"
 
 rpm_snapshot_args() {
     local -n args="$1"
-    args+=(--snapshot-time="${PACKAGE_SNAPSHOT_TIME}" --snapshot-exclude-repos=azurelinux-local-cache)
+    args+=(--snapshot-time="${PACKAGE_SNAPSHOT_TIME}" "--snapshot-exclude-repos=azurelinux-local-cache,azurelinux-pipeline-cache")
 }
 dnf5() {
     printf '%s\n' "$@" > "${work_dir}/dnf-args"
@@ -41,12 +47,36 @@ remote_root="${work_dir}/remote-root"
 rpm_setup_repos "${remote_root}" 3.0
 rpm_download_packages "${work_dir}/remote-download" "${remote_root}" grub2
 grep -Fxq -- '--snapshot-time=1700000000' "${work_dir}/dnf-args"
-if grep -Fxq -- '--disable-repo=azurelinux-local-cache' "${work_dir}/dnf-args"; then
+if grep -Eq -- '^--disable-repo=azurelinux-(local|pipeline)-cache$' "${work_dir}/dnf-args"; then
     die "Cannot disable a local cache repository that is not configured"
 fi
 
 rpm_download_packages "${work_dir}/local-download" "${root_fs}" grub2
 grep -Fxq -- '--disable-repo=azurelinux-local-cache' "${work_dir}/dnf-args"
+grep -Fxq -- '--disable-repo=azurelinux-pipeline-cache' "${work_dir}/dnf-args"
+
+for unavailable_repo in "" "${work_dir}/nonexistent"; do
+    rpm_setup_repos "${root_fs}" 3.0 "${local_repo}" "${pipeline_repo}"
+    rpm_setup_repos "${root_fs}" 3.0 "${local_repo}" "${unavailable_repo}"
+    [[ ! -f "${repo_dir}/azurelinux-pipeline.repo" ]] ||
+        die "An unavailable pipeline cache must not leave a stale repository: ${unavailable_repo:-unset}"
+    rpm_download_packages "${work_dir}/local-only-download" "${root_fs}" grub2
+    grep -Fxq -- '--disable-repo=azurelinux-local-cache' "${work_dir}/dnf-args"
+    if grep -Fxq -- '--disable-repo=azurelinux-pipeline-cache' "${work_dir}/dnf-args"; then
+        die "Cannot disable a pipeline cache repository that is not configured"
+    fi
+done
+
+mkdir -p "${work_dir}/missing-metadata"
+if (rpm_setup_repos "${work_dir}/bad-root" 3.0 "${local_repo}" "${work_dir}/missing-metadata") >/dev/null 2>&1; then
+    die "A pipeline cache without repository metadata must fail"
+fi
+
+rpm_init_database() { :; }
+rpm_import_gpg_key() { :; }
+RPM_STAGING_DIR="${local_repo}/" rpm_install_init "${work_dir}/discovered-root"
+[[ -f "${work_dir}/discovered-root/etc/yum.repos.d/azurelinux-pipeline.repo" ]] ||
+    die "Repository initialization must discover the sibling pipeline cache"
 
 download_dir="${work_dir}/bootloader-rpms"
 mkdir -p "${download_dir}"
