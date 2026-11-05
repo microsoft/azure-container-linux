@@ -1,6 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#[cfg(test)]
+mod tests;
+
 use alloc::{vec, vec::Vec};
 use uefi::{
     CStr16, Result as EfiResult, Status, boot, cstr16, println,
@@ -109,7 +112,7 @@ pub(super) fn apply_profile(profile: Profile) -> EfiResult {
 }
 
 /// Treat a missing or invalid-size active addon as replaceable, but retain file I/O errors.
-pub(super) fn active_addon_matches(existing: EfiResult<Option<Vec<u8>>>, expected: &[u8]) -> EfiResult<bool> {
+fn active_addon_matches(existing: EfiResult<Option<Vec<u8>>>, expected: &[u8]) -> EfiResult<bool> {
     match existing {
         Ok(existing) => Ok(existing.as_deref() == Some(expected)),
         Err(error) if error.status() == Status::NOT_FOUND => Ok(false),

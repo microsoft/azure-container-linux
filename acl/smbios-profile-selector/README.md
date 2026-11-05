@@ -33,7 +33,8 @@ Source layout:
   application.
 - [smbios.rs](src/smbios.rs): reads and parses SMBIOS processor information.
 - [uki.rs](src/uki.rs): selects the boot profile and manages its signed addon.
-- [tests.rs](src/tests.rs): native unit tests.
+- unit tests: [SMBIOS](src/smbios/tests.rs), [UKI](src/uki/tests.rs),
+  and [SBAT metadata](src/tests.rs).
 
 ## Boot integration
 
