@@ -13,6 +13,9 @@
 # REPOSITORY CONFIGURATION:
 #   - Local cache repository (if RPM_LOCAL_CACHE is set) - priority 1
 #     Snapshot builds exclude retained upstream bootloader RPMs from this cache.
+#   - Pipeline RPMs alongside RPM staging in ../pipeline-rpms - priority 99,
+#     matching PMC; Trident uses its explicit source selection instead.
+#     Like the local cache, only existing directories are used and must have metadata.
 #   - Bootstrap base repo (used only to install filesystem + azurelinux-repos)
 #   - Azure Linux official repositories (installed via azurelinux-repos RPM)
 
@@ -58,7 +61,7 @@ rpm_snapshot_args() {
         die "PACKAGE_SNAPSHOT_TIME must be a ten-digit Unix UTC timestamp"
     /usr/bin/dnf5 --help | grep -- '--snapshot-time' >/dev/null ||
         die "SDK DNF5 does not support --snapshot-time; rebuild the SDK with the snapshot plugin"
-    args+=(--snapshot-time="${PACKAGE_SNAPSHOT_TIME}" --snapshot-exclude-repos=azurelinux-local-cache)
+    args+=(--snapshot-time="${PACKAGE_SNAPSHOT_TIME}" "--snapshot-exclude-repos=azurelinux-local-cache,azurelinux-pipeline-cache")
 }
 
 # Emit a Syft-compatible RPM manifest for the installed packages in a rootfs.
@@ -102,6 +105,7 @@ rpm_setup_repos() {
     local root_fs_dir="$1"
     local releasever="${2:-3.0}"
     local local_repo_dir="${3:-}"  # Optional local repository cache
+    local pipeline_repo_dir="${4:-}"
 
     local repo_dir="${root_fs_dir}/etc/yum.repos.d"
     sudo mkdir -p "${repo_dir}"
@@ -111,15 +115,16 @@ rpm_setup_repos() {
 
     info "Setting up Azure Linux repositories in ${root_fs_dir}"
 
+    local bootloader_exclusions=""
+    if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" ]]; then
+        bootloader_exclusions="grub2 grub2-efi grub2-efi-binary shim systemd-boot"
+    fi
+
     # Setup local repository cache if provided and has proper metadata
     if [[ -n "${local_repo_dir}" ]] && [[ -d "${local_repo_dir}" ]]; then
         if [[ -f "${local_repo_dir}/repodata/repomd.xml" ]]; then
             info "  Adding local repository cache: ${local_repo_dir}"
-            local local_exclusions=""
-            if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" ]]; then
-                # Retained upstream bootloader RPMs are not locally built packages.
-                local_exclusions="excludepkgs=grub2 grub2-efi grub2-efi-binary shim systemd-boot"
-            fi
+            local local_exclusions="${bootloader_exclusions:+excludepkgs=${bootloader_exclusions}}"
             sudo tee "${repo_dir}/azurelinux-local.repo" > /dev/null <<EOF
 [azurelinux-local-cache]
 name=Azure Linux Local Package Cache
@@ -135,6 +140,31 @@ EOF
             info "  Hint: Run 'createrepo_c ${local_repo_dir}' to create repository metadata"
             exit 1
         fi
+    fi
+
+    # Setup pipeline repository cache if provided. It matches PMC's priority of 99, so the highest version package may come from either PMC or the pipeline repository.
+    if [[ -n "${pipeline_repo_dir}" ]] && [[ -d "${pipeline_repo_dir}" ]]; then
+        if [[ -f "${pipeline_repo_dir}/repodata/repomd.xml" ]]; then
+            info "  Adding pipeline RPM repository: ${pipeline_repo_dir}"
+            # Exclude trident packages in case tridentRpmSource=sdk is set to avoid conflicts with SDK-provided packages
+            local pipeline_exclusions="excludepkgs=trident*${bootloader_exclusions:+ ${bootloader_exclusions}}"
+            sudo tee "${repo_dir}/azurelinux-pipeline.repo" > /dev/null <<EOF
+[azurelinux-pipeline-cache]
+name=Azure Linux Pipeline Packages
+baseurl=file://${pipeline_repo_dir}
+enabled=1
+gpgcheck=0
+repo_gpgcheck=0
+priority=99
+${pipeline_exclusions}
+EOF
+        else
+            warn "  Skipping pipeline cache (no repository metadata): ${pipeline_repo_dir}"
+            info "  Hint: Run 'createrepo_c ${pipeline_repo_dir}' to create repository metadata"
+            exit 1
+        fi
+    else
+        sudo rm -f "${repo_dir}/azurelinux-pipeline.repo"
     fi
 
     # Minimal bootstrap repo — just enough to install 'filesystem' and
@@ -547,7 +577,11 @@ rpm_install_init() {
     local rpm_staging
     rpm_staging=$(rpm_get_staging_dir 2>/dev/null || echo "")
     local local_cache="${RPM_LOCAL_CACHE:-${rpm_staging}}"
-    rpm_setup_repos "${root_fs_dir}" "3.0" "${local_cache}"
+    local pipeline_cache=""
+    if [[ -n "${rpm_staging}" ]]; then
+        pipeline_cache="${rpm_staging%/}/../pipeline-rpms"
+    fi
+    rpm_setup_repos "${root_fs_dir}" "3.0" "${local_cache}" "${pipeline_cache}"
 }
 
 # Query installed RPM packages
@@ -876,8 +910,13 @@ rpm_download_packages() {
     fi
     local -a snapshot_args=()
     rpm_snapshot_args snapshot_args
-    if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" && -f "${repo_dir}/azurelinux-local.repo" ]]; then
-        snapshot_args+=(--disable-repo=azurelinux-local-cache)
+    if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" ]]; then
+        local cache
+        for cache in local pipeline; do
+            if [[ -f "${repo_dir}/azurelinux-${cache}.repo" ]]; then
+                snapshot_args+=("--disable-repo=azurelinux-${cache}-cache")
+            fi
+        done
     fi
 
     dnf5 "${snapshot_args[@]}" download "${download_args[@]}" "${packages[@]}"
