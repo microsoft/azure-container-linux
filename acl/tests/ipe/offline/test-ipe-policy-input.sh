@@ -1054,6 +1054,67 @@ test_pure_vm_reuse_skips_local_artifact() {
     operation_uses_local_image_artifact
 }
 
+test_ipe_context_logging() (
+    source_test_functions "${SCRIPT_DIR}/acl/build_rpm_image.sh" \
+        operation_uses_gallery_image print_ipe_context
+    info() { printf '%s\n' "$*"; }
+    local source override mode build_flag output
+    BOARD=amd64-usr
+    GROUP=production
+    BUILD_IMAGE=false
+    BUILD_VM_IMAGE=false
+    BUILD_TEST_IMAGE=false
+    ACL_IPE_SIGNING_MODE=ephemeral
+
+    for source in gallery-version gallery-latest reused-vm; do
+        ACG_IMAGE_VERSION_ID=""
+        REUSE_IMAGE=false
+        REUSE_VM=false
+        case "${source}" in
+            gallery-version) ACG_IMAGE_VERSION_ID=/gallery/image/version ;;
+            gallery-latest) REUSE_IMAGE=true ;;
+            reused-vm) REUSE_VM=true ;;
+        esac
+        for override in false true; do
+            IPE_MODE_OVERRIDE_SET="${override}"
+            ACL_IPE_MODE=disabled
+            [[ "${override}" != true ]] || ACL_IPE_MODE=audit
+            output="$(print_ipe_context)"
+            [[ "${output}" == *"IPE runtime mode: not queried by the builder"* ]]
+            [[ "${output}" != *"IPE build configuration:"* &&
+               "${output}" != *"signing:"* && "${output}" != *"Building "* ]]
+            if [[ "${source}" == reused-vm ]]; then
+                [[ "${output}" == *"Validating an existing VM"* ]]
+            else
+                [[ "${output}" == *"Validating an existing gallery image"* ]]
+            fi
+            if [[ "${override}" == true ]]; then
+                [[ "${output}" == *"Requested IPE setting: audit (not observed guest state)"* ]]
+            else
+                [[ "${output}" != *"Requested IPE setting:"* ]]
+            fi
+        done
+    done
+
+    REUSE_VM=false
+    for build_flag in BUILD_IMAGE BUILD_VM_IMAGE BUILD_TEST_IMAGE; do
+        printf -v "${build_flag}" true
+        for mode in disabled audit; do
+            ACL_IPE_MODE="${mode}"
+            output="$(print_ipe_context)"
+            [[ "${output}" == *"IPE build configuration: ${mode} (signing: ephemeral)"* ]]
+            [[ "${output}" != *"IPE runtime mode:"* ]]
+        done
+        # Combined build/reuse operations must distinguish both contexts.
+        REUSE_VM=true
+        output="$(print_ipe_context)"
+        [[ "${output}" == *"IPE build configuration: audit"* &&
+           "${output}" == *"IPE runtime mode: not queried by the builder"* ]]
+        REUSE_VM=false
+        printf -v "${build_flag}" false
+    done
+)
+
 test_reused_vm_type_loaded_from_state() {
     local build_script="${SCRIPT_DIR}/acl/build_rpm_image.sh"
     local state_file="${TEST_DIR}/vm-state.env"
@@ -1091,6 +1152,7 @@ test_incomplete_or_mismatched_cert_pair_rejected
 test_root_hash_signing_boolean_and_hydration
 test_markerless_secure_boot_cert_remains_disabled
 test_pure_vm_reuse_skips_local_artifact
+test_ipe_context_logging
 test_reused_vm_type_loaded_from_state
 
 echo "IPE policy input tests passed"
