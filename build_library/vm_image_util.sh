@@ -710,16 +710,15 @@ install_oem_sysext() {
     rm -rf "${built_sysext_dir}"
 
     if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" && "${INJECT_DOCKER_SYSEXT:-false}" == "true" ]]; then
-        # Inject the docker sysext into oem partition for testing, since
-        # docker is built as a standalone sysext and not in base image.
-        local built_docker_sysext_path="${upload_dir}/docker.raw"
-        local installed_docker_sysext_abspath="${installed_sysext_oem_dir}/docker.raw"
-
-        info "RPM mode: Injecting docker sysext into OEM partition for testing"
-        sudo install -Dpm 0644 \
-             "${built_docker_sysext_path}" \
-             "${VM_TMP_ROOT}${installed_docker_sysext_abspath}" ||
-            die "Could not install docker sysext into OEM partition"
+        # Inject standalone sysexts into the OEM partition for testing.
+        local sysext
+        for sysext in docker kola-testing; do
+            info "RPM mode: Injecting ${sysext} sysext into OEM partition for testing"
+            sudo install -Dpm 0644 \
+                "${upload_dir}/${sysext}.raw" \
+                "${VM_TMP_ROOT}${installed_sysext_oem_dir}/${sysext}.raw" ||
+                die "Could not install ${sysext} sysext into OEM partition"
+        done
     fi
 
     # Mark the installed sysext as active.
