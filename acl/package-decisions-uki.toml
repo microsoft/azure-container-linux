@@ -30,4 +30,4 @@ reason = """\
 
 ["shim"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'

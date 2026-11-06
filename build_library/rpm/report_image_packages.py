@@ -34,7 +34,7 @@ from typing import Any, BinaryIO, cast
 TOOLS_IMAGE = "mcr.microsoft.com/azurelinux/base/core:3.0"
 OCI_ARCHES_BY_NATIVE_ARCH = {"x86_64": "amd64", "aarch64": "arm64"}
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
-CSV_HEADER = ("NVRA", "Size (MiB)", "Decision", "Reason", "Dependants Count", "Top-level Dependents")
+CSV_HEADER = ("NVRA", "Size (MiB)", "Decision", "Reason", "Dependents Count", "Top-level Dependents")
 RPM_FORMAT = "%{NAME}\\t%{VERSION}\\t%{RELEASE}\\t%{ARCH}\\t%{SIZE}\\n"
 MAX_DB_BYTES = 256 * 1024 * 1024
 MAX_IMAGE_BYTES = 128 * 1024 ** 3
@@ -1396,13 +1396,13 @@ def report_dependents(
         if decision == Decision.REMOVE_TOP_LEVEL and dependent_nvras:
             conflict_messages.append(
                 f"Package {package.name!r} ({package.nvra}) has decision 'remove-top-level' "
-                f"but has Dependants Count={len(dependent_nvras)} in the complete installed graph; "
+                f"but has Dependents Count={len(dependent_nvras)} in the complete installed graph; "
                 f"Dependents: {', '.join(sorted(dependent_nvras))}"
             )
         elif decision == Decision.REMOVE_DEPENDENCY and not dependent_nvras:
             conflict_messages.append(
                 f"Package {package.name!r} ({package.nvra}) has decision 'remove-dependency' "
-                "but has no dependants in the complete installed graph"
+                "but has no dependents in the complete installed graph"
             )
         elif decision == Decision.REMOVE_DEPENDENCY:
             blocking_nvras = dependent_nvras - nvras_to_remove
@@ -1498,7 +1498,12 @@ def write_csv(
     sizes_by_nvra = {package.nvra: package.size for package in packages}
     pkgnames_by_nvra = {package.nvra: package.name for package in packages}
 
-    top_level_nvras = {
+    installed_top_level_nvras = {
+        nvra
+        for group in top_level_groups(dependents_by_nvra)
+        for nvra in group
+    }
+    remaining_top_level_nvras = {
         nvra
         for group in top_level_groups(remaining_dependents_by_nvra)
         for nvra in group
@@ -1515,25 +1520,34 @@ def write_csv(
             csv_rows: list[tuple[str, str, str, str, int, str]] = []
 
             for package in packages:
-                dependent_nvras = remaining_dependents_by_nvra[package.nvra]
-                top_level_dependent_nvras = sorted(dependent_nvras & top_level_nvras)
+                remaining_dependent_nvras = remaining_dependents_by_nvra[package.nvra]
+                remaining_top_level_dependent_nvras = sorted(remaining_dependent_nvras & remaining_top_level_nvras)
                 decision = decisions_by_pkgname.get(package.name)
                 decision_text = decision.value if decision is not None else ""
                 reason = reasons_by_pkgname.get(package.name, "") if decision is not None else ""
-                if top_level_dependent_nvras:
+
+                reason_top_level_dependent_nvras = (
+                    dependents_by_nvra[package.nvra] & installed_top_level_nvras
+                    if decision == Decision.REMOVE_DEPENDENCY
+                    else set(remaining_top_level_dependent_nvras)
+                )
+                if reason_top_level_dependent_nvras:
                     top_level_dependent_pkgnames = sorted({
-                        pkgnames_by_nvra[nvra] for nvra in top_level_dependent_nvras
+                        pkgnames_by_nvra[nvra] for nvra in reason_top_level_dependent_nvras
                     })
-                    required_by = "Required by another package: " + ", ".join(top_level_dependent_pkgnames)
-                    reason = required_by + (f"; {reason}" if reason else "")
+                    noun = "package" if len(top_level_dependent_pkgnames) == 1 else "packages"
+                    qualifier = " selected for removal" if decision == Decision.REMOVE_DEPENDENCY else ""
+                    prefix = f"Required by top-level {noun}{qualifier}: "
+                    required_by = prefix + ", ".join(top_level_dependent_pkgnames)
+                    reason = f"{reason}; {required_by}" if reason else required_by
 
                 row = (
                     package.nvra,
                     f"{package.size / (1024 ** 2):.2f}",
                     decision_text,
                     reason,
-                    len(dependent_nvras),
-                    "\n".join(f"- {nvra}" for nvra in top_level_dependent_nvras),
+                    len(remaining_dependent_nvras),
+                    "\n".join(f"- {nvra}" for nvra in remaining_top_level_dependent_nvras),
                 )
                 csv_rows.append(row)
 

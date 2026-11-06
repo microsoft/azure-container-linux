@@ -6,7 +6,8 @@
 # The review states when the original requester is unverified. Missing callers are audit findings.
 # Dependency/removal references use exact RPM package names. They don't use product names.
 # Package names identify binary RPMs, including subpackages.
-# Keep means required in the production base. Optional extensions have separate requirements.
+# Keep means retained through policy removal; repo packages are removed during later image cleanup.
+# Other kept packages are required in the production base. Optional extensions have separate requirements.
 # Sysext-only RPM dependencies belong in the rebuilt sysext, including OEM dependencies.
 # Rebuild extensions against the reduced build-base with matching RPM records.
 # A sysext RPM requirement alone never justifies decision = "keep". Independent host boot, provisioning, and support callers
@@ -57,6 +58,26 @@ decision = "keep"
 reason = """\
     Contains azure-nvme-id and Azure disk-identification udev rules. These supply device links used by AKS \
     provisioning, including the resource-disk path when swap is configured on that disk."""
+
+["azurelinux-repos"]
+decision = "keep"
+# Both boot modes remove azurelinux-repos* in finish_image_backup_etc_rpm after reporting.
+# https://github.com/microsoft/azure-container-linux/blob/19b6c6326a1c0a4f5fa62ee4b484effbb45c2d49/build_library/rpm/build_image_util.sh#L1451-L1478
+reason = """\
+    Needed for package installation and bootloader downloads during the build. Removed after this report by \
+    image-finalization cleanup in both UKI and GRUB builds. It doesn't contribute anything to the image size regardless."""
+
+["azurelinux-repos-cloud-native"]
+decision = "keep"
+reason = """\
+    Needed for package installation and bootloader downloads during the build. Removed after this report by \
+    image-finalization cleanup in both UKI and GRUB builds. It doesn't contribute anything to the image size regardless."""
+
+["azurelinux-repos-shared"]
+decision = "keep"
+reason = """\
+    Required by azurelinux-repos and azurelinux-repos-cloud-native during the build. Removed after this report by \
+    image-finalization cleanup in both UKI and GRUB builds. It doesn't contribute anything to the image size regardless."""
 
 ["bc"]
 decision = "remove-top-level"
@@ -1056,423 +1077,423 @@ reason = """\
 
 ["SymCrypt"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["SymCrypt-OpenSSL"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["attr"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["audit-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["azurelinux-release"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["bash"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["bzip2-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["ca-certificates"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["ca-certificates-shared"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["ca-certificates-tools"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["chkconfig"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["coreutils"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["cpio"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["cracklib"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["cracklib-dicts"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["cryptsetup-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["curl-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["cyrus-sasl-lib"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["dbus"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["device-mapper"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["device-mapper-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["diffutils"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["dracut"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["e2fsprogs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["e2fsprogs-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["elfutils"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["elfutils-default-yama-scope"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["elfutils-libelf"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["expat"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["expat-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["file-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["filesystem"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["findutils"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["glib"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["glibc"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["gmp"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["gnupg2"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["gpgme"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["grep"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["grub2-configuration"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["gzip"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["iana-etc"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["iproute"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["iputils"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["irqbalance"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["json-c"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["kbd"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["kernel"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["kmod"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["krb5"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libacl"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libassuan"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libattr"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libbpf"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libcap"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libcap-ng"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libdb"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libffi"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libgcc"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libgcrypt"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libgpg-error"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libidn2"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libksba"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libmnl"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libpcre2-16-0"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libpcre2-32-0"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libpcre2-8-0"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libpcre2-posix2"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libpkgconf"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libpwquality"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libseccomp"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libselinux"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libsemanage"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libsepol"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libssh2"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libstdc++"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libtasn1"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libunistring"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libxcrypt"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libxkbcommon"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["libxml2"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["lua-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["lz4"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["ncurses"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["ncurses-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["newt"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["nghttp2"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["npth"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["openldap"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["openssl"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["openssl-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["p11-kit"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["p11-kit-trust"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["pam"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["pcre2"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["pcre2-tools"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["pinentry"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["pkgconf"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["pkgconf-m4"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["pkgconf-pkg-config"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["popt"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["procps-ng"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["psmisc"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["readline"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["sed"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["selinux-policy"]
 decision = "keep"
@@ -1489,80 +1510,80 @@ reason = """\
 
 ["shadow-utils"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["shadow-utils-subid"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["slang"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["sqlite-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["sudo"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["systemd"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["systemd-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["systemd-networkd"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["systemd-pam"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["systemd-resolved"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["systemd-rpm-macros"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["systemd-udev"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["tpm2-tss"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["util-linux"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["util-linux-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["xkeyboard-config"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["xz"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["xz-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["zlib"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
 
 ["zstd-libs"]
 decision = "keep"
-reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it.'
+reason = 'Azure Linux 3.0 minimal-os (3.0.20260923) includes it'
