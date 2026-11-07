@@ -88,6 +88,14 @@ In UKI mode, Ignition execution is gated by the first-boot addon described above
 
 The ROOT partition is created at a minimal size in the shipped image. On first boot, **systemd-repart** and **systemd-growfs** automatically expand it to fill all remaining disk space, giving workloads access to the full disk without manual intervention.
 
+### Linux Security Modules
+
+The main UKI cmdline (and the GRUB cmdline) carries an `lsm=` argument that enables the **BPF LSM**, so eBPF security tools such as Tetragon or KubeArmor can deny operations through LSM hooks instead of only observing them.
+
+- `lsm=` replaces the kernel's built-in list instead of extending it. The build reads `CONFIG_LSM` from the kernel RPM's `config-<version>` on the ESP and appends `bpf`, so the active modules and their order stay those of the Azure Linux kernel.
+- The build fails if the kernel config lacks `CONFIG_BPF_LSM=y` or a `CONFIG_LSM` default.
+- SELinux and IPE stay active alongside it. `cat /sys/kernel/security/lsm` on a running node shows the active list, which should end with `bpf`.
+
 ### SELinux
 
 ACL ships with **SELinux in enforcing mode by default**. The policy is aligned with Flatcar's upstream SELinux policy, which focuses on strict separation between the host OS and container workloads — host system services run in confined domains while containers are isolated by the `container_t` type. See [SELinux Container Domains](selinux.md) for specialized workload domains and safe configuration examples.
