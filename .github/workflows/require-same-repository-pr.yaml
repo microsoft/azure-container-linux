@@ -1,0 +1,22 @@
+name: Require same-repository pull requests
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft]
+
+permissions: {}
+
+jobs:
+  verify-pr-head-repository:
+    name: Verify PR head repository
+    runs-on: ubuntu-latest
+    env:
+      BASE_REPOSITORY_ID: ${{ github.event.pull_request.base.repo.id }}
+      HEAD_REPOSITORY_ID: ${{ github.event.pull_request.head.repo.id }}
+    steps:
+      - name: Reject fork pull requests
+        run: |
+          if [[ -z "$HEAD_REPOSITORY_ID" || "$HEAD_REPOSITORY_ID" != "$BASE_REPOSITORY_ID" ]]; then
+            echo "::error::Pull requests from forks cannot be merged into this repository."
+            exit 1
+          fi
