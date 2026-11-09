@@ -7,7 +7,7 @@
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.7
-Release: 2%{?dist}
+Release: 3%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -29,6 +29,7 @@ Patch7:  CVE-2026-78669.patch
 Patch8:  CVE-2026-97032.patch
 Patch9:  CVE-2026-81870.patch
 Patch10: erofs-signed-dmverity.patch
+Patch11: cri-inherit-pod-mcs.patch
 
 %{?systemd_requires}
 
@@ -109,6 +110,10 @@ fi
 %dir /opt/containerd/lib
 
 %changelog
+* Mon Nov 09 2026 Sean Dougherty <sdougherty@microsoft.com> - 2.3.7-3
+- Preserve pod MCS categories for nonprivileged container SELinux type-only overrides
+- Retain shared category reservations during container creation and sandbox recovery
+
 * Mon Oct 19 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.7-2
 - Add patch for signed EROFS dm-verity referrer, snapshotter, and CRI support
 
