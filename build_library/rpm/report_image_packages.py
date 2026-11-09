@@ -39,6 +39,7 @@ RPM_FORMAT = "%{NAME}\\t%{VERSION}\\t%{RELEASE}\\t%{ARCH}\\t%{SIZE}\\n"
 MAX_DB_BYTES = 256 * 1024 * 1024
 MAX_IMAGE_BYTES = 128 * 1024 ** 3
 MAX_OS_RELEASE_BYTES = 64 * 1024
+REPOSITORY_PACKAGES = ("azurelinux-repos", "azurelinux-repos-cloud-native", "azurelinux-repos-shared")
 
 
 class InventoryError(ValueError):
@@ -1756,6 +1757,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--output-dir", type=Path, required=True)
 
+    parser.add_argument(
+        "--build-hook",
+        action="store_true",
+        help="retain repository-package policy entries for pre-finalization build reporting",
+    )
+
     source_group = parser.add_mutually_exclusive_group(required=True)
     source_group.add_argument(
         "--build-id",
@@ -1833,6 +1840,17 @@ def main(argv: list[str] | None = None) -> None:
     decision_files: list[Path] = args.package_decisions_file
     try:
         decisions_by_pkgname, reasons_by_pkgname = load_decision_files(decision_files)
+        if not args.build_hook:
+            for name in REPOSITORY_PACKAGES:
+                if name not in decisions_by_pkgname:
+                    continue
+
+                if decisions_by_pkgname[name] != Decision.KEEP:
+                    raise InventoryError(f"standalone repository-package decision for {name!r} must be keep")
+
+                del decisions_by_pkgname[name]
+                del reasons_by_pkgname[name]
+                print(f"Excluding finalized repository package from standalone policy: {name}", flush=True)
     except (InventoryError, OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
         parser.error(f"--package-decisions-file: {error}")
 

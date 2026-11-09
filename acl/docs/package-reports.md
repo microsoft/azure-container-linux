@@ -21,9 +21,7 @@ All builds use [`acl/package-decisions-base.toml`](../package-decisions-base.tom
 
 The selected files must not contain overlapping package names.
 
-The base policy keeps `azurelinux-repos`, `azurelinux-repos-cloud-native`, and
-`azurelinux-repos-shared` through this report. Both UKI and GRUB builds remove
-them during later image-finalization cleanup.
+The base policy keeps `azurelinux-repos`, `azurelinux-repos-cloud-native`, and `azurelinux-repos-shared` through this report. Both UKI and GRUB builds remove them during later image-finalization cleanup. Standalone analysis excludes their decisions and reasons from the loaded policy since they are not included in the final artifacts.
 
 | Decision | Behavior |
 | --- | --- |
@@ -89,6 +87,9 @@ For standard ACL artifact analysis, the script downloads the Azure RPM database 
 The script exports the tools image into a work-directory chroot and uses its RPM and tdnf tools.
 
 ## Build and pipeline modes
+
+The build hook passes `--build-hook` to retain repository-package policy entries
+and require their presence before finalization.
 
 Non-production pipelines that build RPM base images expose `packageOperation` at queue time and forward the selection as `PACKAGE_OPERATION` through base-image assembly and the SDK login shell. Production pipelines always use `report-and-remove`.
 

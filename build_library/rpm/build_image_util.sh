@@ -1533,6 +1533,7 @@ report_and_remove_image_packages_rpm() {
     fi
 
     sudo python3 -B "${report_script}" \
+        --build-hook \
         --root-dir "${root_fs_dir}" \
         --work-dir "${BUILD_DIR}/.package-report-work" \
         "${policy_args[@]}" \
