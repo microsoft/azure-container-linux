@@ -24,21 +24,17 @@ source "${SCRIPT_DIR}/validate_qemu.sh"
 
 # MOCK_VM_STATE=booting models systemd-boot's startup key check: a key in the
 # first 2 seconds opens its boot menu, which loader.conf's "timeout 0" leaves
-# waiting for input; otherwise the VM autologins. MOCK_VM_STATE=running models
-# an idle VM whose login prompt reappears only after Enter.
+# waiting for input; otherwise the VM logs in automatically. MOCK_VM_STATE=menu
+# models a VM already stopped at that menu.
 cat > "${TEST_TMPDIR}/virsh" <<'EOF'
 #!/usr/bin/env bash
 [[ "$1" == "console" ]] || exit 1
 echo "Connected to domain '$2'"
 echo "Escape character is ^] (Ctrl + ])"
-if [[ "${MOCK_VM_STATE}" == "booting" ]]; then
-    if IFS= read -rs -n 1 -t 2 _; then
-        echo "Reboot Into Firmware Interface"
-    else
-        echo "acl login: azureuser (automatic login)"
-    fi
-elif IFS= read -rs -n 1 -t 3 _; then
-    echo "acl login: "
+if [[ "${MOCK_VM_STATE}" == "menu" ]] || IFS= read -rs -n 1 -t 2 _; then
+    echo "Reboot Into Firmware Interface"
+else
+    echo "acl login: azureuser (automatic login)"
 fi
 # Ctrl+] detaches, as it does from the real console.
 while IFS= read -rs -n 1 key; do
@@ -49,10 +45,12 @@ chmod +x "${TEST_TMPDIR}/virsh"
 export PATH="${TEST_TMPDIR}:${PATH}"
 export MOCK_VM_STATE
 
+# Usage: assert_boot_wait <description> <expected status> [console text]...
 assert_boot_wait() {
     local description="$1"
     local expected_rc="$2"
-    local rc=0
+    shift 2
+    local rc=0 marker
 
     if wait_for_vm_boot_qemu acl 5 >"${TEST_TMPDIR}/console.log" 2>&1; then
         rc=0
@@ -65,20 +63,32 @@ assert_boot_wait() {
         cat "${TEST_TMPDIR}/console.log" >&2
         return 1
     fi
+    for marker in "$@"; do
+        if ! grep -qF -- "${marker}" "${TEST_TMPDIR}/console.log"; then
+            printf 'FAIL: %s: console output lacks "%s"\n' \
+                "${description}" "${marker}" >&2
+            cat "${TEST_TMPDIR}/console.log" >&2
+            return 1
+        fi
+    done
 
     printf 'PASS: %s\n' "${description}"
 }
 
-MOCK_VM_STATE=booting
-REUSE_VM=false
-assert_boot_wait "fresh VM reaches its login prompt without console input" 0
+# The fresh-boot case catches a boot wait that types only if the mock's key
+# check reacts to a key.
+mock_output="$(printf '\r' | MOCK_VM_STATE=booting virsh console acl)"
+if [[ "${mock_output}" != *"Reboot Into Firmware Interface"* ]]; then
+    printf 'FAIL: the mock ignored a key during its startup key check\n' >&2
+    exit 1
+fi
+printf 'PASS: a key during the startup key check opens the mock boot menu\n'
 
-MOCK_VM_STATE=running
-REUSE_VM=true
-assert_boot_wait "reused VM gets Enter to redraw its login prompt" 0
-
-# Shows the mock can fail: Enter during the key check stops at the menu.
 MOCK_VM_STATE=booting
-REUSE_VM=true
-assert_boot_wait "Enter during systemd-boot's key check stops at its menu" 1
+assert_boot_wait "fresh VM reaches its login prompt without console input" 0 \
+    "Login prompt detected"
+
+MOCK_VM_STATE=menu
+assert_boot_wait "VM stopped at the systemd-boot menu fails the boot wait" 1 \
+    "Reboot Into Firmware Interface" "Timeout waiting for login prompt"
 )

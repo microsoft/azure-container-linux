@@ -251,14 +251,9 @@ connect_vm_console_qemu() {
 wait_for_vm_boot_qemu() {
     local vm_name="$1"
     local timeout="${2:-300}"
-    # Press Enter on attach only for a VM that was already running, to redraw its
-    # login prompt. A fresh VM prints the prompt itself, and an early Enter can
-    # reach systemd-boot's startup key check; with "timeout 0" in loader.conf, it
-    # then opens the boot menu and waits there with no timeout.
-    local press_enter=false
-    if [[ "${REUSE_VM:-false}" == "true" ]]; then
-        press_enter=true
-    fi
+    # Watch the console without typing on it. A fresh VM prints its login prompt
+    # by itself, and a key that reaches systemd-boot's startup key check opens
+    # its boot menu, which "timeout 0" in loader.conf leaves with no countdown.
 
     info "Connecting to VM console (will disconnect on login prompt, timeout: ${timeout}s)..."
     echo "╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
@@ -273,19 +268,12 @@ wait_for_vm_boot_qemu() {
 #!/usr/bin/expect -f
 set timeout [lindex $argv 0]
 set vm_name [lindex $argv 1]
-set press_enter [lindex $argv 2]
 
 log_user 1
 
 spawn virsh console $vm_name
 
 expect {
-    "Escape character" {
-        if {$press_enter} {
-            send "\r"
-        }
-        exp_continue
-    }
     -re {(login:|Login:)} {
         puts "\n╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
         puts "✓ Login prompt detected - VM boot complete"
@@ -319,7 +307,7 @@ EXPECT_EOF
     chmod +x "$expect_script"
 
     local exit_code
-    "$expect_script" "$timeout" "$vm_name" "$press_enter"
+    "$expect_script" "$timeout" "$vm_name"
     exit_code=$?
     rm -f "$expect_script"
 
