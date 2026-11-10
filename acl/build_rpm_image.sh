@@ -1118,6 +1118,13 @@ build_rpms() {
 build_image() {
     section "Building Azure Container Linux Image"
 
+    if [[ "${BOARD}" == "arm64-usr" && "${BOOTLOADER_MODE}" == "uki" ]]; then
+        # Build the SMBIOS profile selector and efitreeloader for ARM64.
+        # The SDK installs and signs both EFI applications during image assembly.
+        bash "${SCRIPT_DIR}/acl/smbios-profile-selector/build-smbios-selector-and-loader.sh" \
+            "${EFITREELOADER_DIR:?EFITREELOADER_DIR must point to the efitreeloader checkout}"
+    fi
+
     info "Configuration:"
     info "  Board:           ${BOARD}"
     info "  Group:           ${GROUP}"
