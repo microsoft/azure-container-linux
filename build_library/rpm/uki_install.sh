@@ -605,18 +605,10 @@ _uki_build_verity_addons() {
         local signature_name="verity-usr-${usr_hash}.p7s.cred"
         # dm-verity verifies the 64 ASCII hash bytes, without a trailing newline.
         printf '%s' "${usr_hash}" > "${verity_temp_dir}/root.hash"
-        "${BUILD_LIBRARY_DIR}/rpm/ensure_ephemeral_cert.sh" "${cert_dir}" require ||
-            die "Missing /usr signing material"
-        openssl cms -sign -binary -noattr -md sha256 \
-            -in "${verity_temp_dir}/root.hash" \
-            -signer "${cert_dir}/uki-signing-ca.pem" -inkey "${cert_dir}/ca.key" \
-            -outform DER -out "${verity_temp_dir}/${signature_name}" ||
+        bash "${BUILD_LIBRARY_DIR}/rpm/sign_ipe_artifact.sh" \
+            usr "${verity_temp_dir}/root.hash" \
+            "${verity_temp_dir}/${signature_name}" "${cert_dir}" ||
             die "Failed to sign /usr root hash"
-        openssl cms -verify -binary -inform DER \
-            -in "${verity_temp_dir}/${signature_name}" \
-            -content "${verity_temp_dir}/root.hash" \
-            -nointern -certfile "${cert_dir}/uki-signing-ca.pem" -noverify \
-            -out /dev/null || die "Invalid /usr signature candidate"
         # systemd-stub exposes this per-UKI file under /.extra/credentials/.
         sudo mkdir -p "${esp_dir}/EFI/Linux/${uki_name}.extra.d"
         sudo cp "${verity_temp_dir}/${signature_name}" \
