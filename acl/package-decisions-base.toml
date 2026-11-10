@@ -424,12 +424,11 @@ reason = """\
     separate container tools."""
 
 ["ipvsadm"]
-decision = "keep"
+decision = "remove-top-level"
 reason = """\
-    Keep this explicitly tested IPVS administration tool. Its installed package size is only 0.10 MiB in the \
-    captured AMD64 inventory. \
-    [Mantle's packages test](https://github.com/microsoft/azure-container-linux-mantle/blob/1832eaa7562b8ed7cd2f78b9d4f199aa999f46bb/kola/tests/packages/ipvsadm.go) \
-    exercises ipvsadm, although that test is not currently executed in our pipelines."""
+    Contains IPVS administration commands. The inherited \
+    [Flatcar base package list](https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/sdk_container/src/third_party/coreos-overlay/coreos-base/coreos/coreos-0.0.1.ebuild) \
+    directly includes sys-cluster/ipvsadm. Kube-proxy programs IPVS through netlink."""
 
 ["iscsi-initiator-utils"]
 decision = "keep"

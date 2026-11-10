@@ -29,7 +29,7 @@ from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, BinaryIO, cast
+from typing import Any, cast
 
 TOOLS_IMAGE = "mcr.microsoft.com/azurelinux/base/core:3.0"
 OCI_ARCHES_BY_NATIVE_ARCH = {"x86_64": "amd64", "aarch64": "arm64"}
@@ -173,7 +173,7 @@ def validate_database(path: Path) -> None:
 
 
 def backup_database(source: Path, destination: Path) -> None:
-    """Copy directly unless a nonempty WAL needs merging into the snapshot."""
+    """Copy directly unless a nonempty SQLite write-ahead log (WAL) needs merging into the snapshot."""
     wal = Path(str(source) + "-wal")
     if not wal.exists() or wal.stat().st_size == 0:
         shutil.copyfile(source, destination)
@@ -388,7 +388,7 @@ def image_path(root: Path, relative: str) -> Path:
 
 
 def current_sources(root: Path) -> dict[str, Path]:
-    """Locate just the image database, optional WAL, and a small os-release file."""
+    """Locate just the image database, its optional SQLite write-ahead log, and a small os-release file."""
     resolved_database_paths: set[Path] = set()
     database_paths = (
         "var/lib/rpm/rpmdb.sqlite",
@@ -430,7 +430,7 @@ def current_sources(root: Path) -> dict[str, Path]:
         if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
             raise InventoryError(f"Image {filename} must be a regular file of at most {limit} bytes")
 
-    with open_image_file(root, database) as stream:
+    with database.open("rb") as stream:
         if stream.read(16) != b"SQLite format 3\0":
             raise InventoryError(f"Not a SQLite RPM database: {database}")
 
@@ -463,95 +463,16 @@ def validate_current_paths(root: Path, work: Path, output: Path) -> tuple[Path, 
 
 
 @contextmanager
-def open_image_file(root: Path, path: Path) -> Generator[BinaryIO, None, None]:
-    """Open an already-resolved path without following replaced directory symlinks."""
-    path_parts = path.relative_to(root).parts
-    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-
-    try:
-        for part in path_parts[:-1]:
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
-            os.close(directory)
-            directory = child
-
-        descriptor = os.open(path_parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
-        with os.fdopen(descriptor, "rb") as stream:
-            yield stream
-    finally:
-        os.close(directory)
-
-
-def current_fingerprint(
-    root: Path,
-    copies: Path | None = None,
-) -> dict[str, tuple[str, int, int, int, int, int, str]]:
-    """Hash every source input, including WAL bytes, using only read-only file I/O."""
-    fingerprints_by_filename: dict[str, tuple[str, int, int, int, int, int, str]] = {}
-
-    for filename, source in current_sources(root).items():
-        limit = MAX_OS_RELEASE_BYTES if filename == "os-release" else MAX_DB_BYTES
-        digest = hashlib.sha256()
-        total = 0
-
-        with open_image_file(root, source) as stream:
-            before = os.fstat(stream.fileno())
-            if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
-                raise InventoryError(f"Invalid current image file: {source}")
-
-            # No SQLite connection is ever opened against the source image:
-            # even mode=ro can create or update its shared-memory sidecar.
-            destination = (copies / filename).open("xb") if copies is not None else None
-
-            try:
-                while chunk := stream.read(1024 * 1024):
-                    total += len(chunk)
-                    if total > limit:
-                        raise InventoryError(f"Current image file exceeds {limit} bytes: {source}")
-
-                    digest.update(chunk)
-                    if destination is not None:
-                        destination.write(chunk)
-            finally:
-                if destination is not None:
-                    destination.close()
-
-            after = os.fstat(stream.fileno())
-
-        before_metadata = (
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-        after_metadata = (
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        )
-        if before_metadata != after_metadata or total != before.st_size:
-            raise InventoryError("Current image inputs changed during collection; rerun")
-
-        fingerprints_by_filename[filename] = (
-            str(source),
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-            digest.hexdigest(),
-        )
-
-    return fingerprints_by_filename
-
-
-@contextmanager
 def current_image_snapshot(
     root: Path,
     work: Path,
 ) -> Generator[tuple[Path, dict[str, object]], None, None]:
-    """Merge a private database/WAL copy, and invalidate any changed source inputs."""
+    """Copy the image RPM database, its SQLite write-ahead log, and os-release into a private query root."""
     root, work = root.resolve(strict=True), work.resolve()
     if not root.is_dir():
         raise InventoryError("--root-dir must be a directory")
+
+    sources_by_filename = current_sources(root)
 
     with tempfile.TemporaryDirectory(prefix=".acl-current-", dir=work) as temporary:
         private = Path(temporary)
@@ -559,28 +480,25 @@ def current_image_snapshot(
         copies.mkdir(mode=0o700)
         snapshot.mkdir(mode=0o700)
 
-        before_by_filename = current_fingerprint(root, copies)
-        if current_fingerprint(root) != before_by_filename:
-            raise InventoryError("Current image inputs changed during collection; rerun")
+        # Never open SQLite on the image itself.
+        # Even mode=ro can create or update the image database's shared-memory sidecar.
+        for filename in ("rpmdb.sqlite", "rpmdb.sqlite-wal"):
+            if filename in sources_by_filename:
+                shutil.copyfile(sources_by_filename[filename], copies / filename)
 
         database = snapshot / "var/lib/rpm/rpmdb.sqlite"
         database.parent.mkdir(parents=True, mode=0o700)
         (snapshot / "etc").mkdir(mode=0o700)
         backup_database(copies / "rpmdb.sqlite", database)
-        shutil.copyfile(copies / "os-release", snapshot / "etc/os-release")
+        shutil.copyfile(sources_by_filename["os-release"], snapshot / "etc/os-release")
 
         provenance: dict[str, object] = {
             "root": str(root),
-            "database_path": before_by_filename["rpmdb.sqlite"][0],
+            "database_path": str(sources_by_filename["rpmdb.sqlite"]),
             "sha256": sha256(database),
         }
 
         yield snapshot, provenance
-
-        # Invalidate WAL appends/checkpoints and database replacements.
-        # Hashing only the main file can miss committed WAL.
-        if current_fingerprint(root) != before_by_filename:
-            raise InventoryError("Current image inputs changed during collection; rerun")
 
 
 def native_architecture() -> str:
@@ -1479,23 +1397,14 @@ def top_level_groups(dependents_by_nvra: Mapping[str, set[str]]) -> list[set[str
     return groups
 
 
-def write_csv(
-    path: Path,
+def package_report_rows(
     packages: list[Package],
     dependents_by_nvra: dict[str, set[str]],
     decisions_by_pkgname: dict[str, Decision],
-    reasons_by_pkgname: dict[str, str] | None = None,
-    *,
-    remaining_dependents_by_nvra: dict[str, set[str]] | None = None,
-) -> None:
-    reasons_by_pkgname = reasons_by_pkgname or {}
-    if remaining_dependents_by_nvra is None:
-        remaining_dependents_by_nvra = report_dependents(
-            packages,
-            dependents_by_nvra,
-            decisions_by_pkgname,
-        )
-
+    reasons_by_pkgname: dict[str, str],
+    remaining_dependents_by_nvra: dict[str, set[str]],
+) -> list[tuple[str, str, str, str, str, str]]:
+    """Build CSV_HEADER-ordered report rows in their final CSV and Markdown order."""
     sizes_by_nvra = {package.nvra: package.size for package in packages}
     pkgnames_by_nvra = {package.nvra: package.name for package in packages}
 
@@ -1510,6 +1419,45 @@ def write_csv(
         for nvra in group
     }
 
+    rows: list[tuple[str, str, str, str, str, str]] = []
+
+    for package in packages:
+        remaining_dependent_nvras = remaining_dependents_by_nvra[package.nvra]
+        remaining_top_level_dependent_nvras = sorted(remaining_dependent_nvras & remaining_top_level_nvras)
+        decision = decisions_by_pkgname.get(package.name)
+        decision_text = decision.value if decision is not None else ""
+        reason = reasons_by_pkgname.get(package.name, "") if decision is not None else ""
+
+        reason_top_level_dependent_nvras = (
+            dependents_by_nvra[package.nvra] & installed_top_level_nvras
+            if decision == Decision.REMOVE_DEPENDENCY
+            else set(remaining_top_level_dependent_nvras)
+        )
+        if reason_top_level_dependent_nvras:
+            top_level_dependent_pkgnames = sorted({
+                pkgnames_by_nvra[nvra] for nvra in reason_top_level_dependent_nvras
+            })
+            noun = "package" if len(top_level_dependent_pkgnames) == 1 else "packages"
+            qualifier = " selected for removal" if decision == Decision.REMOVE_DEPENDENCY else ""
+            prefix = f"Required by top-level {noun}{qualifier}: "
+            required_by = prefix + ", ".join(top_level_dependent_pkgnames)
+            reason = f"{reason}; {required_by}" if reason else required_by
+
+        rows.append((
+            package.nvra,
+            f"{package.size / (1024 ** 2):.2f}",
+            decision_text,
+            reason,
+            str(len(remaining_dependent_nvras)),
+            "\n".join(f"- {nvra}" for nvra in remaining_top_level_dependent_nvras),
+        ))
+
+    # Sort by Top-level Dependents text, ascending with empty lists first;
+    # then Decision text, byte size descending, and NVRA ascending.
+    return sorted(rows, key=lambda row: (row[5], row[2], -sizes_by_nvra[row[0]], row[0]))
+
+
+def write_csv(path: Path, rows: Sequence[Sequence[str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".csv.partial")
 
@@ -1517,89 +1465,40 @@ def write_csv(
         with temporary.open("w", encoding="utf-8", newline="") as stream:
             writer = csv.writer(stream)
             writer.writerow(CSV_HEADER)
-
-            csv_rows: list[tuple[str, str, str, str, int, str]] = []
-
-            for package in packages:
-                remaining_dependent_nvras = remaining_dependents_by_nvra[package.nvra]
-                remaining_top_level_dependent_nvras = sorted(remaining_dependent_nvras & remaining_top_level_nvras)
-                decision = decisions_by_pkgname.get(package.name)
-                decision_text = decision.value if decision is not None else ""
-                reason = reasons_by_pkgname.get(package.name, "") if decision is not None else ""
-
-                reason_top_level_dependent_nvras = (
-                    dependents_by_nvra[package.nvra] & installed_top_level_nvras
-                    if decision == Decision.REMOVE_DEPENDENCY
-                    else set(remaining_top_level_dependent_nvras)
-                )
-                if reason_top_level_dependent_nvras:
-                    top_level_dependent_pkgnames = sorted({
-                        pkgnames_by_nvra[nvra] for nvra in reason_top_level_dependent_nvras
-                    })
-                    noun = "package" if len(top_level_dependent_pkgnames) == 1 else "packages"
-                    qualifier = " selected for removal" if decision == Decision.REMOVE_DEPENDENCY else ""
-                    prefix = f"Required by top-level {noun}{qualifier}: "
-                    required_by = prefix + ", ".join(top_level_dependent_pkgnames)
-                    reason = f"{reason}; {required_by}" if reason else required_by
-
-                row = (
-                    package.nvra,
-                    f"{package.size / (1024 ** 2):.2f}",
-                    decision_text,
-                    reason,
-                    len(remaining_dependent_nvras),
-                    "\n".join(f"- {nvra}" for nvra in remaining_top_level_dependent_nvras),
-                )
-                csv_rows.append(row)
-
-            # Sort by Top-level Dependents text, ascending with empty lists first;
-            # then Decision text, byte size descending, and NVRA ascending.
-            for row in sorted(csv_rows, key=lambda row: (row[5], row[2], -sizes_by_nvra[row[0]], row[0])):
-                writer.writerow(row)
+            writer.writerows(rows)
 
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def write_markdown(csv_path: Path, title: str) -> Path:
-    """Render the finished CSV as a heading and source-aligned table in CSV order."""
-    path = csv_path.with_suffix(".md")
+def write_markdown(path: Path, title: str, rows: Sequence[Sequence[str]]) -> None:
+    """Render the report rows as a heading and source-aligned table in CSV order."""
     temporary = path.with_suffix(".md.partial")
 
     def table_row(cell_values: Sequence[str], column_widths: Sequence[int]) -> str:
         return "| " + " | ".join(value.ljust(width) for value, width in zip(cell_values, column_widths)) + " |\n"
 
+    markdown_rows: list[list[str]] = []
+
+    for row in (CSV_HEADER, *rows):
+        escaped_cells: list[str] = []
+
+        for value in row:
+            cell = html.escape(value, quote=False)
+            cell = cell.replace("\\", "\\\\")
+            cell = cell.replace("|", "\\|")
+            cell = cell.replace("\r\n", "\n")
+            cell = cell.replace("\r", "\n")
+            cell = cell.replace("\n", "<br>")
+            escaped_cells.append(cell)
+
+        markdown_rows.append(escaped_cells)
+
+    column_widths = [max(3, max(len(row[index]) for row in markdown_rows)) for index in range(len(CSV_HEADER))]
+
     try:
-        with csv_path.open(encoding="utf-8", newline="") as source, \
-                temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            reader = csv.reader(source)
-            csv_header = next(reader, None)
-            if not csv_header:
-                raise InventoryError(f"CSV report has no header: {csv_path}")
-
-            csv_rows: list[list[str]] = [csv_header, *reader]
-            if any(len(row) != len(csv_header) for row in csv_rows):
-                raise InventoryError(f"CSV report has inconsistent columns: {csv_path}")
-
-            markdown_rows: list[list[str]] = []
-
-            for row in csv_rows:
-                escaped_cells: list[str] = []
-
-                for value in row:
-                    cell = html.escape(value, quote=False)
-                    cell = cell.replace("\\", "\\\\")
-                    cell = cell.replace("|", "\\|")
-                    cell = cell.replace("\r\n", "\n")
-                    cell = cell.replace("\r", "\n")
-                    cell = cell.replace("\n", "<br>")
-                    escaped_cells.append(cell)
-
-                markdown_rows.append(escaped_cells)
-
-            column_widths = [max(3, max(len(row[index]) for row in markdown_rows)) for index in range(len(csv_header))]
-
+        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
             stream.write(f"# {title}\n\n")
             stream.write(table_row(markdown_rows[0], column_widths))
             stream.write(table_row(["-" * width for width in column_widths], column_widths))
@@ -1609,8 +1508,6 @@ def write_markdown(csv_path: Path, title: str) -> Path:
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
-
-    return path
 
 
 def write_removal_list(
@@ -1841,6 +1738,8 @@ def main(argv: list[str] | None = None) -> None:
     try:
         decisions_by_pkgname, reasons_by_pkgname = load_decision_files(decision_files)
         if not args.build_hook:
+            # When used as a build hook, this script reports before image finalization uninstalls azurelinux-repos*.
+            # Otherwise, this script reads finished images or build artifacts that no longer contain them.
             for name in REPOSITORY_PACKAGES:
                 if name not in decisions_by_pkgname:
                     continue
@@ -1877,7 +1776,7 @@ def main(argv: list[str] | None = None) -> None:
             if root is not None:
                 print(f"Querying current ACL image at {root}...", flush=True)
 
-                # The context protects the temporary snapshot and checks the original after querying.
+                # The context keeps SQLite and the native tools on a temporary copy of the image database.
                 with current_image_snapshot(root, work) as (snapshot, snapshot_metadata):
                     packages, dependents_by_nvra, architecture = query_database(
                         tools=None,
@@ -1972,9 +1871,6 @@ def main(argv: list[str] | None = None) -> None:
                         database_label=database_label,
                     )
 
-                    if sha256(build_rpmdb) != database_digest:
-                        raise InventoryError(f"{database_label} RPM database changed during collection; rerun")
-
                 validate_package_presence(decisions_by_pkgname, packages)
 
                 if cached is None:
@@ -2016,18 +1912,20 @@ def main(argv: list[str] | None = None) -> None:
 
             output.mkdir(parents=True, exist_ok=True)
 
-            csv_path = output / "package-decisions.csv"
-            write_csv(
-                csv_path,
+            report_rows = package_report_rows(
                 packages,
                 dependents_by_nvra,
-                decisions_by_pkgname=decisions_by_pkgname,
-                reasons_by_pkgname=reasons_by_pkgname,
-                remaining_dependents_by_nvra=remaining_dependents_by_nvra,
+                decisions_by_pkgname,
+                reasons_by_pkgname,
+                remaining_dependents_by_nvra,
             )
+
+            csv_path = output / "package-decisions.csv"
+            write_csv(csv_path, report_rows)
             print(f"Wrote {csv_path} ({len(packages)} packages)")
 
-            markdown_path = write_markdown(csv_path, image_title)
+            markdown_path = output / "package-decisions.md"
+            write_markdown(markdown_path, image_title, report_rows)
             print(f"Wrote {markdown_path}")
 
             removal_path = output / "packages-selected-for-removal.txt"
