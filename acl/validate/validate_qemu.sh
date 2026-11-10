@@ -251,6 +251,9 @@ connect_vm_console_qemu() {
 wait_for_vm_boot_qemu() {
     local vm_name="$1"
     local timeout="${2:-300}"
+    # Watch the console without typing on it. A fresh VM prints its login prompt
+    # by itself, and a key that reaches systemd-boot's startup key check opens
+    # its boot menu, which "timeout 0" in loader.conf leaves with no countdown.
 
     info "Connecting to VM console (will disconnect on login prompt, timeout: ${timeout}s)..."
     echo "╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
@@ -271,10 +274,6 @@ log_user 1
 spawn virsh console $vm_name
 
 expect {
-    "Escape character" {
-        send "\r"
-        exp_continue
-    }
     -re {(login:|Login:)} {
         puts "\n╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝╝"
         puts "✓ Login prompt detected - VM boot complete"

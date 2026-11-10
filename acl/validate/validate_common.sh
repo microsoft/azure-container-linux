@@ -993,7 +993,7 @@ validate_main() {
 
         if [[ ${#RUN_SCRIPTS[@]} -eq 0 ]] && [[ ${#RUN_HOST_SCRIPTS[@]} -eq 0 ]]; then
             # No scripts — interactive mode
-            if [[ "$VM_TYPE" == "qemu" ]]; then
+            if [[ "$VM_TYPE" == "qemu" ]] && [[ "$REUSE_VM" != "true" ]]; then
                 echo
                 info "Waiting for VM to boot (showing console output)..."
                 if ! wait_for_vm_boot_qemu "${VM_NAME}" "$VM_BOOT_TIMEOUT"; then
