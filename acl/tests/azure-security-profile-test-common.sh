@@ -22,14 +22,22 @@ setup_ssh_opts() {
 }
 
 ssh_cmd() {
-    ssh "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" "$@"
+    local -a command=(ssh)
+    if [[ "${1:-}" == "--timeout" ]]; then
+        command=(timeout --signal=TERM --kill-after=1s "$2" ssh)
+        shift 2
+    fi
+    "${command[@]}" "${SSH_OPTS[@]}" "${VM_SSH_USER}@${VM_IP}" "$@"
 }
 
 imds_security_profile_state() {
-    local raw
-    raw=$(ssh_cmd "curl -sf -H Metadata:true --noproxy '*' \
-        'http://169.254.169.254/metadata/instance/compute/tagsList?api-version=2021-02-01'" \
-        2>/dev/null) || return 1
+    local raw read_timeout="${1:-10}"
+    raw=$(ssh_cmd --timeout "${read_timeout}s" \
+        "curl -fsS --connect-timeout 5 --max-time ${read_timeout} -H Metadata:true --noproxy '*' \
+        'http://169.254.169.254/metadata/instance/compute/tagsList?api-version=2021-02-01'") || {
+        error "Could not read the security profile from IMDS (SSH/curl exit code $?)"
+        return 1
+    }
     jq -sce --arg tag "${SECURITY_PROFILE_TAG_NAME}" \
         "$(acl_security_profile_jq_filter)" <<<"${raw}"
 }
@@ -127,15 +135,22 @@ set_security_profile_tag_state() {
     fi
 
     info "Waiting for in-guest IMDS to report the updated security profile..."
-    local deadline seen_state
+    local deadline remaining read_timeout seen_state last_seen_state="unavailable"
     deadline=$(( $(date +%s) + 60 ))
-    while (( $(date +%s) < deadline )); do
-        seen_state="$(imds_security_profile_state)" &&
-            [[ "${seen_state}" == "${state}" ]] &&
-            return 0
-        sleep 2
+    while (( (remaining = deadline - $(date +%s)) > 0 )); do
+        read_timeout=$(( remaining < 10 ? remaining : 10 ))
+        if seen_state="$(imds_security_profile_state "${read_timeout}")"; then
+            last_seen_state="${seen_state}"
+            if [[ "${seen_state}" == "${state}" ]] &&
+                (( $(date +%s) < deadline )); then
+                return 0
+            fi
+        fi
+        remaining=$(( deadline - $(date +%s) ))
+        (( remaining > 0 )) || break
+        sleep "$(( remaining < 2 ? remaining : 2 ))"
     done
-    error "IMDS did not converge to the requested security profile within 60s"
+    error "IMDS did not converge to the requested security profile within 60s (expected ${state}; last observed ${last_seen_state})"
     return 1
 }
 
