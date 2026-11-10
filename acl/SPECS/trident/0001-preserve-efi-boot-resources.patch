@@ -1,3 +1,18 @@
+From: Mitch Zhu <mitchzhu@microsoft.com>
+Date: Tue, 10 Nov 2026 00:44:21 +0000
+Subject: [PATCH] esp: preserve chained EFI boot resources across updates
+
+ARM64 ACL images with SMBIOS profile selection enabled add the selector,
+a separate systemd-boot binary, and the profiles directory containing the
+signed Grace addon.
+Trident's fixed boot-file list omits these files, and its file-only copy
+operations cannot preserve the directory. A fresh image can boot, but a
+file-based ESP update can leave efitreeloader without its required files.
+
+Copy additional EFI applications and boot-resource directories through
+the existing slot and UEFI fallback replacement flow. Handle directories
+in the .new/.old cleanup and test that the resources survive both paths.
+---
 diff --git a/crates/trident/src/subsystems/esp.rs b/crates/trident/src/subsystems/esp.rs
 index a47c2cb..43cee9b 100644
 --- a/crates/trident/src/subsystems/esp.rs

@@ -335,7 +335,7 @@ OSREL
     _uki_build_kdump_addon "${ESP_DIR}"
     _uki_build_debug_addon "${ESP_DIR}" "${uki_name}"
 
-    if [[ "${ACL_SMBIOS_PROFILE_SELECTOR:-false}" == "true" ]]; then
+    if [[ "${EFI_ARCH}" == "aa64" ]]; then
         _uki_install_smbios_selector "${ESP_DIR}" "${efi_stub}" "${sd_boot_efi}"
     fi
 
@@ -352,15 +352,21 @@ _uki_install_smbios_selector() {
     local esp_dir="$1" efi_stub="$2" systemd_boot="$3"
     local selector_dir="${SCRIPT_ROOT}/acl/smbios-profile-selector"
     local binaries="${selector_dir}/target/boot"
+    # Reject unsupported targets or missing binaries before changing boot files.
     [[ "${EFI_ARCH}" == "aa64" ]] || die "SMBIOS profile selection requires ARM64"
     for name in smbios-profile-selector.efi efitreeloader.efi; do
         [[ -s "${binaries}/${name}" ]] || die "Missing selector build output: ${binaries}/${name}"
     done
 
+    # Prepare the inactive template location and runtime activation directory.
     sudo mkdir -p "${esp_dir}/EFI/BOOT/profiles" "${esp_dir}/loader/addons"
+    # Keep shim unchanged; efitreeloader runs the SMBIOS profile selector
+    # before systemd-boot, preserved as 3rdaa64.efi.
     sudo cp "${systemd_boot}" "${esp_dir}/EFI/BOOT/3rdaa64.efi"
     sudo cp "${binaries}/efitreeloader.efi" "${esp_dir}/EFI/BOOT/grubaa64.efi"
     sudo cp "${binaries}/smbios-profile-selector.efi" "${esp_dir}/EFI/BOOT/"
+    # Keep Grace parameters outside active addon paths until the SMBIOS
+    # profile selector detects NVIDIA Grace and activates this template.
     sudo ukify build \
         --cmdline=@"${selector_dir}/boot/nvidia-grace-kernel-parameters.txt" \
         --stub="${efi_stub}" \

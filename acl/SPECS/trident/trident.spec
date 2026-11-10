@@ -335,6 +335,9 @@ mkdir -p "$pcrlockroot"
 )
 
 %changelog
+* Mon Nov 09 2026 Mitch Zhu <mitchzhu@microsoft.com> - 0.30.0-2
+- Preserve chained EFI applications and profile addons across A/B updates.
+
 * Fri Oct 23 2026 Brian Fjeldstad <bfjelds@microsoft.com> - 0.30.0-1
 - Update to version 0.30.0
 

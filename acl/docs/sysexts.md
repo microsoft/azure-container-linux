@@ -23,9 +23,12 @@ Built and shipped alongside the disk image:
   - `nvidia-driver-vgpu`
   - `nvidia-container-toolkit`
   - `nvidia-fabric-manager`
+
+  The `nvidia-driver-cuda-open` sysext uses `cuda-open` on AMD64 and
+  `cuda-open-hwe` on ARM64. The ARM64 driver requires a matching HWE kernel.
+  The `nvidia-driver-cuda` and `nvidia-driver-vgpu` sysexts remain AMD64-only.
+
 - **Scenario-specific**:
   - `docker`
-
-The open NVIDIA driver sysext uses `cuda-open` on AMD64 and `cuda-open-hwe` on ARM64. The ARM64 driver requires a matching HWE kernel. Proprietary CUDA and vGPU sysexts remain AMD64-only.
 
 Sysexts are defined in `sysexts.yaml` with a required `mode` field. **Embedded** sysexts (e.g. `containerd`) are placed directly in the image and activated at boot. **Standalone** sysexts are built separately and downloaded on demand. Package names can be RPM names (e.g. `cuda-open`) or portage-style names (e.g. `app-containers/docker`) — the build system tries direct RPM installation first and falls back to the catalog. The `archs` field controls which architectures to build for; omitting it builds for all. An optional mangle script (`build_library/sysext_mangle_<name>` or `build_library/rpm/sysexts/sysext_mangle_<name>`) can relocate files that RPMs install outside `/usr`.

@@ -61,11 +61,7 @@ while IFS=$'\t' read -r key value arch; do
     fi
 done < <(_catalog_tsv_cmd "${_CATALOG_YAML}")
 
-if [[ "${ACL_SMBIOS_PROFILE_SELECTOR:-false}" == "true" ]]; then
-    if [[ "${_board_arch}" != "arm64" || "${BOOTLOADER_MODE:-}" != "uki" ]]; then
-        echo "FATAL: SMBIOS profile selection requires an ARM64 UKI image" >&2
-        exit 1
-    fi
+if [[ "${_board_arch}" == "arm64" && "${BOOTLOADER_MODE:-}" == "uki" ]]; then
     PACKAGE_CATALOG["sys-kernel/coreos-kernel"]="kernel-hwe"
     PACKAGE_CATALOG["sys-kernel/coreos-modules"]="kernel-hwe"
     PACKAGE_CATALOG["dev-util/bpftool"]="bpftool-hwe"

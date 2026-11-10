@@ -187,11 +187,6 @@ export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
-export ACL_SMBIOS_PROFILE_SELECTOR="${ACL_SMBIOS_PROFILE_SELECTOR:-false}"
-case "${ACL_SMBIOS_PROFILE_SELECTOR}" in
-    true|false) ;;
-    *) echo "ACL_SMBIOS_PROFILE_SELECTOR must be true or false" >&2; exit 1 ;;
-esac
 # Build-time IPE mode and signing mode. Runtime activation is selected only
 # through the Azure IMDS acl-node-security-profile tag.
 IPE_MODE_OVERRIDE_SET=false
@@ -1123,12 +1118,10 @@ build_rpms() {
 build_image() {
     section "Building Azure Container Linux Image"
 
-    if [[ "${ACL_SMBIOS_PROFILE_SELECTOR}" == "true" ]]; then
-        if [[ "${BOARD}" != "arm64-usr" || "${BOOTLOADER_MODE}" != "uki" ]]; then
-            error "SMBIOS profile selection requires an ARM64 UKI image"
-            exit 1
-        fi
-        bash "${SCRIPT_DIR}/acl/smbios-profile-selector/build.sh" \
+    if [[ "${BOARD}" == "arm64-usr" && "${BOOTLOADER_MODE}" == "uki" ]]; then
+        # Build the SMBIOS profile selector and efitreeloader for ARM64.
+        # The SDK installs and signs both EFI applications during image assembly.
+        bash "${SCRIPT_DIR}/acl/smbios-profile-selector/build-smbios-selector-and-loader.sh" \
             "${EFITREELOADER_DIR:?EFITREELOADER_DIR must point to the efitreeloader checkout}"
     fi
 

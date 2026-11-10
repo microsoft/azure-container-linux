@@ -4,8 +4,8 @@
 # Licensed under the MIT License.
 
 # sign_uki_ephemeral.sh — Sign the UKI Secure Boot chain with an ephemeral
-# (self-signed) key. Covers both systemd-boot (EFI/BOOT/grub*.efi, shim's
-# second stage) and the UKI + addons (EFI/Linux/*.efi, acl/uki-addons/*).
+# (self-signed) key. Covers systemd-boot, UKIs and addons, plus the optional
+# ARM64 SMBIOS profile selector and its efitreeloader boot chain.
 # Shim itself (EFI/BOOT/BOOT<ARCH>.EFI) is Microsoft-signed and left alone.
 #
 # This script signs applicable EFI binaries using a newly generated certificate
@@ -104,13 +104,16 @@ fi
 info "Certificate: ${CERT_FILE}"
 
 # Sign every EFI binary on the ESP that shim or the firmware will verify
-# against UEFI db. The Secure Boot chain is:
+# against UEFI db. The default Secure Boot chain is:
 #   firmware → EFI/BOOT/BOOT<ARCH>.EFI (shim, Microsoft-signed — DO NOT re-sign)
 #           → EFI/BOOT/grub<ARCH>.efi  (systemd-boot, normally Mariner-signed;
 #                                       unsigned when RPMs come from a dev
 #                                       pipeline → sign with ephemeral key)
 #           → EFI/Linux/<uki>.efi      (UKI + addons — sign with ephemeral key)
 #           → acl/uki-addons/*.efi     (addon templates, signed for runtime use)
+# In ARM64 SMBIOS profile selector images, grubaa64.efi is efitreeloader.
+# It runs smbios-profile-selector.efi, then systemd-boot from 3rdaa64.efi.
+# The inactive EFI/BOOT/profiles/nvidia-grace.addon.efi also needs signing.
 # Active and template copies are independent files, so each is signed directly.
 # The ephemeral CA cert is enrolled in the gallery image's Secure Boot db by
 # publish_to_gallery.sh, so shim accepts the signatures produced here.
@@ -123,12 +126,12 @@ done < <(
         "${ESP_DIR}/EFI/Linux" \
         "${ESP_DIR}/acl/uki-addons" \
         -name '*.efi' -type f -print0 2>/dev/null
-    # systemd-boot is installed as grub<arch>.efi (shim looks it up by that
-    # name). Match grub*.efi explicitly and skip BOOT<ARCH>.EFI (shim itself).
+    # Shim loads grub<arch>.efi: normally systemd-boot, or efitreeloader in
+    # ARM64 selector images. Include the two extra applications, but not shim.
     find \
         "${ESP_DIR}/EFI/BOOT" \
         -maxdepth 1 -type f \
-        \( -iname 'grub*.efi' -o -iname '3rd*.efi' -o -name 'smbios-profile-selector.efi' \) \
+        \( -iname 'grub*.efi' -o -iname '3rdaa64.efi' -o -name 'smbios-profile-selector.efi' \) \
         -print0 2>/dev/null
     if [[ -f "${ESP_DIR}/EFI/BOOT/profiles/nvidia-grace.addon.efi" ]]; then
         printf '%s\0' "${ESP_DIR}/EFI/BOOT/profiles/nvidia-grace.addon.efi"

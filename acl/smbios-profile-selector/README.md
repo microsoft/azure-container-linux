@@ -17,7 +17,7 @@ so its UEFI workspace settings apply.
 
 ```sh
 cargo test --locked --lib
-bash tests/image.sh
+bash tests/test-smbios-image-wiring.sh
 cargo build --locked --release --target aarch64-unknown-uefi
 cargo build --locked --release --target x86_64-unknown-uefi
 ```
@@ -37,28 +37,12 @@ Source layout:
 - unit tests: [SMBIOS](src/smbios/tests.rs), [UKI](src/uki/tests.rs),
   and [SBAT metadata](src/tests.rs).
 
-To build an ARM64 validation image, prepare the SDK as described in the
-[image build guide](../docs/BUILD_RPM_IMAGE_README.md), install the pinned Rust
-toolchain, and run from the repository root:
-
-```sh
-ACL_SMBIOS_PROFILE_SELECTOR=true BOOTLOADER_MODE=uki \
-  EFITREELOADER_DIR=/path/to/efitreeloader \
-  ./acl/build_rpm_image.sh --build-rpms --build-image --build-vm-image \
-    --board=arm64-usr --vm-type=azure
-```
-
-This opt-in selects `kernel-hwe` and builds the selector and configured
-efitreeloader from source. The dependency checkout is not modified. Normal
-builds remain unchanged when the option is off.
-
-Validation images use ephemeral signing keys, not production trust. Existing
-installations need the Trident boot-resource update before adopting this boot
-chain.
-
 ## Boot integration
 
 The app runs after shim and before systemd-boot.
+
+For the ARM64 image-build command, see the
+[image build guide](../docs/BUILD_RPM_IMAGE_README.md#phase-3-build-the-image).
 
 Build and sign a command-line-only addon from
 [nvidia-grace-kernel-parameters.txt](boot/nvidia-grace-kernel-parameters.txt),
