@@ -1644,6 +1644,163 @@ def validate_removal(
         root_run([*rpm_command, "--test", "-e", *pkgnames_to_remove])
 
 
+def collect_current_inventory(
+    root: Path,
+    work: Path,
+    rpm: str,
+    tdnf: str,
+    package_manager: str,
+    decisions_by_pkgname: dict[str, Decision],
+) -> tuple[list[Package], dict[str, set[str]], str, dict[str, object]]:
+    print(f"Querying current ACL image at {root}...", flush=True)
+
+    with current_image_snapshot(root, work) as (snapshot, snapshot_metadata):
+        packages, dependents_by_nvra, architecture = query_database(
+            tools=None,
+            database=None,
+            snapshot=snapshot,
+            rpm_executable=rpm,
+            package_manager_executable=tdnf,
+            package_manager=package_manager,
+        )
+
+        validate_package_presence(decisions_by_pkgname, packages)
+
+        pkgnames_to_remove = sorted({
+            package.name for package in packages
+            if decisions_by_pkgname.get(package.name, Decision.KEEP) != Decision.KEEP
+        })
+        if pkgnames_to_remove:
+            validate_removal(
+                pkgnames_to_remove,
+                rpm,
+                snapshot,
+                None,
+            )
+
+        snapshot_metadata.update({"packages": len(packages), "architecture": architecture})
+        build_id = os.environ.get("BUILD_BUILDID", "")
+        if build_id.isdecimal() and int(build_id) > 0:
+            snapshot_metadata["build_id"] = int(build_id)
+
+        provenance: dict[str, object] = {
+            "mode": "current",
+            "package_manager": package_manager,
+            "acl": snapshot_metadata,
+        }
+
+    inventory_path = work / "inventories" / "acl-current.json"
+    write_inventory(inventory_path, packages, dependents_by_nvra)
+    print(f"Wrote raw inventory {inventory_path}", flush=True)
+
+    return packages, dependents_by_nvra, architecture, provenance
+
+
+def collect_build_inventory(
+    work: Path,
+    build_id: int,
+    acl_template: bool,
+    image_platform: str,
+    image_platform_was_explicit: bool,
+    image_name: str,
+    inventory_name: str,
+    database_label: str,
+    tools_image: str,
+    architecture: str,
+    decisions_by_pkgname: dict[str, Decision],
+    build_rpmdb: Path | None,
+) -> tuple[list[Package], dict[str, set[str]], dict[str, object]]:
+    provenance: dict[str, object] = {"tools_image": tools_image}
+
+    if build_rpmdb is None:
+        if acl_template:
+            build_rpmdb, provenance[image_name] = download_acl(work, build_id, acl_template=True)
+        else:
+            build_rpmdb, provenance[image_name] = download_acl(
+                work,
+                build_id,
+                qemu=image_platform == "qemu",
+            )
+            provenance["image_platform"] = image_platform
+
+    reuse_arguments = [
+        "--build-rpmdb",
+        str(build_rpmdb.resolve()),
+    ]
+    reuse_instruction = "omit --image-platform and add" if image_platform_was_explicit else "add"
+    print(
+        f"To reuse the {database_label} RPM database without downloading, {reuse_instruction}:\n  "
+        + shlex.join(reuse_arguments),
+        flush=True,
+    )
+
+    inventory_path = work / "inventories" / f"{inventory_name}.json"
+    database_digest = sha256(build_rpmdb)
+    cache_key: dict[str, object] = {
+        "version": 1,
+        "rpmdb_sha256": database_digest,
+        "tools_image": tools_image,
+        "database_label": database_label,
+    }
+    cached = read_inventory(inventory_path, cache_key)
+
+    if cached is not None:
+        packages, dependents_by_nvra = cached
+        validate_package_architectures(packages, architecture)
+        print(f"Reusing cached {database_label} inventory {inventory_path}", flush=True)
+    else:
+        print("Preparing Azure Linux tools directory...", flush=True)
+        tools = prepare_tools(work, tools_image)
+        provenance["tools_inspect"] = json.loads(root_run(["docker", "image", "inspect", tools_image]))
+
+        print(f"Querying {database_label} RPM database {build_rpmdb}...", flush=True)
+        packages, dependents_by_nvra, _ = query_database(
+            tools,
+            build_rpmdb.resolve(),
+            snapshot=None,
+            rpm_executable="rpm",
+            package_manager_executable=None,
+            package_manager="tdnf",
+            database_label=database_label,
+        )
+
+    validate_package_presence(decisions_by_pkgname, packages)
+
+    if cached is None:
+        write_inventory(inventory_path, packages, dependents_by_nvra, cache_key=cache_key)
+        print(f"Wrote raw {database_label} inventory {inventory_path}", flush=True)
+
+    provenance[image_name + "_database"] = {
+        "database_label": database_label,
+        "path": str(build_rpmdb),
+        "sha256": database_digest,
+        "packages": len(packages),
+        "cached": cached is not None,
+    }
+
+    pkgnames_to_remove = sorted({
+        package.name
+        for package in packages
+        if decisions_by_pkgname.get(package.name, Decision.KEEP) != Decision.KEEP
+    })
+    if pkgnames_to_remove:
+        tools = prepare_tools(work, tools_image)
+        with tempfile.TemporaryDirectory(prefix=".acl-removal-", dir=tools) as temporary:
+            snapshot = Path(temporary)
+            private_database = snapshot / "var/lib/rpm/rpmdb.sqlite"
+            private_database.parent.mkdir(parents=True)
+            shutil.copyfile(build_rpmdb, private_database)
+
+            validate_removal(
+                pkgnames_to_remove,
+                "rpm",
+                snapshot,
+                tools,
+            )
+
+    return packages, dependents_by_nvra, provenance
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1771,139 +1928,31 @@ def main(argv: list[str] | None = None) -> None:
         with (work / ".lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
-            provenance: dict[str, object] = {}
-
             if root is not None:
-                print(f"Querying current ACL image at {root}...", flush=True)
-
-                # The context keeps SQLite and the native tools on a temporary copy of the image database.
-                with current_image_snapshot(root, work) as (snapshot, snapshot_metadata):
-                    packages, dependents_by_nvra, architecture = query_database(
-                        tools=None,
-                        database=None,
-                        snapshot=snapshot,
-                        rpm_executable=rpm,
-                        package_manager_executable=tdnf,
-                        package_manager=package_manager,
-                    )
-
-                    validate_package_presence(decisions_by_pkgname, packages)
-
-                    pkgnames_to_remove = sorted({
-                        package.name for package in packages
-                        if decisions_by_pkgname.get(package.name, Decision.KEEP) != Decision.KEEP
-                    })
-                    if pkgnames_to_remove:
-                        validate_removal(
-                            pkgnames_to_remove,
-                            rpm,
-                            snapshot,
-                            None,
-                        )
-
-                    snapshot_metadata.update({"packages": len(packages), "architecture": architecture})
-                    build_id = os.environ.get("BUILD_BUILDID", "")
-                    if build_id.isdecimal() and int(build_id) > 0:
-                        snapshot_metadata["build_id"] = int(build_id)
-
-                    provenance.update({"mode": "current", "package_manager": package_manager, "acl": snapshot_metadata})
-
-                inventory_path = work / "inventories" / "acl-current.json"
-                write_inventory(inventory_path, packages, dependents_by_nvra)
-                print(f"Wrote raw inventory {inventory_path}", flush=True)
+                packages, dependents_by_nvra, architecture, provenance = collect_current_inventory(
+                    root,
+                    work,
+                    rpm,
+                    tdnf,
+                    package_manager,
+                    decisions_by_pkgname,
+                )
             else:
                 assert args.build_id is not None
-                provenance["tools_image"] = args.tools_image
-
-                build_rpmdb: Path | None = args.build_rpmdb
-                if build_rpmdb is None:
-                    if args.acl_template:
-                        build_rpmdb, provenance[image_name] = download_acl(work, args.build_id, acl_template=True)
-                    else:
-                        downloaded_databases = {
-                            "azure": download_acl(work, args.build_id),
-                            "qemu": download_acl(work, args.build_id, qemu=True),
-                        }
-                        build_rpmdb, provenance[image_name] = downloaded_databases[image_platform]
-                        provenance["image_platform"] = image_platform
-                        for download_platform, (database, source) in downloaded_databases.items():
-                            if download_platform != image_platform:
-                                provenance[f"acl_{download_platform}_download"] = {**source, "path": str(database)}
-                                print(f"Downloaded {download_platform.upper()} RPM database {database} (not analyzed)", flush=True)
-
-                reuse_arguments = [
-                    "--build-rpmdb",
-                    str(build_rpmdb.resolve()),
-                ]
-                reuse_instruction = "add" if args.image_platform is None else "omit --image-platform and add"
-                print(
-                    f"To reuse the {database_label} RPM database without downloading, {reuse_instruction}:\n  " + shlex.join(reuse_arguments),
-                    flush=True,
+                packages, dependents_by_nvra, provenance = collect_build_inventory(
+                    work,
+                    args.build_id,
+                    args.acl_template,
+                    image_platform,
+                    args.image_platform is not None,
+                    image_name,
+                    inventory_name,
+                    database_label,
+                    args.tools_image,
+                    architecture,
+                    decisions_by_pkgname,
+                    args.build_rpmdb,
                 )
-
-                inventory_path = work / "inventories" / f"{inventory_name}.json"
-                database_digest = sha256(build_rpmdb)
-                cache_key: dict[str, object] = {
-                    "version": 1,
-                    "rpmdb_sha256": database_digest,
-                    "tools_image": args.tools_image,
-                    "database_label": database_label,
-                }
-                cached = read_inventory(inventory_path, cache_key)
-
-                if cached is not None:
-                    packages, dependents_by_nvra = cached
-                    validate_package_architectures(packages, architecture)
-                    print(f"Reusing cached {database_label} inventory {inventory_path}", flush=True)
-                else:
-                    print("Preparing Azure Linux tools directory...", flush=True)
-                    tools = prepare_tools(work, args.tools_image)
-                    provenance["tools_inspect"] = json.loads(root_run(["docker", "image", "inspect", args.tools_image]))
-
-                    print(f"Querying {database_label} RPM database {build_rpmdb}...", flush=True)
-                    packages, dependents_by_nvra, _ = query_database(
-                        tools,
-                        build_rpmdb.resolve(),
-                        snapshot=None,
-                        rpm_executable="rpm",
-                        package_manager_executable=None,
-                        package_manager="tdnf",
-                        database_label=database_label,
-                    )
-
-                validate_package_presence(decisions_by_pkgname, packages)
-
-                if cached is None:
-                    write_inventory(inventory_path, packages, dependents_by_nvra, cache_key=cache_key)
-                    print(f"Wrote raw {database_label} inventory {inventory_path}", flush=True)
-
-                provenance[image_name + "_database"] = {
-                    "database_label": database_label,
-                    "path": str(build_rpmdb),
-                    "sha256": database_digest,
-                    "packages": len(packages),
-                    "cached": cached is not None,
-                }
-
-                pkgnames_to_remove = sorted({
-                    package.name
-                    for package in packages
-                    if decisions_by_pkgname.get(package.name, Decision.KEEP) != Decision.KEEP
-                })
-                if pkgnames_to_remove:
-                    tools = prepare_tools(work, args.tools_image)
-                    with tempfile.TemporaryDirectory(prefix=".acl-removal-", dir=tools) as temporary:
-                        snapshot = Path(temporary)
-                        private_database = snapshot / "var/lib/rpm/rpmdb.sqlite"
-                        private_database.parent.mkdir(parents=True)
-                        shutil.copyfile(build_rpmdb, private_database)
-
-                        validate_removal(
-                            pkgnames_to_remove,
-                            "rpm",
-                            snapshot,
-                            tools,
-                        )
 
             remaining_dependents_by_nvra = report_dependents(packages, dependents_by_nvra, decisions_by_pkgname)
 
