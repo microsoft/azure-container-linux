@@ -357,7 +357,7 @@ def image_path(root: Path, relative: str) -> Path:
 
     while pending_path_parts:
         part = pending_path_parts.popleft()
-        if part in {"/", "."}:
+        if part in {"/", "//", "."}:
             continue
 
         if part == "..":
@@ -467,7 +467,7 @@ def current_image_snapshot(
     root: Path,
     work: Path,
 ) -> Generator[tuple[Path, dict[str, object]], None, None]:
-    """Copy the image RPM database, its SQLite write-ahead log, and os-release into a private query root."""
+    """Copy a quiescent image database, its SQLite write-ahead log, and os-release into a private query root."""
     root, work = root.resolve(strict=True), work.resolve()
     if not root.is_dir():
         raise InventoryError("--root-dir must be a directory")
@@ -1827,7 +1827,8 @@ def main(argv: list[str] | None = None) -> None:
     source_group.add_argument(
         "--root-dir",
         type=Path,
-        help="mounted image root or host root '/' to analyze locally",
+        help="mounted image root or host root '/' to analyze locally; "
+             "package writes must remain stopped throughout collection",
     )
 
     parser.add_argument(
