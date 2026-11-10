@@ -1,5 +1,5 @@
 #!/bin/bash
-# Best-effort load and activate the UKI-bound ACL IPE policy during Azure initrd.
+# Best-effort load and activate the UKI-bound ACL IPE policy during initrd.
 # systemd-stub exposes the credential at /.extra/credentials/.
 
 set -uo pipefail
@@ -25,11 +25,27 @@ fi
 
 expected_hash=""
 token_count=0
+boot_mode=""
+boot_mode_count=0
 for word in ${cmdline}; do
+    [[ "${word}" != acl.ipe.mode ]] || skip "acl.ipe.mode requires an explicit value"
+    if [[ "${word}" == acl.ipe.mode=* ]]; then
+        boot_mode="${word#acl.ipe.mode=}"
+        boot_mode_count=$((boot_mode_count + 1))
+    fi
     [[ "${word}" == acl.ipe.policy_sha256=* ]] || continue
     expected_hash="${word#acl.ipe.policy_sha256=}"
     token_count=$((token_count + 1))
 done
+if [[ "${boot_mode_count}" -gt 1 ]]; then
+    skip "duplicate acl.ipe.mode tokens"
+fi
+if [[ "${boot_mode_count}" -eq 1 ]]; then
+    case "${boot_mode}" in
+        audit|disabled) ;;
+        *) skip "unsupported acl.ipe.mode '${boot_mode}'" ;;
+    esac
+fi
 
 case "${token_count}" in
     0) log "No acl.ipe.policy_sha256 token; IPE disabled for this image."; exit 0 ;;
@@ -65,31 +81,33 @@ cat "${CREDENTIAL_PATH}" > "${IPE_DIR}/new_policy" 2>/dev/null ||
     skip "kernel rejected policy load from ${CREDENTIAL_PATH}"
 log "Loaded policy ${POLICY_NAME} into kernel IPE."
 
-[[ -r "${SECURITY_PROFILE_HELPER}" ]] ||
-    skip "security profile helper is missing or unreadable: ${SECURITY_PROFILE_HELPER}"
-# shellcheck source=/usr/lib/acl/acl-node-security-profile.sh
-source "${SECURITY_PROFILE_HELPER}" ||
-    skip "could not load security profile helper: ${SECURITY_PROFILE_HELPER}"
-declare -F acl_security_profile >/dev/null ||
-    skip "security profile helper is missing required functions"
-declare -F acl_security_profile_value >/dev/null ||
-    skip "security profile helper is missing required functions"
+mode="${boot_mode:-off}"
+if [[ "${boot_mode_count}" -eq 0 ]]; then
+    [[ -r "${SECURITY_PROFILE_HELPER}" ]] ||
+        skip "security profile helper is missing or unreadable: ${SECURITY_PROFILE_HELPER}"
+    # shellcheck source=/usr/lib/acl/acl-node-security-profile.sh
+    source "${SECURITY_PROFILE_HELPER}" ||
+        skip "could not load security profile helper: ${SECURITY_PROFILE_HELPER}"
+    declare -F acl_security_profile >/dev/null ||
+        skip "security profile helper is missing required functions"
+    declare -F acl_security_profile_value >/dev/null ||
+        skip "security profile helper is missing required functions"
 
-mode="off"
-if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
-    if security_profile="$(acl_security_profile)"; then
-        requested_mode="$(acl_security_profile_value "${security_profile}" "ipe")"
-        case "${requested_mode}" in
-            disabled|off|audit) mode="${requested_mode}" ;;
-            enforcing)
-                log "IPE mode 'enforcing' is not supported at runtime; leaving IPE inactive."
-                mode="off"
-                ;;
-            "") ;;
-            *) log "Ignoring unrecognized IPE mode '${requested_mode}' from IMDS." ;;
-        esac
-    else
-        log "IMDS unavailable; leaving IPE inactive (policy loaded but not activated)."
+    if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
+        if security_profile="$(acl_security_profile)"; then
+            requested_mode="$(acl_security_profile_value "${security_profile}" "ipe")"
+            case "${requested_mode}" in
+                disabled|off|audit) mode="${requested_mode}" ;;
+                enforcing)
+                    log "IPE mode 'enforcing' is not supported at runtime; leaving IPE inactive."
+                    mode="off"
+                    ;;
+                "") ;;
+                *) log "Ignoring unrecognized IPE mode '${requested_mode}' from IMDS." ;;
+            esac
+        else
+            log "IMDS unavailable; leaving IPE inactive (policy loaded but not activated)."
+        fi
     fi
 fi
 log "Using IPE mode '${mode}'."
@@ -112,6 +130,11 @@ log "Activated policy ${POLICY_NAME}."
 policy_active="$(cat "${active_file}" 2>/dev/null || true)"
 [[ "${policy_active}" == "1" ]] ||
     skip "policy ${POLICY_NAME} activation verification failed"
+
+if [[ "${boot_mode_count}" -eq 1 ]]; then
+    log "Explicit boot policy mode is active; leaving containerd configuration unchanged."
+    exit 0
+fi
 
 if [[ ! -r "${CONTAINERD_PROFILE_SRC}" ]]; then
     log "ERROR: active IPE policy has no containerd profile at ${CONTAINERD_PROFILE_SRC}."

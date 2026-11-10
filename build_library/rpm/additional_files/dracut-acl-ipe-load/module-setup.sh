@@ -18,6 +18,11 @@ install() {
 
     inst_simple "${moddir}/acl-ipe-load.service" \
                 "${systemdsystemunitdir}/acl-ipe-load.service"
+    # Downstream non-Azure images explicitly opt in; stock service gates stay unchanged.
+    if [[ -f "${moddir}/baremetal.conf" ]]; then
+        inst_simple "${moddir}/baremetal.conf" \
+                    "${systemdsystemunitdir}/acl-ipe-load.service.d/10-baremetal.conf"
+    fi
 
     # Manually enable the unit -- dracut does not process [Install] sections.
     mkdir -p "${initdir}/${systemdsystemunitdir}/initrd.target.wants"
