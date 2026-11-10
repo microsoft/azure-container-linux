@@ -1,0 +1,157 @@
+From: Mitch Zhu <mitchzhu@microsoft.com>
+Date: Tue, 10 Nov 2026 00:44:21 +0000
+Subject: [PATCH] esp: preserve chained EFI boot resources across updates
+
+ARM64 ACL images with SMBIOS profile selection enabled add the selector,
+a separate systemd-boot binary, and the profiles directory containing the
+signed Grace addon.
+Trident's fixed boot-file list omits these files, and its file-only copy
+operations cannot preserve the directory. A fresh image can boot, but a
+file-based ESP update can leave efitreeloader without its required files.
+
+Copy additional EFI applications and boot-resource directories through
+the existing slot and UEFI fallback replacement flow. Handle directories
+in the .new/.old cleanup and test that the resources survive both paths.
+---
+diff --git a/crates/trident/src/subsystems/esp.rs b/crates/trident/src/subsystems/esp.rs
+index a47c2cb..43cee9b 100644
+--- a/crates/trident/src/subsystems/esp.rs
++++ b/crates/trident/src/subsystems/esp.rs
+@@ -582,6 +582,27 @@ fn copy_boot_files_for_uefi_fallback(
+     Ok(())
+ }
+
++fn copy_boot_entry(from: &Path, to: &Path) -> Result<(), Error> {
++    if fs::symlink_metadata(from)?.is_dir() {
++        // A failed earlier copy must not leave stale files in the replacement tree.
++        if to.is_dir() {
++            fs::remove_dir_all(to)?;
++        } else if to.exists() {
++            fs::remove_file(to)?;
++        }
++        fs::create_dir_all(to)?;
++        for entry in fs::read_dir(from)? {
++            let entry = entry?;
++            copy_boot_entry(&entry.path(), &to.join(entry.file_name())).with_context(|| {
++                format!("Failed to copy boot entry '{}'", entry.path().display())
++            })?;
++        }
++    } else {
++        fs::copy(from, to)?;
++    }
++    Ok(())
++}
++
+ /// Copies boot files from one folder to another.
+ pub fn replace_boot_files(from_dir: &Path, to_dir: &Path) -> Result<(), Error> {
+     trace!(
+@@ -600,7 +621,7 @@ pub fn replace_boot_files(from_dir: &Path, to_dir: &Path) -> Result<(), Error> {
+         .try_for_each(|from_path| {
+             let to_file_name = format!("{}.new", from_path.file_name().to_string_lossy());
+             let to_path = to_dir.join(to_file_name);
+-            fs::copy(from_path.path(), &to_path).context(format!(
++            copy_boot_entry(&from_path.path(), &to_path).context(format!(
+                 "Failed to copy file '{}' to '{}'",
+                 from_path.path().display(),
+                 to_path.display(),
+@@ -674,7 +695,12 @@ pub fn replace_boot_files(from_dir: &Path, to_dir: &Path) -> Result<(), Error> {
+             let orig_file_name = orig_path.file_name();
+             // Skip files that do not end with .old
+             if orig_file_name.to_string_lossy().ends_with(".old") {
+-                fs::remove_file(orig_path.path()).context(format!(
++                let result = if orig_path.file_type()?.is_dir() {
++                    fs::remove_dir_all(orig_path.path())
++                } else {
++                    fs::remove_file(orig_path.path())
++                };
++                result.context(format!(
+                     "Failed to remove pre-existing file '{}'",
+                     orig_path.path().display()
+                 ))?;
+@@ -761,7 +787,7 @@ fn copy_boot_files(
+             source_path.display(),
+             destination_path.display()
+         );
+-        fs::copy(&source_path, &destination_path).context(format!(
++        copy_boot_entry(&source_path, &destination_path).context(format!(
+             "Failed to copy file '{}' to '{}'",
+             source_path.display(),
+             destination_path.display()
+@@ -862,6 +888,31 @@ fn generate_boot_filepaths(temp_mount_dir: &Path, is_uki: bool) -> Result<Vec<Pa
+     );
+     paths.push(boot_efi_path);
+
++    // Chained loaders may need additional EFI applications and nested boot resources.
++    let boot_dir = temp_mount_dir.join(EFI_DEFAULT_BIN_RELATIVE_PATH);
++    let mut additional_paths = Vec::new();
++    for entry in fs::read_dir(&boot_dir).context("Failed to enumerate EFI boot resources")? {
++        let entry = entry?;
++        let name = entry.file_name();
++        if [BOOT_EFI, GRUB_EFI, GRUB_NOPREFIX_EFI]
++            .iter()
++            .any(|known| name.to_string_lossy().eq_ignore_ascii_case(known))
++        {
++            continue;
++        }
++        let path = entry.path();
++        if entry.file_type()?.is_dir()
++            || path
++                .extension()
++                .and_then(|extension| extension.to_str())
++                .is_some_and(|extension| extension.eq_ignore_ascii_case("efi"))
++        {
++            additional_paths.push(path);
++        }
++    }
++    additional_paths.sort();
++    paths.extend(additional_paths);
++
+     Ok(paths)
+ }
+
+@@ -1440,6 +1491,45 @@ mod tests {
+         }
+     }
+
++    #[test]
++    fn test_chained_boot_resources_survive_update_and_fallback() {
++        let image = TempDir::new().unwrap();
++        let image_boot = image.path().join(EFI_DEFAULT_BIN_RELATIVE_PATH);
++        fs::create_dir_all(image_boot.join("profiles")).unwrap();
++        let resources = [
++            BOOT_EFI,
++            GRUB_EFI,
++            "smbios-profile-selector.efi",
++            "second.efi",
++            "profiles/nvidia-grace.addon.efi",
++        ];
++        for name in resources {
++            fs::write(image_boot.join(name), name.as_bytes()).unwrap();
++        }
++
++        let esp = TempDir::new().unwrap();
++        let slot = esp.path().join("EFI/AZLB");
++        let paths = generate_boot_filepaths(image.path(), true).unwrap();
++        copy_boot_files(image.path(), &slot, paths).unwrap();
++        let fallback = esp.path().join(EFI_DEFAULT_BIN_RELATIVE_PATH);
++        fs::create_dir_all(fallback.join("profiles.new")).unwrap();
++        fs::write(fallback.join("profiles.new/stale.addon.efi"), "stale").unwrap();
++        fs::create_dir_all(fallback.join("profiles")).unwrap();
++        fs::write(fallback.join("profiles/old.addon.efi"), "old").unwrap();
++        replace_boot_files(&slot, &fallback).unwrap();
++        bootstrap_azla_from_fallback(esp.path()).unwrap();
++
++        for root in [slot, fallback.clone(), esp.path().join("EFI/AZLA")] {
++            for name in resources {
++                assert_eq!(fs::read(root.join(name)).unwrap(), name.as_bytes());
++            }
++        }
++        assert!(!fallback.join("profiles/stale.addon.efi").exists());
++        assert!(!fallback.join("profiles/old.addon.efi").exists());
++        assert!(!fallback.join("profiles.old").exists());
++        assert!(!fallback.join("profiles.new").exists());
++    }
++
+     #[test]
+     fn test_bootstrap_azla_from_fallback() {
+         let esp_dir = TempDir::new().unwrap();

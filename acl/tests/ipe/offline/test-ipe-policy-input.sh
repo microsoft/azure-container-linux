@@ -153,6 +153,7 @@ test_uki_provision_preserves_unsigned_verity() (
     _uki_build_fips_addon() { :; }
     _uki_build_kdump_addon() { :; }
     _uki_build_debug_addon() { :; }
+    _uki_install_smbios_selector() { :; }
     ukify() {
         local argument output="" cmdline=""
         for argument; do

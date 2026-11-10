@@ -61,6 +61,12 @@ while IFS=$'\t' read -r key value arch; do
     fi
 done < <(_catalog_tsv_cmd "${_CATALOG_YAML}")
 
+if [[ "${_board_arch}" == "arm64" && "${BOOTLOADER_MODE:-}" == "uki" ]]; then
+    PACKAGE_CATALOG["sys-kernel/coreos-kernel"]="kernel-hwe"
+    PACKAGE_CATALOG["sys-kernel/coreos-modules"]="kernel-hwe"
+    PACKAGE_CATALOG["dev-util/bpftool"]="bpftool-hwe"
+fi
+
 unset _board_arch
 
 # ── Helper functions ────────────────────────────────────────────────────────
