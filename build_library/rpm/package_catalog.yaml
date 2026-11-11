@@ -600,7 +600,7 @@ packages:
   sys-process/audit: audit
 
   sys-libs/timezone-data: tzdata
-  dev-util/bpftool: bpftool
+  dev-util/bpftool: bpftool-hwe
 
   # Remaining packages - marked as SKIP for now (need investigation or not available)
   app-arch/lbzip2: SKIP
