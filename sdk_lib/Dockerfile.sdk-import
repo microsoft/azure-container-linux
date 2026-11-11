@@ -49,6 +49,7 @@ RUN echo "if [ -f /mnt/host/source/.sdkenv ]; then source /mnt/host/source/.sdke
 RUN chown -h sdk:sdk /mnt/host/source/src/scripts /mnt/host/source/src/build /home/sdk/trunk /home/sdk/.bashrc
 
 COPY --chown=sdk:sdk sdk_lib/sdk_entry.sh /home/sdk
+COPY --chown=sdk:sdk build_library/usr_filesystem.sh /home/sdk
 RUN chmod 755 /home/sdk/sdk_entry.sh
 
 # This should be a NOP; if you see packages being rebuilt
