@@ -14,8 +14,8 @@
 
 packages:
   # Kernel - always from Azure Linux in RPM mode
-  sys-kernel/coreos-kernel: kernel
-  sys-kernel/coreos-modules: kernel
+  sys-kernel/coreos-kernel: kernel-hwe
+  sys-kernel/coreos-modules: kernel-hwe
 
   # Initramfs generator - needed for Azure Linux kernel (no embedded initramfs)
   sys-kernel/dracut: dracut

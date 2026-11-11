@@ -383,10 +383,20 @@ finish_image_cleanup_issue_rpm() {
 
 finish_image_kernel_config_rpm() {
     local root_fs_dir="$1"
+    local buddy_manifest expected_kernel
+    buddy_manifest="$(rpm_get_staging_dir)/kernel-buddy.json"
+    expected_kernel="$(jq -er '.kernelRelease | select(test("^[0-9][A-Za-z0-9_.+~-]*$"))' \
+        "${buddy_manifest}")" || die "HWE qualification requires a valid staged buddy manifest"
+    [[ -f "${root_fs_dir}/boot/vmlinuz-${expected_kernel}" ]] ||
+        die "HWE qualification kernel does not match the selected buddy build"
+    sudo install -D -m 0644 "${buddy_manifest}" \
+        "${root_fs_dir}/usr/share/acl/kernel-buddy.json"
 
     # In RPM mode, kernel config is at /boot/config-* (Azure Linux layout)
     local config_file
     config_file=$(ls "${root_fs_dir}"/boot/config-* 2>/dev/null | head -1)
+    [[ "${config_file}" == "${root_fs_dir}/boot/config-${expected_kernel}" ]] ||
+        die "HWE qualification found a different kernel config"
     if [[ -n "${config_file}" ]]; then
         cp "${config_file}" "${BUILD_DIR}/${image_kconfig}"
     else
