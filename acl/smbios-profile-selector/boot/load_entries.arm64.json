@@ -1,0 +1,10 @@
+{
+    "load_entries": [
+        {
+            "path": "smbios-profile-selector.efi"
+        },
+        {
+            "path": "3rdaa64.efi"
+        }
+    ]
+}
