@@ -586,7 +586,7 @@ probe="${probe_dir}/writable-true"
 cp "${usr_probe}" "${probe}"
 chmod 0755 "${probe}"
 boot_id="$(cat /proc/sys/kernel/random/boot_id)"
-cursor_output="$(journalctl -b -n 0 --show-cursor --no-pager)" ||
+cursor_output="$(journalctl -b _TRANSPORT=audit -n 0 --show-cursor --no-pager)" ||
     fail "could not establish the journal cursor"
 cursor="$(sed -n 's/^-- cursor: //p' <<< "${cursor_output}")"
 [[ -n "${cursor}" ]] || fail "journal did not return a cursor"
