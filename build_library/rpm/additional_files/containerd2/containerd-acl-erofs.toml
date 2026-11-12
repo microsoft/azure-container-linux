@@ -3,6 +3,10 @@ version = 4
 
 [plugins."io.containerd.snapshotter.v1.erofs"]
   enable_dmverity_referrers = true
+  # Supply the container-storage label missing from unlabeled EROFS contents so
+  # existing SELinux policy can transition container processes to spc_t.
+  # This mount-wide context overrides individual file labels.
+  ovl_mount_options = ['context="system_u:object_r:container_var_lib_t:s0"']
 
 [plugins."io.containerd.cri.v1.images"]
   snapshotter = "erofs"
