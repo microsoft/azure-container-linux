@@ -301,6 +301,18 @@ ipe_run_base_probes() {
     ipe_run_probe "${directory}" base-systemctl "${systemctl_probe}" --version
 }
 
+ipe_get_audit_cursor() {
+    local output cursor
+    # systemd 255 can skip the first match if the cursor is outside this filter.
+    output="$(journalctl -b _TRANSPORT=audit -n 0 --show-cursor --no-pager)" || return 1
+    cursor="$(sed -n 's/^-- cursor: //p' <<< "${output}")"
+    [[ -n "${cursor}" ]] || {
+        echo "Journal did not return an audit cursor" >&2
+        return 1
+    }
+    printf '%s\n' "${cursor}"
+}
+
 ipe_collect_probe_audit() {
     local directory="$1" boot_id="$2" cursor="$3" control="$4" pid="$5"
     local attempt logs journal_boot_id="${boot_id//-/}"
@@ -638,10 +650,8 @@ cp "${usr_probe}" "${probe}"
 chmod 0755 "${probe}"
 boot_id="$(cat /proc/sys/kernel/random/boot_id)"
 cat /proc/net/netlink > "${probe_dir}/netlink-before.log"
-cursor_output="$(journalctl -b -n 0 --show-cursor --no-pager)" ||
+cursor="$(ipe_get_audit_cursor)" ||
     fail "could not establish the journal cursor"
-cursor="$(sed -n 's/^-- cursor: //p' <<< "${cursor_output}")"
-[[ -n "${cursor}" ]] || fail "journal did not return a cursor"
 echo "IPE_REPORT schema=1 boot=${boot_id} kernel=$(uname -r) policy=${POLICY_NAME} enforce=0 usr_signature=${usr_signature_mode}"
 echo "IPE_CAPTURE transport=audit after_cursor=${cursor}"
 # The final known-denial control establishes collection health for earlier probes.

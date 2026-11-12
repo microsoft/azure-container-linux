@@ -65,6 +65,51 @@ test_probe_payload() (
     fi
 )
 
+test_cursor_preserves_first_audit_event() (
+    local directory cursor mode=normal
+    local boot_id=fa8a7b1c-0c08-4915-9707-3d3ce9879c4e
+    local target_event='IPE_ACCESS ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=123 path="/usr/bin/containerd" rule="DEFAULT op=EXECUTE action=DENY"'
+    local control_event='IPE_ACCESS ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=124 path="/var/tmp/probe" rule="DEFAULT op=EXECUTE action=DENY"'
+    directory="$(mktemp -d)"
+    trap 'rm -rf -- "${directory}"' EXIT
+    sleep() { :; }
+    cat() {
+        if [[ "$1" == /proc/sys/kernel/random/boot_id ]]; then
+            printf '%s\n' "${boot_id}"
+        else
+            command cat "$@"
+        fi
+    }
+    journalctl() {
+        if [[ " $* " == *" --show-cursor "* ]]; then
+            case "${mode}" in
+                unreadable) return 1 ;;
+                empty) return 0 ;;
+            esac
+            if [[ " $* " == *" _TRANSPORT=audit "* ]]; then
+                echo '-- cursor: audit-anchor'
+            else
+                echo '-- cursor: non-audit-anchor'
+            fi
+        else
+            # A nonmatching anchor makes systemd 255 skip the first audit event.
+            if [[ " $* " == *" --after-cursor=audit-anchor "* ]]; then
+                printf '%s\n' "${target_event}"
+            fi
+            printf '%s\n' "${target_event/BPRM_CHECK/MMAP}" "${control_event}"
+        fi
+    }
+    cursor="$(ipe_get_audit_cursor)" || return 1
+    ipe_collect_probe_audit "${directory}" "${boot_id}" "${cursor}" /var/tmp/probe 124 || return 1
+    ipe_assert_probe_audit "$(cat "${directory}/audit.log")" /usr/bin/containerd 123 deny || return 1
+    for mode in unreadable empty; do
+        if ipe_get_audit_cursor; then
+            echo "Invalid ${mode} journal cursor was accepted" >&2
+            return 1
+        fi
+    done
+)
+
 test_capture() (
     local directory event count=0 mode=delayed
     local boot_id=fa8a7b1c-0c08-4915-9707-3d3ce9879c4e
@@ -305,6 +350,7 @@ test_probe_matrix_summary() (
 test_inventory
 test_target_events
 test_probe_payload
+test_cursor_preserves_first_audit_event
 test_capture
 test_execution_and_reporting
 test_probe_command_and_output_logging
