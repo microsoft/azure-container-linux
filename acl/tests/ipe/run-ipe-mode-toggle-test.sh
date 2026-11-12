@@ -1,26 +1,13 @@
 #!/bin/bash
-# Test reboot-based IPE mode selection through acl-node-security-profile.
-#
-# Canonical acl-node-security-profile values are 'disabled' and 'audit';
-# 'off' is also accepted as a runtime alias for 'disabled'.
-# 'enforcing' is reserved: it must never activate at runtime, and any
-# assertion that observes it fails loudly and immediately (see
-# assert_ipe_mode / assert_ipe_not_enforcing).
-#
-# This script accepts whatever acl-node-security-profile tag the VM was
-# *created* with (e.g. a smoke-test pipeline tagging
-# acl-node-security-profile=ipe=audit before first boot): Step 0 reads and
-# validates that initial state without forcing a reset first, then Steps
-# 1-4 exercise the canonical disabled/audit reboot toggle, and Step 5
-# exercises the 'off' alias.
+# Verify audit-only qualification images stay in audit across tag changes
+# and reboots. IPE enforcement must never become enabled.
 
 set -euo pipefail
 
 source "${SCRIPT_DIR}/acl/validate/validate_common.sh"
 source "${SCRIPT_DIR}/acl/tests/azure-security-profile-test-common.sh"
 source "${SCRIPT_DIR}/acl/tests/ipe/run-ipe-audit-test.sh"
-# Reuse the exact same key=value profile parser the in-guest loader uses,
-# so the host-side test can never disagree with production parsing.
+# Reuse the node security profile parser when inspecting IMDS tags.
 source "${SCRIPT_DIR}/build_library/rpm/additional_files/acl-node-security-profile.sh"
 
 POLICY_NAME="acl_ipe_boot_policy"
@@ -55,17 +42,9 @@ get_ipe_mode() {
     esac
 }
 
-# Maps an acl-node-security-profile 'ipe' value (canonical or supported alias)
-# to the runtime state the loader is expected to produce. Mirrors
-# build_library/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.sh:
-# disabled|off -> inactive, audit -> active/audit,
-# enforcing (reserved) and anything unrecognized -> inactive.
+# This qualification branch ignores IPE mode tags.
 expected_mode_for_tag() {
-    case "$1" in
-        disabled|off|"") echo "off" ;;
-        audit) echo "audit" ;;
-        *) echo "off" ;;
-    esac
+    echo "audit"
 }
 
 # CRITICAL, fails loudly and immediately: 'enforcing' must never be the
@@ -233,7 +212,7 @@ main() {
     section "Step 0: Accept the VM's initial acl-node-security-profile state"
     # Read whatever tag the VM was already created/booted with (e.g. a smoke
     # pipeline pre-tagging acl-node-security-profile=ipe=audit) without
-    # forcing a reset first, and validate it is honored.
+    # forcing a reset first, and verify audit is active regardless of the tag.
     local initial_profile initial_ipe_value initial_expected expected_tag
     expected_tag="${ACL_EXPECTED_IPE_MODE:-}"
     case "${expected_tag}" in
@@ -255,25 +234,21 @@ main() {
     initial_expected="$(expected_mode_for_tag "${initial_ipe_value}")"
     info "Initial acl-node-security-profile: '${initial_profile:-<absent>}' (ipe='${initial_ipe_value:-<absent>}') -> expected IPE mode '${initial_expected}'"
     assert_ipe_mode "${initial_expected}"
-    if [[ "${initial_expected}" == "audit" ]]; then
-        assert_ipe_assets_present 1
-        run_audit_validation initial-audit
-    else
-        assert_ipe_assets_present 0
-    fi
+    assert_ipe_assets_present 1
+    run_audit_validation initial-audit
 
-    section "Step 1: Disable IPE through the canonical 'disabled' value"
+    section "Step 1: Verify 'disabled' cannot disable audit on this image"
     set_security_profile_key_and_reboot "ipe" "disabled"
-    assert_ipe_mode "off"
-    assert_ipe_assets_present
+    assert_ipe_mode "audit"
+    assert_ipe_assets_present 1
 
-    section "Step 2: Verify the reserved 'enforcing' value is rejected and never activates"
+    section "Step 2: Verify 'enforcing' cannot enable enforcement on this image"
     set_security_profile_key_and_reboot "ipe" "enforcing"
     assert_ipe_not_enforcing
-    assert_ipe_mode "off"
-    assert_ipe_assets_present
+    assert_ipe_mode "audit"
+    assert_ipe_assets_present 1
 
-    section "Step 3: Enable IPE through the canonical 'audit' value"
+    section "Step 3: Verify audit remains active with the 'audit' value"
     set_security_profile_key_and_reboot "ipe" "audit"
     assert_ipe_mode "audit"
     assert_ipe_assets_present 1
@@ -283,18 +258,18 @@ main() {
     run_audit_fallback_validation
     run_audit_validation post-containerd-fallback
 
-    section "Step 4: Disable IPE through the canonical 'disabled' value"
+    section "Step 4: Verify 'disabled' still leaves audit active"
     set_security_profile_key_and_reboot "ipe" "disabled"
-    assert_ipe_mode "off"
-    assert_ipe_assets_present
+    assert_ipe_mode "audit"
+    assert_ipe_assets_present 1
 
-    section "Step 5: Verify the 'off' alias"
+    section "Step 5: Verify 'off' cannot disable audit on this image"
     set_security_profile_key_and_reboot "ipe" "off"
-    assert_ipe_mode "off"
-    assert_ipe_assets_present
+    assert_ipe_mode "audit"
+    assert_ipe_assets_present 1
 
     section "IPE IMDS Reboot Toggle Test Summary"
-    info "All reboot-based IPE toggle assertions passed"
+    info "All reboot-based audit-only IPE assertions passed"
 }
 
 # Allow this script to be sourced (e.g. by an offline unit-test harness)

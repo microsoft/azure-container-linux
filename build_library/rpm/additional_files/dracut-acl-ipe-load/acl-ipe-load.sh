@@ -8,7 +8,6 @@ POLICY_NAME="${ACL_IPE_POLICY_NAME:-acl_ipe_boot_policy}"
 IPE_DIR="${ACL_IPE_DIR:-/sys/kernel/security/ipe}"
 CREDENTIAL_PATH="${ACL_IPE_CREDENTIAL_PATH:-/.extra/credentials/acl-ipe-policy.p7b.cred}"
 CMDLINE_FILE="${ACL_IPE_CMDLINE_FILE:-/proc/cmdline}"
-SECURITY_PROFILE_HELPER="${ACL_IPE_SECURITY_PROFILE_HELPER:-/usr/lib/acl/acl-node-security-profile.sh}"
 CONTAINERD_PROFILE_SRC="${ACL_IPE_CONTAINERD_PROFILE:-/usr/lib/acl/containerd-acl-erofs-profile.conf}"
 CONTAINERD_PROFILE_DEST="${ACL_IPE_CONTAINERD_DROPIN:-/run/systemd/system/containerd.service.d/90-acl-profile.conf}"
 
@@ -65,41 +64,10 @@ cat "${CREDENTIAL_PATH}" > "${IPE_DIR}/new_policy" 2>/dev/null ||
     skip "kernel rejected policy load from ${CREDENTIAL_PATH}"
 log "Loaded policy ${POLICY_NAME} into kernel IPE."
 
-[[ -r "${SECURITY_PROFILE_HELPER}" ]] ||
-    skip "security profile helper is missing or unreadable: ${SECURITY_PROFILE_HELPER}"
-# shellcheck source=/usr/lib/acl/acl-node-security-profile.sh
-source "${SECURITY_PROFILE_HELPER}" ||
-    skip "could not load security profile helper: ${SECURITY_PROFILE_HELPER}"
-declare -F acl_security_profile >/dev/null ||
-    skip "security profile helper is missing required functions"
-declare -F acl_security_profile_value >/dev/null ||
-    skip "security profile helper is missing required functions"
-
-mode="off"
-if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
-    if security_profile="$(acl_security_profile)"; then
-        requested_mode="$(acl_security_profile_value "${security_profile}" "ipe")"
-        case "${requested_mode}" in
-            disabled|off|audit) mode="${requested_mode}" ;;
-            enforcing)
-                log "IPE mode 'enforcing' is not supported at runtime; leaving IPE inactive."
-                mode="off"
-                ;;
-            "") ;;
-            *) log "Ignoring unrecognized IPE mode '${requested_mode}' from IMDS." ;;
-        esac
-    else
-        log "IMDS unavailable; leaving IPE inactive (policy loaded but not activated)."
-    fi
-fi
+# Qualification branch only: audit does not depend on IMDS or node tags.
+mode="audit"
+log "Audit-only qualification image; ignoring IPE mode tags."
 log "Using IPE mode '${mode}'."
-
-case "${mode}" in
-    disabled|off)
-        log "IPE mode is ${mode}; policy loaded but activation skipped."
-        exit 0
-        ;;
-esac
 
 write_value "${IPE_DIR}/enforce" 0 ||
     skip "failed to set IPE enforce=0 (${mode})"

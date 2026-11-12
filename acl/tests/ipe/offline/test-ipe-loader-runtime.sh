@@ -81,48 +81,12 @@ test_missing_cmdline() {
     assert_best_effort_skip "could not read kernel command line"
 }
 
-# ---- Test: valid load + inactive (IMDS off) ----
-test_valid_inactive_load() {
-    run_inactive_case valid-inactive off
-}
-
-# ---- Test: 'disabled' is accepted as an alias for 'off' ----
-test_valid_disabled_alias_inactive() {
-    run_inactive_case valid-disabled-alias disabled
-}
-
-run_inactive_case() {
-    local name="$1" imds_mode="$2"
-    prepare_case "${name}"
-    make_credential "${CASE_DIR}/credential.p7b.cred"
-    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
-
-    # Override IMDS to return the requested inactive-style mode
-    command cat > "${CASE_DIR}/security-profile.sh" <<EOF
-acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
-acl_security_profile_value() { printf '%s\n' '${imds_mode}'; }
-EOF
-
-    # The policy is loaded into new_policy but not activated
-    run_loader "${CASE_DIR}/credential.p7b.cred"
-    # Verify policy was loaded
-    [[ -s "${IPE_DIR}/new_policy" ]]
-    # enforce should remain unchanged (not set to 0)
-    [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
-    [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
-}
-
-# ---- Test: the removed runtime alias must not activate IPE ----
-test_removed_alias_inactive() {
-    local output
-    output="$(run_inactive_case removed-alias permissive)"
-    grep -Fq "Ignoring unrecognized IPE mode 'permissive' from IMDS." <<< "${output}"
-    grep -Fq "Using IPE mode 'off'." <<< "${output}"
-}
-
-# ---- Test: audit activates the policy without enforcement ----
-test_valid_audit_active() {
-    run_active_case valid-audit audit
+# Qualification images always audit, including absent and unsupported tags.
+test_audit_ignores_mode_tags() {
+    local mode
+    for mode in "" audit off disabled enforcing permissive bogus; do
+        run_active_case "audit-${mode:-absent}" "${mode}"
+    done
 }
 
 run_active_case() (
@@ -135,6 +99,15 @@ run_active_case() (
 acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
 acl_security_profile_value() { printf '%s\n' '${imds_mode}'; }
 EOF
+    case "${3:-available}" in
+        missing) rm "${CASE_DIR}/security-profile.sh" ;;
+        unavailable)
+            command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
+acl_security_profile() { return 1; }
+acl_security_profile_value() { return 1; }
+EOF
+            ;;
+    esac
 
     # Simulate the kernel creating the policy interface when the credential
     # is written, after the loader's preexisting-policy check.
@@ -150,37 +123,13 @@ EOF
 
     local output
     output="$(run_loader "${CASE_DIR}/credential.p7b.cred")"
-    grep -Fq "Using IPE mode '${imds_mode}'." <<< "${output}" ||
-        { echo "loader did not report requested mode '${imds_mode}'" >&2; return 1; }
+    grep -Fq "Using IPE mode 'audit'." <<< "${output}" ||
+        { echo "loader did not select audit mode" >&2; return 1; }
+    [[ -s "${IPE_DIR}/new_policy" ]]
     [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
     [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
     cmp "${CASE_DIR}/containerd-acl-erofs-profile.conf" "${CASE_DIR}/dropins/90-acl-profile.conf"
 )
-
-# ---- Test: 'enforcing' is reserved; loader logs an explicit unsupported
-# diagnostic and falls back safely to inactive without failing boot ----
-test_enforcing_mode_safe_fallback() {
-    prepare_case enforcing-fallback
-    make_credential "${CASE_DIR}/credential.p7b.cred"
-    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
-
-    command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
-acl_security_profile() { printf '%s\n' 'ipe=enforcing'; }
-acl_security_profile_value() { printf '%s\n' 'enforcing'; }
-EOF
-
-    local output
-    output="$(run_loader "${CASE_DIR}/credential.p7b.cred")"
-    grep -Fq "IPE mode 'enforcing' is not supported at runtime; leaving IPE inactive." <<< "${output}" ||
-        { echo "missing explicit unsupported-mode diagnostic" >&2; return 1; }
-    grep -Fq "Using IPE mode 'off'." <<< "${output}" ||
-        { echo "loader did not fall back to inactive mode" >&2; return 1; }
-    # Verify policy was loaded but not activated, and boot was not blocked.
-    [[ -s "${IPE_DIR}/new_policy" ]]
-    [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
-    [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
-}
-
 
 # ---- Test: duplicate token → skip IPE and continue boot ----
 test_duplicate_token() {
@@ -283,26 +232,9 @@ test_other_preexisting_ambiguity() {
         "${CASE_DIR}/credential.p7b.cred"
 }
 
-# ---- Test: missing runtime mode helper → skip IPE and continue boot ----
-test_missing_security_profile_helper() {
-    prepare_case missing-profile-helper
-    make_credential "${CASE_DIR}/credential.p7b.cred"
-    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred"
-    rm "${CASE_DIR}/security-profile.sh"
-    assert_best_effort_skip "security profile helper is missing or unreadable" \
-        "${CASE_DIR}/credential.p7b.cred"
-}
-
-# ---- Test: incomplete runtime mode helper → skip IPE and continue boot ----
-test_incomplete_security_profile_helper() {
-    prepare_case incomplete-profile-helper
-    make_credential "${CASE_DIR}/credential.p7b.cred"
-    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred"
-    command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
-acl_security_profile() { printf '%s\n' 'ipe=off'; }
-EOF
-    assert_best_effort_skip "security profile helper is missing required functions" \
-        "${CASE_DIR}/credential.p7b.cred"
+test_audit_without_metadata() {
+    run_active_case missing-profile-helper "" missing
+    run_active_case unavailable-imds "" unavailable
 }
 
 # ---- Test: IMDS failure after validation ----
@@ -558,11 +490,8 @@ PY
 test_hashed_cmdline_helper
 test_absent_token
 test_missing_cmdline
-test_valid_inactive_load
-test_valid_disabled_alias_inactive
-test_removed_alias_inactive
-test_valid_audit_active
-test_enforcing_mode_safe_fallback
+test_audit_ignores_mode_tags
+test_audit_without_metadata
 test_duplicate_token
 test_malformed_hash
 test_zero_hash
@@ -573,8 +502,6 @@ test_missing_ipe_interface
 test_rejected_write
 test_preexisting_ambiguity
 test_other_preexisting_ambiguity
-test_missing_security_profile_helper
-test_incomplete_security_profile_helper
 test_imds_failure_after_validation
 test_best_effort_service_wiring
 test_containerd_profile_selection
