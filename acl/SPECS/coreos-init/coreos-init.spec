@@ -109,6 +109,7 @@ python3 %{SOURCE1} systemd/system-generators/flatcar-autologin-generator
 %changelog
 * Thu Nov 12 2026 Mayank Singh <mayansingh@microsoft.com> - 0.0.1-5
 - Return success when the autologin user search finds no eligible user.
+- Preserve passwd file-open failures instead of treating them as no match.
 - Test no-match handling with and without autologin and preserve user selection.
 
 * Mon Jun 29 2026 Jiri Appl <jiria@microsoft.com> - 0.0.1-4
