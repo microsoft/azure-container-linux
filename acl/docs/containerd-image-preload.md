@@ -323,10 +323,15 @@ actually recovers the store.
 ### Inspect the output image without booting
 
 ```sh
-sudo modprobe nbd max_part=8
+sudo modprobe nbd max_part=9
 sudo qemu-nbd --connect=/dev/nbd0 --read-only -f vpc staging/out/acl-preloaded.vhd
 sudo mkdir -p /mnt/verify
-sudo mount -o ro /dev/nbd0p7 /mnt/verify   # ROOT is the seventh partition
+
+# Select ROOT by GPT partition label rather than a hard-coded index -- the
+# partition number varies by layout (e.g. ROOT is p7 on the pre-usr-verity-sig
+# layout, p9 once hash-sig-a/hash-sig-b are present).
+ROOT_PART=$(sudo blkid -t PARTLABEL="ROOT" -o device /dev/nbd0p* | head -n1)
+sudo mount -o ro "${ROOT_PART}" /mnt/verify
 
 ls -la /mnt/verify/var/lib/containerd
 strings /mnt/verify/var/lib/containerd/io.containerd.metadata.v1.bolt/meta.db \
