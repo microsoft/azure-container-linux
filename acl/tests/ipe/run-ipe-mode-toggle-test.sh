@@ -279,9 +279,13 @@ main() {
     assert_ipe_assets_present 1
     run_audit_validation reenabled-audit
 
-    info "Verifying containerd base fallback while IPE remains in audit mode"
-    run_audit_fallback_validation
-    run_audit_validation post-containerd-fallback
+    # Diagnostic branch: repeat the failing boundary without relaxing its assertions.
+    local iteration
+    for iteration in {1..10}; do
+        info "Verifying containerd base fallback in audit mode (diagnostic iteration ${iteration}/10)"
+        run_audit_fallback_validation
+        run_audit_validation "post-containerd-fallback-${iteration}"
+    done
 
     section "Step 4: Disable IPE through the canonical 'disabled' value"
     set_security_profile_key_and_reboot "ipe" "disabled"
