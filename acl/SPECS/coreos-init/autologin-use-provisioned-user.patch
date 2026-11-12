@@ -63,9 +63,9 @@ index 1234567..abcdefg 100755
 +                break
 +            fi
 +        done
-+        [ -z "$skip" ] && echo "$name" && return
++        [ -n "$skip" ] && continue
++        echo "$name" && return
 +    done < /etc/passwd
-+    return 0
 +}
 +
 +AUTOLOGIN_USER=$(determine_autologin_user)

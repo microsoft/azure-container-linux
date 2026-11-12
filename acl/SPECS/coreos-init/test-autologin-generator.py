@@ -15,7 +15,8 @@ class AutologinGeneratorTests(unittest.TestCase):
         core = f"core:x:500:500::/:{core_shell}" if core_shell else ""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "passwd").write_text((core + "\n" if core else "") + users)
+            if users is not None:
+                (root / "passwd").write_text((core + "\n" if core else "") + users)
             (root / "cmdline").write_text(cmdline + "\n")
             (root / "active").write_text("ttyS0\n")
             (root / "getent").write_text(
@@ -59,6 +60,16 @@ class AutologinGeneratorTests(unittest.TestCase):
                 result, overrides = self.run_generator(None, "", cmdline)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(overrides, {})
+
+    def test_missing_passwd_file_reports_failure(self):
+        for core_shell in (None, "/sbin/nologin"):
+            for cmdline in ("quiet", "flatcar.autologin"):
+                with self.subTest(core_shell=core_shell, cmdline=cmdline):
+                    result, overrides = self.run_generator(core_shell, None, cmdline)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("passwd", result.stderr)
+                    self.assertIn("No such file or directory", result.stderr)
+                    self.assertEqual(overrides, {})
 
     def test_existing_user_selection_is_preserved(self):
         users = "disabled:x:1000:1000::/:/bin/false\nalice:x:1001:1001::/:/bin/bash\n"
