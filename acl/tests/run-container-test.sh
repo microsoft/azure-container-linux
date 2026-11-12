@@ -172,7 +172,7 @@ run_erofs_selinux_test() (
     label="$(stat -Lc %C "/proc/${pid}/exe")"
     domain="$(tr -d '\000\n' < "/proc/${pid}/attr/current")"
     echo "EROFS nginx: pid=${pid} executable=${label} domain=${domain}"
-    [[ "${label}" == system_u:object_r:container_var_lib_t:s0 ]] ||
+    [[ "${label}" == system_u:object_r:container_file_t:s0 ]] ||
         fail "Unexpected nginx executable label"
     [[ "${domain}" == system_u:system_r:spc_t:s0 ]] ||
         fail "Unexpected nginx process domain"
