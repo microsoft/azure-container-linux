@@ -1,5 +1,6 @@
 {
  "Signatures": {
-  "coreos-init-0.0.1-8bd8a82.tar.gz": "8a512599c00629a9b1a3dfa55b3edb6ce6ddf57bd5418c6a7acc0160127113ad"
+  "coreos-init-0.0.1-8bd8a82.tar.gz": "8a512599c00629a9b1a3dfa55b3edb6ce6ddf57bd5418c6a7acc0160127113ad",
+  "test-autologin-generator.py": "4d2b4f7aace3c4761bf8b94837ab72614cd2bed3fe6f40aa486bb18648d259d0"
  }
 }
