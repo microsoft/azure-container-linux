@@ -113,7 +113,7 @@ info "Certificate: ${CERT_FILE}"
 #           → acl/uki-addons/*.efi     (addon templates, signed for runtime use)
 # In ARM64 SMBIOS profile selector images, grubaa64.efi is efitreeloader.
 # It runs smbios-profile-selector.efi, then systemd-boot from 3rdaa64.efi.
-# The inactive EFI/BOOT/profiles/nvidia-grace.addon.efi also needs signing.
+# The inactive EFI/BOOT/nvidia-grace.addon.efi also needs signing.
 # Active and template copies are independent files, so each is signed directly.
 # The ephemeral CA cert is enrolled in the gallery image's Secure Boot db by
 # publish_to_gallery.sh, so shim accepts the signatures produced here.
@@ -133,8 +133,8 @@ done < <(
         -maxdepth 1 -type f \
         \( -iname 'grub*.efi' -o -iname '3rdaa64.efi' -o -name 'smbios-profile-selector.efi' \) \
         -print0 2>/dev/null
-    if [[ -f "${ESP_DIR}/EFI/BOOT/profiles/nvidia-grace.addon.efi" ]]; then
-        printf '%s\0' "${ESP_DIR}/EFI/BOOT/profiles/nvidia-grace.addon.efi"
+    if [[ -f "${ESP_DIR}/EFI/BOOT/nvidia-grace.addon.efi" ]]; then
+        printf '%s\0' "${ESP_DIR}/EFI/BOOT/nvidia-grace.addon.efi"
     fi
 )
 

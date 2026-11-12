@@ -70,19 +70,25 @@ result="$(env -i PATH="${PATH}" TEST_REPO="${REPO}" \
     bash "${WORK}/builder/image_to_vm.sh" --board=arm64-usr --format=azure)"
 [[ "${result}" == kernel-hwe ]] || { echo "VM conversion lost the ARM64 board" >&2; exit 1; }
 
-# The open-driver sysext uses HWE on ARM64 and keeps cuda-open on AMD64.
+# ARM64 adds the HWE driver only for UKI; GRUB and AMD64 retain their previous behavior.
 source "${REPO}/build_library/standalone_sysext_util.sh"
-for board in amd64-usr arm64-usr; do
-    expected_driver_package=cuda-open
-    if [[ "${board}" == arm64-usr ]]; then
-        expected_driver_package=cuda-open-hwe
-    fi
-    actual_sysexts="$(parse_standalone_sysexts_yaml "${REPO}/acl/sysexts.yaml" "${board}" gpu)"
-    [[ " ${actual_sysexts} " == *" nvidia-driver-cuda-open|${expected_driver_package} "* ]] || {
-        echo "Unexpected NVIDIA open-driver package for ${board}: ${actual_sysexts}" >&2
+while read -r board bootloader expected_driver_package; do
+    actual_sysexts="$(BOOTLOADER_MODE="${bootloader}" \
+        parse_standalone_sysexts_yaml "${REPO}/acl/sysexts.yaml" "${board}" gpu)"
+    if [[ "${expected_driver_package}" == none ]]; then
+        [[ " ${actual_sysexts} " != *" nvidia-driver-cuda-open|"* ]]
+    else
+        [[ " ${actual_sysexts} " == *" nvidia-driver-cuda-open|${expected_driver_package} "* ]]
+    fi || {
+        echo "Unexpected NVIDIA open-driver package for ${board}/${bootloader}: ${actual_sysexts}" >&2
         exit 1
     }
-done
+done <<'CASES'
+arm64-usr uki cuda-open-hwe
+arm64-usr grub none
+amd64-usr uki cuda-open
+amd64-usr grub cuda-open
+CASES
 
 # Exercise the real build and install conditions without SDK or firmware tools.
 sed -n '/^    if \[\[ "${BOARD}" == "arm64-usr".*/,/^    fi/p' \
@@ -145,7 +151,8 @@ _uki_install_smbios_selector "${esp}" "${WORK}/stub.efi" "${WORK}/systemd-boot.e
 cmp "${WORK}/systemd-boot.efi" "${esp}/EFI/BOOT/3rdaa64.efi"
 cmp "${project}/target/boot/efitreeloader.efi" "${esp}/EFI/BOOT/grubaa64.efi"
 cmp "${project}/target/boot/smbios-profile-selector.efi" "${esp}/EFI/BOOT/smbios-profile-selector.efi"
-[[ -s "${esp}/EFI/BOOT/profiles/nvidia-grace.addon.efi" ]]
+[[ -s "${esp}/EFI/BOOT/nvidia-grace.addon.efi" ]]
+[[ ! -e "${esp}/EFI/BOOT/profiles" ]]
 [[ ! -e "${esp}/loader/addons/acl-nvidia-grace.addon.efi" ]]
 [[ "$(cat "${esp}/EFI/BOOT/BOOTAA64.EFI")" == "original shim" ]]
 if grep -Eq '^--(linux|uname)' "${WORK}/ukify-arguments"; then

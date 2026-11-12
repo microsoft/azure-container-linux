@@ -359,7 +359,7 @@ _uki_install_smbios_selector() {
     done
 
     # Prepare the inactive template location and runtime activation directory.
-    sudo mkdir -p "${esp_dir}/EFI/BOOT/profiles" "${esp_dir}/loader/addons"
+    sudo mkdir -p "${esp_dir}/EFI/BOOT" "${esp_dir}/loader/addons"
     # Keep shim unchanged; efitreeloader runs the SMBIOS profile selector
     # before systemd-boot, preserved as 3rdaa64.efi.
     sudo cp "${systemd_boot}" "${esp_dir}/EFI/BOOT/3rdaa64.efi"
@@ -370,7 +370,7 @@ _uki_install_smbios_selector() {
     sudo ukify build \
         --cmdline=@"${selector_dir}/boot/nvidia-grace-kernel-parameters.txt" \
         --stub="${efi_stub}" \
-        --output="${esp_dir}/EFI/BOOT/profiles/nvidia-grace.addon.efi"
+        --output="${esp_dir}/EFI/BOOT/nvidia-grace.addon.efi"
     info "UKI/RPM: Installed SMBIOS selector; NVIDIA Grace addon remains inactive"
 }
 

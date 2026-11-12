@@ -27,6 +27,8 @@
 #                    - qemu-img              # installed on all architectures
 #                    - name: qemu-kvm        # installed only on amd64
 #                      archs: [amd64]
+#                  Optional 'bootloaders' restricts a package to [uki] or [grub].
+#                  Sysexts with no matching packages are skipped.
 #      mode      — "embedded" or "standalone" (required).
 #                  "embedded" sysexts are placed on the /usr filesystem inside the
 #                  image and activated at boot.  "standalone" sysexts are built as
@@ -76,6 +78,7 @@ sysexts:
         archs: [amd64]
       - name: cuda-open-hwe
         archs: [arm64]
+        bootloaders: [uki]
     archs:
       - amd64
       - arm64
