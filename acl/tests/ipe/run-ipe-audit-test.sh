@@ -565,9 +565,60 @@ if grep -Fq "dmverity_roothash=" <<< "${policy}"; then
     fail "active policy must not contain dmverity_roothash rules"
 fi
 
+ipe_dump_diagnostics() {
+    local directory="$1" status="$2" file pid
+    echo "IPE_DIAGNOSTICS BEGIN original_exit=${status}"
+    echo "=== netlink sockets after probes (including Drops) ==="
+    cat /proc/net/netlink || return 1
+    if command -v auditctl >/dev/null; then
+        auditctl -s || return 1
+        auditctl -l || return 1
+    else
+        echo "auditctl unavailable; inspect kernel loss messages and netlink Drops instead"
+    fi
+    for file in "${directory}"/netlink-before.log "${directory}"/audit.log \
+        "${directory}"/audit-error.log; do
+        if [[ -f "${file}" ]]; then
+            echo "=== ${file##*/} ==="
+            cat "${file}" || return 1
+        fi
+    done
+    if [[ -n "${cursor:-}" && -n "${boot_id:-}" ]]; then
+        # Preserve the original verdict; delayed evidence is diagnostic only.
+        if [[ "${status}" != 0 ]]; then sleep 10 || return 1; fi
+        journalctl --boot="${boot_id//-/}" --after-cursor="${cursor}" \
+            --no-pager -o json > "${directory}/all-transports.jsonl" || return 1
+        echo "=== probe records from all journal transports (no path/hook filter) ==="
+        for file in "${directory}"/*.pid; do
+            [[ -f "${file}" ]] || continue
+            pid="$(cat "${file}")" || return 1
+            echo "=== ${file##*/}: ${pid} ==="
+            jq -c --arg pid "${pid}" \
+                'select((.MESSAGE // "") | test("(^|[[:space:]])pid=" + $pid + "([[:space:]]|$)"))' \
+                "${directory}/all-transports.jsonl" || return 1
+        done
+    fi
+    echo "=== kernel audit/loss messages for this boot ==="
+    journalctl -k -b --no-pager -o cat |
+        awk 'tolower($0) ~ /audit|netlink|suppressed/' || return 1
+    echo "=== journal suppression messages for this boot ==="
+    journalctl -b --no-pager -o cat |
+        awk '/Suppressed [0-9]+ messages|audit_lost|backlog limit|rate limit exceeded/' || return 1
+    echo "IPE_DIAGNOSTICS END original_exit=${status}"
+}
+
 probe_dir="$(mktemp -d /var/tmp/acl-ipe-audit.XXXXXX)" ||
     fail "could not create the probe workspace"
-trap 'rm -rf -- "${probe_dir}"' EXIT
+trap '
+    status=$?
+    trap - EXIT
+    if ! (set -e; ipe_dump_diagnostics "${probe_dir}" "${status}"); then
+        echo "ERROR: IPE diagnostic collection failed" >&2
+        [[ "${status}" != 0 ]] || status=1
+    fi
+    rm -rf -- "${probe_dir}" || status=1
+    exit "${status}"
+' EXIT
 available_sysexts="$(systemd-sysext list --json=short)" ||
     fail "could not discover available sysexts"
 active_sysexts="$(systemd-sysext status --json=short)" ||
@@ -586,6 +637,7 @@ probe="${probe_dir}/writable-true"
 cp "${usr_probe}" "${probe}"
 chmod 0755 "${probe}"
 boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+cat /proc/net/netlink > "${probe_dir}/netlink-before.log"
 cursor_output="$(journalctl -b -n 0 --show-cursor --no-pager)" ||
     fail "could not establish the journal cursor"
 cursor="$(sed -n 's/^-- cursor: //p' <<< "${cursor_output}")"
