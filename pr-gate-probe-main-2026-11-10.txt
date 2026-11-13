@@ -1,0 +1,2 @@
+DO NOT MERGE: temporary same-repository PR gate probe.
+This file is disposable and does not affect the image build.
