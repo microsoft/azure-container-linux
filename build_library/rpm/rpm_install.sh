@@ -14,7 +14,7 @@
 #   - Local cache repository (if RPM_LOCAL_CACHE is set) - priority 1
 #     Snapshot builds exclude retained upstream bootloader RPMs from this cache.
 #   - Pipeline RPMs alongside RPM staging in ../pipeline-rpms - priority 99,
-#     matching PMC; Trident uses its explicit source selection instead.
+#     matching PMC; Trident RPMs are filtered by the pipeline before assembly.
 #     Like the local cache, only existing directories are used and must have metadata.
 #   - Bootstrap base repo (used only to install filesystem + azurelinux-repos)
 #   - Azure Linux official repositories (installed via azurelinux-repos RPM)
@@ -146,8 +146,7 @@ EOF
     if [[ -n "${pipeline_repo_dir}" ]] && [[ -d "${pipeline_repo_dir}" ]]; then
         if [[ -f "${pipeline_repo_dir}/repodata/repomd.xml" ]]; then
             info "  Adding pipeline RPM repository: ${pipeline_repo_dir}"
-            # Exclude trident packages in case tridentRpmSource=sdk is set to avoid conflicts with SDK-provided packages
-            local pipeline_exclusions="excludepkgs=trident*${bootloader_exclusions:+ ${bootloader_exclusions}}"
+            local pipeline_exclusions="${bootloader_exclusions:+excludepkgs=${bootloader_exclusions}}"
             sudo tee "${repo_dir}/azurelinux-pipeline.repo" > /dev/null <<EOF
 [azurelinux-pipeline-cache]
 name=Azure Linux Pipeline Packages
