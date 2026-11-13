@@ -109,6 +109,11 @@ create_prod_image() {
         info "RPM mode: Installed systemd-boot RPM into image rootfs (stubs on /usr)"
     fi
 
+    # Build extensions against the reduced base so their RPM dependencies are
+    # installed into the extension.
+    report_and_remove_image_packages_rpm "${root_fs_dir}" || \
+      die "RPM mode: Failed to report or remove image packages"
+
     test_image_content "${root_fs_dir}"
   fi
   
