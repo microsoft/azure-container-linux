@@ -187,8 +187,8 @@ export IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
 export IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
 # Extra kernel cmdline args baked into a UKI debug addon (e.g., for boot profiling)
 export EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
-# Build-time IPE mode and signing mode. Runtime activation is selected only
-# through the Azure IMDS acl-node-security-profile tag.
+# Build-time IPE capability and signing mode. Audit-capable Azure images default
+# to audit; the IMDS acl-node-security-profile tag can override that default.
 IPE_MODE_OVERRIDE_SET=false
 if [[ -v ACL_IPE_MODE ]]; then
     IPE_MODE_OVERRIDE_SET=true

@@ -77,6 +77,7 @@ declare -F acl_security_profile_value >/dev/null ||
 
 mode="off"
 if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
+    mode="audit"
     if security_profile="$(acl_security_profile)"; then
         requested_mode="$(acl_security_profile_value "${security_profile}" "ipe")"
         case "${requested_mode}" in
@@ -86,9 +87,13 @@ if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
                 mode="off"
                 ;;
             "") ;;
-            *) log "Ignoring unrecognized IPE mode '${requested_mode}' from IMDS." ;;
+            *)
+                log "Ignoring unrecognized IPE mode '${requested_mode}' from IMDS."
+                mode="off"
+                ;;
         esac
     else
+        mode="off"
         log "IMDS unavailable; leaving IPE inactive (policy loaded but not activated)."
     fi
 fi

@@ -72,6 +72,9 @@ test_absent_token() {
     prepare_case absent-token
     printf 'root=/dev/sda1\n' > "${CASE_DIR}/cmdline"
     run_loader
+    [[ ! -s "${IPE_DIR}/new_policy" ]]
+    [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
+    [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
 }
 
 # ---- Test: unreadable/missing cmdline → skip IPE and continue boot ----
@@ -125,14 +128,20 @@ test_valid_audit_active() {
     run_active_case valid-audit audit
 }
 
+test_azure_default_audit_active() {
+    run_active_case azure-default-audit "" audit
+}
+
 run_active_case() (
-    local name="$1" imds_mode="$2"
+    local name="$1" imds_mode="$2" expected_mode="${3:-$2}"
     prepare_case "${name}"
     make_credential "${CASE_DIR}/credential.p7b.cred"
     write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
 
+    local profile=""
+    [[ -z "${imds_mode}" ]] || profile="ipe=${imds_mode}"
     command cat > "${CASE_DIR}/security-profile.sh" <<EOF
-acl_security_profile() { printf '%s\n' 'ipe=${imds_mode}'; }
+acl_security_profile() { printf '%s\n' '${profile}'; }
 acl_security_profile_value() { printf '%s\n' '${imds_mode}'; }
 EOF
 
@@ -150,12 +159,38 @@ EOF
 
     local output
     output="$(run_loader "${CASE_DIR}/credential.p7b.cred")"
-    grep -Fq "Using IPE mode '${imds_mode}'." <<< "${output}" ||
-        { echo "loader did not report requested mode '${imds_mode}'" >&2; return 1; }
+    grep -Fq "Using IPE mode '${expected_mode}'." <<< "${output}" ||
+        { echo "loader did not report expected mode '${expected_mode}'" >&2; return 1; }
     [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
     [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
     cmp "${CASE_DIR}/containerd-acl-erofs-profile.conf" "${CASE_DIR}/dropins/90-acl-profile.conf"
 )
+
+test_non_azure_default_inactive() {
+    prepare_case non-azure-default
+    make_credential "${CASE_DIR}/credential.p7b.cred"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred"
+    run_loader
+    [[ -s "${IPE_DIR}/new_policy" ]]
+    [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
+    [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
+}
+
+test_imds_failure_inactive() {
+    prepare_case imds-failure-inactive
+    make_credential "${CASE_DIR}/credential.p7b.cred"
+    write_hashed_cmdline "${CASE_DIR}/credential.p7b.cred" "flatcar.oem.id=azure"
+    command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
+acl_security_profile() { return 1; }
+acl_security_profile_value() { return 1; }
+EOF
+    local output
+    output="$(run_loader)"
+    grep -Fq 'IMDS unavailable; leaving IPE inactive' <<< "${output}"
+    [[ -s "${IPE_DIR}/new_policy" ]]
+    [[ "$(<"${IPE_DIR}/enforce")" == "9" ]]
+    [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
+}
 
 # ---- Test: 'enforcing' is reserved; loader logs an explicit unsupported
 # diagnostic and falls back safely to inactive without failing boot ----
@@ -562,6 +597,9 @@ test_valid_inactive_load
 test_valid_disabled_alias_inactive
 test_removed_alias_inactive
 test_valid_audit_active
+test_azure_default_audit_active
+test_non_azure_default_inactive
+test_imds_failure_inactive
 test_enforcing_mode_safe_fallback
 test_duplicate_token
 test_malformed_hash
