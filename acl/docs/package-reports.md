@@ -21,7 +21,7 @@ All builds use [`acl/package-decisions-base.toml`](../package-decisions-base.tom
 
 The selected files must not contain overlapping package names.
 
-The base policy keeps `azurelinux-repos`, `azurelinux-repos-cloud-native`, and `azurelinux-repos-shared` through this report. Both UKI and GRUB builds remove them during later image-finalization cleanup. Standalone analysis excludes their decisions and reasons from the loaded policy since they are not included in the final artifacts.
+The base policy keeps `azurelinux-repos`, `azurelinux-repos-cloud-native`, and `azurelinux-repos-shared` through this report. Both UKI and GRUB builds remove them during later image-finalization cleanup. Standalone analysis excludes these packages from the loaded policy since they are not included in the final artifacts. Standalone analysis also permits packages selected for removal to be absent for the same reason.
 
 | Decision | Behavior |
 | --- | --- |

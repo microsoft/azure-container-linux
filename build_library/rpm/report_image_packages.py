@@ -1291,8 +1291,14 @@ def write_inventory(
 def validate_package_presence(
     decisions_by_pkgname: Mapping[str, Decision],
     packages: Sequence[Package],
+    *,
+    require_all_policy_packages: bool,
 ) -> None:
-    absent_pkgnames = sorted(decisions_by_pkgname.keys() - {package.name for package in packages})
+    required_pkgnames = {
+        name for name, decision in decisions_by_pkgname.items()
+        if require_all_policy_packages or decision == Decision.KEEP
+    }
+    absent_pkgnames = sorted(required_pkgnames - {package.name for package in packages})
     if absent_pkgnames:
         raise InventoryError(
             f"Decision file entries refer to packages not installed in the image: {', '.join(absent_pkgnames)}"
@@ -1651,6 +1657,8 @@ def collect_current_inventory(
     tdnf: str,
     package_manager: str,
     decisions_by_pkgname: dict[str, Decision],
+    *,
+    require_all_policy_packages: bool,
 ) -> tuple[list[Package], dict[str, set[str]], str, dict[str, object]]:
     print(f"Querying current ACL image at {root}...", flush=True)
 
@@ -1664,7 +1672,7 @@ def collect_current_inventory(
             package_manager=package_manager,
         )
 
-        validate_package_presence(decisions_by_pkgname, packages)
+        validate_package_presence(decisions_by_pkgname, packages, require_all_policy_packages=require_all_policy_packages)
 
         pkgnames_to_remove = sorted({
             package.name for package in packages
@@ -1709,6 +1717,8 @@ def collect_build_inventory(
     architecture: str,
     decisions_by_pkgname: dict[str, Decision],
     build_rpmdb: Path | None,
+    *,
+    require_all_policy_packages: bool,
 ) -> tuple[list[Package], dict[str, set[str]], dict[str, object]]:
     provenance: dict[str, object] = {"tools_image": tools_image}
 
@@ -1764,7 +1774,7 @@ def collect_build_inventory(
             database_label=database_label,
         )
 
-    validate_package_presence(decisions_by_pkgname, packages)
+    validate_package_presence(decisions_by_pkgname, packages, require_all_policy_packages=require_all_policy_packages)
 
     if cached is None:
         write_inventory(inventory_path, packages, dependents_by_nvra, cache_key=cache_key)
@@ -1814,7 +1824,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--build-hook",
         action="store_true",
-        help="retain repository-package policy entries for pre-finalization build reporting",
+        help="retain repository-package policy entries and require all policy packages for pre-finalization build "
+            "reporting",
     )
 
     source_group = parser.add_mutually_exclusive_group(required=True)
@@ -1854,9 +1865,9 @@ def main(argv: list[str] | None = None) -> None:
         action="append",
         default=[],
         metavar="TOML",
-        help="TOML package tables with decision (keep, remove-top-level, or remove-dependency) "
-             "and string reason (required for keep, optional for removal decisions); "
-             "repeat for additional files with nonoverlapping package names",
+        help="TOML package tables with decision (keep, remove-top-level, or remove-dependency) and string reason "
+            "(required for keep, optional for removal decisions); repeat for additional files with nonoverlapping "
+            "package names",
     )
 
     args = parser.parse_args(argv)
@@ -1937,6 +1948,7 @@ def main(argv: list[str] | None = None) -> None:
                     tdnf,
                     package_manager,
                     decisions_by_pkgname,
+                    require_all_policy_packages=args.build_hook,
                 )
             else:
                 assert args.build_id is not None
@@ -1953,6 +1965,7 @@ def main(argv: list[str] | None = None) -> None:
                     architecture,
                     decisions_by_pkgname,
                     args.build_rpmdb,
+                    require_all_policy_packages=args.build_hook,
                 )
 
             remaining_dependents_by_nvra = report_dependents(packages, dependents_by_nvra, decisions_by_pkgname)
