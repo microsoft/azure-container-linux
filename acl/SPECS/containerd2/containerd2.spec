@@ -7,7 +7,7 @@
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.7
-Release: 2%{?dist}
+Release: 3%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -29,6 +29,8 @@ Patch7:  CVE-2026-78669.patch
 Patch8:  CVE-2026-97032.patch
 Patch9:  CVE-2026-81870.patch
 Patch10: erofs-signed-dmverity.patch
+Patch11: erofs-newest-dmverity-referrer.patch
+Patch12: erofs-malformed-dmverity-referrer-fallback.patch
 
 %{?systemd_requires}
 
@@ -109,6 +111,11 @@ fi
 %dir /opt/containerd/lib
 
 %changelog
+* Fri Nov 13 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.7-3
+- Select the newest dm-verity referrer with a deterministic digest tie-break
+- Ignore malformed optional referrer metadata without downgrading retained signed snapshots
+- Add regression coverage for selection, fallback, retained content, and I/O failures
+
 * Mon Oct 19 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.7-2
 - Add patch for signed EROFS dm-verity referrer, snapshotter, and CRI support
 
