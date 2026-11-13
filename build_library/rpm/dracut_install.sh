@@ -308,8 +308,8 @@ SETUP_EOF
     sudo chmod +x "${selinux_toggle_module}/module-setup.sh"
     sudo chmod +x "${selinux_toggle_module}/acl-selinux-toggle.sh"
 
-    # Optional ACL IPE policy loader. Capable images always carry the loader,
-    # but it leaves the policy inactive unless Azure IMDS requests a mode.
+    # Optional ACL IPE policy loader. Capable images carry the loader, which
+    # resolves the Azure runtime mode from its default and IMDS overrides.
     case "${ACL_IPE_CAPABLE:-false}" in
         false)
             ;;
