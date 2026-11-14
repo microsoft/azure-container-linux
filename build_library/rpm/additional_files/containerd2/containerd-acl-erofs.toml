@@ -3,6 +3,14 @@ version = 4
 
 [plugins."io.containerd.snapshotter.v1.erofs"]
   enable_dmverity_referrers = true
+  # Supply the container-file label missing from unlabeled EROFS contents so
+  # existing SELinux policy can transition container processes to spc_t.
+  # This mount-wide context overrides individual file labels.
+  # Before switching AKS to enable_selinux=true, resolve the EROFS SELinux issue
+  # below and omit this fallback for SELinux-enabled CRI so its workload/MCS
+  # label is used without duplicate context= options:
+  # https://dev.azure.com/mariner-org/ACL/_workitems/edit/25166
+  ovl_mount_options = ['context="system_u:object_r:container_file_t:s0"']
 
 [plugins."io.containerd.cri.v1.images"]
   snapshotter = "erofs"
