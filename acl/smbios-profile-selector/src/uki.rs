@@ -6,8 +6,12 @@ mod tests;
 
 use alloc::{vec, vec::Vec};
 use uefi::{
-    CStr16, Result as EfiResult, Status, boot, cstr16, println,
+    CStr16, Result as EfiResult, Status, boot, cstr16,
+    fs::PathBuf,
+    println,
     proto::{
+        device_path::{DevicePath, media::FilePath},
+        loaded_image::LoadedImage,
         media::file::{Directory, File, FileAttribute, FileInfo, FileMode, RegularFile},
         shim::ShimLock,
     },
@@ -16,7 +20,7 @@ use uefi::{
 use crate::smbios::SmbiosDetectionError;
 
 const MAX_ADDON_BYTES: u64 = 1024 * 1024;
-const NVIDIA_GRACE_TEMPLATE_PATH: &CStr16 = cstr16!("\\EFI\\BOOT\\profiles\\nvidia-grace.addon.efi");
+const NVIDIA_GRACE_TEMPLATE_RELATIVE_PATH: &CStr16 = cstr16!("nvidia-grace.addon.efi");
 const NVIDIA_GRACE_ACTIVE_ADDON_PATH: &CStr16 = cstr16!("\\loader\\addons\\acl-nvidia-grace.addon.efi");
 const NVIDIA_GRACE_TEMP_ADDON_PATH: &CStr16 = cstr16!("\\loader\\addons\\acl-nvidia-grace.addon.efi.tmp");
 const NVIDIA_GRACE_ADDON_FILENAME: &CStr16 = cstr16!("acl-nvidia-grace.addon.efi");
@@ -47,6 +51,24 @@ pub(super) fn detect_profile(processors: &[&str]) -> Result<Profile, SmbiosDetec
     })
 }
 
+fn resolve_nvidia_grace_template_path(image_path: &DevicePath) -> Result<PathBuf, Status> {
+    // efitreeloader passes the selector's directory and filename together in one UEFI FilePath node.
+    let mut nodes = image_path.node_iter();
+    let node = nodes.next().ok_or(Status::INVALID_PARAMETER)?;
+    if nodes.next().is_some() {
+        return Err(Status::INVALID_PARAMETER);
+    }
+    let file_path: &FilePath = node.try_into().map_err(|_| Status::INVALID_PARAMETER)?;
+    let path = PathBuf::from(
+        file_path
+            .path_name()
+            .to_cstring16()
+            .map_err(|_| Status::INVALID_PARAMETER)?,
+    );
+    let parent = path.parent().ok_or(Status::INVALID_PARAMETER)?;
+    Ok(parent.join(NVIDIA_GRACE_TEMPLATE_RELATIVE_PATH))
+}
+
 /// Apply the selected profile without modifying the UKI or unrelated addons.
 /// Generic removes the active file; NVIDIA Grace asks shim to verify its template and installs it if needed.
 pub(super) fn apply_profile(profile: Profile) -> EfiResult {
@@ -59,15 +81,32 @@ pub(super) fn apply_profile(profile: Profile) -> EfiResult {
     if profile == Profile::Generic {
         return remove_file(&mut root, NVIDIA_GRACE_ACTIVE_ADDON_PATH);
     }
+    // Conservative A/B updates boot the new slot while EFI/BOOT still holds the old boot files.
+    // Read the template beside this selector to use the boot settings from the same slot.
+    let template_path = {
+        let image = boot::open_protocol_exclusive::<LoadedImage>(boot::image_handle())
+            .inspect_err(|error| println!("Cannot access the selector's loaded-image information: {error:?}"))?;
+        let image_path = image.file_path().ok_or_else(|| {
+            println!("The selector's loaded-image file path is missing.");
+            Status::INVALID_PARAMETER
+        })?;
+        resolve_nvidia_grace_template_path(image_path).map_err(|status| {
+            println!("Cannot resolve the Grace template: expected one media file path with a parent directory.");
+            status
+        })?
+    };
+    let template_path = template_path.to_cstr16();
     // Ask shim to verify the NVIDIA Grace template before modifying addon files.
-    let bytes = read_addon(&mut root, NVIDIA_GRACE_TEMPLATE_PATH)?.ok_or(Status::BAD_BUFFER_SIZE)?;
+    let bytes = read_addon(&mut root, template_path)
+        .inspect_err(|error| println!("Cannot read the NVIDIA Grace template {template_path}: {error:?}"))?
+        .ok_or(Status::BAD_BUFFER_SIZE)?;
     let shim_handle = boot::get_handle_for_protocol::<ShimLock>()
         .inspect_err(|error| println!("Cannot find shim's image-verification interface (ShimLock): {error:?}"))?;
     let verifier = boot::open_protocol_exclusive::<ShimLock>(shim_handle)
         .inspect_err(|error| println!("Cannot open shim's image-verification interface (ShimLock): {error:?}"))?;
-    verifier.verify(&bytes).inspect_err(|error| {
-        println!("Shim could not verify the NVIDIA Grace template {NVIDIA_GRACE_TEMPLATE_PATH}: {error:?}")
-    })?;
+    verifier
+        .verify(&bytes)
+        .inspect_err(|error| println!("Shim could not verify the NVIDIA Grace template {template_path}: {error:?}"))?;
     // Avoid rewriting an unchanged addon on every boot.
     if active_addon_matches(read_addon(&mut root, NVIDIA_GRACE_ACTIVE_ADDON_PATH), &bytes)? {
         return Ok(());
@@ -164,7 +203,7 @@ fn open_file(root: &mut Directory, path: &CStr16, mode: FileMode) -> EfiResult<R
     // UEFI can return a directory handle, but addon callers require a regular file.
     root.open(path, mode, FileAttribute::empty())
         .inspect_err(|error| {
-            if error.status() != Status::NOT_FOUND || path == NVIDIA_GRACE_TEMPLATE_PATH {
+            if error.status() != Status::NOT_FOUND {
                 println!("Cannot open addon {path} in {mode:?} mode: {error:?}");
             }
         })?

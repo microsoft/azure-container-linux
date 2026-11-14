@@ -218,12 +218,10 @@ ipe_check_probe_payload() {
                 echo "Ambiguous probe provider: ${target} also exists in ${provider}" >&2
                 return 1
             }
+            # Overlayfs xino can rewrite the inode exposed through /usr.
+            # Match the payload bytes and reject competing providers instead.
             cmp -- "${target}" "${payload}" || {
                 echo "Probe content does not match ${origin}: ${target}" >&2
-                return 1
-            }
-            [[ "$(stat -Lc %i "${target}")" == "$(stat -Lc %i "${payload}")" ]] || {
-                echo "Probe inode does not match ${origin}: ${target}" >&2
                 return 1
             }
             count=$((count + 1))

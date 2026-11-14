@@ -23,6 +23,11 @@ Built and shipped alongside the disk image:
   - `nvidia-driver-vgpu`
   - `nvidia-container-toolkit`
   - `nvidia-fabric-manager`
+
+  The `nvidia-driver-cuda-open` sysext uses `cuda-open` on AMD64 and
+  `cuda-open-hwe` on ARM64. The ARM64 driver requires a matching HWE kernel.
+  The `nvidia-driver-cuda` and `nvidia-driver-vgpu` sysexts remain AMD64-only.
+
 - **Scenario-specific**:
   - `docker`
 

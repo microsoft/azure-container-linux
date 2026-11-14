@@ -17,6 +17,7 @@ so its UEFI workspace settings apply.
 
 ```sh
 cargo test --locked --lib
+bash tests/test-smbios-image-wiring.sh
 cargo build --locked --release --target aarch64-unknown-uefi
 cargo build --locked --release --target x86_64-unknown-uefi
 ```
@@ -40,12 +41,16 @@ Source layout:
 
 The app runs after shim and before systemd-boot.
 
+For the ARM64 image-build command, see the
+[image build guide](../docs/BUILD_RPM_IMAGE_README.md#phase-3-build-the-image).
+
 Build and sign a command-line-only addon from
 [nvidia-grace-kernel-parameters.txt](boot/nvidia-grace-kernel-parameters.txt),
 without `.linux` or `.uname` sections. The app uses these ESP paths:
 
-- `EFI/BOOT/profiles/nvidia-grace.addon.efi`:
-  Inactive, pre-signed NVIDIA Grace template.
+- `nvidia-grace.addon.efi`, relative to the loaded selector's directory:
+  Inactive, pre-signed NVIDIA Grace template. Fresh images use `EFI/BOOT`;
+  Trident A/B updates use the loaded `EFI/AZLA` or `EFI/AZLB` slot.
 - `loader/addons/acl-nvidia-grace.addon.efi`:
   Selector-owned global addon; present for NVIDIA Grace, absent for Generic.
 

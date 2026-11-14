@@ -12,6 +12,7 @@
 #   STANDALONE_SYSEXTS_SPEC  — space-separated "name|category/package[&pkg]" entries
 #
 # Optional environment:
+#   BOOTLOADER_MODE          — uki or grub (defaults to grub for legacy callers)
 #   SYSEXT_COMPRESSION       — override default sysext compression (zstd)
 #   PACKAGE_SOURCE_MODE      — "RPM" to pass RPM env vars to build_sysext
 #   RPM_STAGING_DIR, IMAGE_VERSION, IMAGE_VERSION_ID, IMAGE_BUILD_ID
@@ -40,11 +41,16 @@ _parse_sysexts_yaml() {
     local separator="$4"
     local tag_filter="${5:-}"
     local arch="${board%%-*}"
+    local bootloader_mode="${BOOTLOADER_MODE:-grub}"
 
     if [[ ! -f "${yaml_file}" ]]; then
         echo ""
         return 0
     fi
+    case "${bootloader_mode}" in
+        uki|grub) ;;
+        *) echo "ERROR: Unsupported BOOTLOADER_MODE: ${bootloader_mode}" >&2; return 1 ;;
+    esac
 
     # Build the tag filter clause for yq.
     # Tags are only applied for standalone mode.
@@ -79,17 +85,22 @@ _parse_sysexts_yaml() {
     fi
 
     local result
-    result=$(ARCHVAL="${arch}" TAGVALS="${tag_vals}" \
+    if ! result=$(ARCHVAL="${arch}" TAGVALS="${tag_vals}" BOOTLOADERVAL="${bootloader_mode}" \
     yq eval -r "
         .sysexts[]
         ${mode_select}
         | select(.archs == null or (.archs[] | select(. == env(ARCHVAL))))
         ${tag_select}
-        | .name + \"|\" + ([.packages[]
+        | .packages = [.packages[]
             | select(tag == \"!!str\" or .archs == null or (.archs[] | select(. == env(ARCHVAL))))
+            | select(tag == \"!!str\" or .bootloaders == null or (.bootloaders[] | select(. == env(BOOTLOADERVAL))))
             | (select(tag == \"!!str\") // .name)]
-            | join(\"&\"))
-    " "${yaml_file}")
+        | select(.packages | length > 0)
+        | .name + \"|\" + (.packages | join(\"&\"))
+    " "${yaml_file}"); then
+        echo "ERROR: Failed to select sysext packages from ${yaml_file}" >&2
+        return 1
+    fi
 
     if [[ "${separator}" == " " ]]; then
         echo "${result}" | tr '\n' ' '
