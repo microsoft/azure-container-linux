@@ -85,7 +85,7 @@ if [[ " ${cmdline} " == *" flatcar.oem.id=azure "* ]]; then
                 log "IPE mode 'enforcing' is not supported at runtime; leaving IPE inactive."
                 mode="off"
                 ;;
-            "") ;;
+            "") mode="audit" ;;
             *) log "Ignoring unrecognized IPE mode '${requested_mode}' from IMDS." ;;
         esac
     else
