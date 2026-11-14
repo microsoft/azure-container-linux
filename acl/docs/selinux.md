@@ -156,11 +156,11 @@ is not MCS constrained and its sockets normally use `s0`. MCS still constrains
 the helper's interactions with MCS-constrained domains and objects.
 
 Policy support must reach every applicable node before a workload selects this
-type. A type-only override in a multi-container pod may receive a different MCS
-level from the pod sandbox and shared artifacts. Before enabling the domain in
-a CSI manifest, validate coordinated MCS labeling for the driver, helpers,
-projected files, and both CSI socket directions. Do not work around category
-mismatches by using a static all-category level.
+type. Older containerd packages may assign a type-only override different MCS
+categories from its sandbox; see [container type overrides](#container-type-overrides).
+Before enabling the domain in a CSI manifest, validate coordinated MCS labeling
+for the driver, helpers, projected files, and both CSI socket directions. Do not
+work around category mismatches by using a static all-category level.
 
 ### `container_kvm_t`
 
@@ -232,8 +232,9 @@ This table summarizes SELinux policy intent, not every individual permission.
 
 ### Kubernetes
 
-For a single-container pod, set only the required process type and allow the
-runtime to allocate the MCS level:
+Set only the required process type and allow the runtime to allocate the MCS
+level. For multi-container pods, also review
+[container type overrides](#container-type-overrides) below:
 
 ```yaml
 apiVersion: v1
@@ -277,23 +278,30 @@ separate read-only `/var/log/audit` mount only when the collector must read
 auditd-managed files. Stock ACL does not run auditd, so this mount is needed
 only on customized hosts that add it.
 
-When SELinux options omit an explicit level, containerd allocates a new MCS
-level for that container instead of inheriting the sandbox label. In a
-multi-container pod, independent type-only overrides can therefore prevent
-containers from sharing MCS-constrained IPC, sockets, processes, or relabeled
-volumes.
+#### Container type overrides
 
-Kubernetes has no built-in field that both generates a unique per-pod level
-and overrides the type. ACL does not ship an allocator for this case, so use a
-single-container pod for `container_logreader_t` and run other workloads in
-separate pods.
+ACL's `containerd2-2.3.7-3` package preserves the pod sandbox's allocated MCS
+level when a nonprivileged container specifies only `seLinuxOptions.type`.
+The container keeps its requested type and shares its pod's categories, so
+selecting a specialized type does not by itself prevent access to pod-shared
+files such as `/etc/hosts` and `/etc/resolv.conf`. The host policy must still
+permit the requested type to access those files.
 
-An advanced multi-container deployment requires a mutating admission webhook
-that assigns the same level to the sandbox and every participating container.
-Its allocator must be coordinated with containerd on every node, such as by
-using a disjoint reserved category range, so it cannot select a level already
-assigned to another container. Do not reuse one static level across pods;
-doing so collapses MCS isolation between them.
+Containers without SELinux options continue to inherit the complete sandbox
+label. Explicit container levels, including `s0`, take precedence. Privileged
+containers and configurations that set the SELinux user or role keep their
+existing behavior. If no sandbox level is recorded, existing allocation
+behavior is retained. The change does not enable CRI SELinux or alter policy.
+
+The runtime tracks shared categories until the last sandbox or container
+reference is removed. Failed container creation does not release categories
+still held by the pod, and sandbox label metadata is preserved for recovery.
+
+On older packages, a type-only override may allocate independent categories.
+Use single-container pods or a separately coordinated allocation mechanism
+until the runtime update is available on every applicable node. Do not reuse
+one static level across pods or generate uncoordinated category numbers in
+deployment templates; this does not preserve independent pod isolation.
 
 ## MCS isolation
 
