@@ -196,6 +196,8 @@ test_uki_provision_preserves_unsigned_verity() (
             "${BOARD_ROOT}/usr/lib/systemd/boot/efi/linux${EFI_ARCH}.efi.stub" \
             "${BOARD_ROOT}/boot/efi/EFI/BOOT/boot${EFI_ARCH}.efi" \
             "${BOARD_ROOT}/boot/efi/EFI/BOOT/grub${EFI_ARCH}.efi"
+        printf 'CONFIG_BPF_LSM=y\nCONFIG_LSM="lockdown,yama,selinux,ipe"\n' \
+            > "${esp}/config-6.6.145.2"
         printf 'policy credential\n' > "${BUILD_DIR}/acl-ipe-policy/acl-ipe-policy.p7b.cred"
         printf 'stale\n' > "${extra}/acl-ipe-policy.p7b.cred"
         printf '11111111-2222-3333-4444-555555555555\n' > "${FLAGS_fs_uuid}"
@@ -234,6 +236,7 @@ test_uki_provision_preserves_unsigned_verity() (
         uki_provision_rpm "${esp}"
         cmdline="$(<"${BUILD_DIR}/${uki_name}.cmdline")"
         [[ "${cmdline}" == *"mount.usr=/dev/mapper/usr mount.usrflags=ro"* ]]
+        [[ " ${cmdline} " == *" lsm=lockdown,yama,selinux,ipe,bpf "* ]]
         [[ "${cmdline}" != *"usrhash="* && "${cmdline}" != *"systemd.verity_usr_"* ]]
         [[ "${cmdline}" != *"acl.slot="* ]]
         [[ "${cmdline}" != *"root-hash-signature="* ]]
