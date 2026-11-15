@@ -17,3 +17,5 @@ Detailed documentation for Azure Container Linux.
 | ------------------------------------------------------ | --------------------------------------------------------------------- |
 | [Build RPM Image](BUILD_RPM_IMAGE_README.md)           | Building ACL images from RPMs                                         |
 | [Container Image Preload](containerd-image-preload.md) | Baking OCI images into the containerd store with the Image Customizer |
+| [EROFS `/usr` builds](erofs-usr.md) | Build defaults, source-image compatibility, and qualification gates |
+| [EROFS design overview](erofs-design.md) | Overall flow, key logic and decisions |

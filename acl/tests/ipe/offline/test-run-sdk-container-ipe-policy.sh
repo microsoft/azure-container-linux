@@ -6,8 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "${TEST_DIR}"' EXIT
 
-mkdir -p "${TEST_DIR}/sdk_lib"
+mkdir -p "${TEST_DIR}/sdk_lib" "${TEST_DIR}/build_library"
 cp "${SCRIPT_DIR}/run_sdk_container" "${TEST_DIR}/run_sdk_container"
+cp "${SCRIPT_DIR}/build_library/usr_filesystem.sh" "${TEST_DIR}/build_library/usr_filesystem.sh"
 
 cat > "${TEST_DIR}/sdk_lib/sdk_container_common.sh" <<'EOF'
 docker_a=(docker)
@@ -49,10 +50,13 @@ assert_docker_call() {
 
 run_container() {
     local mode="$1" signing_mode="$2" log="$3" status="${4:-up}"
+    local filesystem="${5:-erofs}"
     (
         cd "${TEST_DIR}"
         ACL_IPE_MODE="${mode}" \
         ACL_IPE_SIGNING_MODE="${signing_mode}" \
+        PACKAGE_SOURCE_MODE=RPM \
+        ACL_USR_FS="${filesystem}" \
         FAKE_DOCKER_LOG="${log}" \
         FAKE_DOCKER_STATUS="${status}" \
             ./run_sdk_container -C fake-sdk -n reused-container -- true
@@ -61,15 +65,19 @@ run_container() {
 
 test_mode_forwarded() {
     local log="${TEST_DIR}/mode.log"
-    local mode signing
-    for mode in disabled audit; do
-        for signing in ephemeral esrp; do
-            : > "${log}"
-            run_container "${mode}" "${signing}" "${log}"
-            grep -Fq $'\t-e\tACL_IPE_MODE='"${mode}"$'\t' "${log}" ||
-                { echo "IPE mode ${mode} was not forwarded" >&2; return 1; }
-            grep -Fq $'\t-e\tACL_IPE_SIGNING_MODE='"${signing}"$'\t' "${log}" ||
-                { echo "IPE signing mode ${signing} was not forwarded" >&2; return 1; }
+    local mode signing filesystem
+    for filesystem in btrfs erofs; do
+        for mode in disabled audit; do
+            for signing in ephemeral esrp; do
+                : > "${log}"
+                run_container "${mode}" "${signing}" "${log}" up "${filesystem}"
+                grep -Fq $'\t-e\tACL_IPE_MODE='"${mode}"$'\t' "${log}" ||
+                    { echo "IPE mode ${mode} was not forwarded" >&2; return 1; }
+                grep -Fq $'\t-e\tACL_IPE_SIGNING_MODE='"${signing}"$'\t' "${log}" ||
+                    { echo "IPE signing mode ${signing} was not forwarded" >&2; return 1; }
+                grep -Fq $'\t-e\tACL_USR_FS='"${filesystem}"$'\t' "${log}" ||
+                    { echo "Filesystem ${filesystem} was not forwarded" >&2; return 1; }
+            done
         done
     done
     ACL_ROOT_HASH_SIGNING_ENABLED=true run_container audit ephemeral "${log}"
