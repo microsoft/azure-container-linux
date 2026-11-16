@@ -24,7 +24,7 @@ PACKAGE_SNAPSHOT_TIME=1700000000
 rpm_setup_repos "${root_fs}" 3.0 "${local_repo}" "${pipeline_repo}"
 grep -qx 'excludepkgs=grub2 grub2-efi grub2-efi-binary shim systemd-boot' \
     "${repo_dir}/azurelinux-local.repo"
-grep -Fxq 'excludepkgs=trident* grub2 grub2-efi grub2-efi-binary shim systemd-boot' \
+grep -qx 'excludepkgs=grub2 grub2-efi grub2-efi-binary shim systemd-boot' \
     "${repo_dir}/azurelinux-pipeline.repo"
 
 unset PACKAGE_SNAPSHOT_TIME
@@ -32,7 +32,9 @@ rpm_setup_repos "${root_fs}" 3.0 "${local_repo}" "${pipeline_repo}"
 if grep -q '^excludepkgs=' "${repo_dir}/azurelinux-local.repo"; then
     die "Bootloader exclusions must only apply to snapshot builds"
 fi
-grep -Fxq 'excludepkgs=trident*' "${repo_dir}/azurelinux-pipeline.repo"
+if grep -q '^excludepkgs=' "${repo_dir}/azurelinux-pipeline.repo"; then
+    die "Pipeline exclusions must only apply to snapshot bootloader packages"
+fi
 
 rpm_snapshot_args() {
     local -n args="$1"
