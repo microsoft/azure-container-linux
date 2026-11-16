@@ -171,6 +171,28 @@ Build the ACL production image using RPM package sources.
 ./acl/build_rpm_image.sh --rebuild
 ```
 
+ARM64 UKI images use `kernel-hwe` and `bpftool-hwe` and include the SMBIOS
+profile selector. AMD64 and GRUB images keep `kernel` and `bpftool`.
+
+**SMBIOS profile selection (ARM64 UKI images)**
+
+ARM64 UKI builds require a checkout of the private efitreeloader repository.
+Install the Rust toolchains specified by `acl/smbios-profile-selector` and
+efitreeloader, then run from the repository root:
+
+```bash
+BOOTLOADER_MODE=uki EFITREELOADER_DIR=/path/to/efitreeloader \
+  ./acl/build_rpm_image.sh --build-rpms --build-image --build-vm-image \
+    --board=arm64-usr --vm-type=azure
+```
+
+This builds both EFI applications without modifying the efitreeloader checkout.
+At boot, the selector enables Grace-specific arguments on NVIDIA Grace and
+leaves them inactive on ordinary ARM hardware.
+Images use build-time signing keys; production publishing must re-sign the
+selector and Grace addon. Existing installations need the Trident boot-resource
+update before adopting this boot chain.
+
 **Optional IPE audit (UKI images)**
 
 Use `ephemeral` for dev/test or `esrp` for later production signing by

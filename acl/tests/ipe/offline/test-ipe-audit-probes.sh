@@ -52,6 +52,19 @@ test_probe_payload() (
     ln -s "${target}" "${directory}/oem-azure/usr/bin/eject"
     ipe_check_probe_payload "${directory}" base bin/true \
         "$(readlink -f "${directory}/oem-azure/usr/bin/eject")"
+    # OverlayFS xino, as observed with kernel-hwe, can remap the inode in the
+    # merged view without changing the backing payload.
+    # A copy models that difference without requiring an OverlayFS mount.
+    target="${directory}/merged-true"
+    cp "${directory}/base/bin/true" "${target}"
+    [[ "$(stat -Lc %i "${target}")" != "$(stat -Lc %i "${directory}/base/bin/true")" ]]
+    ipe_check_probe_payload "${directory}" base bin/true "${target}"
+    printf 'different payload\n' > "${target}"
+    if ipe_check_probe_payload "${directory}" base bin/true "${target}"; then
+        echo "Different payload passed provenance validation" >&2
+        return 1
+    fi
+    cp "${directory}/base/bin/true" "${target}"
     cp "${target}" "${directory}/containerd/usr/bin/true"
     if ipe_check_probe_payload "${directory}" base bin/true "${target}"; then
         echo "Ambiguous provider passed provenance validation" >&2

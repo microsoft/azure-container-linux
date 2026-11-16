@@ -2,6 +2,41 @@
 // Licensed under the MIT License.
 
 use super::*;
+use uefi::proto::device_path::build::{DevicePathBuilder, media};
+
+#[test]
+fn grace_template_follows_the_loaded_slot() {
+    for (loaded, expected) in [
+        (cstr16!("\\EFI\\BOOT\\smbios-profile-selector.efi"), cstr16!("EFI\\BOOT\\nvidia-grace.addon.efi")),
+        (cstr16!("\\EFI\\AZLB\\smbios-profile-selector.efi"), cstr16!("EFI\\AZLB\\nvidia-grace.addon.efi")),
+        (cstr16!("EFI\\AZLA\\smbios-profile-selector.efi"), cstr16!("EFI\\AZLA\\nvidia-grace.addon.efi")),
+    ] {
+        let mut storage = Vec::new();
+        let path = DevicePathBuilder::with_vec(&mut storage)
+            .push(&media::FilePath { path_name: loaded })
+            .unwrap()
+            .finalize()
+            .unwrap();
+        assert_eq!(resolve_nvidia_grace_template_path(path).unwrap().to_cstr16(), expected);
+    }
+}
+
+#[test]
+fn grace_template_rejects_missing_or_ambiguous_loaded_paths() {
+    for parts in [
+        vec![],
+        vec![cstr16!("smbios-profile-selector.efi")],
+        vec![cstr16!("EFI\\AZLB\\"), cstr16!("smbios-profile-selector.efi")],
+    ] {
+        let mut storage = Vec::new();
+        let mut builder = DevicePathBuilder::with_vec(&mut storage);
+        for path_name in parts {
+            builder = builder.push(&media::FilePath { path_name }).unwrap();
+        }
+        let path = builder.finalize().unwrap();
+        assert_eq!(resolve_nvidia_grace_template_path(path).unwrap_err(), Status::INVALID_PARAMETER);
+    }
+}
 
 #[test]
 fn nvidia_grace_and_generic_profiles() {
