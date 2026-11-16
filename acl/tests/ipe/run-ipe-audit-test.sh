@@ -301,9 +301,30 @@ ipe_run_base_probes() {
     ipe_run_probe "${directory}" base-systemctl "${systemctl_probe}" --version
 }
 
+ipe_assert_matrix_denials() {
+    local directory="$1" logs="$2" name target expected pid
+    shift 2
+    [[ $(( $# % 3 )) == 0 ]] || {
+        echo "Invalid IPE probe matrix for audit capture" >&2
+        return 1
+    }
+    while (( $# )); do
+        name="$1" target="$2" expected="$3"
+        shift 3
+        [[ "${expected}" != allow ]] || continue
+        [[ "${expected}" == deny ]] || {
+            echo "Invalid IPE probe expectation: ${expected}" >&2
+            return 1
+        }
+        pid="$(cat "${directory}/${name}.pid")" || return 1
+        ipe_assert_probe_audit "${logs}" "${target}" "${pid}" deny || return 1
+    done
+}
+
 ipe_collect_probe_audit() {
     local directory="$1" boot_id="$2" cursor="$3" control="$4" pid="$5"
     local attempt logs journal_boot_id="${boot_id//-/}"
+    shift 5
     # journalctl expects 32 hex digits, unlike the UUID from /proc.
     [[ "${journal_boot_id}" =~ ^[[:xdigit:]]{32}$ ]] || {
         echo "Invalid boot ID for IPE audit capture: ${boot_id}" >&2
@@ -320,8 +341,10 @@ ipe_collect_probe_audit() {
             return 1
         }
         logs="$(cat "${directory}/audit.log")"
-        if ipe_find_denial_event "${logs}" "${control}" "${pid}" |
-            grep -Eq 'ipe_hook=BPRM_CHECK([[:space:]]|$)'; then
+        if {
+            ipe_assert_probe_audit "${logs}" "${control}" "${pid}" deny &&
+                ipe_assert_matrix_denials "${directory}" "${logs}" "$@"
+        } >/dev/null 2>&1; then
             # Drain delayed records before judging absence for earlier probes.
             sleep 2
             journalctl --boot="${journal_boot_id}" --after-cursor="${cursor}" \
@@ -333,16 +356,21 @@ ipe_collect_probe_audit() {
                 echo "Boot changed during final IPE audit capture" >&2
                 return 1
             }
-            ipe_find_denial_event "$(cat "${directory}/audit.log")" "${control}" "${pid}" |
-                grep -Eq 'ipe_hook=BPRM_CHECK([[:space:]]|$)' || {
-                echo "Final control record disappeared during audit collection" >&2
+            logs="$(cat "${directory}/audit.log")"
+            if ! {
+                ipe_assert_probe_audit "${logs}" "${control}" "${pid}" deny &&
+                    ipe_assert_matrix_denials "${directory}" "${logs}" "$@"
+            } >/dev/null; then
+                echo "Required probe record disappeared during audit collection" >&2
                 return 1
-            }
+            fi
             return 0
         fi
         sleep 1
     done
-    echo "Audit telemetry failed: no fresh target BPRM_CHECK denial for the final writable control" >&2
+    echo "Audit telemetry failed: required target BPRM_CHECK denials are incomplete" >&2
+    ipe_assert_probe_audit "${logs}" "${control}" "${pid}" deny >&2 &&
+        ipe_assert_matrix_denials "${directory}" "${logs}" "$@" >&2
     return 1
 }
 
@@ -592,7 +620,17 @@ cursor="$(sed -n 's/^-- cursor: //p' <<< "${cursor_output}")"
 [[ -n "${cursor}" ]] || fail "journal did not return a cursor"
 echo "IPE_REPORT schema=1 boot=${boot_id} kernel=$(uname -r) policy=${POLICY_NAME} enforce=0 usr_signature=${usr_signature_mode}"
 echo "IPE_CAPTURE transport=audit after_cursor=${cursor}"
-# The final known-denial control establishes collection health for earlier probes.
+usr_expected=deny
+[[ "${usr_signature_mode}" != required ]] || usr_expected=allow
+probe_matrix=(
+    base "${usr_probe}" "${usr_expected}"
+    base-bash "${bash_probe}" "${usr_expected}"
+    base-systemctl "${systemctl_probe}" "${usr_expected}"
+    containerd "${containerd_probe}" deny
+    oem-azure "${oem_probe}" deny
+    writable "${probe}" deny
+)
+# A control record is not a delivery fence for other processes' audit records.
 ipe_run_base_probes "${probe_dir}" "${usr_probe}" "${bash_probe}" "${systemctl_probe}"
 ipe_run_probe "${probe_dir}" containerd "${containerd_probe}" --version
 ipe_run_probe "${probe_dir}" oem-azure "${oem_probe}" -v
@@ -600,22 +638,16 @@ ipe_run_probe "${probe_dir}" writable "${probe}"
 telemetry=fail
 if [[ -r "${probe_dir}/writable.pid" ]]; then
     if ipe_collect_probe_audit "${probe_dir}" "${boot_id}" "${cursor}" \
-        "${probe}" "$(cat "${probe_dir}/writable.pid")" 2> "${probe_dir}/audit-error.log"; then
+        "${probe}" "$(cat "${probe_dir}/writable.pid")" "${probe_matrix[@]}" \
+        2> "${probe_dir}/audit-error.log"; then
         telemetry=pass
     fi
 else
     echo "Missing execution PID for the final writable control" > "${probe_dir}/audit-error.log"
 fi
 [[ -f "${probe_dir}/audit.log" ]] || : > "${probe_dir}/audit.log"
-usr_expected=deny
-[[ "${usr_signature_mode}" != required ]] || usr_expected=allow
-ipe_report_probe_matrix "${probe_dir}" "${telemetry}" \
-    base "${usr_probe}" "${usr_expected}" \
-    base-bash "${bash_probe}" "${usr_expected}" \
-    base-systemctl "${systemctl_probe}" "${usr_expected}" \
-    containerd "${containerd_probe}" deny \
-    oem-azure "${oem_probe}" deny \
-    writable "${probe}" deny || fail "IPE probe matrix failed"
+ipe_report_probe_matrix "${probe_dir}" "${telemetry}" "${probe_matrix[@]}" ||
+    fail "IPE probe matrix failed"
 [[ "$(tr -d '[:space:]' < "${IPE_DIR}/enforce")" == 0 &&
    "$(tr -d '[:space:]' < "${POLICY_DIR}/active")" == 1 ]] ||
     fail "IPE state changed during the probe matrix"

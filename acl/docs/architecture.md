@@ -63,6 +63,12 @@ The `/usr` partition (USR-A) is a read-only btrfs filesystem with zstd compressi
 - Before VM conversion re-signs an IPE UKI, it verifies the staged credential's signer, selects the UKI named by `loader.conf`, and requires that UKI's exact companion credential to match the staged bytes and its single `acl.ipe.policy_sha256` token. Inconsistent artifacts fail conversion rather than being discovered only at boot.
 - Any corruption of `/usr` causes an immediate kernel panic, preventing the system from running a tampered image.
 
+Live IPE audit validation uses a boot- and cursor-bound journal window. Collection
+waits within its existing bounded timeout for the writable control and every
+required target-file `BPRM_CHECK` denial; one process's record does not establish
+that another process's records have arrived. `MMAP`-only evidence remains
+insufficient, and missing or disappearing required records fail validation.
+
 The A/B partition scheme (USR-A / USR-B) enables safe updates: the inactive slot is written, verified, and then atomically switched on reboot.
 
 ### `/etc` Overlay from `/usr`

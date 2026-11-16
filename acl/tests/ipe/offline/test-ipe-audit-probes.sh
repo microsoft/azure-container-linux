@@ -66,11 +66,13 @@ test_probe_payload() (
 )
 
 test_capture() (
-    local directory event count=0 mode=delayed
+    local directory event target_event count=0 mode=delayed
     local boot_id=fa8a7b1c-0c08-4915-9707-3d3ce9879c4e
     directory="$(mktemp -d)"
     trap 'rm -rf -- "${directory}"' EXIT
     event='IPE_ACCESS ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=123 path="/var/tmp/probe" rule="DEFAULT op=EXECUTE action=DENY"'
+    target_event='IPE_ACCESS ipe_op=EXECUTE ipe_hook=BPRM_CHECK enforcing=0 pid=124 path="/usr/bin/containerd" rule="DEFAULT op=EXECUTE action=DENY"'
+    printf '124\n' > "${directory}/containerd.pid"
     sleep() { :; }
     cat() {
         if [[ "$1" == /proc/sys/kernel/random/boot_id ]]; then
@@ -102,6 +104,13 @@ test_capture() (
                 printf '%s\n' "${event}"
                 ;;
             reboot-after-control) printf '%s\n' "${event}" ;;
+            delayed-target|missing-target|lost-target)
+                printf '%s\n' "${event}" "${target_event/BPRM_CHECK/MMAP}"
+                if [[ "${mode}" == delayed-target && "${count}" -ge 5 ]] ||
+                   [[ "${mode}" == lost-target && "${count}" -eq 1 ]]; then
+                    printf '%s\n' "${target_event}"
+                fi
+                ;;
         esac
         return 0
     }
@@ -111,6 +120,22 @@ test_capture() (
         count=0
         if ipe_collect_probe_audit "${directory}" "${boot_id}" cursor /var/tmp/probe 123; then
             echo "Invalid ${mode} telemetry passed collection" >&2
+            return 1
+        fi
+    done
+    mode=delayed-target
+    count=0
+    ipe_collect_probe_audit "${directory}" "${boot_id}" cursor /var/tmp/probe 123 \
+        containerd /usr/bin/containerd deny
+    [[ "${count}" == 6 ]] || {
+        echo "Audit capture returned before the required target denial arrived" >&2
+        return 1
+    }
+    for mode in missing-target lost-target; do
+        count=0
+        if ipe_collect_probe_audit "${directory}" "${boot_id}" cursor /var/tmp/probe 123 \
+            containerd /usr/bin/containerd deny; then
+            echo "Incomplete ${mode} telemetry passed collection" >&2
             return 1
         fi
     done
