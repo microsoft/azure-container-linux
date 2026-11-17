@@ -58,12 +58,12 @@ get_ipe_mode() {
 # Maps an acl-node-security-profile 'ipe' value (canonical or supported alias)
 # to the runtime state the loader is expected to produce. Mirrors
 # build_library/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.sh:
-# disabled|off -> inactive, audit -> active/audit,
+# Test branch default: absent mode or audit -> active/audit, disabled|off -> inactive,
 # enforcing (reserved) and anything unrecognized -> inactive.
 expected_mode_for_tag() {
     case "$1" in
-        disabled|off|"") echo "off" ;;
-        audit) echo "audit" ;;
+        disabled|off) echo "off" ;;
+        audit|"") echo "audit" ;;
         *) echo "off" ;;
     esac
 }
