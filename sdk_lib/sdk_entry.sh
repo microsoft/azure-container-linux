@@ -1,5 +1,15 @@
 #!/bin/bash
 
+PACKAGE_OPERATION="${PACKAGE_OPERATION:-report-and-remove}"
+case "${PACKAGE_OPERATION}" in
+    report-and-remove|report-only|disabled) ;;
+    *)
+        echo "Invalid PACKAGE_OPERATION: ${PACKAGE_OPERATION} (expected report-and-remove, report-only, or disabled)" >&2
+        exit 1
+        ;;
+esac
+
+export PACKAGE_OPERATION
 if [[ -n ${PACKAGE_SNAPSHOT_TIME:-} ]]; then
     if [[ ! ${PACKAGE_SNAPSHOT_TIME} =~ ^[1-9][0-9]{9}$ ]]; then
         echo "PACKAGE_SNAPSHOT_TIME must be a 10-digit positive Unix timestamp" >&2

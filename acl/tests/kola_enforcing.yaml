@@ -28,6 +28,9 @@ version: 1
 
 tests:
   - name: acl.basic
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: DbusPerms requires gdbus from the kola-testing extension, which the ACL-T image omits
   - name: acl.internet
     exceptions:
       - platforms: [qemu]
@@ -264,6 +267,9 @@ tests:
   - name: coreos.ignition.systemd.enable-service
   - name: coreos.selinux.boolean
   - name: coreos.tls.fetch-urls
+    exceptions:
+      - imageVariants: [acl-t]
+        reason: Test requires wget from the kola-testing extension, which the ACL-T production image omits
 
   - name: docker.base
     exceptions:
