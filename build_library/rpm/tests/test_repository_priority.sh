@@ -85,4 +85,9 @@ install_and_check newer-pmc "${package}" 2 --disable-repo=azurelinux-local-cache
 build_rpm "${package}" 3 "${work_dir}/pipeline-rpms"
 createrepo_c --quiet --update "${work_dir}/pipeline-rpms"
 install_and_check newer-pipeline "${package}" 3 --disable-repo=azurelinux-local-cache
-install_and_check explicit-trident trident 1 --disable-repo=azurelinux-local-cache
+install_and_check upstream-trident trident 99 --disable-repo=azurelinux-local-cache
+install_and_check pmc-trident trident 1 \
+    --disable-repo=azurelinux-local-cache --disable-repo=azurelinux-pipeline-cache
+build_rpm trident 0.1 "${work_dir}/local"
+createrepo_c --quiet --update "${work_dir}/local"
+install_and_check acl-trident trident 0.1

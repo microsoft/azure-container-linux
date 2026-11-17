@@ -511,7 +511,7 @@ check_build_test_selection() (
     operation_uses_vm_image() { return 0; }
     error() { echo "$*" >&2; }
 
-    local BOARD=amd64-usr GROUP=production VM_TYPE=azure RETRY_ATTEMPTS=0
+    local BOARD=amd64-usr GROUP=production VM_TYPE=azure RETRY_ATTEMPTS=0 PACKAGE_OPERATION=report-and-remove
     local BUILD_VM_IMAGE=false START_VM=false REUSE_IMAGE=false ACG_IMAGE_VERSION_ID=""
     local ACL_IPE_CAPABLE=true BOOTLOADER_MODE=uki AZ_VM_ARGS="" SECURE_BOOT_ENABLED=true
     local -a RUN_SCRIPTS=() RUN_HOST_SCRIPTS=()
