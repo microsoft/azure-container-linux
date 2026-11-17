@@ -398,6 +398,18 @@ The script automatically configures libvirt (default network, URI) on Azure Linu
   --run-script=./acl/tests/run-selinux-avc-test.sh
 ```
 
+The container runtime smoke test retries each image pull up to three times, with
+15-second and 30-second backoff delays. Each attempt has a 300-second timeout and
+a 5-second forced-termination grace period. These limits apply to both the
+baseline and IPE/EROFS image pulls on QEMU and Azure VMs. Exhausting the retries
+still fails the test; container startup and security assertions are not retried.
+
+Run the pull-retry regression tests locally without a VM or registry access:
+
+```bash
+bash acl/tests/test-run-container-test.sh
+```
+
 Subsequent runs will clean up the VM automatically. To manually clean up the VM:
 
 ```bash

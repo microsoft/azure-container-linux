@@ -11,9 +11,31 @@ fail() {
     exit 1
 }
 
+# Guest execution copies only this script, not the host retry library.
+pull_image_with_retry() {
+    local attempt status backoff=15
+    for attempt in 1 2 3; do
+        echo "Pulling image (attempt ${attempt}/3): $*" >&2
+        if timeout --signal=TERM --kill-after=5s 300s ctr images pull "$@" > /dev/null; then
+            return 0
+        else
+            status=$?
+        fi
+
+        if [[ "${attempt}" -eq 3 ]]; then
+            echo "FAILED: Image pull failed after 3 attempts (exit ${status}): $*" >&2
+            return "${status}"
+        fi
+
+        echo "Image pull failed (exit ${status}); retrying in ${backoff}s: $*" >&2
+        sleep "${backoff}" || return "$?"
+        backoff=$((backoff * 2))
+    done
+}
+
 run_overlayfs_smoke_test() {
     iptables -I INPUT -p tcp --dport 80 -j ACCEPT
-    ctr image pull mcr.microsoft.com/azurelinux/base/nginx:1 > /dev/null
+    pull_image_with_retry mcr.microsoft.com/azurelinux/base/nginx:1 || return "$?"
     ctr run --detach --net-host mcr.microsoft.com/azurelinux/base/nginx:1 nginx
     sleep 2
 }
@@ -153,7 +175,7 @@ run_erofs_selinux_test() (
     trap 'exit 130' INT
     trap 'exit 143' TERM
 
-    timeout 300 ctr images pull --snapshotter erofs "${image}" > /dev/null
+    pull_image_with_retry --snapshotter erofs "${image}" || return "$?"
     start_erofs_nginx "${image}" "${id}" "${directory}"
 
     tasks="$(test_ctr tasks ls)"
@@ -183,6 +205,8 @@ run_erofs_selinux_test() (
     echo "PASS: EROFS nginx labels and LuaJIT startup"
 )
 
-run_overlayfs_smoke_test
-require_erofs_profile
-run_erofs_selinux_test
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    run_overlayfs_smoke_test
+    require_erofs_profile
+    run_erofs_selinux_test
+fi
