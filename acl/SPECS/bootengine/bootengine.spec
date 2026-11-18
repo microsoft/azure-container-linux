@@ -3,7 +3,7 @@
 # PMC rebase tracking - update these after incorporating upstream PMC changes.
 # check_pmc_staleness.sh compares these against the current PMC release.
 %define pmc_base_version 0.0.38
-%define pmc_base_release 1
+%define pmc_base_release 2
 
 Name:           bootengine
 Version:        0.0.38
