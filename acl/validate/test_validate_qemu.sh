@@ -3,7 +3,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 #
-# Regression tests for the serial console handling in the QEMU boot wait.
+# Regression tests for QEMU serial console boot waits and script dispatch.
 # A mock `virsh console` stands in for the VM, so the suite needs expect but
 # no VM.
 
@@ -91,4 +91,51 @@ assert_boot_wait "fresh VM reaches its login prompt without console input" 0 \
 MOCK_VM_STATE=menu
 assert_boot_wait "VM stopped at the systemd-boot menu fails the boot wait" 1 \
     "Reboot Into Firmware Interface" "Timeout waiting for login prompt"
+
+assert_console_script_timeouts() (
+    unset _VALIDATE_COMMON_LOADED
+    local validate_dir="${SCRIPT_DIR}"
+    SCRIPT_DIR="$(cd "${validate_dir}/.." && pwd)"
+    # shellcheck source=acl/validate/validate_common.sh
+    source "${validate_dir}/validate_common.sh"
+    VM_TYPE=qemu
+    VM_CONSOLE_USER=tester
+    VM_CONSOLE_PASSWORD=""
+    local console_timeout=0 console_status=0
+
+    run_command_via_console_qemu() {
+        [[ "$1" == acl && "$3" == tester && "$4" == "" ]] || return 2
+        console_timeout="${5:-60}"
+        return "${console_status}"
+    }
+
+    local container_script="${SCRIPT_DIR}/tests/run-container-test.sh"
+    run_scripts_via_console acl "${container_script}"
+
+    # Two pull windows, tag lookup, six ctr operations, and readiness polling.
+    local required_budget=$((2 * (3 * (300 + 5) + 15 + 30) + 93 + 6 * 60 + 60 + 2))
+    if ((console_timeout < required_budget)); then
+        printf 'FAIL: container script timeout %s is below its %s-second budget\n' \
+            "${console_timeout}" "${required_budget}" >&2
+        return 1
+    fi
+    [[ "${SCRIPT_RESULTS_STATUS[*]}" == 0 ]]
+    printf 'PASS: QEMU container script timeout covers both pull retry windows and assertions\n'
+
+    run_scripts_via_console acl "${SCRIPT_DIR}/tests/run-systemd-health-test.sh"
+    [[ "${console_timeout}" == 60 ]]
+    run_scripts_via_console acl "true"
+    [[ "${console_timeout}" == 60 ]]
+    printf 'PASS: unrelated QEMU scripts and inline commands retain their timeout\n'
+
+    console_status=1
+    if run_scripts_via_console acl "${container_script}"; then
+        printf 'FAIL: QEMU container script failure was reported as success\n' >&2
+        return 1
+    fi
+    [[ "${SCRIPT_RESULTS_STATUS[*]}" == "0 0 0 1" ]]
+    printf 'PASS: QEMU container script failures remain recorded and propagated\n'
+)
+
+assert_console_script_timeouts
 )
