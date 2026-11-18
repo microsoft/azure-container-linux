@@ -389,11 +389,22 @@ The container runtime smoke test retries each image pull up to three times, with
 a 5-second forced-termination grace period. These limits apply to both the
 baseline and IPE/EROFS image pulls on QEMU and Azure VMs. Exhausting the retries
 still fails the test; container startup and security assertions are not retried.
+QEMU serial-console execution allows 45 minutes for this script, covering both
+pull-retry windows (up to 32 minutes combined) plus image-tag lookup, startup,
+security assertions, and cleanup. Other scripts and inline commands retain their
+60-second console timeout.
 
 Run the pull-retry regression tests locally without a VM or registry access:
 
 ```bash
 bash acl/tests/test-run-container-test.sh
+```
+
+Check QEMU console timeout dispatch and boot handling locally (requires `expect`,
+but no VM):
+
+```bash
+bash acl/validate/test_validate_qemu.sh
 ```
 
 Subsequent runs will clean up the VM automatically. To manually clean up the VM:
