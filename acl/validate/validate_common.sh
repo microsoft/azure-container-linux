@@ -289,7 +289,13 @@ run_scripts_via_console() {
                 encoded=$(base64 -w0 "$script")
                 local remote_cmd="echo '$encoded' | base64 -d > /tmp/script.sh && chmod +x /tmp/script.sh && /tmp/script.sh; echo \"SCRIPT_EXIT_CODE:\$?\""
 
-                if ! run_command_via_console_qemu "$vm_name" "$remote_cmd" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD"; then
+                local script_timeout=60
+                if [[ "${script##*/}" == "run-container-test.sh" ]]; then
+                    # Both pull retry windows take up to 1920s; allow startup, assertions, and cleanup too.
+                    script_timeout=2700
+                fi
+
+                if ! run_command_via_console_qemu "$vm_name" "$remote_cmd" "$VM_CONSOLE_USER" "$VM_CONSOLE_PASSWORD" "$script_timeout"; then
                     error "Script failed: $script"
                     SCRIPT_RESULTS_NAMES+=("$script")
                     SCRIPT_RESULTS_STATUS+=(1)
