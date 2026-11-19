@@ -138,8 +138,8 @@ reason = """\
 
 ["bootengine"]
 decision = "keep"
-# Payload: ACL's 0.0.38-2 overlay. The base SPEC is release 1.
-# https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/acl/SPECS/bootengine/bootengine.spec
+# Payload: %files owns the dracut modules and update-bootengine.
+# https://github.com/microsoft/azurelinux/blob/d8a2284b8716e63f3604b8be2d460da8d1369504/SPECS/bootengine/bootengine.spec
 # ACL patches and consumes the modules to generate its initramfs.
 # https://github.com/microsoft/azure-container-linux/blob/39668ce60123274ead5bf599e198f91edd04ff0d/build_library/rpm/dracut_install.sh
 # Activation: Ignition targets and the encrypted-root udev service request.
