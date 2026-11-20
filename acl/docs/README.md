@@ -15,6 +15,7 @@ Detailed documentation for Azure Container Linux.
 
 | Document                                               | Description                                                           |
 | ------------------------------------------------------ | --------------------------------------------------------------------- |
+| [Integrity Policy Enforcement](ipe.md)               | Enable, verify, disable, and troubleshoot IPE audit on Azure VMs and AKS |
 | [Build RPM Image](BUILD_RPM_IMAGE_README.md)           | Building ACL images from RPMs                                         |
 | [Package Reports](package-reports.md) | Reporting and removing image packages |
 | [Container Image Preload](containerd-image-preload.md) | Baking OCI images into the containerd store with the Image Customizer |
