@@ -199,6 +199,11 @@ OSREL
     # Common base args — platform-agnostic, same for all image types.
     cmdline+=" root=LABEL=ROOT rootflags=rw"
     cmdline+=" consoleblank=0"
+    # Activate the BPF LSM so eBPF security tools can deny operations
+    # through LSM hooks. The list keeps the kernel's CONFIG_LSM order.
+    local lsm_arg
+    lsm_arg="$(rpm_bpf_lsm_cmdline_arg "${ESP_DIR}")" || die "UKI/RPM: failed to build lsm= argument"
+    cmdline+=" ${lsm_arg}"
     if [[ -n "${ipe_policy_hash_token}" ]]; then
         cmdline+=" ${ipe_policy_hash_token}"
     fi
