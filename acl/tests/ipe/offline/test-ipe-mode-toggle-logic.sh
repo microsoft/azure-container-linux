@@ -558,6 +558,17 @@ test_audit_fallback_restores_containerd() (
             fi
         done
     done
+
+    local setup_prefix
+    setup_prefix="$(sed '/^systemctl daemon-reload$/,$d' "${test_dir}/setup")"
+    setup_prefix="${setup_prefix//\/usr\/bin\/containerd/containerd}"
+    containerd() { printf 'version = 4\nuse_local_image_pull = false\n'; }
+    export -f containerd
+    bash -s -- "${test_dir}/config-dir/fallback.toml" "${test_dir}/missing-dropins/99-test.conf" \
+        <<< "${setup_prefix}"
+    grep -Fq "Environment=CONTAINERD_CONFIG=${test_dir}/config-dir/fallback.toml" \
+        "${test_dir}/missing-dropins/99-test.conf"
+    grep -Fxq 'use_local_image_pull = true' "${test_dir}/config-dir/fallback.toml"
 )
 
 test_cleanup_preserves_primary_failure() {
