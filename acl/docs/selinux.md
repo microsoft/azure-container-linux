@@ -303,6 +303,15 @@ until the runtime update is available on every applicable node. Do not reuse
 one static level across pods or generate uncoordinated category numbers in
 deployment templates; this does not preserve independent pod isolation.
 
+## Filesystem mount API
+
+SELinux mount contexts are quoted for the legacy comma-separated mount API.
+The `fsconfig` API accepts each value separately and requires the context without
+those quotes. ACL carries the upstream containerd
+[mount-parameter parsing fix](https://github.com/containerd/containerd/pull/13754)
+for `context`, `fscontext`, `defcontext`, and `rootcontext`. This preserves the
+label and its categories; it does not change policy or enable CRI SELinux.
+
 ## MCS isolation
 
 `container_t`, `container_logreader_t`, `container_csi_sidecar_t`, and
