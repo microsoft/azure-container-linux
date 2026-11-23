@@ -32,3 +32,34 @@ grep -Fq '"--ssh-timeout=${VM_SSH_TIMEOUT}"' "${VALIDATE_COMMON}"
 grep -Fq '"--boot-timeout=${VM_BOOT_TIMEOUT}"' "${VALIDATE_COMMON}"
 
 echo "azure security profile helper timeout contract passed"
+
+# Persist attempts across the command substitution used to capture az diagnostics.
+attempts="$(mktemp)"
+trap 'rm -f "$attempts"' EXIT
+info() { :; }
+sleep() { :; }
+az() {
+    printf '%q ' "$@" >> "$attempts"
+    printf '\n' >> "$attempts"
+    if (( $(wc -l < "$attempts") <= failures )); then
+        printf '%s\n' "$diagnostic" >&2
+        return 17
+    fi
+}
+
+check_tag_write() {
+    local operation="$1" tag="$2" diagnostic="$3" failures="$4"
+    local expected_attempts="$5" expected_rc="$6" rc=0
+    : > "$attempts"
+    update_security_profile_tag --resource-id test-vm --operation "$operation" --tags "$tag" || rc=$?
+    [[ "$rc" == "$expected_rc" ]]
+    [[ $(wc -l < "$attempts") -eq expected_attempts ]]
+    [[ $(sort -u "$attempts" | wc -l) -eq 1 ]]
+}
+
+check_tag_write merge "acl-node-security-profile=ipe=audit" \
+    "ERROR: ('Unable to connect to proxy', RemoteDisconnected('Remote end closed connection without response'))" 1 2 0
+check_tag_write delete "acl-node-security-profile=" "Connection reset by peer" 2 3 0
+check_tag_write merge "acl-node-security-profile=ipe=audit" "Connection reset by peer" 3 3 17
+check_tag_write merge "acl-node-security-profile=ipe=audit" "AuthorizationFailed" 1 1 17
+echo "azure security profile tag retry tests passed"
