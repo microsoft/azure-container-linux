@@ -16,7 +16,7 @@
 Summary:        SELinux policy
 Name:           selinux-policy
 Version:        %{refpolicy_major}.%{refpolicy_minor}
-Release:        12%{?dist}
+Release:        13%{?dist}
 License:        GPLv2
 Vendor:         Microsoft Corporation
 Distribution:   Azure Linux
@@ -91,8 +91,10 @@ Patch61:        0061-container-Allow-log-reader-to-map-journals.patch
 Patch62:        0062-container-Add-CSI-sidecar-domain.patch
 Patch63:        0063-container-Allow-log-reader-runtime-probes.patch
 Patch64:        0064-container-Allow-privileged-containers-dbus-to-kernel_t.patch
+Patch65:        0065-container-Allow-getpgid-within-the-same-MCS-range.patch
 BuildRequires:  bzip2
 BuildRequires:  checkpolicy >= %{CHECKPOLICYVER}
+BuildRequires:  libsepol >= %{LIBSEPOLVER}
 BuildRequires:  m4
 BuildRequires:  policycoreutils-devel >= %{POLICYCOREUTILSVER}
 BuildRequires:  python3
@@ -327,6 +329,33 @@ install -m 644 %{SOURCE1} %{buildroot}%{_usr}/share/selinux/devel/Makefile
 install -m 644 doc/example.* %{buildroot}%{_usr}/share/selinux/devel/
 install -m 644 doc/policy.* %{buildroot}%{_usr}/share/selinux/devel/
 
+%check
+# Query the policy shipped by this RPM, not the build host's active policy.
+policy=%{buildroot}%{_sysconfdir}/selinux/%{policy_name}/policy/policy.*
+set -- $policy
+test "$#" -eq 1 && test -s "$1" || exit 1
+policy=$1
+check_getpgid() {
+    expected=$1
+    shift
+    rc=0
+    sepol_check_access "$policy" "system_u:system_r:$1" "system_u:system_r:$2" process getpgid || rc=$?
+    if [ "$rc" -ne "$expected" ]; then
+        echo "getpgid $1 -> $2: expected status $expected, got $rc" >&2
+        exit 1
+    fi
+}
+peer=container_t:s0:c83,c464
+check_getpgid 0 "$peer" "$peer"
+# libsepol returns 7 for a policy denial; do not accept invalid contexts.
+for target in container_t:s0:c69,c257 container_t:s0:c83,c257 container_t:s0:c83 container_t:s0 init_t:s0 kernel_t:s0; do
+    check_getpgid 7 "$peer" "$target"
+done
+# Independently exercise each end of the range.
+check_getpgid 7 "$peer" container_t:s0-s0:c83,c464
+check_getpgid 7 container_t:s0-s0:c83,c464 container_t:s0
+check_getpgid 0 container_t:s0 container_t:s0
+
 %post
 if [ ! -s %{_sysconfdir}/selinux/config ]; then
 # Permissive by default.  Enforcing support will be added in a later phase
@@ -369,6 +398,9 @@ exit 0
 selinuxenabled && semodule -nB
 exit 0
 %changelog
+* Mon Nov 23 2026 Sean Dougherty <sdougherty@microsoft.com> - 2.20250213-13
+- Allow confined containers to query process groups within the same MCS range.
+
 * Mon Oct 19 2026 Francisco Huelsz Prince <frhuelsz@microsoft.com> - 2.20250213-12
 - Allow privileged containers to message unlabeled host D-Bus services.
 
