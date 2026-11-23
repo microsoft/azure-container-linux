@@ -183,6 +183,7 @@ run_audit_fallback_validation() (
 
     ssh_cmd "sudo bash -s -- '${config}' '${dropin}'" <<'EOF' || return
 set -euo pipefail
+mkdir -p "$(dirname "$1")" "$(dirname "$2")"
 /usr/bin/containerd --config /usr/share/containerd/config.toml config dump |
     sed -e '/^imports = /d' \
         -e 's/^\([[:space:]]*use_local_image_pull = \)false$/\1true/' > "$1"
