@@ -87,6 +87,28 @@ boot_id() {
     ssh_cmd 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null
 }
 
+update_security_profile_tag() {
+    local delay output rc
+    # Replay the same merge/delete if the connection drops before we get a response.
+    for delay in 2 5 0; do
+        if output="$(az tag update "$@" --output none 2>&1)"; then
+            [[ -z "$output" ]] || printf '%s\n' "$output" >&2
+            return 0
+        else
+            rc=$?
+        fi
+        printf '%s\n' "$output" >&2
+        (( delay > 0 )) || return "$rc"
+        case "$output" in
+            *RemoteDisconnected*|*"Connection reset by peer"*)
+                info "Azure tag write disconnected; retrying in ${delay}s..."
+                sleep "$delay" || return 1
+                ;;
+            *) return "$rc" ;;
+        esac
+    done
+}
+
 set_security_profile_tag_state() {
     local state="$1"
     local present value vm_id
@@ -114,21 +136,19 @@ set_security_profile_tag_state() {
     SECURITY_PROFILE_MUTATED=true
     if [[ "${present}" == "false" ]]; then
         info "Removing acl-node-security-profile tag..."
-        if ! az tag update \
+        if ! update_security_profile_tag \
             --resource-id "$vm_id" \
             --operation delete \
-            --tags "${SECURITY_PROFILE_TAG_NAME}=" \
-            --output none; then
+            --tags "${SECURITY_PROFILE_TAG_NAME}="; then
             error "Could not remove acl-node-security-profile"
             return 1
         fi
     else
         info "Setting acl-node-security-profile=${value}..."
-        if ! az tag update \
+        if ! update_security_profile_tag \
             --resource-id "$vm_id" \
             --operation merge \
-            --tags "${SECURITY_PROFILE_TAG_NAME}=${value}" \
-            --output none; then
+            --tags "${SECURITY_PROFILE_TAG_NAME}=${value}"; then
             error "Could not update acl-node-security-profile"
             return 1
         fi
