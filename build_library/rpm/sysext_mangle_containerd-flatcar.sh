@@ -56,11 +56,16 @@ sed -E 's/^([[:space:]]*)SystemdCgroup[[:space:]]*=.*/\1SystemdCgroup = false/' 
   "${acl_config}" > "${acl_cgroupfs_config}"
 chmod 0644 "${acl_cgroupfs_config}"
 
-# Add the EROFS containerd configuration. The IPE loader activates it at boot.
+# Keep the profile generator with the runtime so replacement extensions do not
+# retain an initramfs-owned startup override.
 install -Dpm 0644 "${profile_dir}/containerd-acl-erofs.toml" \
   "${rootfs}/usr/share/containerd/acl-erofs.toml"
 install -Dpm 0755 "${profile_dir}/containerd-acl-select-profile" \
   "${rootfs}/usr/libexec/containerd/acl-select-profile"
+install -Dpm 0644 "${profile_dir}/containerd-acl-erofs-profile.conf" \
+  "${rootfs}/usr/share/containerd/acl-erofs-profile.conf"
+install -Dpm 0755 "${profile_dir}/containerd-acl-profile-generator" \
+  "${rootfs}/usr/lib/systemd/system-generators/acl-containerd-profile-generator"
 
 # The RPM enables the unit from %post, which does not run when the payload is
 # unpacked into a sysext, so create the enablement symlink here.

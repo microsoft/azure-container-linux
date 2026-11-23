@@ -1,0 +1,28 @@
+#!/bin/bash
+
+set -euo pipefail
+
+output_dir="${1:?systemd generator output directory is required}"
+ipe_dir="${ACL_IPE_DIR:-/sys/kernel/security/ipe}"
+profile="${ACL_IPE_CONTAINERD_PROFILE:-/usr/share/containerd/acl-erofs-profile.conf}"
+selector="${ACL_IPE_CONTAINERD_SELECTOR:-/usr/libexec/containerd/acl-select-profile}"
+active="${ipe_dir}/policies/acl_ipe_boot_policy/active"
+
+[[ -e "${active}" ]] || exit 0
+if ! policy_active="$(cat "${active}")"; then
+    echo "ERROR: cannot read ACL IPE policy activation state: ${active}" >&2
+    exit 1
+fi
+case "${policy_active}" in
+    0) exit 0 ;;
+    1) ;;
+    *) echo "ERROR: invalid ACL IPE policy activation state: ${policy_active}" >&2; exit 1 ;;
+esac
+
+if [[ ! -x "${selector}" || ! -r "${profile}" ]]; then
+    echo "ERROR: the active ACL containerd extension is missing its IPE profile assets" >&2
+    exit 1
+fi
+
+mkdir -p "${output_dir}/containerd.service.d"
+cat "${profile}" > "${output_dir}/containerd.service.d/90-acl-profile.conf"
