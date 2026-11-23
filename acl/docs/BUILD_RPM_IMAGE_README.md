@@ -238,12 +238,17 @@ and signature credential; slot-named addons elsewhere are rejected.
 On opted-in images, missing or invalid signatures prevent normal boot of
 that entry, even when runtime IPE is off or IMDS is unavailable.
 
-IPE activation triggers a containerd systemd drop-in that imports
-a base config (AgentBaker's on AKS nodes) merged with
+While the IPE policy is active, a systemd generator shipped with the containerd
+extension produces `/run/systemd/generator/containerd.service.d/90-acl-profile.conf`.
+The generated drop-in imports a base config (AgentBaker's on AKS nodes) merged with
 `/usr/share/containerd/acl-erofs.toml`, which selects EROFS as the CRI
 and snapshotter plugins and enables the flag to discover dm-verity OCI
 referrers. This requires a matching containerd RPM with signed EROFS referrer
-support. Disabled IPE leaves the base config selected. If the merged profile is
+support. Systemd regenerates this configuration on daemon reload. Replacing the
+containerd extension also removes its generator, so a custom runtime retains its
+own startup configuration instead of referencing missing ACL profile helpers.
+IPE policy activation is unchanged; custom runtimes are not assumed to support
+signed EROFS. Disabled IPE leaves the base config selected. If the merged profile is
 incompatible with signed EROFS, confirmed IPE `enforce=0` selects the base
 config as a fallback, without signed-referrer support. The selector checks
 flag support in `containerd config default` before validating the merged

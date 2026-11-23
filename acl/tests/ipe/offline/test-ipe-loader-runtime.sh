@@ -6,7 +6,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 LOADER="${SCRIPT_DIR}/build_library/rpm/additional_files/dracut-acl-ipe-load/acl-ipe-load.sh"
 PROFILE_HELPER="${SCRIPT_DIR}/build_library/rpm/additional_files/acl-node-security-profile.sh"
-CONTAINERD_EROFS_PROFILE="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-erofs-profile.conf"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
@@ -32,7 +31,6 @@ prepare_case() {
     mkdir -p "${IPE_DIR}"
     : > "${IPE_DIR}/new_policy"
     printf '9\n' > "${IPE_DIR}/enforce"
-    cp "${CONTAINERD_EROFS_PROFILE}" "${CASE_DIR}/containerd-acl-erofs-profile.conf"
 
     command cat > "${CASE_DIR}/security-profile.sh" <<'EOF'
 acl_security_profile() {
@@ -50,7 +48,6 @@ run_loader() {
     ACL_IPE_CMDLINE_FILE="${CASE_DIR}/cmdline" \
     ACL_IPE_CREDENTIAL_PATH="${credential}" \
     ACL_IPE_SECURITY_PROFILE_HELPER="${CASE_DIR}/security-profile.sh" \
-    ACL_IPE_CONTAINERD_PROFILE="${CASE_DIR}/containerd-acl-erofs-profile.conf" \
     ACL_IPE_CONTAINERD_DROPIN="${CASE_DIR}/dropins/90-acl-profile.conf" \
         bash "${LOADER}" 2>&1
 }
@@ -158,7 +155,7 @@ EOF
         { echo "loader did not report expected mode '${expected_mode}'" >&2; return 1; }
     [[ "$(<"${IPE_DIR}/enforce")" == "0" ]]
     [[ "$(<"${IPE_DIR}/policies/acl_ipe_boot_policy/active")" == "1" ]]
-    cmp "${CASE_DIR}/containerd-acl-erofs-profile.conf" "${CASE_DIR}/dropins/90-acl-profile.conf"
+    [[ ! -e "${CASE_DIR}/dropins/90-acl-profile.conf" ]]
 )
 
 test_default_does_not_override_imds_failure() {
