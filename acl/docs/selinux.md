@@ -309,6 +309,11 @@ device-mapper identity. Different mount labels must not share a filesystem
 superblock. Unlabeled mounts retain their existing device identity; root-hash
 and signature verification remain unchanged.
 
+With CRI SELinux enabled, the runtime supplies the workload's root filesystem
+label through the OCI specification. The EROFS profile does not add another
+overlay `context=` option. The uniform `container_file_t:s0` fallback is imported
+only when CRI SELinux is disabled.
+
 ## MCS isolation
 
 `container_t`, `container_logreader_t`, `container_csi_sidecar_t`, and
