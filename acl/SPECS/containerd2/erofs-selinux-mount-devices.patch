@@ -1,0 +1,250 @@
+From 264f1e1b42b179cb6e49c90c3b71facf1ffddab7 Mon Sep 17 00:00:00 2001
+From: Sean Dougherty <sdougherty@microsoft.com>
+Date: Mon, 23 Nov 2026 22:39:16 +0000
+Subject: [PATCH] erofs: isolate dm-verity devices by SELinux mount context
+
+SELinux mount labels belong to filesystem superblocks. Reusing one verity mapper across distinct mount contexts therefore fails when the kernel reuses that superblock. Include explicit SELinux mount options in mapper identity for both signed and unsigned layers, retaining existing names for unlabeled mounts and all signature verification checks.
+
+Add identity tests and a privileged regression mounting one layer concurrently without a context and with two allocated MCS labels.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ plugins/mount/erofs/plugin_linux.go           |  34 ++++-
+ .../mount/erofs/selinux_devices_linux_test.go | 144 ++++++++++++++++++
+ 2 files changed, 171 insertions(+), 7 deletions(-)
+ create mode 100644 plugins/mount/erofs/selinux_devices_linux_test.go
+
+diff --git a/plugins/mount/erofs/plugin_linux.go b/plugins/mount/erofs/plugin_linux.go
+index 3b60d6ece..a69976cfa 100644
+--- a/plugins/mount/erofs/plugin_linux.go
++++ b/plugins/mount/erofs/plugin_linux.go
+@@ -118,9 +118,9 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ 
+ 		var devicePath, cleanupName string
+ 		if signedDmverity {
+-			devicePath, cleanupName, err = setupSignedDmVerityDevice(ctx, m.Source, expectedRootHash, metadata.HashOffset, expectedSignatureDigest)
++			devicePath, cleanupName, err = setupSignedDmVerityDevice(ctx, m.Source, expectedRootHash, metadata.HashOffset, expectedSignatureDigest, m.Options)
+ 		} else {
+-			devicePath, cleanupName, err = setupDmVerityDevice(ctx, m.Source, metadata)
++			devicePath, cleanupName, err = setupDmVerityDevice(ctx, m.Source, metadata, m.Options)
+ 		}
+ 		dmverityDevice = cleanupName
+ 		if err != nil {
+@@ -203,7 +203,7 @@ func (h *erofsMountHandler) Mount(ctx context.Context, m mount.Mount, mp string,
+ // setupDmVerityDevice creates or reuses a dm-verity device for the given EROFS source.
+ // It returns the device path to mount from, and a cleanup name (non-empty only when
+ // a new device was created, so the caller can close it on error).
+-func setupDmVerityDevice(ctx context.Context, source string, metadata *dmverity.DmverityMetadata) (devicePath string, cleanupName string, err error) {
++func setupDmVerityDevice(ctx context.Context, source string, metadata *dmverity.DmverityMetadata, mountOptions []string) (devicePath string, cleanupName string, err error) {
+ 	supported, err := dmverity.IsSupported()
+ 	if err != nil || !supported {
+ 		return "", "", fmt.Errorf("layer requires dm-verity but system doesn't support it (dm_verity module not loaded): %w", err)
+@@ -212,7 +212,7 @@ func setupDmVerityDevice(ctx context.Context, source string, metadata *dmverity.
+ 	// Extract snapshot ID from source path
+ 	// Path format: {root}/snapshots/{id}/layer.erofs
+ 	snapshotID := filepath.Base(filepath.Dir(source))
+-	deviceName := fmt.Sprintf("containerd-erofs-%s", snapshotID)
++	deviceName := dmverityDeviceNameForMount(fmt.Sprintf("containerd-erofs-%s", snapshotID), mountOptions)
+ 	devicePath = dmverity.DevicePath(deviceName)
+ 
+ 	log.G(ctx).WithFields(log.Fields{
+@@ -246,8 +246,8 @@ func setupDmVerityDevice(ctx context.Context, source string, metadata *dmverity.
+ 	return devicePath, "", nil
+ }
+ 
+-// setupSignedDmVerityDevice creates or reuses one signed mapper for a layer.
+-func setupSignedDmVerityDevice(ctx context.Context, source, expectedRootHash string, hashOffset uint64, expectedSignatureDigest string) (devicePath string, cleanupName string, err error) {
++// setupSignedDmVerityDevice creates or reuses a signed mapper for a layer and mount context.
++func setupSignedDmVerityDevice(ctx context.Context, source, expectedRootHash string, hashOffset uint64, expectedSignatureDigest string, mountOptions []string) (devicePath string, cleanupName string, err error) {
+ 	supported, err := dmverity.IsSupported()
+ 	if err != nil || !supported {
+ 		return "", "", fmt.Errorf("layer requires dm-verity but system doesn't support it (dm_verity module not loaded): %w", err)
+@@ -255,7 +255,7 @@ func setupSignedDmVerityDevice(ctx context.Context, source, expectedRootHash str
+ 
+ 	snapshotID := filepath.Base(filepath.Dir(filepath.Clean(source)))
+ 	verityIdentity := digest.FromString(expectedRootHash + "-" + expectedSignatureDigest).Encoded()[:32]
+-	deviceName := signedDmverityDeviceNamePrefix + snapshotID + "-" + verityIdentity
++	deviceName := dmverityDeviceNameForMount(signedDmverityDeviceNamePrefix+snapshotID+"-"+verityIdentity, mountOptions)
+ 	devicePath = dmverity.DevicePath(deviceName)
+ 	signatureFile, err := dmveritySignatureFile(source)
+ 	if err != nil {
+@@ -282,6 +282,26 @@ func setupSignedDmVerityDevice(ctx context.Context, source, expectedRootHash str
+ 	return devicePath, "", nil
+ }
+ 
++func dmverityDeviceNameForMount(base string, options []string) string {
++	var securityOptions []string
++	for _, option := range options {
++		key, _, hasValue := strings.Cut(option, "=")
++		if !hasValue {
++			continue
++		}
++		switch key {
++		case "context", "fscontext", "defcontext", "rootcontext":
++			securityOptions = append(securityOptions, option)
++		}
++	}
++	if len(securityOptions) == 0 {
++		return base
++	}
++	// SELinux mount labels apply to the superblock, so different labels must not
++	// reuse one filesystem device. Keep the existing identity for unlabeled mounts.
++	return base + "-" + digest.FromString(strings.Join(securityOptions, "\x00")).Encoded()[:32]
++}
++
+ // dmveritySignatureFile checks readability and nonempty contents before mapper reuse.
+ func dmveritySignatureFile(source string) (string, error) {
+ 	signatureFile := dmverity.SignaturePath(source)
+diff --git a/plugins/mount/erofs/selinux_devices_linux_test.go b/plugins/mount/erofs/selinux_devices_linux_test.go
+new file mode 100644
+index 000000000..9a2d75ac4
+--- /dev/null
++++ b/plugins/mount/erofs/selinux_devices_linux_test.go
+@@ -0,0 +1,144 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package erofs
++
++import (
++	"context"
++	"encoding/json"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"github.com/containerd/containerd/v2/core/mount"
++	"github.com/containerd/containerd/v2/internal/dmverity"
++	"github.com/containerd/containerd/v2/pkg/testutil"
++	"github.com/opencontainers/selinux/go-selinux"
++	"github.com/opencontainers/selinux/go-selinux/label"
++	"github.com/stretchr/testify/require"
++)
++
++func TestDmverityDeviceNameForMount(t *testing.T) {
++	for _, base := range []string{
++		"containerd-erofs-123",
++		signedDmverityDeviceNamePrefix + "123-" + strings.Repeat("a", 32),
++	} {
++		t.Run(base, func(t *testing.T) {
++			require.Equal(t, base, dmverityDeviceNameForMount(base, nil))
++			require.Equal(t, base, dmverityDeviceNameForMount(base, []string{"ro", "loop", "contextual=unrelated"}))
++			seen := map[string]bool{base: true}
++			for _, key := range []string{"context", "fscontext", "defcontext", "rootcontext"} {
++				for _, value := range []string{
++					`"system_u:object_r:container_file_t:s0:c1,c2"`,
++					`"system_u:object_r:container_file_t:s0:c3,c4"`,
++				} {
++					options := []string{key + "=" + value}
++					name := dmverityDeviceNameForMount(base, options)
++					require.False(t, seen[name], "different security options share %q", name)
++					seen[name] = true
++					require.True(t, strings.HasPrefix(name, base+"-"))
++					require.Len(t, name, len(base)+33)
++					require.Equal(t, name, dmverityDeviceNameForMount(base, append([]string{"ro"}, options...)))
++					require.Equal(t, name, dmverityDeviceNameForMount(base, options))
++				}
++			}
++		})
++	}
++}
++
++func TestDmveritySELinuxMountIsolation(t *testing.T) {
++	testutil.RequiresRoot(t)
++	if !selinux.GetEnabled() {
++		t.Skip("SELinux is not enabled")
++	}
++	if _, err := exec.LookPath("mkfs.erofs"); err != nil {
++		t.Skipf("mkfs.erofs is unavailable: %v", err)
++	}
++	supported, err := dmverity.IsSupported()
++	require.NoError(t, err)
++	require.True(t, supported)
++
++	directory, err := os.MkdirTemp(t.TempDir(), "snapshot-")
++	require.NoError(t, err)
++	source := filepath.Join(directory, "root")
++	require.NoError(t, os.Mkdir(source, 0700))
++	require.NoError(t, os.WriteFile(filepath.Join(source, "payload"), []byte("shared layer\n"), 0644))
++	layer := filepath.Join(directory, "layer.erofs")
++	output, err := exec.Command("mkfs.erofs", layer, source).CombinedOutput()
++	require.NoError(t, err, "%s", output)
++	info, err := os.Stat(layer)
++	require.NoError(t, err)
++	// Use multiple data blocks so the fixture has a nonempty verity hash tree.
++	offset := (info.Size() + 4095) &^ 4095
++	if offset < 1024*1024 {
++		offset = 1024 * 1024
++	}
++	require.NoError(t, os.Truncate(layer, offset))
++	options := dmverity.DefaultDmverityOptions()
++	options.UUID = "12345678-1234-1234-1234-123456789012"
++	options.DataBlocks = uint64(offset / 4096)
++	options.HashOffset = uint64(offset)
++	rootHash, err := dmverity.Format(layer, layer, options)
++	require.NoError(t, err)
++	metadata, err := json.Marshal(dmverity.DmverityMetadata{
++		RootHash: rootHash, HashOffset: uint64(offset),
++	})
++	require.NoError(t, err)
++	require.NoError(t, os.WriteFile(dmverity.MetadataPath(layer), metadata, 0600))
++
++	processA, labelA := selinux.ContainerLabels()
++	processB, labelB := selinux.ContainerLabels()
++	t.Cleanup(func() {
++		selinux.ReleaseLabel(processA)
++		selinux.ReleaseLabel(processB)
++	})
++	require.NotEmpty(t, labelA)
++	require.NotEmpty(t, labelB)
++	require.NotEqual(t, labelA, labelB)
++
++	handler := NewErofsMountHandler()
++	contexts := []string{"", labelA, labelB}
++	devices := make(map[string]string)
++	for _, mountLabel := range contexts {
++		target := t.TempDir()
++		options := []string{"ro", "loop", dmverity.MountOptionMetadataPrefix + dmverity.MetadataPath(layer)}
++		if mountLabel != "" {
++			options = append(options, label.FormatMountLabel("", mountLabel))
++		}
++		active, err := handler.Mount(context.Background(), mount.Mount{
++			Type: "erofs", Source: layer, Options: options,
++		}, target, nil)
++		require.NoError(t, err, "mount label %q", mountLabel)
++		t.Cleanup(func() {
++			require.NoError(t, handler.Unmount(context.Background(), target))
++		})
++		for priorLabel, device := range devices {
++			require.NotEqual(t, device, active.Mount.Source,
++				"labels %q and %q must not share a filesystem device", priorLabel, mountLabel)
++		}
++		devices[mountLabel] = active.Mount.Source
++		payload, err := os.ReadFile(filepath.Join(target, "payload"))
++		require.NoError(t, err)
++		require.Equal(t, "shared layer\n", string(payload))
++		if mountLabel != "" {
++			actual, err := selinux.FileLabel(filepath.Join(target, "payload"))
++			require.NoError(t, err)
++			require.Equal(t, mountLabel, actual)
++		}
++	}
++}
+-- 
+2.45.4
+

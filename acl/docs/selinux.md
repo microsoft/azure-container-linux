@@ -304,6 +304,17 @@ those quotes. ACL carries the upstream containerd
 for `context`, `fscontext`, `defcontext`, and `rootcontext`. This preserves the
 label and its categories; it does not change policy or enable CRI SELinux.
 
+EROFS dm-verity mounts also include explicit SELinux context options in their
+device-mapper identity. Different mount labels must not share a filesystem
+superblock. Unlabeled mounts retain their existing device identity; root-hash
+and signature verification remain unchanged.
+
+An explicit OCI workload mount label replaces any snapshotter `context=`
+fallback instead of adding a conflicting second option. Clients without an
+explicit label, including ordinary `ctr` invocations, retain the
+`container_file_t:s0` fallback. This supports confined CRI workloads and
+unconfined clients concurrently without changing the global CRI setting.
+
 ## MCS isolation
 
 `container_t`, `container_logreader_t`, `container_csi_sidecar_t`, and
