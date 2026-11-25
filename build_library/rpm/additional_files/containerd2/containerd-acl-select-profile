@@ -4,7 +4,6 @@ set -euo pipefail
 
 base_config="${1:-}"
 erofs_config="${ACL_CONTAINERD_EROFS_CONFIG:-/usr/share/containerd/acl-erofs.toml}"
-unconfined_config="${ACL_CONTAINERD_EROFS_UNCONFINED_CONFIG:-/usr/share/containerd/acl-erofs-unconfined.toml}"
 final_config="${ACL_CONTAINERD_CONFIG_PATH:-/run/containerd/acl-config.toml}"
 ipe_dir="${ACL_IPE_DIR:-/sys/kernel/security/ipe}"
 
@@ -26,13 +25,9 @@ write_config() {
     {
         printf 'version = 4\nimports = ['
         get_absolute_path "${base_config}"
-        if [[ "$1" == "erofs" || "$1" == "erofs-unconfined" ]]; then
+        if [[ "$1" == "erofs" ]]; then
             printf ', '
             get_absolute_path "${erofs_config}"
-        fi
-        if [[ "$1" == "erofs-unconfined" ]]; then
-            printf ', '
-            get_absolute_path "${unconfined_config}"
         fi
         printf ']\n'
     } > "${temporary_merged_config}"
@@ -238,7 +233,7 @@ check_transfer_service_conflicts() {
 # Run the 'containerd config dump' command to get the fully merged configuration of the base and EROFS profile.
 # The checks below ensure the merged config is valid and does not contain compatibility issues.
 validate_erofs_profile() {
-    local defaults merged cri_selinux
+    local defaults merged
 
     # Read the default config options to see what the containerd binary supports.
     if ! defaults="$(containerd config default)"; then
@@ -250,41 +245,6 @@ validate_erofs_profile() {
     if ! merged="$(containerd --config "${temporary_merged_config}" config dump)"; then
         echo "WARNING: cannot load the merged EROFS containerd configuration" >&2
         return 1
-    fi
-
-    if ! cri_selinux="$(awk '
-        {
-            gsub(/\047/, "\"")
-            sub(/^[[:space:]]+/, "")
-            sub(/[[:space:]]+$/, "")
-        }
-        /^\[/ { section = $0 }
-        (section == "[plugins.\"io.containerd.cri.v1.runtime\"]" ||
-         section == "[plugins.\"io.containerd.grpc.v1.cri\"]") &&
-            /^enable_selinux =/ { value = $3; count++ }
-        END {
-            if (count != 1 || (value != "true" && value != "false")) {
-                print "WARNING: cannot determine the effective CRI SELinux setting" > "/dev/stderr"
-                exit 1
-            }
-            print value
-        }
-    ' <<< "${merged}")"; then
-        return 1
-    fi
-    if [[ "${cri_selinux}" == "false" ]]; then
-        if [[ ! -r "${unconfined_config}" ]]; then
-            echo "WARNING: missing EROFS unconfined-label fallback: ${unconfined_config}" >&2
-            return 1
-        fi
-        if ! write_config erofs-unconfined; then
-            echo "WARNING: cannot write the unconfined EROFS configuration" >&2
-            return 1
-        fi
-        if ! merged="$(containerd --config "${temporary_merged_config}" config dump)"; then
-            echo "WARNING: cannot load the unconfined EROFS configuration" >&2
-            return 1
-        fi
     fi
 
     check_erofs_settings "${merged}" || return 1

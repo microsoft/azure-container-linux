@@ -375,7 +375,6 @@ test_containerd_profile_selection() (
 
     local selector="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-select-profile"
     local erofs="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-erofs.toml"
-    local unconfined="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-erofs-unconfined.toml"
     local base="${CASE_DIR}/base \"quoted\" config.toml"
     local original="${CASE_DIR}/original.toml"
     local final="${CASE_DIR}/run/acl-config.toml"
@@ -409,9 +408,6 @@ grep -Fq "${ACL_CONTAINERD_EROFS_CONFIG}" "$2" || {
     exit 1
 }
 
-if [[ "${TEST_CRI_SELINUX}" != missing ]]; then
-    printf '[plugins."io.containerd.cri.v1.runtime"]\nenable_selinux = %s\n' "${TEST_CRI_SELINUX}"
-fi
 cat <<TOML
 [plugins."io.containerd.snapshotter.v1.erofs"]
 enable_dmverity_referrers = true
@@ -432,40 +428,19 @@ EOF
     export ACL_IPE_DIR="${IPE_DIR}"
     export ACL_CONTAINERD_CONFIG_PATH="${final}"
     export ACL_CONTAINERD_EROFS_CONFIG="${erofs}"
-    export ACL_CONTAINERD_EROFS_UNCONFINED_CONFIG="${unconfined}"
 
     printf 'version = 2\nroot = "/var/lib/containerd-provider"\n' > "${CASE_DIR}/relative.toml"
-    for scenario in compatible selinux-enabled selinux-enabled-no-fallback missing-label-fallback missing-cri-setting \
-        transfer-concurrency cri-concurrency local-pull dmverity-off \
+    for scenario in compatible transfer-concurrency cri-concurrency local-pull dmverity-off \
         unpack-compatible unpack-overlayfs unpack-wrong-arch unpack-platform-unchecked \
         unpack-mixed-arch unpack-split-entries; do
-        if [[ "${scenario}" == missing-cri-setting && -n "${CONTAINERD_BIN:-}" ]]; then
-            continue
-        fi
         local_pull=false
         fallback=false
         extra=""
         export TEST_CRI_DOWNLOADS=7
-        export TEST_CRI_SELINUX=false
-        export ACL_CONTAINERD_EROFS_UNCONFINED_CONFIG="${unconfined}"
         export TEST_DMVERITY_MODE=auto
         export TEST_UNPACK_CONFIG=""
 
         case "${scenario}" in
-            selinux-enabled|selinux-enabled-no-fallback)
-                TEST_CRI_SELINUX=true
-                if [[ "${scenario}" == selinux-enabled-no-fallback ]]; then
-                    ACL_CONTAINERD_EROFS_UNCONFINED_CONFIG="${CASE_DIR}/missing.toml"
-                fi
-                ;;
-            missing-label-fallback)
-                ACL_CONTAINERD_EROFS_UNCONFINED_CONFIG="${CASE_DIR}/missing.toml"
-                fallback=true
-                ;;
-            missing-cri-setting)
-                TEST_CRI_SELINUX=missing
-                fallback=true
-                ;;
             transfer-concurrency)
                 extra=$'[plugins."io.containerd.transfer.v1.local"]\nmax_concurrent_downloads = 4'
                 ;;
@@ -534,24 +509,17 @@ imports = ["relative.toml"]
 [plugins."io.containerd.cri.v1.images"]
 use_local_image_pull = ${local_pull}
 ${extra}
-[plugins."io.containerd.cri.v1.runtime"]
-enable_selinux = ${TEST_CRI_SELINUX}
 EOF
 
         cp "${base}" "${original}"
         bash "${selector}" "${base}"
 
-        python3 - "${final}" "${base}" "${erofs}" "${unconfined}" "${fallback}" "${TEST_CRI_SELINUX}" <<'PY'
+        python3 - "${final}" "${base}" "${erofs}" "${fallback}" <<'PY'
 import sys, tomllib
-path, base, erofs, unconfined, fallback, selinux = sys.argv[1:]
+path, base, erofs, fallback = sys.argv[1:]
 with open(path, "rb") as config:
     wrapper = tomllib.load(config)
-imports = [base]
-if fallback != "true":
-    imports.append(erofs)
-    if selinux == "false":
-        imports.append(unconfined)
-assert wrapper == {"version": 4, "imports": imports}
+assert wrapper == {"version": 4, "imports": [base] if fallback == "true" else [base, erofs]}
 PY
 
         cmp "${base}" "${original}"
@@ -561,15 +529,6 @@ PY
         if [[ -n "${CONTAINERD_BIN:-}" ]]; then
             containerd --config "${final}" config dump |
                 python3 -c 'import sys, tomllib; assert tomllib.loads(sys.stdin.read())["root"] == "/var/lib/containerd-provider"'
-            if [[ "${fallback}" == "false" ]]; then
-                containerd --config "${final}" config dump |
-                    python3 -c 'import sys, tomllib
-config = tomllib.loads(sys.stdin.read())
-options = config["plugins"]["io.containerd.snapshotter.v1.erofs"]["ovl_mount_options"]
-expected = [] if sys.argv[1] == "true" else ["context=\"system_u:object_r:container_file_t:s0\""]
-assert options == expected, options
-' "${TEST_CRI_SELINUX}"
-            fi
         fi
     done
 
@@ -593,20 +552,6 @@ assert options == expected, options
     cmp "${final}" "${CASE_DIR}/selected.toml"
     [[ -z "$(find "${CASE_DIR}/run" -name '*.tmp.*' -print)" ]]
     cmp "${base}" "${original}"
-    local packaged="${CASE_DIR}/packaged"
-    mkdir -p "${packaged}/etc/containerd" "${packaged}/usr/lib/systemd/system"
-    printf '[Service]\nExecStart=/usr/bin/containerd\n' \
-        > "${packaged}/usr/lib/systemd/system/containerd.service"
-    command cat > "${packaged}/etc/containerd/config.toml" <<'EOF'
-version = 2
-[plugins."io.containerd.grpc.v1.cri"]
-enable_selinux = false
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
-SystemdCgroup = true
-EOF
-    bash "${SCRIPT_DIR}/build_library/rpm/sysext_mangle_containerd-flatcar.sh" "${packaged}"
-    cmp "${erofs}" "${packaged}/usr/share/containerd/acl-erofs.toml"
-    cmp "${unconfined}" "${packaged}/usr/share/containerd/acl-erofs-unconfined.toml"
     echo "containerd audit profile wrapper tests passed"
 )
 

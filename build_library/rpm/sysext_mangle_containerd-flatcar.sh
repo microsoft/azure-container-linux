@@ -59,8 +59,6 @@ chmod 0644 "${acl_cgroupfs_config}"
 # Add the EROFS containerd configuration. The IPE loader activates it at boot.
 install -Dpm 0644 "${profile_dir}/containerd-acl-erofs.toml" \
   "${rootfs}/usr/share/containerd/acl-erofs.toml"
-install -Dpm 0644 "${profile_dir}/containerd-acl-erofs-unconfined.toml" \
-  "${rootfs}/usr/share/containerd/acl-erofs-unconfined.toml"
 install -Dpm 0755 "${profile_dir}/containerd-acl-select-profile" \
   "${rootfs}/usr/libexec/containerd/acl-select-profile"
 

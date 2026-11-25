@@ -1,0 +1,117 @@
+From b6ffb6bcb4fc2b4b94235b2d8af6b61e3fda8c93 Mon Sep 17 00:00:00 2001
+From: Sean Dougherty <sdougherty@microsoft.com>
+Date: Wed, 25 Nov 2026 03:53:27 +0000
+Subject: [PATCH] client: let explicit mount labels replace snapshotter
+ fallback contexts
+
+An OCI workload mount label must take precedence over a snapshotter-provided fallback instead of creating duplicate SELinux context options. Preserve snapshotter defaults for clients without an explicit mount label and avoid modifying snapshotter-owned backing slices. Add regression coverage for replacement, unlabeled clients, other mount options, explicit s0, and shared slices.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ client/container.go                  | 17 +++++++-
+ client/container_mount_label_test.go | 58 ++++++++++++++++++++++++++++
+ 2 files changed, 73 insertions(+), 2 deletions(-)
+ create mode 100644 client/container_mount_label_test.go
+
+diff --git a/client/container.go b/client/container.go
+index 7974a27d6..65b351178 100644
+--- a/client/container.go
++++ b/client/container.go
+@@ -351,8 +351,7 @@ func (c *container) handleMounts(ctx context.Context, request *tasks.CreateTaskR
+ 		}
+ 		for _, m := range mounts {
+ 			if spec.Linux != nil && spec.Linux.MountLabel != "" {
+-				ml := fmt.Sprintf("context=%q", spec.Linux.MountLabel)
+-				m.Options = append(m.Options, ml)
++				m.Options = withMountLabel(m.Options, spec.Linux.MountLabel)
+ 			}
+ 			request.Rootfs = append(request.Rootfs, &types.Mount{
+ 				Type:    m.Type,
+@@ -366,6 +365,20 @@ func (c *container) handleMounts(ctx context.Context, request *tasks.CreateTaskR
+ 	return nil
+ }
+ 
++func withMountLabel(options []string, label string) []string {
++	if label == "" {
++		return options
++	}
++	// An explicit workload label replaces any snapshotter fallback context.
++	result := make([]string, 0, len(options)+1)
++	for _, option := range options {
++		if !strings.HasPrefix(option, "context=") {
++			result = append(result, option)
++		}
++	}
++	return append(result, fmt.Sprintf("context=%q", label))
++}
++
+ func (c *container) Restore(ctx context.Context, ioCreate cio.Creator, rootDir string) (_ int, retErr error) {
+ 	errorPid := -1
+ 	i, err := ioCreate(c.id)
+diff --git a/client/container_mount_label_test.go b/client/container_mount_label_test.go
+new file mode 100644
+index 000000000..f8885d42c
+--- /dev/null
++++ b/client/container_mount_label_test.go
+@@ -0,0 +1,58 @@
++/*
++   Copyright The containerd Authors.
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
++*/
++
++package client
++
++import (
++	"slices"
++	"testing"
++
++	"github.com/stretchr/testify/require"
++)
++
++func TestWithMountLabel(t *testing.T) {
++	const label = "system_u:object_r:container_file_t:s0:c17,c42"
++	const option = `context="system_u:object_r:container_file_t:s0:c17,c42"`
++	const fallback = `context="system_u:object_r:container_file_t:s0"`
++	for _, tc := range []struct {
++		name     string
++		options  []string
++		label    string
++		expected []string
++	}{
++		{"unlabeled retains default", []string{"ro", fallback}, "", []string{"ro", fallback}},
++		{"unlabeled empty", nil, "", nil},
++		{"label without default", []string{"ro"}, label, []string{"ro", option}},
++		{"label replaces default", []string{"ro", fallback}, label, []string{"ro", option}},
++		{"label replaces duplicates", []string{fallback, "rw", option}, label, []string{"rw", option}},
++		{"explicit s0 replaces categories", []string{option}, "system_u:object_r:container_file_t:s0", []string{fallback}},
++		{"preserves other options", []string{"fscontext=other", "contextual=other", "rootcontext=other", "context", `lowerdir=/a\,b:/c`, fallback}, label,
++			[]string{"fscontext=other", "contextual=other", "rootcontext=other", "context", `lowerdir=/a\,b:/c`, option}},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			original := slices.Clone(tc.options)
++			require.Equal(t, tc.expected, withMountLabel(tc.options, tc.label))
++			require.Equal(t, original, tc.options, "snapshotter-owned options must not be modified")
++		})
++	}
++}
++
++func TestWithMountLabelDoesNotOverwriteSharedBackingArray(t *testing.T) {
++	options := []string{"ro", "snapshotter-owned"}
++	got := withMountLabel(options[:1], "system_u:object_r:container_file_t:s0")
++	require.Equal(t, []string{"ro", `context="system_u:object_r:container_file_t:s0"`}, got)
++	require.Equal(t, "snapshotter-owned", options[1])
++}
+-- 
+2.45.4
+

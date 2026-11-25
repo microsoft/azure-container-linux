@@ -7,7 +7,7 @@
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.7
-Release: 5%{?dist}
+Release: 6%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -32,6 +32,7 @@ Patch10: erofs-signed-dmverity.patch
 Patch11: erofs-newest-referrer.patch
 Patch12: fsmount-selinux-context.patch
 Patch13: erofs-selinux-mount-devices.patch
+Patch14: explicit-mount-label-precedence.patch
 
 %{?systemd_requires}
 
@@ -112,6 +113,9 @@ fi
 %dir /opt/containerd/lib
 
 %changelog
+* Wed Nov 25 2026 Sean Dougherty <sdougherty@microsoft.com> - 2.3.7-6
+- Let explicit workload mount labels replace snapshotter fallback contexts
+
 * Mon Nov 23 2026 Sean Dougherty <sdougherty@microsoft.com> - 2.3.7-5
 - Isolate EROFS dm-verity devices by SELinux mount context
 
