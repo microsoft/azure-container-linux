@@ -86,7 +86,7 @@ An overview of how the branches are structured can be seen below
 | Git Ref      | Branch / Tag | For PRs | Published | Notes
 |:-------------|:-------------|:--------|:----------|:------------
 |aclmain       |Branch        |Yes      |No         | **Primary development branch**
-|release/3.0   |Branch        |No       |Yes        | Staging branch for publishing
+|release/*     |Branch        |No       |Yes        | Staging branches for publishing
 
 ### PR Titles
 
