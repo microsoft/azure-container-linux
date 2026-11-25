@@ -50,33 +50,40 @@ Ordinary development PRs should target `aclmain`.
   skip full release validation with the release owner's risk assessment.
   Changes to images, kernels, packages, or runtime behavior can affect AKS;
   determine the appropriate downstream qualification with the release
-  owner rather than assuming it can be skipped. If full validation is
+  owner rather than assuming it can be skipped. See the
+  [follow-on cherry-pick reports](https://dev.azure.com/mariner-org/ACL/_git/acl-pipelines?path=/docs/releases/README.md&version=GBmain)
+  for incremental candidate/control assessments. If full validation is
   omitted, state the unassessed downstream risk and release-owner decision
   in the PR description or a merge comment **before merging**. A passing
   aclmain run and cherry-pick check do not establish full release qualification.
 - **Full changeset:** Promote the whole qualified `aclmain` candidate, not
-  selected commits. Follow the
+  selected commits. Start with the
+  [ACL release-validation skill](https://dev.azure.com/mariner-org/ACL/_git/acl-pipelines?path=/.github/skills/acl-release-validation/SKILL.md&version=GBmain),
+  then follow the
   [ACL release-validation guidance](https://dev.azure.com/mariner-org/ACL/_git/acl-pipelines?path=/docs/releases/README.md&version=GBmain)
   and its [detailed reference](https://dev.azure.com/mariner-org/ACL/_git/acl-pipelines?path=/.github/skills/acl-release-validation/REFERENCE.md&version=GBmain).
   Compare the exact candidate with the release control, including downstream
-  evidence. The linked examples describe `release/3.0`; for another branch,
-  establish its control and requirements with the release owner.
+  evidence. Record shipped versions in the
+  [release history](https://dev.azure.com/mariner-org/ACL/_git/acl-pipelines?path=/docs/release-history.md&version=GBmain).
+  The linked examples describe `release/3.0`; for another branch, establish
+  its control and requirements with the release owner.
 
 ## Merge-method fallback
 
 For targeted cherry-picks, if rebase and merge is unavailable or cannot
-preserve the reviewed changes, **squash and merge** is an option. It has
-been used for targeted backports
-([#156](https://github.com/microsoft/azure-container-linux/pull/156)) and full
-promotions ([#102](https://github.com/microsoft/azure-container-linux/pull/102)).
-For full promotions, prefer a merge commit to retain common history with
-`aclmain`; use squash only if the release owner explicitly accepts losing
-that ancestry. Before using squash, compare the resulting tree with the
-reviewed PR, confirm that prerequisite and follow-up fixes survive, and
-retain the cherry-pick validation evidence or full-promotion report because
-squash replaces commit identities.
-If the proposed result differs, re-review it before merging. Switching merge
-methods does **not** substitute for the required bypass permission.
+preserve the reviewed changes, **squash and merge** is an option, as used in
+[#156](https://github.com/microsoft/azure-container-linux/pull/156). For
+full promotions, prefer a **merge commit** to retain common history with
+`aclmain`, as in [#121](https://github.com/microsoft/azure-container-linux/pull/121).
+If that is unavailable, **rebase and merge** has been used for a full
+promotion in [#102](https://github.com/microsoft/azure-container-linux/pull/102),
+but only use it after the release owner explicitly accepts losing shared
+ancestry and confirms the candidate/control validation still applies.
+Before using either fallback, compare the resulting tree with the reviewed
+PR, confirm necessary fixes survive, and retain the cherry-pick or
+full-promotion evidence because commit identities change. If the proposed
+result differs, re-review it before merging. Switching methods does **not**
+substitute for the required bypass permission.
 
 ## Exceptions to a cherry-pick skill PASS
 
