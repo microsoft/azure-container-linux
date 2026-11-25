@@ -22,15 +22,16 @@ For **every commit introduced by the PR**:
    Cherry-picks change SHAs; messages and aggregate diffs do not prove patch
    identity. Use `git patch-id --verbatim` so whitespace changes count. Default
    `git patch-id` and `--stable` strip whitespace.
-2. A completed, successful build or test run used a revision of **this
-   repository** containing the matching `aclmain` patch. Verify the run's
-   actual source SHA, repository, branch, and result; a green check on a
-   different revision or PR merge ref is not evidence.
-3. Changes between that patch and both the tested revision and current
-   `aclmain` have not reverted, corrected, completed, or materially changed
-   the fix without the corresponding changes in the release PR or its target.
-   A later green build may have tested a corrected fix, not the isolated
-   cherry-pick.
+2. A completed, successful full `aclmain` pipeline run built and tested both
+   architectures using a revision of **this repository** containing the
+   matching patch. Verify the run's actual source SHA, repository, branch,
+   effective build/test coverage, and result; a green check on a different
+   revision, a partial manual run, or a PR merge ref is not evidence.
+3. Every required prerequisite from before the main patch, and every
+   required follow-up through both the tested revision and current `aclmain`,
+   is effective in the final release candidate after all PR commits. A
+   later green build may include prerequisites or corrections absent from
+   the release; a PR commit may overwrite a fix already in the target.
 
 Do not report PASS unless all three are proven for every commit. Missing
 evidence is UNVERIFIED; a demonstrated mismatch or omitted necessary fix is
@@ -63,8 +64,15 @@ For each single-parent commit, compute its patch ID:
 git show --format='commit %H' --no-ext-diff --no-renames --full-index --binary <sha> | git patch-id --verbatim
 ```
 
-Compare against individual non-merge commits on `aclmain` using the same
-options (for example, `git log -p --no-merges --format='commit %H' --no-ext-diff --no-renames --full-index --binary <aclmain-ref> | git patch-id --verbatim`). Confirm each match is an ancestor of the fetched `aclmain` tip.
+First search individual non-merge `aclmain` commits since the release/main
+split, using the same options (for example,
+`git log -p --no-merges --format='commit %H' --no-ext-diff --no-renames --full-index --binary <split-sha>..<aclmain-ref> | git patch-id --verbatim`,
+where `<split-sha>` is `git merge-base <base-tip> <aclmain-ref>`). If there
+is no match, widen the search to earlier `aclmain` history before concluding
+the patch is absent; the initial bound is an optimization, not proof of
+absence. If the split cannot be established or history is incomplete, mark
+the lookup UNVERIFIED. Confirm each match is an ancestor of the fetched
+`aclmain` tip.
 An original commit cited in the cherry-pick message is a search hint, not
 proof; inspect ambiguous or multiple matches.
 
@@ -74,22 +82,34 @@ changes manually; leave the gate UNVERIFIED if identity cannot be established.
 
 ### 3. Prove the ADO pipeline tested each main change
 
-Use the Azure DevOps `ado-pipelines_build` `list` action for project `ACL`,
-definition **5304**, branch `refs/heads/main`, status `Completed`, result
-`Succeeded`, order `FinishTimeDescending`, and `top: 100`. Follow every
-`continuationToken` with the same filters and order until each commit has
-evidence or pages are exhausted. Build `sourceVersion` is the `acl-pipelines`
-revision, **not** this repository's revision.
+Find runs of the Azure DevOps `ACL` project's pipeline **5304** on
+`refs/heads/main`, ordered newest first, with status `Completed` and result
+`Succeeded`. Use configured ADO tools (`ado-pipelines_build` `list` and
+`ado-pipelines_run` `get`), `az pipelines`, or the ADO Builds and Pipelines
+REST APIs, whichever is available. Paginate with the same filters and order
+until each commit has evidence or pages are exhausted. For each candidate,
+read the resolved run resources, parameters, stages/jobs/tests, and timeline;
+do not rely on the build list alone. Build `sourceVersion` is the
+`acl-pipelines` revision, **not** this repository's revision.
 
-For each candidate, use `ado-pipelines_run` `get` with project `ACL`,
-`pipelineId: 5304`, and the run ID. Confirm state `Completed`, result
-`Succeeded`, and the exact `resources.repositories.azure_container_linux.version`
-and `resources.repositories.azure_container_linux.refName` values. The latter
+Confirm run state `Completed`, result `Succeeded`, and the exact
+`resources.repositories.azure_container_linux.version` and
+`resources.repositories.azure_container_linux.refName` values. The latter
 must be `refs/heads/aclmain`. Confirm the resource repository type and
 identity from the pipeline definition/configuration: the
 `azure_container_linux` resource must be the GitHub
 `microsoft/azure-container-linux` repository. Do not infer identity merely
 from the resource alias.
+
+For scheduled **or manual** runs, establish that both amd64 and aarch64 were
+actually built and tested with the full required test selection. Inspect
+queue-time parameters (including architecture, `testOnly`, and test-skip
+settings) **and** the resolved timeline, jobs, test results, and artifacts:
+a displayed default of `amd64` does not prove a scheduled run only built
+amd64, and `arch=both` alone does not prove both tests completed. A
+test-only rerun, skipped tests, or one-architecture run does not qualify.
+If effective coverage cannot be verified, mark the run UNVERIFIED and
+continue looking for another qualifying run.
 
 Fetch the run resource SHA from that GitHub repository if needed, then check
 `git merge-base --is-ancestor <matching-main-sha> <run-resource-sha>` **in
@@ -101,7 +121,20 @@ the run tested it. Continue with the follow-up audit before counting the
 run as evidence. Failed, partially succeeded, canceled, and PR-validation
 runs do not satisfy this gate.
 
-### 4. Audit subsequent fixes and dependencies
+### 4. Audit prerequisites, subsequent fixes, and the final candidate
+
+For each main match, trace earlier prerequisites on `aclmain` that the patch
+depends on, including helpers, packages, configuration, build wiring, and
+changes in other files or repositories. Inspect the patch and surrounding
+behavior, not just commit messages or shared paths. Check whether each
+necessary earlier change is already effective in the **recorded release
+target** or supplied by the PR, in the required order. The successful main
+run already includes earlier changes; it does not prove the release does.
+If the PR removes the only code using a prior dependency, verify in the
+final candidate that it has no remaining consumers and record that
+prerequisite as not required, rather than demanding the unused change.
+If a prerequisite is missing, FAIL; if dependency or equivalence cannot be
+established, UNVERIFIED.
 
 For each main match, inspect commits through **both** its successful run
 revision and the freshly fetched `aclmain` tip. Include merged side branches.
@@ -113,11 +146,18 @@ be essential. Trace cross-repository dependencies when a later fix requires
 them rather than inferring safety from this repository alone.
 
 For each materially related follow-up, check whether its effective change
-is present in the release PR **or recorded release target**, including
-different-SHA equivalent patches or release-specific adaptations. A required
-missing fix is FAIL; uncertain relevance or equivalence is UNVERIFIED. A run
-before the final related fix cannot validate the complete release change.
-Do not infer semantic equivalence from an absence of same-file commits.
+was supplied by the PR or recorded release target, including different-SHA
+equivalent patches or release-specific adaptations. Inspect the **recorded
+PR head after every proposed commit** for overwrites or reintroductions of
+code removed by a fix; presence in the target alone is not enough. Verify
+that every necessary prerequisite and follow-up remains effective in the
+final candidate. If the target is not an ancestor of the PR head, inspect
+the result of combining the recorded target and head using the proposed
+merge method; do not infer its final state from either tree alone. If a
+necessary change is absent or overwritten, FAIL; if the final state cannot
+be established, UNVERIFIED. A run before the final related fix cannot
+validate the complete release change. Do not infer semantic equivalence
+from an absence of same-file commits.
 
 ### 5. Report evidence
 
@@ -125,7 +165,8 @@ Show one row per PR commit: release SHA, matching `aclmain` SHA, patch status,
 successful ADO build ID/link, `azure_container_linux` resource SHA, and
 PASS/FAIL/UNVERIFIED reason. Link builds to
 `https://dev.azure.com/mariner-org/ACL/_build/results?buildId=<id>`.
-List the audited main ranges, related later commits and dispositions, and
-whether the run included all required fixes. Distinguish an exhausted search
+List the audited main ranges, earlier prerequisites, later related commits,
+their dispositions in the recorded target and final candidate, and whether
+the run included all required fixes. Distinguish an exhausted search
 with no successful run from an incomplete search. Do not post the result to
 the PR unless explicitly requested.

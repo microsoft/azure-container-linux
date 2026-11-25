@@ -12,3 +12,8 @@
   source revision is not the tested repository revision.
 - Audit subsequent changes through the run and current main tip so omitted
   follow-ups cannot be hidden behind a passing build.
+- Trace earlier prerequisites and verify that required prerequisites and
+  follow-ups survive in the final release candidate, not just the target tip.
+- Bound the initial patch search to the release/main split, widening when
+  necessary; require effective full build and test coverage for both
+  architectures, including on manual runs.

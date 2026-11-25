@@ -3,54 +3,102 @@
 This is a maintainer procedure for pull requests targeting `release/*`.
 Ordinary development PRs should target `aclmain`.
 
-## Qualify the change on aclmain first
+## Merge checklist
 
-Land the complete change on `aclmain` and wait for a **completed, successful
-run of the [aclmain nightly pipeline](https://dev.azure.com/mariner-org/70814062-73d6-4295-8e5f-b224172b9c69/_build/definition?definitionId=5304)** that resolved the GitHub ACL source revision containing it.
-PR checks or a green run against an older/different source do not replace
-nightly qualification. Confirm the run's actual repository pin, not just its
-branch name or the pipeline repository's commit.
+1. Normally, land the complete change on `aclmain`. Wait for a **completed,
+   successful [aclmain nightly pipeline](https://dev.azure.com/mariner-org/ACL/_build/definition?definitionId=5304)**
+   run whose resolved GitHub ACL source revision includes it. A full manual
+   run of the same pipeline also counts when both architectures were built
+   and tested with the required coverage. Verify the main SHA, source pin,
+   parameters, and effective job/test results; a green PR check, partial
+   manual run, or the pipeline repository's commit is not equivalent
+   evidence. For an emergency that cannot wait, follow the explicit
+   exception process below.
+2. Choose a targeted cherry-pick or the full changeset (below). Open a PR
+   into the intended `release/*` branch and review its entire diff. Record
+   the original main commits and target tip for a cherry-pick, or the exact
+   candidate and release control for a full promotion.
+3. For cherry-picks, run the
+   [validation skill](../../../.github/skills/validate-release-cherry-picks/SKILL.md).
+   Review its per-commit PASS report, including prerequisites, follow-ups,
+   and tested source pins. For a full promotion, follow the linked
+   release-validation guidance and retain its candidate/control report.
+   Summarize the result and any limitation in the public PR without linking
+   internal reports or runs.
+4. Confirm **all required PR checks pass** and the reviewed PR head has not
+   changed. If the cherry-pick skill does not PASS, use only a documented
+   exception below with substitute evidence and release-owner approval;
+   never treat UNVERIFIED as PASS or bypass failing PR checks.
+5. A maintainer with the **admin role** must obtain **just-in-time (JIT)**
+   access to merge. Prefer **rebase and merge for cherry-picks** and a
+   **merge commit for full promotions** so main/release ancestry is
+   preserved. Use a reviewed squash fallback only as described below.
+   Select the **bypass** checkbox
+   required for the protected release branch; it does not waive checks or
+   qualification. If bypass is unavailable, stop and resolve access or
+   protection before merging. Verify the resulting branch has only the
+   intended changes.
 
-## Choose the backport scope
+## Backport options
 
-- **Cherry-pick** when the change is self-contained. Preserve every proposed
-  commit's patch exactly as it landed on `aclmain` (including whitespace).
-  Identify the original main commits, carry all required prerequisites and
-  later fixes in the correct order, and check that the successful nightly
-  tested the *complete* change. Do not treat matching commit messages or an
-  equivalent final diff as proof. If release-specific adaptation is necessary,
-  flag it for explicit review; the patch-identity gate cannot PASS it as-is.
-  Full release validation may be skipped for targeted cherry-picks, but warn
-  in the PR that downstream release readiness was not reassessed. A passing
-  nightly and cherry-pick check do not establish full release qualification.
-- **Take the full changeset** when the release should receive the whole
-  `aclmain` candidate rather than selected commits. Review the complete
-  difference against the current release tip and follow the
+- **Targeted cherry-pick:** Preserve each main patch exactly, including
+  whitespace, and bring all earlier prerequisites and later fixes needed
+  for it to work on the release branch. Check that they remain effective
+  after **all** proposed PR commits; a change in the target can be overwritten
+  by a cherry-pick. Normally, the qualifying aclmain run must include the
+  complete change. Low-risk targeted changes such as tests, docs, or CI may
+  skip full release validation with the release owner's risk assessment.
+  Changes to images, kernels, packages, or runtime behavior can affect AKS;
+  determine the appropriate downstream qualification with the release
+  owner rather than assuming it can be skipped. If full validation is
+  omitted, state the unassessed downstream risk and release-owner decision
+  in the PR description or a merge comment **before merging**. A passing
+  aclmain run and cherry-pick check do not establish full release qualification.
+- **Full changeset:** Promote the whole qualified `aclmain` candidate, not
+  selected commits. Follow the
   [ACL release-validation guidance](https://dev.azure.com/mariner-org/ACL/_git/acl-pipelines?path=/docs/releases/README.md&version=GBmain)
   and its [detailed reference](https://dev.azure.com/mariner-org/ACL/_git/acl-pipelines?path=/.github/skills/acl-release-validation/REFERENCE.md&version=GBmain).
-  Qualify the exact candidate against the release control, including
-  downstream evidence; a successful nightly alone is not a release readiness
-  decision. The linked examples describe `release/3.0`: for another
-  `release/*` branch, establish the applicable control and requirements with
-  the release owner. Do not use a partial backport and call it a full promotion.
+  Compare the exact candidate with the release control, including downstream
+  evidence. The linked examples describe `release/3.0`; for another branch,
+  establish its control and requirements with the release owner.
 
-## Review and merge
+## Merge-method fallback
 
-1. Open a PR into the intended `release/*` branch and confirm its target and
-   complete diff. All required PR checks must pass. Run the
-   [release cherry-pick validation skill](../../../.github/skills/validate-release-cherry-picks/SKILL.md) and require **PASS** for
-   cherry-picks. For a full changeset, run it where applicable; if a gate
-   cannot PASS or there is a good reason to disregard its result, document
-   the precise reason, evidence, and release-owner decision before merging.
-   Never interpret UNVERIFIED as PASS.
-2. Only a maintainer with the **admin role** can merge a release-branch PR.
-   Obtain the required **just-in-time (JIT) admin access** before attempting
-   the merge. Do not use elevated access to skip failing PR checks.
-3. Prefer **rebase and merge** when it preserves the reviewed changes and
-   branch history. In the merge UI, explicitly select the **bypass** checkbox
-   required for the protected release branch; this does not waive the PR
-   checks or qualification above. If the option is unavailable or the
-   proposed merge differs from what was reviewed, stop and resolve that
-   before merging.
-4. After merging, verify the release branch contains the intended change
-   and no unexpected commits.
+For targeted cherry-picks, if rebase and merge is unavailable or cannot
+preserve the reviewed changes, **squash and merge** is an option. It has
+been used for targeted backports
+([#156](https://github.com/microsoft/azure-container-linux/pull/156)) and full
+promotions ([#102](https://github.com/microsoft/azure-container-linux/pull/102)).
+For full promotions, prefer a merge commit to retain common history with
+`aclmain`; use squash only if the release owner explicitly accepts losing
+that ancestry. Before using squash, compare the resulting tree with the
+reviewed PR, confirm that prerequisite and follow-up fixes survive, and
+retain the cherry-pick validation evidence or full-promotion report because
+squash replaces commit identities.
+If the proposed result differs, re-review it before merging. Switching merge
+methods does **not** substitute for the required bypass permission.
+
+## Exceptions to a cherry-pick skill PASS
+
+Do not treat an unverified result as PASS. These cases need a documented
+disposition rather than a blanket waiver:
+
+- **Removal makes a prerequisite irrelevant:** If the PR deletes the only
+  code or file that needed an earlier main-branch change, prove in the final
+  candidate that no remaining behavior depends on it. Mark the prerequisite
+  *not required* with that evidence; do not carry it over just to satisfy a
+  mechanical history check. A prerequisite still used by the final candidate
+  cannot be waived.
+- **Emergency patch:** If the release cannot wait for the usual main/nightly
+  sequence or a skill PASS, get an explicit release-owner decision before
+  merging. Record the urgency, which gates are being deferred, substitute
+  validation, residual risk, and the plan to land and test the fix on
+  `aclmain`. This is an exception to the normal path, not a PASS result.
+- **Release-specific adaptation or non-textual/merge commit:** If verbatim
+  patch comparison cannot establish identity, manually compare the effective
+  final change and document why the adaptation is necessary.
+
+Record the decision and evidence in the review record. **Required PR checks
+must still pass**, and admin/JIT merge rules still apply. A full `aclmain`
+promotion follows the separate release-validation guidance above; it is not
+a cherry-pick skill exception.
