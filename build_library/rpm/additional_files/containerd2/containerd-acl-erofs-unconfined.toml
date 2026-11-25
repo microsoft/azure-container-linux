@@ -1,5 +1,0 @@
-version = 4
-
-[plugins."io.containerd.snapshotter.v1.erofs"]
-  # Unconfined runtimes still need a container-file label on EROFS contents.
-  ovl_mount_options = ['context="system_u:object_r:container_file_t:s0"']

@@ -3,9 +3,11 @@ version = 4
 
 [plugins."io.containerd.snapshotter.v1.erofs"]
   enable_dmverity_referrers = true
-  # SELinux-enabled CRI supplies the workload label through the OCI spec.
-  # The selector imports a separate fallback only when CRI SELinux is disabled.
-  ovl_mount_options = []
+  # Supply the container-file label missing from unlabeled EROFS contents so
+  # existing SELinux policy can transition container processes to spc_t.
+  # This mount-wide context overrides individual file labels.
+  # Explicit OCI workload mount labels replace this snapshotter fallback.
+  ovl_mount_options = ['context="system_u:object_r:container_file_t:s0"']
 
 [plugins."io.containerd.cri.v1.images"]
   snapshotter = "erofs"
