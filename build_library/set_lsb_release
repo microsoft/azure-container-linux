@@ -107,12 +107,6 @@ fi
 sudo ln -sf "../usr/lib/os-release" "${ROOT_FS_DIR}/etc/os-release"
 sudo mkdir -p "${ROOT_FS_DIR}${DISTRO_SHARE_DIR}"
 sudo ln -sf "../../lib/os-release" "${ROOT_FS_DIR}${DISTRO_SHARE_DIR}/os-release"
-# Compat for split of lib64 into lib and lib64
-if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
-  if [ ! -e "${ROOT_FS_DIR}/usr/lib64/os-release" ]; then
-    sudo ln -sf "../lib/os-release" "${ROOT_FS_DIR}/usr/lib64/os-release"
-  fi
-fi
 
 # Create the defaults for the coreos configuration files in the usr directory
 if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
