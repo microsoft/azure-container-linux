@@ -48,4 +48,6 @@ Additional tests live in `acl/tests/`:
 - systemd service health (`run-systemd-health-test.sh`)
 - Disk I/O error detection (`run-dmesg-io-error-test.sh`)
 - Container runtime smoke tests (`run-container-test.sh`)
-- SELinux AVC check (`run-selinux-avc-test.sh`)
+- SELinux AVC check (`run-selinux-avc-test.sh`): fails on unexpected AVCs and
+  verifies that enforcing SELinux denies a confined `container_t` process
+  reading a DAC-readable, temporary `shadow_t` file.
