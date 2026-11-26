@@ -195,6 +195,11 @@ mkdir "${BUILD_DIR}/${FLAGS_install_root_basename}"
 mkdir "${BUILD_DIR}/workdir"
 mount -t overlay overlay -o lowerdir="${BUILD_DIR}/fs-root${pkginfo_lowerdirs}",upperdir="${BUILD_DIR}/${FLAGS_install_root_basename}",workdir="${BUILD_DIR}/workdir" "${BUILD_DIR}/${FLAGS_install_root_basename}"
 
+if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+  rpm_setup_fasttrack_repo "${BUILD_DIR}/${FLAGS_install_root_basename}" ||
+    die "Failed to configure the FastTrack preview repository for ${SYSEXTNAME}"
+fi
+
 REPO_BUILD_ID=$(source "${REPO_MANIFESTS_DIR}/version.txt"; echo "$FLATCAR_BUILD_ID")
 REPO_FLATCAR_VERSION=$(source "${REPO_MANIFESTS_DIR}/version.txt"; echo "$FLATCAR_VERSION")
 VERSION_BOARD=$(source "${BUILD_DIR}/fs-root/usr/lib/os-release" && echo "$VERSION")
@@ -247,6 +252,7 @@ info "Building '${SYSEXTNAME}' squashfs with (meta-)packages '${@}' in '${BUILD_
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]] && [[ -f "${BUILD_DIR}/${FLAGS_install_root_basename}/var/lib/rpm/rpmdb.sqlite" ]]; then
   rpm_query_packages "${BUILD_DIR}/${FLAGS_install_root_basename}" > "${BUILD_DIR}/.rpm-base.tmp"
   rpm_query_manifest "${BUILD_DIR}/${FLAGS_install_root_basename}" | sort > "${BUILD_DIR}/.rpm-base-manifest.tmp"
+  RPM_DEFER_FASTTRACK_VALIDATION=true
 fi
 
 for package; do
@@ -361,6 +367,13 @@ if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
   else
     warn "No RPM database found for ${SYSEXTNAME}; ${SYSEXTNAME}_packages.txt will be empty"
   fi
+
+  rpm_setup_fasttrack_repo "${BUILD_DIR}/${FLAGS_install_root_basename}" ||
+    die "Failed to restore the FastTrack preview repository for ${SYSEXTNAME}"
+  rpm_validate_fasttrack_packages \
+      "${BUILD_DIR}/${FLAGS_install_root_basename}" \
+      "${BUILD_DIR}/.rpm-sysext-manifest.tmp" ||
+    die "FastTrack package verification failed for ${SYSEXTNAME}"
 
   # Empty means either nothing was installed or the base image already had every
   # package this sysext asks for. Both are valid sysexts with nothing of their

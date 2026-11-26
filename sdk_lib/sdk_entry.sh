@@ -25,6 +25,15 @@ if [[ -n ${PACKAGE_SNAPSHOT_TIME:-} ]]; then
     printf 'export PACKAGE_SNAPSHOT_TIME=%s\n' "$PACKAGE_SNAPSHOT_TIME" >> /home/sdk/.bashrc
 fi
 
+sed -i '/^export FASTTRACK_REPO_FILE=/d' /home/sdk/.bashrc || exit 1
+if [[ -n ${FASTTRACK_REPO_FILE:-} ]]; then
+    if [[ ! -f "${FASTTRACK_REPO_FILE}" ]]; then
+        echo "FastTrack repo file not found in SDK: ${FASTTRACK_REPO_FILE}" >&2
+        exit 2
+    fi
+    printf 'export FASTTRACK_REPO_FILE=%q\n' "${FASTTRACK_REPO_FILE}" >> /home/sdk/.bashrc
+fi
+
 if [ -n "${SDK_USER_ID:-}" ] ; then
     # If the "core" user from /usr/share/baselayout/passwd has the same ID, allow to take it instead
     usermod --non-unique -u $SDK_USER_ID sdk
