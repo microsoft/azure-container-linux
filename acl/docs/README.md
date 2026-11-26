@@ -5,6 +5,7 @@ Detailed documentation for Azure Container Linux.
 | Document                        | Description                                                                  |
 | ------------------------------- | ---------------------------------------------------------------------------- |
 | [Architecture](architecture.md) | Overview, relationship with Flatcar, boot flow, dm-verity, Ignition, SELinux |
+| [Flatcar 4757 rebase](flatcar-4757-rebase.md) | Upstream changes from 4459.2.4 and their impact on ACL builds and nodes |
 | [System Extensions](sysexts.md) | Base and standalone sysexts, GPU drivers                                     |
 | [Platforms](platforms.md)       | Supported platforms and OEM packages                                         |
 | [Testing](testing.md)           | Kola/Mantle framework, test categories, enforcing tests                      |
