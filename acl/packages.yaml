@@ -24,6 +24,6 @@ packages:
   - lksctp-tools        # SCTP user-space tools (stress-ng build dep)
 
   # --- ACL-patched system packages ----------------------------------------
-  - containerd2         # Signed EROFS support not yet available from PMC
+  - containerd2         # Test-only: build both containerd RPMs until PMC has the pair
   - selinux-policy      # SELinux reference policy (ACL-specific modules)
   - trident             # Declarative OS lifecycle agent; built here for the acl-pipelines tridentRpmSource=sdk option

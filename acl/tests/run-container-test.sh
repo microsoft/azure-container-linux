@@ -42,7 +42,7 @@ run_overlayfs_smoke_test() {
 
 # Exit successfully when the additional EROFS test does not apply.
 require_erofs_profile() {
-    local containerd_pid containerd_cmdline effective_config snapshotter
+    local containerd_pid
 
     if [[ ! -r /sys/kernel/security/ipe/policies/acl_ipe_boot_policy/active ]] ||
         [[ "$(< /sys/kernel/security/ipe/policies/acl_ipe_boot_policy/active)" != 1 ]]; then
@@ -51,13 +51,25 @@ require_erofs_profile() {
     fi
     [[ "$(< /sys/kernel/security/ipe/enforce)" == 0 ]] || fail "Expected IPE audit mode"
 
-    containerd_pid="$(systemctl show --property=MainPID --value containerd)"
+    containerd_pid="$(systemctl show --property=MainPID --value containerd)" ||
+        fail "Could not get containerd's PID"
     [[ "${containerd_pid}" =~ ^[1-9][0-9]*$ ]] || fail "Containerd is not running"
-    containerd_cmdline="$(tr '\0' ' ' < "/proc/${containerd_pid}/cmdline")"
+    check_running_erofs_profile "/proc/${containerd_pid}"
+}
+
+check_running_erofs_profile() {
+    local proc_dir="$1" containerd_exe containerd_cmdline effective_config snapshotter
+
+    containerd_exe="$(readlink "${proc_dir}/exe")" || fail "Could not resolve running containerd"
+    [[ "${containerd_exe}" == /usr/libexec/containerd-acl/containerd ]] ||
+        fail "IPE is active but containerd is running from ${containerd_exe}"
+    containerd_cmdline="$(tr '\0' ' ' < "${proc_dir}/cmdline")" ||
+        fail "Could not read containerd's command line"
     [[ " ${containerd_cmdline} " == *" --config /run/containerd/acl-config.toml "* ]] ||
         fail "Containerd is not using the IPE-selected config"
 
-    effective_config="$(containerd --config /run/containerd/acl-config.toml config dump)"
+    effective_config="$("${proc_dir}/exe" --config /run/containerd/acl-config.toml config dump)" ||
+        fail "Could not read the running containerd config"
     snapshotter="$(awk '
         {
             gsub(/\047/, "\"")
@@ -67,11 +79,23 @@ require_erofs_profile() {
         /^\[/ { section = $0 }
         section == "[plugins.\"io.containerd.cri.v1.images\"]" && /^snapshotter =/ {
             gsub(/"/, "", $3)
-            print $3
-            found = ($3 != "")
+            snapshotter = $3
         }
-        END { if (!found) exit 1 }
-    ' <<< "${effective_config}")" || fail "Could not determine the effective CRI snapshotter"
+        section == "[plugins.\"io.containerd.snapshotter.v1.erofs\"]" && /^enable_dmverity_referrers =/ {
+            referrers_enabled = ($0 == "enable_dmverity_referrers = true")
+        }
+        END {
+            if (!snapshotter) {
+                print "Missing effective CRI snapshotter" > "/dev/stderr"
+                exit 1
+            }
+            if (snapshotter == "erofs" && !referrers_enabled) {
+                print "Effective EROFS config does not enable dm-verity referrers" > "/dev/stderr"
+                exit 1
+            }
+            print snapshotter
+        }
+    ' <<< "${effective_config}")" || fail "Could not verify the effective EROFS profile"
     if [[ "${snapshotter}" != erofs ]]; then
         echo "Skipping EROFS SELinux test: effective CRI snapshotter is ${snapshotter}."
         exit 0

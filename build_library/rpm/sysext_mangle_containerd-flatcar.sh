@@ -33,6 +33,11 @@ if [[ ! -f "${azl_config}" ]]; then
   exit 1
 fi
 
+if [[ ! -x "${rootfs}/usr/libexec/containerd-acl/containerd" ]]; then
+  echo ">>> ERROR: $0: containerd-acl executable not found in the sysext" >&2
+  exit 1
+fi
+
 echo ">>> NOTICE: $0: installing Azure Linux containerd config with SELinux enabled"
 install -Dpm 0644 "${azl_config}" "${acl_config}"
 

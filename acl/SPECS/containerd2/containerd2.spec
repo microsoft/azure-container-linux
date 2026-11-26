@@ -1,13 +1,11 @@
 %global debug_package %{nil}
 %define upstream_name containerd
-%define pmc_base_version 2.3.7
-%define pmc_base_release 1
 %define commit_hash 6f589cf13dc01a5b493911355427e05b2ff005d7
 
 Summary: Industry-standard container runtime
 Name: %{upstream_name}2
 Version: 2.3.7
-Release: 3.1%{?dist}
+Release: 4.2%{?dist}
 License: ASL 2.0
 Group: Tools/Container
 URL: https://www.containerd.io
@@ -18,6 +16,10 @@ Source0: https://github.com/containerd/containerd/archive/v%{version}.tar.gz#/%{
 Source1: containerd.service
 Source2: containerd.toml
 
+%global acl_srcdir containerd-acl-%{version}
+%global acl_libexecdir %{_libexecdir}/containerd-acl
+
+# Base patches use numbers 0-99. 100 and above are reserved for ACL.
 Patch0:  multi-snapshotters-support.patch
 Patch1:  tardev-support.patch
 Patch2:  fix-TestCgroupNamespace-cgroupv1.patch
@@ -28,6 +30,11 @@ Patch6:  CVE-2026-78660.patch
 Patch7:  CVE-2026-78669.patch
 Patch8:  CVE-2026-97032.patch
 Patch9:  CVE-2026-81870.patch
+Patch10: CVE-2026-116585.patch
+Patch11: CVE-2026-116586.patch
+Patch12: CVE-2026-116587.patch
+Patch13: CVE-2026-116591.patch
+
 Patch100: erofs-dmverity-referrers.patch
 
 %{?systemd_requires}
@@ -62,14 +69,32 @@ low-level storage and network attachments, etc.
 containerd is designed to be embedded into a larger system, rather than being
 used directly by developers or end-users.
 
+%package -n containerd-acl
+Summary: Containerd daemon with ACL signed EROFS support
+Requires: %{name}%{?_isa} = %{version}-%{release}
+
+%description -n containerd-acl
+Alternate containerd daemon for Azure Container Linux with signed EROFS
+support. The base package supplies the service, configuration, and tools.
+The ACL profile selects the alternate daemon.
+
 %prep
-%autosetup -p1 -n %{upstream_name}-%{version}
+# The last setup sets buildsubdir for later RPM stages; keep it on the base tree.
+%setup -q -c -T -n %{acl_srcdir}
+%autosetup -n %{upstream_name}-%{version} -N
+%autopatch -p1 -M 99
+cp -a . "../%{acl_srcdir}/"
+(
+    cd "../%{acl_srcdir}"
+    %autopatch -p1 -m 100
+)
 
 %build
 export BUILDTAGS="-mod=vendor"
 # Go 1.26 requires this experiment for cgo-less OpenSSL systemcrypto.
 export GOEXPERIMENT=ms_nocgo_opensslcrypto
 make VERSION="%{version}" REVISION="%{commit_hash}" binaries man
+make -C "../%{acl_srcdir}" VERSION="%{version}" REVISION="%{commit_hash}" bin/containerd
 
 %check
 export BUILDTAGS="-mod=vendor"
@@ -83,6 +108,8 @@ mkdir -p %{buildroot}/%{_unitdir}
 install -D -p -m 0644 %{SOURCE1} %{buildroot}%{_unitdir}/containerd.service
 install -D -p -m 0644 %{SOURCE2} %{buildroot}%{_sysconfdir}/containerd/config.toml
 install -vdm 755 %{buildroot}/opt/containerd/{bin,lib}
+install -D -p -m 0755 "../%{acl_srcdir}/bin/containerd" \
+    "%{buildroot}%{acl_libexecdir}/containerd"
 
 %post
 %systemd_post containerd.service
@@ -108,16 +135,23 @@ fi
 %dir /opt/containerd/bin
 %dir /opt/containerd/lib
 
+%files -n containerd-acl
+%license LICENSE NOTICE
+%dir %{acl_libexecdir}
+%{acl_libexecdir}/containerd
+
 %changelog
-* Thu Nov 26 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.7-3.1
-- Refresh the signed EROFS patch from the tested containerd fork
+* Thu Nov 26 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.7-4.2
+- Rebuild the test RPM pair with the refreshed ACL signed EROFS patch
 
-* Fri Nov 13 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.7-3
-- Select the newest dm-verity referrer and tolerate malformed optional metadata
-- Include layer signature digests in signed EROFS snapshot keys
+* Wed Nov 25 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.7-4.1
+- Test the consolidated ACL dm-verity referrer patch with the mapper and IPE audit fixes
 
-* Mon Oct 19 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.7-2
-- Add patch for signed EROFS dm-verity referrer, snapshotter, and CRI support
+* Tue Nov 24 2026 Dallas Delaney <dadelan@microsoft.com> - 2.3.7-4
+- Add the opt-in containerd-acl daemon alongside the base containerd2 package
+
+* Tue Nov 03 2026 Azure Linux Security Servicing Account <azurelinux-security@microsoft.com> - 2.3.7-2
+- Patch for CVE-2026-116591, CVE-2026-116587, CVE-2026-116586, CVE-2026-116585
 
 * Tue Oct 13 2026 Azure Linux Security Servicing Account <azurelinux-security@microsoft.com> - 2.3.7-1
 - Upgrade to 2.3.7 for CVE-2026-95839

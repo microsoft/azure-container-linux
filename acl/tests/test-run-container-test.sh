@@ -132,6 +132,42 @@ assert_overlayfs_failure() (
     echo "PASS: overlayfs startup is not reached after pull exhaustion"
 )
 
+assert_erofs_profile() (
+    local daemon="$1" snapshotter="$2" referrers="$3" expected_status="$4" expected_output="$5"
+    local proc_dir status=0
+    proc_dir="$(mktemp -d)"
+    trap 'rm -f -- "${proc_dir}/cmdline" "${proc_dir}/exe"; rmdir -- "${proc_dir}"' EXIT
+    printf '%s\0' "${daemon}" --config /run/containerd/acl-config.toml > "${proc_dir}/cmdline"
+    cat > "${proc_dir}/exe" <<'EOF'
+#!/bin/bash
+[[ "$*" == "--config /run/containerd/acl-config.toml config dump" ]] || exit 1
+printf '[plugins."io.containerd.cri.v1.images"]\nsnapshotter = "%s"\n' "${MOCK_SNAPSHOTTER}"
+printf '[plugins."io.containerd.snapshotter.v1.erofs"]\nenable_dmverity_referrers = %s\n' "${MOCK_REFERRERS}"
+EOF
+    chmod +x "${proc_dir}/exe"
+    export MOCK_SNAPSHOTTER="${snapshotter}" MOCK_REFERRERS="${referrers}"
+
+    # Called by the sourced profile check.
+    # shellcheck disable=SC2317,SC2329
+    readlink() {
+        assert_equal "${proc_dir}/exe" "$*" "probe the running daemon"
+        printf '%s\n' "${daemon}"
+    }
+
+    (
+        check_running_erofs_profile "${proc_dir}"
+        echo "Running EROFS workload"
+    ) > "${OUTPUT}" 2>&1 || status=$?
+    assert_equal "${expected_status}" "${status}" "EROFS profile check status"
+    grep -Fq "${expected_output}" "${OUTPUT}"
+    if [[ "${expected_output}" != "Running EROFS workload" ]] &&
+        grep -Fq "Running EROFS workload" "${OUTPUT}"; then
+        echo "FAIL: skipped or rejected profiles must not run the EROFS workload" >&2
+        exit 1
+    fi
+    printf 'PASS: %s (%s, referrers=%s)\n' "${daemon}" "${snapshotter}" "${referrers}"
+)
+
 # These overrides are called indirectly by the sourced EROFS test.
 # shellcheck disable=SC2329
 assert_erofs_case() (
@@ -191,6 +227,10 @@ assert_pull_case "per-attempt timeout exhaustion" 124 "timeout: command timed ou
 assert_pull_case "forced termination exhaustion" 137 "timeout: command killed" 137 137 137
 assert_overlayfs_recovery
 assert_overlayfs_failure
+assert_erofs_profile /usr/libexec/containerd-acl/containerd erofs true 0 "Running EROFS workload"
+assert_erofs_profile /usr/bin/containerd erofs true 1 "IPE is active but containerd is running from /usr/bin/containerd"
+assert_erofs_profile /usr/libexec/containerd-acl/containerd erofs false 1 "does not enable dm-verity referrers"
+assert_erofs_profile /usr/libexec/containerd-acl/containerd overlayfs false 0 "Skipping EROFS SELinux test"
 assert_erofs_case 23 1 0
 assert_erofs_case 42 42 42 42
 assert_startup_failure

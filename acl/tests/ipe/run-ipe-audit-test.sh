@@ -269,7 +269,7 @@ for name in containerd oem-azure; do
     mount -t squashfs -o ro,nosuid,nodev,noexec "${loop}" "${directory}/${name}"
 done
 for spec in base:/usr/bin/true base:/usr/bin/bash base:/usr/bin/systemctl \
-    containerd:/usr/bin/containerd oem-azure:/usr/sbin/chronyd; do
+    containerd:/usr/libexec/containerd-acl/containerd oem-azure:/usr/sbin/chronyd; do
     origin="${spec%%:*}"
     target="$(readlink -f "${spec#*:}")"
     [[ "${target}" == /usr/* && -f "${target}" && -x "${target}" ]] || {
@@ -525,33 +525,35 @@ systemctl is-active --quiet containerd ||
     fail "containerd is not running"
 containerd_pid="$(systemctl show --property=MainPID --value containerd)" ||
     fail "could not get containerd's PID"
+containerd_exe="$(readlink "/proc/${containerd_pid}/exe")" ||
+    fail "could not resolve running containerd"
+[[ "${containerd_exe}" == /usr/libexec/containerd-acl/containerd ]] ||
+    fail "IPE is active but containerd is running from ${containerd_exe}"
 containerd_cmdline="$(tr '\0' ' ' < "/proc/${containerd_pid}/cmdline")" ||
     fail "could not read containerd's command line"
 [[ " ${containerd_cmdline} " == *" --config /run/containerd/acl-config.toml "* ]] ||
     fail "containerd is not using the IPE-selected config"
-containerd_defaults="$(/usr/bin/containerd config default)" ||
+containerd_defaults="$("${containerd_exe}" config default)" ||
     fail "could not read containerd's default configuration"
-if grep -Eq '^[[:space:]]*enable_dmverity_referrers[[:space:]]*=' <<< "${containerd_defaults}"; then
-    if ! /usr/bin/containerd --config /run/containerd/acl-config.toml config dump |
-        awk '
-            {
-                gsub(/\047/, "\"")
-                sub(/^[[:space:]]+/, "")
-                sub(/[[:space:]]+$/, "")
-            }
-            /^\[/ { section = $0 }
-            section == "[plugins.\"io.containerd.snapshotter.v1.erofs\"]" &&
-                /^enable_dmverity_referrers =/ { referrers = ($0 == "enable_dmverity_referrers = true") }
-            section == "[plugins.\"io.containerd.cri.v1.images\"]" &&
-                /^snapshotter =/ { snapshotter = ($0 == "snapshotter = \"erofs\"") }
-            section == "[plugins.\"io.containerd.service.v1.diff-service\"]" &&
-                /^default =/ { differ = ($0 == "default = [\"erofs\", \"walking\"]") }
-            END { if (!referrers || !snapshotter || !differ) exit 1 }
-        '; then
-        fail "effective containerd config does not enable the expected EROFS profile."
-    fi
-else
-    echo "Containerd lacks dm-verity referrer support. Skipping EROFS config assertion."
+grep -Eq '^[[:space:]]*enable_dmverity_referrers[[:space:]]*=' <<< "${containerd_defaults}" ||
+    fail "running containerd lacks dm-verity referrer support"
+if ! "${containerd_exe}" --config /run/containerd/acl-config.toml config dump |
+    awk '
+        {
+            gsub(/\047/, "\"")
+            sub(/^[[:space:]]+/, "")
+            sub(/[[:space:]]+$/, "")
+        }
+        /^\[/ { section = $0 }
+        section == "[plugins.\"io.containerd.snapshotter.v1.erofs\"]" &&
+            /^enable_dmverity_referrers =/ { referrers = ($0 == "enable_dmverity_referrers = true") }
+        section == "[plugins.\"io.containerd.cri.v1.images\"]" &&
+            /^snapshotter =/ { snapshotter = ($0 == "snapshotter = \"erofs\"") }
+        section == "[plugins.\"io.containerd.service.v1.diff-service\"]" &&
+            /^default =/ { differ = ($0 == "default = [\"erofs\", \"walking\"]") }
+        END { if (!referrers || !snapshotter || !differ) exit 1 }
+    '; then
+    fail "effective containerd config does not enable the expected EROFS profile."
 fi
 
 policy="$(cat "${POLICY_DIR}/policy")"
@@ -580,7 +582,7 @@ ipe_verify_probe_payloads "${probe_dir}" "${available_sysexts}" ||
 usr_probe="$(readlink -f /usr/bin/true)" || fail "could not resolve /usr probe"
 bash_probe="$(readlink -f /usr/bin/bash)" || fail "could not resolve base Bash probe"
 systemctl_probe="$(readlink -f /usr/bin/systemctl)" || fail "could not resolve base systemctl probe"
-containerd_probe="$(readlink -f /usr/bin/containerd)" || fail "could not resolve containerd probe"
+containerd_probe="${containerd_exe}"
 oem_probe="$(readlink -f /usr/sbin/chronyd)" || fail "could not resolve OEM probe"
 probe="${probe_dir}/writable-true"
 cp "${usr_probe}" "${probe}"

@@ -183,7 +183,8 @@ run_audit_fallback_validation() (
 
     ssh_cmd "sudo bash -s -- '${config}' '${dropin}'" <<'EOF' || return
 set -euo pipefail
-/usr/bin/containerd --config /usr/share/containerd/config.toml config dump |
+containerd_bin=/usr/libexec/containerd-acl/containerd
+"${containerd_bin}" --config /usr/share/containerd/config.toml config dump |
     sed -e '/^imports = /d' \
         -e 's/^\([[:space:]]*use_local_image_pull = \)false$/\1true/' > "$1"
 grep -Eq '^[[:space:]]*use_local_image_pull = true$' "$1"
@@ -192,13 +193,17 @@ systemctl daemon-reload
 systemctl restart containerd
 systemctl is-active --quiet containerd
 pid="$(systemctl show --property=MainPID --value containerd)"
+[[ "$(readlink "/proc/${pid}/exe")" == "${containerd_bin}" ]] || {
+    echo "Containerd fallback did not keep the ACL daemon" >&2
+    exit 1
+}
 cmdline="$(tr '\0' ' ' < "/proc/${pid}/cmdline")"
 [[ " ${cmdline} " == *" --config /run/containerd/acl-config.toml "* ]] || {
     echo "Containerd is not using the IPE-selected config" >&2
     exit 1
 }
-expected="$(/usr/bin/containerd --config "$1" config dump | sed '/^imports = /d')"
-effective="$(/usr/bin/containerd --config /run/containerd/acl-config.toml config dump |
+expected="$("${containerd_bin}" --config "$1" config dump | sed '/^imports = /d')"
+effective="$("${containerd_bin}" --config /run/containerd/acl-config.toml config dump |
     sed '/^imports = /d')"
 [[ "${effective}" == "${expected}" ]] || {
     echo "Containerd did not select the expected base fallback" >&2
@@ -287,6 +292,16 @@ main() {
     set_security_profile_key_and_reboot "ipe" "disabled"
     assert_ipe_mode "off"
     assert_ipe_assets_present
+    ssh_cmd "sudo bash -s" <<'EOF'
+set -euo pipefail
+systemctl is-active --quiet containerd
+pid="$(systemctl show --property=MainPID --value containerd)"
+exe="$(readlink "/proc/${pid}/exe")"
+[[ "${exe}" == /usr/bin/containerd ]] || {
+    echo "IPE is off but containerd is running from ${exe}" >&2
+    exit 1
+}
+EOF
 
     section "Step 5: Verify the 'off' alias"
     set_security_profile_key_and_reboot "ipe" "off"

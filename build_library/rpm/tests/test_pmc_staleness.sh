@@ -3,13 +3,46 @@
 set -euo pipefail
 
 SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-CHECKER="${SCRIPT_ROOT}/build_library/rpm/check_pmc_staleness.sh"
 
 fail() { echo "$*" >&2; exit 1; }
 
 work_dir="$(mktemp -d)"
 trap 'rm -rf -- "${work_dir}"' EXIT
-mkdir -p "${work_dir}/root" "${work_dir}/bin"
+CHECKER="${work_dir}/build_library/rpm/check_pmc_staleness.sh"
+mkdir -p "${work_dir}/root" "${work_dir}/bin" "$(dirname "${CHECKER}")" \
+    "${work_dir}/acl/SPECS/fixture" "${work_dir}/acl/SPECS/fixture-amd64"
+cp "${SCRIPT_ROOT}/build_library/rpm/check_pmc_staleness.sh" "${CHECKER}"
+
+# Use a standalone spec set so removing or rebasing a real ACL package cannot break the fixture.
+cat > "${work_dir}/acl/SPECS/fixture/fixture.spec" <<'EOF'
+%define pmc_base_version 1.2.3
+%define pmc_base_release 4
+%global fixture_name pmc-test
+Name: %{fixture_name}
+Version: 1.2.3
+Release: 5
+Summary: PMC staleness test fixture
+License: MIT
+%description
+PMC staleness test fixture.
+EOF
+cat > "${work_dir}/acl/SPECS/fixture-amd64/fixture-amd64.spec" <<'EOF'
+%define pmc_base_version 1.0
+%define pmc_base_release 1
+Name: pmc-test-amd64
+Version: 1.0
+Release: 2
+Summary: AMD64-only PMC staleness test fixture
+License: MIT
+ExclusiveArch: x86_64
+%description
+AMD64-only PMC staleness test fixture.
+EOF
+tracked_name=pmc-test
+tracked_version=1.2.3
+tracked_package="${tracked_name}|0:${tracked_version}-4.azl3"
+arm64_output="${tracked_package}"
+amd64_output="${arm64_output}"$'\npmc-test-amd64|0:1.0-1.azl3'
 
 cat > "${work_dir}/bin/dnf5" <<'EOF'
 #!/bin/bash
@@ -27,43 +60,10 @@ fi
 EOF
 chmod +x "${work_dir}/bin/dnf5"
 
-declare -a amd64_packages=() arm64_packages=()
-tracked_package=""
-tracked_name=""
-tracked_version=""
-for spec_file in "${SCRIPT_ROOT}"/acl/SPECS/*/*.spec; do
-    base_version="$(awk '/^%define pmc_base_version/ {print $3; exit}' "${spec_file}")"
-    base_release="$(awk '/^%define pmc_base_release/ {print $3; exit}' "${spec_file}")"
-    if [[ -n "${base_version}" && -n "${base_release}" ]]; then
-        package_name="$(rpmspec -P --target x86_64 "${spec_file}" 2>/dev/null | sed -n 's/^Name:[[:space:]]*//p' | head -n1)"
-        [[ -n "${package_name}" ]] || fail "Could not resolve package name from ${spec_file}"
-        package_line="${package_name}|0:${base_version}-${base_release}.azl3"
-        amd64_packages+=("${package_line}")
-        exclusive_arch="$(sed -n 's/^ExclusiveArch:[[:space:]]*//p' "${spec_file}" | head -n1)"
-        if [[ -z "${exclusive_arch}" || " $(rpm --eval "${exclusive_arch}") " == *" aarch64 "* ]]; then
-            arm64_packages+=("${package_line}")
-        fi
-        if [[ -z "${tracked_package}" ]]; then
-            tracked_package="${package_line}"
-            tracked_name="${package_name}"
-            tracked_version="${base_version}"
-        fi
-    fi
-done
-[[ -n "${tracked_package}" ]] || fail "No PMC-tracked package found for the test fixture"
-amd64_output="$(printf '%s\n' "${amd64_packages[@]}")"
-arm64_output="$(printf '%s\n' "${arm64_packages[@]}")"
-
 replace_first_package() {
     local replacement="$1" output="$2"
     printf '%s\n' "${replacement}"
     printf '%s\n' "${output}" | tail -n +2
-}
-
-replace_package() {
-    local name="$1" replacement="$2" output="$3"
-    awk -F '|' -v name="${name}" -v replacement="${replacement}" \
-        '$1 == name { print replacement; next } { print }' <<< "${output}"
 }
 
 DNF5_ARGS_FILE="${work_dir}/dnf5-args" \
@@ -88,17 +88,8 @@ grep -Fxq -- '--repofrompath=pmc-base,https://packages.microsoft.com/azurelinux/
     "${work_dir}/dnf5-amd64-args" || fail "AMD64 staleness query used the wrong PMC repository"
 grep -Fxq -- '--queryformat=%{name}|%{epoch}:%{version}-%{release}\n' \
     "${work_dir}/dnf5-amd64-args" || fail "Staleness query did not request structured full EVR output"
-
-grep -Fxq 'containerd2|0:2.3.7-1.azl3' <<< "${amd64_output}" ||
-    fail "containerd2 was not tracked under its macro-expanded RPM name"
-containerd_output="$(replace_package containerd2 'containerd2|0:2.3.8-1.azl3' "${amd64_output}")"
-if DNF5_ARGS_FILE="${work_dir}/dnf5-containerd2-args" \
-    DNF5_OUTPUT="${containerd_output}" DNF5_BIN="${work_dir}/bin/dnf5" BOARD=amd64-usr \
-    bash "${CHECKER}" "${work_dir}/root" > "${work_dir}/containerd2.log" 2>&1; then
-    fail "A newer upstream containerd2 must fail the staleness check"
-fi
-grep -Fq 'containerd2: STALE' "${work_dir}/containerd2.log" ||
-    fail "A newer upstream containerd2 did not report STALE"
+grep -Fxq -- "${tracked_name}" "${work_dir}/dnf5-amd64-args" ||
+    fail "Staleness query did not use the macro-expanded RPM name"
 
 for failure_case in empty unknown partial; do
     case "${failure_case}" in
@@ -150,7 +141,7 @@ fi
 grep -Fq "${tracked_name}: STALE" "${work_dir}/duplicate-newer.log" ||
     fail "The highest duplicate repository candidate was not selected"
 
-stale_output="$(replace_first_package "${tracked_name}|0:${tracked_version}-999999.azl3" "${amd64_output}")"
+stale_output="$(replace_first_package "${tracked_name}|0:1.2.4-1.azl3" "${amd64_output}")"
 if DNF5_ARGS_FILE="${work_dir}/dnf5-stale-args" \
     DNF5_OUTPUT="${stale_output}" DNF5_BIN="${work_dir}/bin/dnf5" BOARD=amd64-usr \
     bash "${CHECKER}" "${work_dir}/root" > "${work_dir}/stale.log" 2>&1; then

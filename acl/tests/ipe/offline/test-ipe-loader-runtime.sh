@@ -375,6 +375,7 @@ test_containerd_profile_selection() (
 
     local selector="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-select-profile"
     local erofs="${SCRIPT_DIR}/build_library/rpm/additional_files/containerd2/containerd-acl-erofs.toml"
+    local containerd_bin="${CASE_DIR}/bin/containerd-acl"
     local base="${CASE_DIR}/base \"quoted\" config.toml"
     local original="${CASE_DIR}/original.toml"
     local final="${CASE_DIR}/run/acl-config.toml"
@@ -390,9 +391,9 @@ test_containerd_profile_selection() (
     printf '0\n' > "${IPE_DIR}/enforce"
 
     if [[ -n "${CONTAINERD_BIN:-}" ]]; then
-        ln -s "$(command -v "${CONTAINERD_BIN}")" "${CASE_DIR}/bin/containerd"
+        ln -s "$(command -v "${CONTAINERD_BIN}")" "${containerd_bin}"
     else
-        command cat > "${CASE_DIR}/bin/containerd" <<'EOF'
+        command cat > "${containerd_bin}" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 
@@ -421,10 +422,9 @@ default = ["erofs", "walking"]
 ${TEST_UNPACK_CONFIG}
 TOML
 EOF
-        chmod +x "${CASE_DIR}/bin/containerd"
+        chmod +x "${containerd_bin}"
     fi
 
-    export PATH="${CASE_DIR}/bin:${PATH}"
     export ACL_IPE_DIR="${IPE_DIR}"
     export ACL_CONTAINERD_CONFIG_PATH="${final}"
     export ACL_CONTAINERD_EROFS_CONFIG="${erofs}"
@@ -512,7 +512,7 @@ ${extra}
 EOF
 
         cp "${base}" "${original}"
-        bash "${selector}" "${base}"
+        bash "${selector}" "${base}" "${containerd_bin}"
 
         python3 - "${final}" "${base}" "${erofs}" "${fallback}" <<'PY'
 import sys, tomllib
@@ -527,14 +527,22 @@ PY
         [[ -z "$(find "${CASE_DIR}/run" -name '*.tmp.*' -print)" ]]
 
         if [[ -n "${CONTAINERD_BIN:-}" ]]; then
-            containerd --config "${final}" config dump |
+            "${containerd_bin}" --config "${final}" config dump |
                 python3 -c 'import sys, tomllib; assert tomllib.loads(sys.stdin.read())["root"] == "/var/lib/containerd-provider"'
         fi
     done
 
     cp "${final}" "${CASE_DIR}/selected.toml"
+    if bash "${selector}" "${base}" "${CASE_DIR}/missing-containerd" > "${CASE_DIR}/failure.log" 2>&1; then
+        echo "Selector accepted a missing daemon in audit mode" >&2
+        return 1
+    fi
+    grep -Fq 'containerd executable must be an absolute path' "${CASE_DIR}/failure.log" ||
+        { echo "missing containerd executable rejection diagnostic" >&2; return 1; }
+    cmp "${final}" "${CASE_DIR}/selected.toml"
+
     printf '1\n' > "${IPE_DIR}/enforce"
-    if bash "${selector}" "${base}" > "${CASE_DIR}/failure.log" 2>&1; then
+    if bash "${selector}" "${base}" "${containerd_bin}" > "${CASE_DIR}/failure.log" 2>&1; then
         echo "Selector allowed unsigned fallback with enforcement enabled" >&2
         return 1
     fi
@@ -542,7 +550,7 @@ PY
         { echo "missing IPE enforcement rejection diagnostic" >&2; return 1; }
 
     rm "${IPE_DIR}/enforce"
-    if bash "${selector}" "${base}" > "${CASE_DIR}/failure.log" 2>&1; then
+    if bash "${selector}" "${base}" "${containerd_bin}" > "${CASE_DIR}/failure.log" 2>&1; then
         echo "Selector allowed unsigned fallback without enforcement state" >&2
         return 1
     fi

@@ -3,6 +3,7 @@
 set -euo pipefail
 
 base_config="${1:-}"
+containerd_bin="${2:-}"
 erofs_config="${ACL_CONTAINERD_EROFS_CONFIG:-/usr/share/containerd/acl-erofs.toml}"
 final_config="${ACL_CONTAINERD_CONFIG_PATH:-/run/containerd/acl-config.toml}"
 ipe_dir="${ACL_IPE_DIR:-/sys/kernel/security/ipe}"
@@ -11,6 +12,9 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 
 [[ -n "${base_config}" && -r "${base_config}" ]] ||
     fail "containerd base config is not readable: ${base_config}"
+
+[[ "${containerd_bin}" == /* && -x "${containerd_bin}" && -f "${containerd_bin}" ]] ||
+    fail "containerd executable must be an absolute path to an executable file: ${containerd_bin}"
 
 # Convert a given path to an absolute path and escape it for use in a TOML file.
 get_absolute_path() {
@@ -236,13 +240,13 @@ validate_erofs_profile() {
     local defaults merged
 
     # Read the default config options to see what the containerd binary supports.
-    if ! defaults="$(containerd config default)"; then
+    if ! defaults="$("${containerd_bin}" config default)"; then
         echo "WARNING: cannot read the containerd default configuration" >&2
         return 1
     fi
     check_referrer_support "${defaults}" || return 1
 
-    if ! merged="$(containerd --config "${temporary_merged_config}" config dump)"; then
+    if ! merged="$("${containerd_bin}" --config "${temporary_merged_config}" config dump)"; then
         echo "WARNING: cannot load the merged EROFS containerd configuration" >&2
         return 1
     fi
