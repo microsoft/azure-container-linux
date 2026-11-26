@@ -1,0 +1,5 @@
+version = 4
+
+[plugins."io.containerd.snapshotter.v1.erofs"]
+  # Without CRI labeling, supply a mount-wide label for unlabeled EROFS layers.
+  ovl_mount_options = ['context="system_u:object_r:container_file_t:s0"']

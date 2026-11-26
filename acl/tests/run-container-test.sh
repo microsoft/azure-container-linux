@@ -42,7 +42,7 @@ run_overlayfs_smoke_test() {
 
 # Exit successfully when the additional EROFS test does not apply.
 require_erofs_profile() {
-    local containerd_pid containerd_cmdline effective_config snapshotter
+    local containerd_pid containerd_cmdline effective_config settings snapshotter cri_selinux
 
     if [[ ! -r /sys/kernel/security/ipe/policies/acl_ipe_boot_policy/active ]] ||
         [[ "$(< /sys/kernel/security/ipe/policies/acl_ipe_boot_policy/active)" != 1 ]]; then
@@ -58,7 +58,7 @@ require_erofs_profile() {
         fail "Containerd is not using the IPE-selected config"
 
     effective_config="$(containerd --config /run/containerd/acl-config.toml config dump)"
-    snapshotter="$(awk '
+    settings="$(awk '
         {
             gsub(/\047/, "\"")
             sub(/^[[:space:]]+/, "")
@@ -67,13 +67,21 @@ require_erofs_profile() {
         /^\[/ { section = $0 }
         section == "[plugins.\"io.containerd.cri.v1.images\"]" && /^snapshotter =/ {
             gsub(/"/, "", $3)
-            print $3
-            found = ($3 != "")
+            snapshotter = $3
         }
-        END { if (!found) exit 1 }
-    ' <<< "${effective_config}")" || fail "Could not determine the effective CRI snapshotter"
+        section == "[plugins.\"io.containerd.cri.v1.runtime\"]" && /^enable_selinux =/ { selinux = $3 }
+        END {
+            if (!snapshotter || (selinux != "true" && selinux != "false")) exit 1
+            print snapshotter, selinux
+        }
+    ' <<< "${effective_config}")" || fail "Could not determine the effective CRI snapshotter and SELinux setting"
+    read -r snapshotter cri_selinux <<< "${settings}"
     if [[ "${snapshotter}" != erofs ]]; then
         echo "Skipping EROFS SELinux test: effective CRI snapshotter is ${snapshotter}."
+        exit 0
+    fi
+    if [[ "${cri_selinux}" == true ]]; then
+        echo "Skipping static-context nginx test: CRI supplies per-pod labels; ctr bypasses CRI."
         exit 0
     fi
 }

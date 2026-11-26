@@ -4,6 +4,7 @@ set -euo pipefail
 
 base_config="${1:-}"
 erofs_config="${ACL_CONTAINERD_EROFS_CONFIG:-/usr/share/containerd/acl-erofs.toml}"
+static_context_config="${ACL_CONTAINERD_STATIC_CONTEXT_CONFIG:-/usr/share/containerd/acl-erofs-static-context.toml}"
 final_config="${ACL_CONTAINERD_CONFIG_PATH:-/run/containerd/acl-config.toml}"
 ipe_dir="${ACL_IPE_DIR:-/sys/kernel/security/ipe}"
 
@@ -28,6 +29,10 @@ write_config() {
         if [[ "$1" == "erofs" ]]; then
             printf ', '
             get_absolute_path "${erofs_config}"
+            if [[ "${2:-}" == false ]]; then
+                printf ', '
+                get_absolute_path "${static_context_config}"
+            fi
         fi
         printf ']\n'
     } > "${temporary_merged_config}"
@@ -232,8 +237,8 @@ check_transfer_service_conflicts() {
 
 # Run the 'containerd config dump' command to get the fully merged configuration of the base and EROFS profile.
 # The checks below ensure the merged config is valid and does not contain compatibility issues.
-validate_erofs_profile() {
-    local defaults merged
+prepare_erofs_profile() {
+    local defaults base_dump cri_selinux merged
 
     # Read the default config options to see what the containerd binary supports.
     if ! defaults="$(containerd config default)"; then
@@ -242,6 +247,25 @@ validate_erofs_profile() {
     fi
     check_referrer_support "${defaults}" || return 1
 
+    # Let containerd resolve imports, migrate legacy CRI config, and supply defaults.
+    if ! base_dump="$(containerd --config "${base_config}" config dump)"; then
+        echo "WARNING: cannot load the base containerd configuration" >&2
+        return 1
+    fi
+    if ! cri_selinux="$(awk '
+        { gsub(/\047/, "\""); sub(/^[[:space:]]+/, "") }
+        /^\[/ { runtime = ($0 == "[plugins.\"io.containerd.cri.v1.runtime\"]") }
+        runtime && $1 == "enable_selinux" && $2 == "=" { value = $3 }
+        END { if (value != "true" && value != "false") exit 1; print value }
+    ' <<< "${base_dump}")"; then
+        echo "WARNING: cannot determine effective CRI enable_selinux setting" >&2
+        return 1
+    fi
+    if [[ "${cri_selinux}" == false && ! -r "${static_context_config}" ]]; then
+        echo "WARNING: cannot read EROFS static context config: ${static_context_config}" >&2
+        return 1
+    fi
+    write_config erofs "${cri_selinux}" || return 1
     if ! merged="$(containerd --config "${temporary_merged_config}" config dump)"; then
         echo "WARNING: cannot load the merged EROFS containerd configuration" >&2
         return 1
@@ -257,9 +281,8 @@ mkdir -p "$(dirname "${final_config}")"
 temporary_merged_config="${final_config}.tmp.$$"
 trap 'rm -f -- "${temporary_merged_config}"' EXIT
 
-write_config erofs
 selected_profile="EROFS"
-if ! validate_erofs_profile; then
+if ! prepare_erofs_profile; then
     # If IPE is enforcing or another unknown state, fail out immediately.
     if ! enforcement="$(tr -d '[:space:]' < "${ipe_dir}/enforce")" ||
         [[ "${enforcement}" != "0" ]]; then

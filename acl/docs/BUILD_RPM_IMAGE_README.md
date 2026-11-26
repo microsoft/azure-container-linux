@@ -237,7 +237,11 @@ a base config (AgentBaker's on AKS nodes) merged with
 `/usr/share/containerd/acl-erofs.toml`, which selects EROFS as the CRI
 and snapshotter plugins and enables the flag to discover dm-verity OCI
 referrers. This requires a matching containerd RPM with signed EROFS referrer
-support. Disabled IPE leaves the base config selected. If the merged profile is
+support. When the effective CRI `enable_selinux` setting is false (the default),
+the selector also imports `acl-erofs-static-context.toml` to label otherwise
+unlabeled layers. When true, CRI supplies the per-pod mount context instead.
+This path requires the [containerd fsconfig quoting fix](https://github.com/containerd/containerd/pull/13754).
+Disabled IPE leaves the base config selected. If the merged profile is
 incompatible with signed EROFS, confirmed IPE `enforce=0` selects the base
 config as a fallback, without signed-referrer support. The selector checks
 flag support in `containerd config default` before validating the merged
