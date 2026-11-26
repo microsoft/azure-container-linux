@@ -67,6 +67,14 @@ interfaces.
 `svirt_lxc_net_t` is a compatibility alias for `container_t`; use the canonical
 `container_t` name in new configurations.
 
+`container_t` can read the process group ID (`getpgid`) of another visible
+`container_t` process with the same MCS range. For example, a server can
+identify its workers during graceful shutdown. A subset of the caller's
+categories is not a match. This checks labels, not parentage or pod identity:
+pods given identical labels (including `s0` without categories) cannot be
+distinguished by this rule. Use distinct runtime-assigned categories for pods
+that require isolation. The permission does not grant the right to send signals.
+
 ### `container_logreader_t`
 
 `container_logreader_t` extends the normal confined container policy with

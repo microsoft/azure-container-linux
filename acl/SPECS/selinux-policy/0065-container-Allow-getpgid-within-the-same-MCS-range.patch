@@ -1,0 +1,67 @@
+diff --git a/policy/mcs b/policy/mcs
+index 30129dc..cbf0e83 100644
+--- a/policy/mcs
++++ b/policy/mcs
+@@ -88,6 +88,11 @@ mlsconstrain { file lnk_file fifo_file } { create relabelto }
+ mlsconstrain process { transition dyntransition ptrace sigkill sigstop signal getsession getattr getsched setsched getrlimit setrlimit getpgid setpgid getcap setcap share setexec setfscreate setcurrent setsockcreate }
+ 	(( h1 dom h2 ) or ( t1 != mcs_constrained_type ));
+ 
++# Dominance alone permits reading a peer with fewer (or no) categories.
++mlsconstrain process getpgid
++	(( t1 != mcs_getpgid_same_range_type ) or ( t1 != t2 ) or
++	 (( l1 eq l2 ) and ( h1 eq h2 )));
++
+ #
+ # MCS policy for socket classes
+ #
+diff --git a/policy/modules/kernel/mcs.if b/policy/modules/kernel/mcs.if
+index 55b5a7f..510f099 100644
+--- a/policy/modules/kernel/mcs.if
++++ b/policy/modules/kernel/mcs.if
+@@ -31,6 +31,25 @@ interface(`mcs_constrained',`
+ 	typeattribute $1 mcs_constrained_type;
+ ')
+ 
++########################################
++## <summary>
++##	Read process group IDs within the same domain and MCS range.
++## </summary>
++## <param name="domain">
++##	<summary>Domain permitted to query its peers.</summary>
++## </param>
++#
++interface(`mcs_getpgid_same_range',`
++	ifdef(`enable_mcs',`
++		gen_require(`
++			attribute mcs_getpgid_same_range_type;
++		')
++
++		typeattribute $1 mcs_getpgid_same_range_type;
++		allow $1 self:process getpgid;
++	')
++')
++
+ ########################################
+ ## <summary>
+ ##	This domain is allowed to read files and directories
+diff --git a/policy/modules/kernel/mcs.te b/policy/modules/kernel/mcs.te
+index 008a90c..386f3df 100644
+--- a/policy/modules/kernel/mcs.te
++++ b/policy/modules/kernel/mcs.te
+@@ -11,3 +11,4 @@ attribute mcssetcats;
+ attribute mcswriteall;
+ attribute mcsreadall;
+ attribute mcs_constrained_type;
++attribute mcs_getpgid_same_range_type;
+diff --git a/policy/modules/services/container.te b/policy/modules/services/container.te
+index 9625ac2..62d8cea 100644
+--- a/policy/modules/services/container.te
++++ b/policy/modules/services/container.te
+@@ -543,6 +543,7 @@ corenet_tcp_connect_all_ports(container_net_domain)
+ #
+ 
+ allow container_t self:process { getcap setrlimit };
++mcs_getpgid_same_range(container_t)
+ 
+ allow container_t container_file_t:filesystem getattr;
+ 
