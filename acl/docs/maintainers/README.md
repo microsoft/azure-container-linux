@@ -5,38 +5,28 @@ Ordinary development PRs should target `aclmain`.
 
 ## Merge checklist
 
-1. Normally, land the complete change on `aclmain`. Wait for a **completed,
-   successful [aclmain nightly pipeline](https://dev.azure.com/mariner-org/ACL/_build/definition?definitionId=5304)**
-   run whose resolved GitHub ACL source revision includes it. A full manual
-   run of the same pipeline also counts when both architectures were built
-   and tested with the required coverage. Verify the main SHA, source pin,
-   parameters, and effective job/test results; a green PR check, partial
-   manual run, or the pipeline repository's commit is not equivalent
-   evidence. For an emergency that cannot wait, follow the explicit
-   exception process below.
-2. Choose a targeted cherry-pick or the full changeset (below). Open a PR
-   into the intended `release/*` branch and review its entire diff. Record
-   the original main commits and target tip for a cherry-pick, or the exact
-   candidate and release control for a full promotion.
-3. For cherry-picks, run the
-   [validation skill](../../../.github/skills/validate-release-cherry-picks/SKILL.md).
-   Review its per-commit PASS report, including prerequisites, follow-ups,
-   and tested source pins. For a full promotion, follow the linked
-   release-validation guidance and retain its candidate/control report.
-   Summarize the result and any limitation in the public PR without linking
-   internal reports or runs.
-4. Confirm **all required PR checks pass** and the reviewed PR head has not
-   changed. If the cherry-pick skill does not PASS, use only a documented
-   exception below with substitute evidence and release-owner approval;
-   never treat UNVERIFIED as PASS or bypass failing PR checks.
-5. A maintainer with the **admin role** must obtain **just-in-time (JIT)**
-   access to merge. Prefer **rebase and merge for cherry-picks** and a
-   **merge commit for full promotions** so main/release ancestry is
-   preserved. Follow the merge-method order below if the preferred method
-   is unavailable. Select the **bypass** checkbox required for the protected
-   release branch; it does not waive checks or qualification. If bypass is
-   unavailable, stop and resolve access or protection before merging.
-   Verify the resulting branch has only the intended changes.
+1. Land the change on `aclmain`. Wait for a completed, successful
+   [aclmain pipeline](https://dev.azure.com/mariner-org/ACL/_build/definition?definitionId=5304)
+   run: nightly or a full manual run. The skill in step 3 checks its source
+   commit and test coverage. For an emergency, use the exception below.
+2. Open a PR to `release/*`. Choose a targeted cherry-pick or full promotion
+   (below), review the diff, and record the main commit(s) or exact
+   candidate and release control.
+3. **Cherry-pick:** Run
+   [validate-release-cherry-picks](../../../.github/skills/validate-release-cherry-picks/SKILL.md);
+   require PASS for every commit. **Full promotion:** Run
+   [acl-release-validation](https://dev.azure.com/mariner-org/ACL/_git/acl-pipelines?path=/.github/skills/acl-release-validation/SKILL.md&version=GBmain)
+   and retain its candidate/control report. Put the verdict, limitations,
+   and any risk decision in the public PR; keep internal run links and
+   detailed evidence private.
+4. Check that all required PR checks pass and the reviewed head is unchanged.
+   If the cherry-pick skill does not PASS, document the specific exception,
+   substitute evidence, and release-owner approval below. UNVERIFIED is not
+   PASS; do not bypass failing checks.
+5. Get JIT **admin** access. Use the merge-method order below and select
+   the protected branch's **bypass** checkbox. If bypass is unavailable,
+   stop and fix access or protection. After merging, verify only the
+   intended changes landed.
 
 ## Backport options
 
