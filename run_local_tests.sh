@@ -65,14 +65,14 @@ function set_vars() {
     img_name="${img_prefix}_qemu_uefi_test_image.img"
   fi
 
-export QEMU_IMAGE_NAME=/work/__build__/images/images/${arch}-usr/latest/${img_name}
-export QEMU_UEFI_FIRMWARE=/work/__build__/images/images/${arch}-usr/latest/${img_prefix}_qemu_uefi_efi_code.qcow2
-export QEMU_UEFI_OVMF_VARS=/work/__build__/images/images/${arch}-usr/latest/${img_prefix}_qemu_uefi_efi_vars.qcow2
-export QEMU_UEFI_SECURE_FIRMWARE=/work/__build__/images/images/${arch}-usr/latest/${img_prefix}_qemu_uefi_secure_efi_code.qcow2
-export QEMU_UEFI_SECURE_OVMF_VARS=/work/__build__/images/images/${arch}-usr/latest/${img_prefix}_qemu_uefi_secure_efi_vars.qcow2
-export QEMU_UPDATE_PAYLOAD=/work/__build__/images/images/${arch}-usr/latest/flatcar_test_update.gz
-export PARALLEL_TESTS=${parallel}
-export KOLA_DEBUG=${KOLA_DEBUG:-}
+  local images="/work/__build__/images/images/${arch}-usr/latest"
+  export QEMU_IMAGE_NAME="${images}/${img_name}"
+  export QEMU_UEFI_FIRMWARE="${images}/${img_prefix}_qemu_uefi_efi_code.qcow2"
+  export QEMU_UEFI_OVMF_VARS="${images}/${img_prefix}_qemu_uefi_efi_vars.qcow2"
+  export QEMU_UEFI_SECURE_FIRMWARE="${images}/${img_prefix}_qemu_uefi_secure_efi_code.qcow2"
+  export QEMU_UEFI_SECURE_OVMF_VARS="${images}/${img_prefix}_qemu_uefi_secure_efi_vars.qcow2"
+  export QEMU_UPDATE_PAYLOAD="${images}/flatcar_test_update.gz"
+  export PARALLEL_TESTS="${parallel}" PACKAGE_SOURCE_MODE KOLA_DEBUG="${KOLA_DEBUG:-}"
 
   export MAX_RETRIES=${MAX_RUNS:-1}
   echo "[DEBUG] run_local_tests.sh set_vars(): MAX_RUNS=${MAX_RUNS:-<not set>} → MAX_RETRIES=${MAX_RETRIES}"

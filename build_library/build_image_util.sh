@@ -1055,7 +1055,7 @@ EOF
     info "RPM mode: Skipping embedded initramfs extraction (Azure Linux kernel has no embedded initramfs)"
   fi
 
-  if [[ -n ${image_realinitrd_contents} || -n ${image_realinitrd_contents_wtd} ]]; then
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" && ( -n ${image_realinitrd_contents} || -n ${image_realinitrd_contents_wtd} ) ]]; then
         mkdir -p "${BUILD_DIR}/tmp_initrd_contents"
         sudo mount "${root_fs_dir}/usr/lib/flatcar/bootengine.img" "${BUILD_DIR}/tmp_initrd_contents"
         if [[ -n ${image_realinitrd_contents} ]]; then
