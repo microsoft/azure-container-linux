@@ -52,6 +52,32 @@ rpm_bootloader_package_file() {
     printf '%s\n' "${matches[0]}"
 }
 
+# Emit the lsm= kernel argument that enables the BPF LSM. lsm= replaces the
+# kernel's built-in LSM list rather than extending it, so start from the
+# CONFIG_LSM default of the kernel RPM on the ESP and append bpf to it.
+rpm_bpf_lsm_cmdline_arg() {
+    local esp_dir="$1"
+
+    local -a configs=()
+    mapfile -t configs < <(find "${esp_dir}" "${esp_dir}/boot" -maxdepth 1 \
+        -type f -name 'config-[0-9]*' 2>/dev/null)
+    [[ ${#configs[@]} -eq 1 ]] ||
+        die "Expected one kernel config-* on ESP (${esp_dir}), found ${#configs[@]}"
+
+    grep -qx 'CONFIG_BPF_LSM=y' "${configs[0]}" ||
+        die "Kernel config ${configs[0]##*/} does not have CONFIG_BPF_LSM=y"
+
+    local lsm_list
+    lsm_list="$(sed -n 's/^CONFIG_LSM="\(.*\)"$/\1/p' "${configs[0]}")"
+    [[ -n "${lsm_list}" ]] ||
+        die "Kernel config ${configs[0]##*/} has no CONFIG_LSM default"
+
+    if [[ ",${lsm_list}," != *",bpf,"* ]]; then
+        lsm_list+=",bpf"
+    fi
+    printf 'lsm=%s\n' "${lsm_list}"
+}
+
 RPM_MANIFEST_QUERY_FORMAT='%|ARCH?{%{NAME}\t%{VERSION}-%{RELEASE}\t%{INSTALLTIME}\t%{BUILDTIME}\t%{VENDOR}\t%{EPOCH}\t%{SIZE}\t%{ARCH}\t%{EPOCHNUM}\t%{SOURCERPM}\n}:{}|'
 
 rpm_snapshot_args() {
