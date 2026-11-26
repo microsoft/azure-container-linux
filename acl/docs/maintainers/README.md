@@ -32,12 +32,11 @@ Ordinary development PRs should target `aclmain`.
 5. A maintainer with the **admin role** must obtain **just-in-time (JIT)**
    access to merge. Prefer **rebase and merge for cherry-picks** and a
    **merge commit for full promotions** so main/release ancestry is
-   preserved. Use a reviewed squash fallback only as described below.
-   Select the **bypass** checkbox
-   required for the protected release branch; it does not waive checks or
-   qualification. If bypass is unavailable, stop and resolve access or
-   protection before merging. Verify the resulting branch has only the
-   intended changes.
+   preserved. Follow the merge-method order below if the preferred method
+   is unavailable. Select the **bypass** checkbox required for the protected
+   release branch; it does not waive checks or qualification. If bypass is
+   unavailable, stop and resolve access or protection before merging.
+   Verify the resulting branch has only the intended changes.
 
 ## Backport options
 
@@ -68,22 +67,31 @@ Ordinary development PRs should target `aclmain`.
   The linked examples describe `release/3.0`; for another branch, establish
   its control and requirements with the release owner.
 
-## Merge-method fallback
+## Merge-method order
 
-For targeted cherry-picks, if rebase and merge is unavailable or cannot
-preserve the reviewed changes, **squash and merge** is an option, as used in
-[#156](https://github.com/microsoft/azure-container-linux/pull/156). For
-full promotions, prefer a **merge commit** to retain common history with
-`aclmain`, as in [#121](https://github.com/microsoft/azure-container-linux/pull/121).
-If that is unavailable, **rebase and merge** has been used for a full
-promotion in [#102](https://github.com/microsoft/azure-container-linux/pull/102),
-but only use it after the release owner explicitly accepts losing shared
-ancestry and confirms the candidate/control validation still applies.
-Before using either fallback, compare the resulting tree with the reviewed
-PR, confirm necessary fixes survive, and retain the cherry-pick or
-full-promotion evidence because commit identities change. If the proposed
-result differs, re-review it before merging. Switching methods does **not**
-substitute for the required bypass permission.
+- **Targeted cherry-picks: rebase and merge, then merge commit, then squash
+  and merge.** Cherry-picks already have different SHAs from their `aclmain`
+  sources, so a merge commit cannot restore main ancestry. Rebase keeps
+  individual backport commits and a linear release history; retain each
+  original main SHA in its commit message for traceability. If rebase is
+  unavailable, a merge commit preserves the backport commits but makes
+  history non-linear. Squash is last because it collapses individual changes
+  and their commit-level traceability.
+- **Full promotions: merge commit, then rebase and merge, then squash and
+  merge.** A merge commit preserves the original `aclmain` commits and
+  shared ancestry, giving later promotions an accurate merge base and
+  reducing repeated conflicts; the history will be non-linear. Rebase keeps
+  commits separate and history linear, but rewrites their SHAs and loses the
+  promoted main ancestry. Squash additionally collapses all commits into
+  one. Use either fallback only with an explicit release-owner decision
+  accepting the ancestry loss and confirming the candidate/control
+  validation remains applicable.
+
+Before using a fallback, compare its resulting tree with the reviewed PR,
+confirm necessary prerequisites and follow-ups survive, and retain the
+cherry-pick or full-promotion evidence. If the result differs, re-review it
+before merging. Switching methods does **not** substitute for the required
+bypass permission.
 
 ## Exceptions to a cherry-pick skill PASS
 
