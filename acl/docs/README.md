@@ -16,5 +16,11 @@ Detailed documentation for Azure Container Linux.
 | Document                                               | Description                                                           |
 | ------------------------------------------------------ | --------------------------------------------------------------------- |
 | [Build RPM Image](BUILD_RPM_IMAGE_README.md)           | Building ACL images from RPMs                                         |
-| [Package Reports](package-reports.md) | Reporting and removing image packages |
+| [Package Reports](package-reports.md)                  | Reporting and removing image packages                                 |
 | [Container Image Preload](containerd-image-preload.md) | Baking OCI images into the containerd store with the Image Customizer |
+
+## Maintainer Guides
+
+| Document                                               | Description                                |
+| ------------------------------------------------------ | ------------------------------------------ |
+| [Merging into release branches](maintainers/README.md) | Qualifying and merging `release/*` changes |
