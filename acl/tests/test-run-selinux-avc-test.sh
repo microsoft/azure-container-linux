@@ -10,11 +10,17 @@ dmesg() { printf '%s\n' "${DMESG_LOG:-boot completed}"; }
 journalctl() { printf '%s\n' "${JOURNAL_LOG:-}"; }
 getenforce() { printf '%s\n' "${MODE:-Enforcing}"; }
 chcon() { :; }
-stat() { printf '%s\n' 'system_u:object_r:shadow_t:s0'; }
+stat() {
+    if [[ "$3" == *acl-selinux-cat.* ]]; then
+        printf '%s\n' 'system_u:object_r:container_file_t:s0'
+    else
+        printf '%s\n' 'system_u:object_r:shadow_t:s0'
+    fi
+}
 runcon() {
     while [[ "$1" != -- ]]; do shift; done
     shift
-    if [[ "$1" == id ]]; then
+    if [[ "$2" == /proc/self/attr/current ]]; then
         printf '%s\n' "${PROCESS_CONTEXT:-system_u:system_r:container_t:s0}"
     elif [[ "${READ_RESULT:-denied}" == denied ]]; then
         printf 'cat: %s: Permission denied\n' "$2" >&2
@@ -49,25 +55,25 @@ PROCESS_CONTEXT=system_u:system_r:unconfined_t:s0
 export MODE PROCESS_CONTEXT
 check_case 'wrong process domain fails' 1 'Probe process has unexpected context'
 PROCESS_CONTEXT=system_u:system_r:container_t:s0
-DMESG_LOG='audit: avc: denied { read } comm="cat" name="other" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
+DMESG_LOG='audit: avc: denied { read } comm="acl-selinux-cat" name="other" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
 export PROCESS_CONTEXT DMESG_LOG
 check_case 'unrelated AVC still fails' 1 'AVC denials found in dmesg: 1'
-DMESG_LOG='audit: avc: denied { read } comm="cat" name="acl-selinux-denial.abcdef" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
+DMESG_LOG='audit: avc: denied { read } comm="acl-selinux-cat" name="acl-selinux-denial.abcdef" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
 export DMESG_LOG
 check_case 'prior probe AVC is excluded' 0 'Enforcing SELinux denied container_t read of shadow_t'
-DMESG_LOG='audit: avc: denied { read } comm="cat" name="acl-selinux-denial.abcdef" scontext=system_u:system_r:container_t:s0:c123,c456 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
+DMESG_LOG='audit: avc: denied { read } comm="acl-selinux-cat" name="acl-selinux-denial.abcdef" scontext=system_u:system_r:container_t:s0:c123,c456 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
 export DMESG_LOG
 check_case 'category-tagged source is not excluded' 1 'AVC denials found in dmesg: 1'
 DMESG_LOG='boot completed'
-JOURNAL_LOG='audit: avc: denied { read } comm="cat" name="acl-selinux-denial.abcdef" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0:c123,c456 tclass=file permissive=0'
+JOURNAL_LOG='audit: avc: denied { read } comm="acl-selinux-cat" name="acl-selinux-denial.abcdef" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0:c123,c456 tclass=file permissive=0'
 export DMESG_LOG JOURNAL_LOG
 check_case 'category-tagged target is not excluded' 1 'AVC denials found in journal: 1'
 JOURNAL_LOG=''
 export JOURNAL_LOG
-DMESG_LOG='audit: avc: denied { write } comm="cat" name="acl-selinux-denial.abcdef" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
+DMESG_LOG='audit: avc: denied { write } comm="acl-selinux-cat" name="acl-selinux-denial.abcdef" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
 export DMESG_LOG
 check_case 'other access to probe is not excluded' 1 'AVC denials found in dmesg: 1'
 DMESG_LOG='boot completed'
-JOURNAL_LOG='audit: avc: denied { read } comm="cat" name="other" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
+JOURNAL_LOG='audit: avc: denied { read } comm="acl-selinux-cat" name="other" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
 export DMESG_LOG JOURNAL_LOG
 check_case 'unrelated journal AVC still fails' 1 'AVC denials found in journal: 1'

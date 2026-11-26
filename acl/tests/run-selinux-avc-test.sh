@@ -35,7 +35,7 @@ if [ -z "$DMESG_OUTPUT" ]; then
 fi
 
 # Only exclude AVCs from this test's known probe, not other container_t denials.
-probe_avc='avc:[[:space:]]+denied[[:space:]]+\{[[:space:]]+read[[:space:]]+\}.*comm="cat" name="acl-selinux-denial\.[^"]+".*scontext=system_u:system_r:container_t:s0[[:space:]].*tcontext=[^[:space:]]*:shadow_t:s0[[:space:]].*tclass=file.*permissive=0'
+probe_avc='avc:[[:space:]]+denied[[:space:]]+\{[[:space:]]+read[[:space:]]+\}.*comm="acl-selinux-cat" name="acl-selinux-denial\.[^"]+".*scontext=system_u:system_r:container_t:s0[[:space:]].*tcontext=[^[:space:]]*:shadow_t:s0[[:space:]].*tclass=file.*permissive=0'
 DMESG_AVC_DENIALS=$(echo "$DMESG_OUTPUT" | grep -E "avc:[[:space:]]+denied" | grep -Ev "$probe_avc" || true)
 
 # Also check journalctl for AVC denials
@@ -93,7 +93,7 @@ fi
 # Check enforcement after the log scan; subsequent invocations exclude only
 # the probe's narrowly identified AVCs.
 check_enforced_denial() (
-    local file context error_file status
+    local file context error_file executable status
     [ "$(getenforce)" = "Enforcing" ] || {
         echo "❌ FAILED: SELinux is not enforcing"
         return 1
@@ -110,7 +110,11 @@ check_enforced_denial() (
         rm -f -- "$file"
         return 1
     }
-    trap 'rm -f -- "$file" "$error_file"' EXIT
+    executable=$(mktemp /tmp/acl-selinux-cat.XXXXXX) || {
+        rm -f -- "$file" "$error_file"
+        return 1
+    }
+    trap 'rm -f -- "$file" "$error_file" "$executable"' EXIT
     printf 'SELinux denial probe\n' > "$file"
     chmod 644 "$file"
     chcon -t shadow_t "$file"
@@ -124,7 +128,16 @@ check_enforced_denial() (
         return 1
     }
 
-    context=$(runcon -u system_u -r system_r -t container_t -l s0 -- id -Z) || {
+    cp "$(command -v cat)" "$executable"
+    chmod 755 "$executable"
+    chcon -t container_file_t "$executable"
+    context=$(stat -c %C "$executable")
+    [[ "$context" == *:container_file_t:* ]] || {
+        echo "❌ FAILED: Probe executable has unexpected label: $context"
+        return 1
+    }
+
+    context=$(runcon -u system_u -r system_r -t container_t -l s0 -- "$executable" /proc/self/attr/current) || {
         echo "❌ FAILED: Cannot enter the confined container_t domain"
         return 1
     }
@@ -134,7 +147,7 @@ check_enforced_denial() (
     }
 
     status=0
-    LC_ALL=C runcon -u system_u -r system_r -t container_t -l s0 -- cat "$file" > /dev/null 2> "$error_file" || status=$?
+    LC_ALL=C runcon -u system_u -r system_r -t container_t -l s0 -- "$executable" "$file" > /dev/null 2> "$error_file" || status=$?
     if [ "$status" -ne 1 ] || ! grep -q 'Permission denied' "$error_file"; then
         echo "❌ FAILED: Confined read was not denied as expected (exit $status)"
         cat "$error_file"
