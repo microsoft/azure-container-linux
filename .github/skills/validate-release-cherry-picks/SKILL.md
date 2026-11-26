@@ -1,6 +1,6 @@
 ---
 name: validate-release-cherry-picks
-version: 1.0.0
+version: 1.0.1
 description: >-
   Validate Azure Container Linux release/* cherry-pick PRs against aclmain:
   check every commit's exact patch, successful CI at a revision containing the
@@ -128,10 +128,14 @@ run using other evidence; this narrower cherry-pick PASS gate intentionally
 requires a `Completed` / `Succeeded` main run. Neither result alone is a
 release-readiness verdict.
 
-Fetch the run resource SHA from that GitHub repository if needed, then check
-`git merge-base --is-ancestor <matching-main-sha> <run-resource-sha>` **in
-that same repository**. A later descendant can cover several PR commits
-only if it includes the complete related fix set. Do not mistake the build
+Fetch the run resource SHA from that GitHub repository if needed. In that
+same repository, check both
+`git merge-base --is-ancestor <matching-main-sha> <run-resource-sha>` and
+`git merge-base --is-ancestor <run-resource-sha> <fresh-aclmain-tip>`.
+If the run pin is no longer reachable from current `aclmain`, or the
+history needed for either check is incomplete, mark the run UNVERIFIED.
+A later descendant can cover several PR commits only if it includes the
+complete related fix set. Do not mistake the build
 `sourceVersion`, ref name, build tag, or number for the resolved source SHA.
 If a later revert removes the change before the run revision, do not claim
 the run tested it. Continue with the follow-up audit before counting the
@@ -156,11 +160,14 @@ established, UNVERIFIED.
 For each main match, inspect commits through **both** its successful run
 revision and the freshly fetched `aclmain` tip. Include merged side branches.
 Use `git log` and `git diff --name-status` to inventory the ranges, then read
-the actual patches and surrounding behavior. Search for follow-ups in nearby
-code, related tests and build wiring, and commit messages referring to the
-fix. Same-file edits are not necessarily related; different-file changes can
-be essential. Trace cross-repository dependencies when a later fix requires
-them rather than inferring safety from this repository alone.
+the actual patches and surrounding behavior. Search later commit messages
+and changed paths for the fix's identifiers, linked issue or PR, and related
+service or feature names; inspect candidate patches in nearby code, related
+tests, and build wiring. Same-file edits are not necessarily related;
+different-file changes can be essential. Trace cross-repository dependencies
+when a later fix requires them rather than inferring safety from this
+repository alone. Re-fetch `aclmain` before reporting and recheck the run
+pin's reachability; if the history is incomplete, mark the audit UNVERIFIED.
 
 For each materially related follow-up, check whether its effective change
 was supplied by the PR or recorded release target, including different-SHA
