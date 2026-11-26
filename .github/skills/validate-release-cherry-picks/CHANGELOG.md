@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1
+
+- Require the successful run's source pin to remain reachable from fresh
+  `aclmain`; incomplete or discarded history is not passing evidence.
+- Search later commit messages and changed paths for fix identifiers, linked
+  issues or PRs, and related features so cross-file follow-ups are not missed.
+
 ## 1.0.0
 
 - Apply the same cherry-pick checks to any `release/*` target branch rather
