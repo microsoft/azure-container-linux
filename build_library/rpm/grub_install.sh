@@ -122,6 +122,10 @@ grub_provision_rpm() {
             if [[ -n "${kernel_name}" ]]; then
                 sed_cmds+=(-e "s|@@KERNEL@@|/flatcar/${kernel_name}|")
             fi
+            # Activate the BPF LSM; see rpm_bpf_lsm_cmdline_arg().
+            lsm_arg="$(rpm_bpf_lsm_cmdline_arg "${ESP_DIR}")" || die "RPM mode: failed to build lsm= argument"
+            info "RPM mode: Injecting ${lsm_arg}"
+            sed_cmds+=(-e "s|@@LSM@@|${lsm_arg}|")
 
             cat "${BUILD_LIBRARY_DIR}/rpm/grub.cfg" | sed "${sed_cmds[@]}" > "${GRUB_TEMP_DIR}/grub.cfg"
 
