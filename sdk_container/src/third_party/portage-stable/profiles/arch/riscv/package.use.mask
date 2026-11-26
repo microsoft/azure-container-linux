@@ -1,5 +1,50 @@
-# Copyright 2019-2025 Gentoo Authors
+# Copyright 2019-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
+
+# Alfred Wingate <parona@protonmail.com> (2026-05-13)
+# dev-qt/qtgraphs:6 is not keyworded here
+dev-python/pyside graphs
+
+# Pacho Ramos <pacho@gentoo.org> (2026-05-09)
+# media-plugins/gst-plugin-gtk4 is not keyworded
+>=net-im/gajim-2.3 voice
+
+# Cristian Othón Martínez Vera <cfuga@cfuga.mx> (2026-03-22)
+# app-pda/usbmuxd is not keyworded here
+gnome-base/gvfs ios
+
+# Robin H. Johnson <robbat2@gentoo.org> (2026-03-22)
+# sys-block/vdo not keyworded here
+sys-fs/lvm2 vdo
+
+# Alfred Wingate <parona@protonmail.com> (2025-12-24)
+# media-libs/jasper is not keyworded here
+media-libs/gegl jpeg2k
+
+# Sam James <sam@gentoo.org> (2025-12-18)
+# dev-lang/ada-bootstrap exists here
+>=sys-devel/gcc-11 -ada
+
+# Sam James <sam@gentoo.org> (2025-10-28)
+# Portability issues with dev-libs/apache-arrow (bug #923968).
+sci-libs/gdal parquet
+
+# Paul Zander <negril.nx+gentoo@gmail.com> (2025-06-29)
+# media-libs/libvmaf is keyworded
+media-libs/x265 -vmaf
+
+# Jakov Smolić <jsmolic@gentoo.org> (2025-10-05)
+# These packages are keyworded on riscv
+sci-libs/flexiblas -system-blas
+sci-libs/lapack -flexiblas
+virtual/blas -flexiblas
+virtual/cblas -flexiblas
+virtual/lapack -flexiblas
+virtual/lapacke -flexiblas
+
+# Michał Górny <mgorny@gentoo.org> (2025-09-12)
+# These BLAS/LAPACK providers are keyworded here.
+sci-libs/flexiblas -openblas
 
 # Alfred Wingate <parona@protonmail.com> (2025-07-31)
 # mongodb not keyworded here
@@ -53,6 +98,7 @@ sci-mathematics/maxima vtk
 # Andreas Sturmlechner <asturm@gentoo.org> (2024-06-15)
 # Requires unkeyworded dev-qt/qtwebengine (and revdeps)
 kde-plasma/plasma-nm openconnect
+net-irc/quassel urlpreview
 
 # Sam James <sam@gentoo.org> (2024-05-19)
 # media-libs/jasper not yet keyworded here: https://bugs.gentoo.org/921559
@@ -122,7 +168,7 @@ app-editors/neovim lua_single_target_luajit
 
 # Yixun Lan <dlan@gentoo.org> (2022-11-24)
 # depend on dev-libs/libpcre2[jit] which not supported yet, bug #879511
-www-servers/varnish jit
+www-servers/vinyl-cache jit
 
 # Yixun Lan <dlan@gentoo.org> (2022-01-27)
 # This target supports ASAN/etc...
@@ -232,12 +278,6 @@ app-admin/syslog-ng test
 # dev-db/mongodb does not support riscv, fails src_configure
 dev-libs/mongo-c-driver test
 
-# Alex Fan <alexfanqi@yahoo.com> (2021-07-20)
-# hdf5-1.10 always fails tests with these 2 use flags enabled, otherwise
-# passes all tests on at least some systems. No longer needed for 1.12,
-# though.
-<sci-libs/hdf5-1.12.1 fortran debug
-
 # Alex Fan <alexfanqi@yahoo.com> (2021-08-12)
 # Marek Szuba <marecki@gentoo.org> (2021-07-14)
 # LuaJIT does not support riscv
@@ -257,6 +297,6 @@ media-libs/opencv vtk
 sci-libs/opencascade vtk
 
 # This doesn't work for (any) riscv yet.
-dev-libs/libpcre2 jit
 dev-libs/libpcre jit
 www-servers/nginx pcre-jit
+www-apache/mod_security jit

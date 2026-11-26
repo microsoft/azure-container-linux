@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -6,7 +6,7 @@ EAPI=8
 PYTHON_COMPAT=( python3_{11..14} )
 TMPFILES_OPTIONAL=1
 
-inherit flag-o-matic pam python-r1 meson-multilib tmpfiles toolchain-funcs
+inherit pam python-r1 meson-multilib tmpfiles toolchain-funcs
 
 MY_PV="${PV/_/-}"
 MY_P="${PN}-${MY_PV}"
@@ -22,7 +22,7 @@ else
 	inherit verify-sig
 
 	if [[ ${PV} != *_rc* ]] ; then
-		KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~hppa ~loong ~m68k ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86 ~amd64-linux ~x86-linux ~arm64-macos"
+		KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~hppa ~loong ~m68k ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86 ~arm64-macos"
 	fi
 
 	SRC_URI="https://www.kernel.org/pub/linux/utils/util-linux/v${PV:0:4}/${MY_P}.tar.xz"
@@ -41,7 +41,7 @@ RDEPEND="
 	virtual/libcrypt:=
 	audit? ( >=sys-process/audit-2.6:= )
 	caps? ( sys-libs/libcap-ng )
-	cramfs? ( sys-libs/zlib:= )
+	cramfs? ( virtual/zlib:= )
 	cryptsetup? ( >=sys-fs/cryptsetup-2.1.0 )
 	hardlink? ( dev-libs/libpcre2:= )
 	ncurses? (
@@ -114,12 +114,9 @@ src_unpack() {
 		return
 	fi
 
-	# Upstream sign the decompressed .tar
 	if use verify-sig; then
-		einfo "Unpacking ${MY_P}.tar.xz ..."
-		verify-sig_verify_detached - "${DISTDIR}"/${MY_P}.tar.sign \
-			< <(xz -cd "${DISTDIR}"/${MY_P}.tar.xz | tee >(tar -xf -))
-		assert "Unpack failed"
+		verify-sig_uncompress_verify_unpack "${DISTDIR}"/${MY_P}.tar.xz \
+			"${DISTDIR}"/${MY_P}.tar.sign
 	else
 		default
 	fi
@@ -127,11 +124,6 @@ src_unpack() {
 
 src_prepare() {
 	default
-
-	# Workaround for bug #961040 (gcc PR120006)
-	if tc-is-gcc && [[ $(gcc-major-version) == 15 && $(gcc-minor-version) -lt 2 ]] ; then
-		append-flags -fno-ipa-pta
-	fi
 
 	if use test ; then
 		# Known-failing tests
@@ -151,7 +143,6 @@ src_prepare() {
 			findmnt/outputs
 			findmnt/filterQ
 			findmnt/filter
-			misc/mountpoint
 			lsblk/lsblk
 			lslocks/lslocks
 			# Fails with network-sandbox at least in nspawn
@@ -174,13 +165,20 @@ src_prepare() {
 
 			# Format changes?
 			lslogins/checkuser
-			misc/swaplabel
-			misc/setarch
+
+			# Permission issues with changing OOM score
+			choom/choom
+
+			# MKFDS_PID is empty
+			lsfd/option-hyperlink
+
+			# Crashes but only under sandbox
+			setarch/setarch
 		)
 
 		# debug prints confuse the tests which look for a diff
 		# in output
-		if has_version "=app-shells/bash-5.3_alpha*" ; then
+		if has_version "=app-shells/bash-5.4_alpha*" ; then
 			known_failing_tests+=(
 				lsfd/column-ainodeclass
 				lsfd/mkfds-netlink-protocol
@@ -319,6 +317,21 @@ multilib_src_configure() {
 		)
 	fi
 
+	if use kernel_Hurd ; then
+		# Disable Linux-specific features
+		emesonargs+=(
+			-Dbuild-partx=disabled
+			-Dbuild-rfkill=disabled
+			-Dbuild-schedutils=disabled
+			-Dbuild-fsck=disabled
+		)
+
+		# This is explicitly needed for some reason? TODO
+		emesonargs+=(
+			-Dbuild-agetty=enabled
+		)
+	fi
+
 	local native_file="${T}"/meson.${CHOST}.${ABI}.ini.local
 	cat >> ${native_file} <<-EOF || die
 	[binaries]
@@ -326,6 +339,7 @@ multilib_src_configure() {
 	EOF
 	# TODO: Verify this does the right thing for releases (may need to
 	# manually install).
+	# https://github.com/util-linux/util-linux/issues/2900
 	if [[ ${PV} != *9999 ]] ; then
 		# Upstream is shipping pre-generated man-pages for releases
 		emesonargs+=(

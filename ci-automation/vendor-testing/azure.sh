@@ -110,7 +110,6 @@ if [[ "${CIA_ARCH}" = 'amd64' ]] && [[ "${PACKAGE_SOURCE_MODE:-PORTAGE}" != 'RPM
     if [[ -z "${AZURE_DISK_URI:-}" ]]; then
         other_instance_types+=('V1')
     fi
-    other_instance_types+=('Standard_NC6s_v3')
 fi
 
 run_kola_tests_on_instances \

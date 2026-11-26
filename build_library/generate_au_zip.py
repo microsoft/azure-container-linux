@@ -88,8 +88,8 @@ def _SplitAndStrip(data):
     if 'not found' in line:
       raise _LibNotFound(line)
     line = re.sub('.*not a dynamic executable.*', '', line)
-    line = re.sub('.* =>\s+', '', line)
-    line = re.sub('\(0x.*\)\s?', '', line)
+    line = re.sub(r'.* =>\s+', '', line)
+    line = re.sub(r'\(0x.*\)\s?', '', line)
     line = line.strip()
     if not len(line):
       continue

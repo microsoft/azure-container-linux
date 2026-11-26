@@ -1,10 +1,11 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
 
 LLVM_COMPAT=( {18..20} )
-PYTHON_COMPAT=( python3_{10..13} python3_13t)
+LLVM_OPTIONAL=1
+PYTHON_COMPAT=( python3_{11..13} python3_13t)
 inherit bash-completion-r1 estack flag-o-matic linux-info llvm-r1 toolchain-funcs python-r1
 
 DESCRIPTION="Userland tools for Linux Performance Counters"
@@ -34,11 +35,12 @@ S="${S_K}/tools/perf"
 
 LICENSE="GPL-2"
 SLOT="0"
-KEYWORDS="~alpha amd64 ~arm arm64 ~loong ppc ppc64 ~riscv x86 ~amd64-linux ~x86-linux"
+KEYWORDS="~alpha amd64 arm arm64 ~loong ppc ppc64 ~riscv x86"
 IUSE="abi_mips_o32 abi_mips_n32 abi_mips_n64 babeltrace capstone big-endian bpf caps crypt debug +doc gtk java libpfm +libtraceevent +libtracefs lzma numa perl +python +slang systemtap tcmalloc unwind"
 
 REQUIRED_USE="
 	${PYTHON_REQUIRED_USE}
+	bpf? ( ${LLVM_REQUIRED_USE} )
 "
 
 # setuptools (and Python) are always needed even if not building Python bindings
@@ -89,7 +91,7 @@ RDEPEND="
 	app-arch/zstd:=
 	dev-libs/elfutils
 	sys-libs/binutils-libs:=
-	sys-libs/zlib
+	virtual/zlib:=
 	virtual/libcrypt
 "
 

@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 # @ECLASS: distutils-r1.eclass
@@ -217,7 +217,7 @@ if [[ -z ${_DISTUTILS_R1_ECLASS} ]]; then
 _DISTUTILS_R1_ECLASS=1
 
 case ${EAPI} in
-	8) ;;
+	8) inherit eapi9-pipestatus ;;
 	*) die "${ECLASS}: EAPI ${EAPI:-0} not supported" ;;
 esac
 
@@ -415,6 +415,28 @@ unset -f _distutils_set_globals
 # }
 # @CODE
 
+# @ECLASS_VARIABLE: DISTUTILS_CONFIG_SETTINGS_JSON
+# @DEFAULT_UNSET
+# @DESCRIPTION:
+# The JSON object deserialized into config_settings dictionary passed
+# to the build backend.
+#
+# Allowed only for DISTUTILS_USE_PEP517=standalone.  Use DISTUTILS_ARGS
+# for other backends.
+#
+# Example:
+# @CODE
+# python_configure_all() {
+# 	DISTUTILS_CONFIG_SETTINGS_JSON='
+# 		{
+# 			"verbose": true,
+# 			"targets": ["foo", "bar"],
+# 			"build-type": "release"
+# 		}
+# 	'
+# }
+# @CODE
+
 # @FUNCTION: distutils_enable_sphinx
 # @USAGE: <subdir> [--no-autodoc | <plugin-pkgs>...]
 # @DESCRIPTION:
@@ -551,6 +573,7 @@ distutils_enable_tests() {
 	case ${1} in
 		import-check)
 			test_pkgs+=' dev-python/pytest-import-check[${PYTHON_USEDEP}]'
+			EPYTEST_PLUGINS+=( pytest-import-check )
 			;&
 		pytest)
 			test_pkgs+=' >=dev-python/pytest-7.4.4[${PYTHON_USEDEP}]'
@@ -1013,6 +1036,8 @@ distutils_wheel_install() {
 		-o -path '*.dist-info/license_files' \
 		-o -path '*.dist-info/licenses/*' \
 		-o -path '*.dist-info/licenses' \
+		-o -path '*.dist-info/sboms/*' \
+		-o -path '*.dist-info/sboms' \
 		-o -path '*.dist-info/zip-safe' \
 		\) -delete || die
 
@@ -1069,7 +1094,7 @@ distutils_pep517_install() {
 			local maturin_args=(
 				"${DISTUTILS_ARGS[@]}"
 				--auditwheel=skip # see bug #831171
-				--jobs="$(makeopts_jobs)"
+				--jobs="$(get_makeopts_jobs)"
 				$(in_iuse debug && usex debug '--profile=dev' '')
 			)
 
@@ -1196,6 +1221,12 @@ distutils_pep517_install() {
 			;;
 	esac
 
+	if [[ ${DISTUTILS_USE_PEP517} == standalone ]]; then
+		config_settings=${DISTUTILS_CONFIG_SETTINGS_JSON}
+	elif [[ -n ${DISTUTILS_CONFIG_SETTINGS_JSON} ]]; then
+		die "DISTUTILS_CONFIG_SETTINGS_JSON supported only for standalone backends"
+	fi
+
 	# https://pyo3.rs/latest/building-and-distribution.html#cross-compiling
 	if tc-is-cross-compiler; then
 		local -x PYO3_CROSS_LIB_DIR=${SYSROOT}/$(python_get_stdlib)
@@ -1259,14 +1290,15 @@ distutils-r1_python_compile() {
 	# we are appending a dynamic component so that
 	# distutils-r1_python_compile can be called multiple
 	# times and don't end up combining resulting packages
+	#
+	# we are no longer adding "parallel" since it is causing too many
+	# issues, including silent miscompilations, and upstream doesn't
+	# address any bugs
 	mkdir -p "${BUILD_DIR}" || die
 	local -x DIST_EXTRA_CONFIG="${BUILD_DIR}/extra-setup.cfg"
 	cat > "${DIST_EXTRA_CONFIG}" <<-EOF || die
 		[build]
 		build_base = ${BUILD_DIR}/build${#DISTUTILS_WHEELS[@]}
-
-		[build_ext]
-		parallel = $(makeopts_jobs "${MAKEOPTS} ${*}")
 	EOF
 
 	if [[ ${DISTUTILS_ALLOW_WHEEL_REUSE} ]]; then
@@ -1287,7 +1319,7 @@ distutils-r1_python_compile() {
 			# from the oldest to the newest implementation,
 			# and the wheels are forward-compatible.
 			if [[
-				( ! ${DISTUTILS_EXT} && ${whl} == *py3-none-any* ) ||
+				( ! ${DISTUTILS_EXT} && ${whl} == *py3-none* ) ||
 				(
 					${EPYTHON} == python* &&
 					# freethreading does not support stable ABI
@@ -1343,7 +1375,7 @@ _distutils-r1_wrap_scripts() {
 
 			debug-print "${FUNCNAME}: installing wrapper at ${bindir}/${basename}"
 			dosym -r /usr/lib/python-exec/python-exec2 \
-				"${bindir#${EPREFIX}}/${basename}"
+				"${bindir#"${EPREFIX}"}/${basename}"
 		done
 
 		for f in "${non_python_files[@]}"; do
@@ -1424,13 +1456,13 @@ distutils-r1_python_install() {
 		(
 			cd "${reg_scriptdir}" && find . -mindepth 1
 		) | sort > "${T}"/.distutils-files-bin
-		assert "listing ${reg_scriptdir} failed"
+		pipestatus || die "listing ${reg_scriptdir} failed"
 		(
 			if [[ -d ${wrapped_scriptdir} ]]; then
 				cd "${wrapped_scriptdir}" && find . -mindepth 1
 			fi
 		) | sort > "${T}"/.distutils-files-wrapped
-		assert "listing ${wrapped_scriptdir} failed"
+		pipestatus || die "listing ${wrapped_scriptdir} failed"
 		if ! diff -U 0 "${T}"/.distutils-files-{bin,wrapped}; then
 			die "File lists for ${reg_scriptdir} and ${wrapped_scriptdir} differ (see diff above)"
 		fi
@@ -1485,8 +1517,8 @@ distutils-r1_run_phase() {
 
 	local -x PATH=${BUILD_DIR}/install${EPREFIX}/usr/bin:${PATH}
 	# Set up build environment, bug #513664.
-	local -x AR=${AR} CC=${CC} CPP=${CPP} CXX=${CXX}
-	tc-export AR CC CPP CXX
+	local -x AR=${AR} CC=${CC} CPP=${CPP} CXX=${CXX} PKG_CONFIG=${PKG_CONFIG}
+	tc-export AR CC CPP CXX PKG_CONFIG
 
 	# Perform additional environment modifications only for python_compile
 	# phase.  This is the only phase where we expect to be calling the Python

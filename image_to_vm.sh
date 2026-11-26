@@ -45,8 +45,6 @@ DEFINE_integer mem "${DEFAULT_MEM}" \
   "Memory size for the vm config in MBs."
 DEFINE_string to "" \
   "Destination folder for VM output file(s)"
-DEFINE_string oem_pkg "" \
-  "OEM package to install"
 DEFINE_string image_name "" \
   "Override the base image name. If not set, defaults to flatcar_production_image.bin"
 DEFINE_boolean getbinpkg "${FLAGS_FALSE}" \
@@ -56,6 +54,10 @@ DEFINE_string getbinpkgver "" \
 
 # include upload options
 . "${BUILD_LIBRARY_DIR}/release_util.sh" || exit 1
+
+# Override the default value to false so that
+# ./flatcar_production_qemu_uefi.sh can launch the qemu VM later.
+FLAGS_only_store_compressed=${FLAGS_FALSE}
 
 # Parse command line
 FLAGS "$@" || exit 1
@@ -70,10 +72,6 @@ fi
 
 if ! set_vm_type "${FLAGS_format}"; then
     die_notrace "Invalid format: ${FLAGS_format}"
-fi
-
-if [ ! -z "${FLAGS_oem_pkg}" ] && ! set_vm_oem_pkg "${FLAGS_oem_pkg}"; then
-  die_notrace "Invalid oem : ${FLAGS_oem_pkg}"
 fi
 
 if [ -z "${FLAGS_board}" ] ; then
@@ -132,11 +130,8 @@ fix_mtab
 # Setup new (raw) image, possibly resizing filesystems
 setup_disk_image "${FLAGS_disk_layout}"
 
-# Install OEM package (oem-release for sysext activation in all modes,
-# plus grub.cfg in GRUB mode or a UKI addon in UKI mode).
-install_oem_package
+# Optionally install any OEM sysexts
 install_oem_sysext
-run_fs_hook
 
 has_ipe_assets() {
     local artifact_dir="$1" esp_dir="$2"

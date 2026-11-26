@@ -1,5 +1,5 @@
-# We don't ship GnuTLS by default, and smartcard has a dep loop
-app-crypt/gnupg smartcard ssl
+# Smartcard has a dep loop.
+app-crypt/gnupg smartcard
 
 # Our ISOs are not built with Catalyst.
 dev-util/catalyst iso
@@ -10,21 +10,8 @@ sys-boot/syslinux perl
 # not needed, problems building with GCC 7.3.0
 sys-libs/ncurses cxx
 
-# app-editors/nano with `USE=unicode` results in build failures in SDK
-# stage1, because ncurses >= 6.2_p20210619 which does not have the USE
-# flag at all.
-# To fix that, exclude the unicode USE flag from packages.use.force list,
-# which is defined in portage-stable.
-app-editors/nano unicode
-
 # Pulls dev-python/sphinx, which in turn pulls a lot of other python stuff.
 sys-fs/btrfs-progs man
-
-# The dev-python/pillow package is pulled in by dev-python/docutils.
-# As the name suggests, it's for generating docs, which we don't even
-# put anywhere. Thus avoid pulling more dependencies than necessary
-# for throw-away things.
-dev-python/pillow jpeg
 
 # Gentoo force-enables X for app-emulation/qemu, because qemu is doing
 # some automagic detection of gtk ignoring whether we want to use gtk
@@ -35,3 +22,6 @@ app-emulation/qemu X
 # disable all tools for NVIDIA driver, keep just kmods
 x11-drivers/nvidia-drivers tools X static-libs
 x11-drivers/old-nvidia-drivers tools X static-libs
+
+# We don't maintain the tarballs needed to build these features offline.
+<sys-fs/overlaybd-9999 dsa isal

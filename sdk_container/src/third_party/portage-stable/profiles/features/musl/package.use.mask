@@ -1,5 +1,10 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
+
+# Andreas K. Hüttel <dilfridge@gentoo.org> (2026-02-04)
+# Some systemd features will never work on musl.
+sys-apps/systemd homed
+sys-auth/pambase homed
 
 # Sv. Lockal <lockalsash@gmail.com.com> (2025-07-07)
 # sci-libs/aotriton-bin is masked on musl
@@ -15,11 +20,6 @@ net-mail/cyrus-imapd test
 # v4l support entirely (always enabled), only libv4l use (bug #911499).
 media-video/ffmpeg v4l
 media-video/ffmpeg-compat v4l
-
-# Ionen Wolkens <ionen@gentoo.org> (2025-03-10)
-# dev-util/nvidia-cuda-toolkit is unavailable on musl
-media-video/ffmpeg npp
-media-video/ffmpeg-compat npp
 
 # Sam James <sam@gentoo.org> (2025-01-08)
 # Depends on currently-masked elogind version on musl profiles (bug #947739)
@@ -46,10 +46,6 @@ app-emulation/libvirt dtrace
 gui-libs/neatvnc tracing
 gui-apps/wayvnc tracing
 
-# Nowa Ammerlaan <nowa@gentoo.org> (2024-07-25)
-# Requires systemd-detect-virt
-app-emulation/virt-firmware test
-
 # Sam James <sam@gentoo.org> (2024-06-03)
 # Poor rendering performance otherwise (bug #931215) but it doesn't
 # work on musl. Bugs #946505, #946643
@@ -75,10 +71,6 @@ sys-apps/hwloc l0
 # Paul Zander <negril.nx+gentoo@gmail.com> (2024-04-20)
 # Renderdoc masked on musl, bug #853856
 media-gfx/blender renderdoc
-
-# Paul Zander <negril.nx+gentoo@gmail.com> (2024-04-20)
-# Support for L0 needs RTLD_DEEPBIND, which does not exist on musl.
-media-gfx/blender oneapi
 
 # Akinori Hattori <hattya@gentoo.org> (2024-04-15)
 # app-i18n/nkf is masked on musl
@@ -115,21 +107,9 @@ sys-devel/binutils gprofng
 # this, however it seems to be unreliable, see bug #922897.
 gui-libs/gtk cpu_flags_x86_f16c
 
-# Nowa Ammerlaan <nowa@gentoo.org> (2024-01-12)
-# The systemd flag is globally masked on musl. But we need
-# systemd's kernel-install to use systemd-boot which is still
-# possible on musl via systemd-utils[boot].
-sys-kernel/installkernel -systemd
-
 # Michał Górny <mgorny@gentoo.org> (2023-12-31)
 # Requires dev-libs/level-zero.
 dev-lang/ispc gpu
-
-# Nowa Ammerlaan <nowa@gentoo.org> (2023-12-18)
-# Requires systemd
-sys-kernel/gentoo-kernel generic-uki
-sys-kernel/gentoo-kernel-bin generic-uki
-sys-kernel/vanilla-kernel generic-uki
 
 # Guillaume Seren <guillaumeseren@gmail.com> (2023-11-29)
 # execinfo.h required for server.
@@ -180,17 +160,11 @@ media-libs/opencv atlas
 media-video/ffmpeg amf
 media-video/ffmpeg-compat amf
 media-video/handbrake amf
-net-fs/openafs tsm
 net-analyzer/nagios-plugin-check_raid megaraid-sas
+net-fs/openafs tsm
+net-misc/yt-dlp deno
 sys-apps/hwloc gl
 www-client/qutebrowser widevine
-
-# Sam James <sam@gentoo.org> (2022-10-03)
-# Needs systemd which is masked on musl
-net-analyzer/wireshark sdjournal
-sys-apps/ipmitool openbmc
-sys-auth/pambase homed
-dev-qt/qtbase journald
 
 # Petr Vaněk <arkamar@atlas.cz> (2022-03-15)
 # musl package does not currently provide gencat binary, which is needed for
@@ -205,10 +179,6 @@ app-emacs/yatex l10n_ja
 # Conrad Kostecki <conikost@gentoo.org> (2021-12-15)
 # Support for L0 needs RTLD_DEEPBIND, which does not exist on musl.
 dev-libs/intel-compute-runtime l0
-
-# Stijn Tintel <stijn@linux-ipv6.be> (2021-12-02)
-# rarpd relies on ether_ntohost which is a stub in musl
-net-misc/iputils rarpd
 
 # Sam James <sam@gentoo.org> (2021-11-20)
 # Pulls in po4a which doesn't seem to work on musl (wants /usr/bin/locale)

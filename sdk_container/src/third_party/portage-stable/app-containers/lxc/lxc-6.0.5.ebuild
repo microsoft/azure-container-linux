@@ -1,4 +1,4 @@
-# Copyright 2022-2025 Gentoo Authors
+# Copyright 2022-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -12,7 +12,7 @@ SRC_URI="https://linuxcontainers.org/downloads/lxc/${P}.tar.gz
 
 LICENSE="GPL-2 LGPL-2.1 LGPL-3"
 SLOT="0/1.8" # SONAME liblxc.so.1 + ${PV//./} _if_ breaking ABI change while bumping.
-KEYWORDS="~amd64 ~arm ~arm64 ~ppc64 ~riscv ~x86"
+KEYWORDS="amd64 ~arm ~arm64 ~ppc64 ~riscv x86"
 IUSE="apparmor +caps examples io-uring man pam seccomp selinux ssl systemd test +tools"
 
 RDEPEND="acct-group/lxc
@@ -71,6 +71,8 @@ ERROR_VETH="CONFIG_VETH: needed for internal (host-to-container) networking"
 VERIFY_SIG_OPENPGP_KEY_PATH=/usr/share/openpgp-keys/linuxcontainers.asc
 
 DOCS=( AUTHORS CONTRIBUTING MAINTAINERS README.md doc/FAQ.txt )
+
+PATCHES=( "${FILESDIR}"/lxc-6.0.5-fix-openat2-include-typo.patch )
 
 pkg_setup() {
 	linux-info_pkg_setup

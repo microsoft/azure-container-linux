@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 # @ECLASS: python-utils-r1.eclass
@@ -27,7 +27,7 @@ if [[ -z ${_PYTHON_UTILS_R1_ECLASS} ]]; then
 _PYTHON_UTILS_R1_ECLASS=1
 
 case ${EAPI} in
-	7|8) ;;
+	7|8) inherit eapi9-pipestatus ;;
 	*) die "${ECLASS}: EAPI ${EAPI:-0} not supported" ;;
 esac
 
@@ -40,8 +40,8 @@ inherit multiprocessing toolchain-funcs
 # All supported Python implementations, most preferred last.
 _PYTHON_ALL_IMPLS=(
 	pypy3_11
-	python3_{13..14}t
-	python3_{11..14}
+	python3_{13..15}t
+	python3_{11..15}
 )
 readonly _PYTHON_ALL_IMPLS
 
@@ -81,7 +81,7 @@ _python_verify_patterns() {
 	local impl pattern
 	for pattern; do
 		case ${pattern} in
-			-[23]|3.[89]|3.1[0-4])
+			-[23]|3.[89]|3.1[0-5])
 				continue
 				;;
 		esac
@@ -137,7 +137,7 @@ _python_set_impls() {
 			# please keep them in sync with _PYTHON_ALL_IMPLS
 			# and _PYTHON_HISTORICAL_IMPLS
 			case ${i} in
-				pypy3_11|python3_9|python3_1[1-4]|python3_1[3-4]t)
+				pypy3_11|python3_9|python3_1[1-5]|python3_1[3-5]t)
 					;;
 				jython2_7|pypy|pypy1_[89]|pypy2_0|pypy3|python2_[5-7]|python3_[1-9]|python3_10)
 					obsolete+=( "${i}" )
@@ -230,7 +230,7 @@ _python_impl_matches() {
 				fi
 				return 0
 				;;
-			3.[89]|3.1[0-4])
+			3.[89]|3.1[0-5])
 				[[ ${impl%t} == python${pattern/./_} || ${impl} == pypy${pattern/./_} ]] &&
 					return 0
 				;;
@@ -602,7 +602,7 @@ python_optimize() {
 	# default to sitedir
 	[[ ${#} -eq 0 ]] && set -- "${D}$(python_get_sitedir)"
 
-	local jobs=$(makeopts_jobs)
+	local jobs=$(get_makeopts_jobs)
 	local d
 	for d; do
 		einfo "Optimizing Python modules in ${d#${D}}"
@@ -679,7 +679,7 @@ python_newexe() {
 	local newfn=${2}
 
 	local scriptdir=$(python_get_scriptdir)
-	local d=${scriptdir#${EPREFIX}}
+	local d=${scriptdir#"${EPREFIX}"}
 
 	(
 		dodir "${wrapd}"
@@ -817,7 +817,7 @@ python_domodule() {
 	else
 		# relative to site-packages
 		local sitedir=$(python_get_sitedir)
-		d=${sitedir#${EPREFIX}}/${_PYTHON_MODULEROOT//.//}
+		d=${sitedir#"${EPREFIX}"}/${_PYTHON_MODULEROOT//.//}
 	fi
 
 	if [[ ${EBUILD_PHASE} == install ]]; then
@@ -1231,12 +1231,12 @@ _python_check_occluded_packages() {
 				comm -1 -3 <(
 					find "${fn}" -type f -not -path '*/__pycache__/*' |
 						sort
-					assert
+					pipestatus || die
 				) <(
 					cd "${sitedir}" &&
 						find "${fn}" -type f -not -path '*/__pycache__/*' |
 						sort
-					assert
+					pipestatus || die
 				)
 			)
 
@@ -1420,7 +1420,7 @@ epytest() {
 	[[ ${NO_COLOR} ]] && color=no
 
 	mkdir -p "${T}/pytest-xml" || die
-	local junit_xml=$(mktemp "${T}/pytest-xml/${EPYTHON}-XXX.xml" || die)
+	local junit_xml=$(mktemp "${T}/pytest-xml/${EPYTHON}-XXXXXX.xml" || die)
 
 	local args=(
 		# verbose progress reporting and tracebacks
@@ -1538,9 +1538,17 @@ epytest() {
 			)
 		fi
 
-		args+=(
-			"--reruns=${EPYTEST_RERUNS}"
-		)
+		if has_version ">=dev-python/pytest-rerunfailures-16.1"; then
+			args+=(
+				# --reruns only adds N reruns for tests not marked for reruns
+				# --force-reruns overrides the rerun count for all tests
+				"--force-reruns=${EPYTEST_RERUNS}"
+			)
+		else
+			args+=(
+				"--reruns=${EPYTEST_RERUNS}"
+			)
+		fi
 	fi
 
 	if [[ -n ${EPYTEST_TIMEOUT} ]]; then
@@ -1553,10 +1561,19 @@ epytest() {
 		args+=(
 			"--timeout=${EPYTEST_TIMEOUT}"
 		)
+
+		if [[ -n ${EPYTEST_RERUNS} ]]; then
+			# This option helps with hangs in some cases when these plugins are used together.
+			# https://github.com/pytest-dev/pytest-timeout/issues/18
+			# https://github.com/pytest-dev/pytest-rerunfailures/issues/99
+			args+=(
+				-o timeout_func_only=true
+			)
+		fi
 	fi
 
 	if [[ ${EPYTEST_XDIST} ]]; then
-		local jobs=${EPYTEST_JOBS:-$(makeopts_jobs)}
+		local jobs=${EPYTEST_JOBS:-$(get_makeopts_jobs)}
 		if [[ ${jobs} -gt 1 ]]; then
 			if [[ ${PYTEST_PLUGINS} != *xdist.plugin* ]]; then
 				args+=(
@@ -1571,6 +1588,17 @@ epytest() {
 				# jobs are unevenly distributed
 				--dist=worksteal
 			)
+
+			if [[ ${MAKEFLAGS} == *--jobserver-auth=* ]]; then
+				if has_version "dev-python/pytest-jobserver[${PYTHON_USEDEP}]"
+				then
+					args+=( -p jobserver )
+				elif [[ ! ${_EPYTEST_JOBSERVER_WARNED} ]]; then
+					ewarn "Jobserver found under pytest-xdist, but cannot be used without:"
+					ewarn "  dev-python/pytest-jobserver"
+					_EPYTEST_JOBSERVER_WARNED=1
+				fi
+			fi
 		fi
 	fi
 

@@ -111,7 +111,29 @@ function copy_dir_from_buildcache() {
     rsync --partial -a -e "${sshcmd}" "${BUILDCACHE_USER}@${BUILDCACHE_SERVER}:${remote_path}" \
         "${local_path}"
 }
+# --
 
+# Returns true if the passed directory contains files that match any
+# of the passed glob strings. Remember to pass the glob as strings
+# (means: quote them, so globs are not resolved at the function
+# callsite).
+function dir_contains_globs() (
+    shopt -s nullglob
+
+    local dir=${1}; shift
+    # rest are globs
+
+    # this is in a subshell, so cd is safe - won't mess with working
+    # directory of the caller
+    cd "${dir}" 2>/dev/null || return 1
+    # for globs to be evaluated, we must not use quotes here
+    local -a files=( ${@} )
+
+    if [[ ${#files[@]} -gt 0 ]]; then
+        return 0
+    fi
+    return 1
+)
 # --
 
 function copy_to_buildcache() {
@@ -232,10 +254,15 @@ function docker_image_from_buildcache() {
     local url="https://${BUILDCACHE_SERVER}/containers/${version}/${tgz}"
     local url_release="https://mirror.release.flatcar-linux.net/containers/${version}/${tgz}"
 
-    curl --fail --silent --show-error --location --retry-delay 1 --retry 60 \
+    local curl_progress=(--silent --show-error)
+    if [[ -t 2 ]]; then
+        curl_progress=(--progress-bar)
+    fi
+
+    curl --fail "${curl_progress[@]}" --location --retry-delay 1 --retry 60 \
         --retry-connrefused --retry-max-time 60 --connect-timeout 20 \
         --remote-name "${url}" \
-        || curl --fail --silent --show-error --location --retry-delay 1 --retry 60 \
+        || curl --fail "${curl_progress[@]}" --location --retry-delay 1 --retry 60 \
         --retry-connrefused --retry-max-time 60 --connect-timeout 20 \
         --remote-name "${url_release}"
 
@@ -254,7 +281,7 @@ function docker_image_from_registry_or_buildcache() {
         return
     fi
 
-    echo "Falling back to tar ball download..." >&2
+    echo "Container image not found in registry, downloading SDK tarball instead (this is normal for nightly builds)..." >&2
     docker_image_from_buildcache "${image}" "${version}" zst || \
         docker_image_from_buildcache "${image}" "${version}" gz
 }

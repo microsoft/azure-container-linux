@@ -44,7 +44,7 @@
 #   4. REGISTRY_PASSWORD. Environment variable. The password to use for Docker registry login.
 #        Defaults to nothing if not set - in such case, SDK container will not be pushed.
 #
-#   5. Cloud credentials as secrets via the environment variables AZURE_PROFILE, AZURE_AUTH_CREDENTIALS,
+#   5. Cloud credentials as secrets via the environment variables
 #      AWS_CREDENTIALS, AWS_MARKETPLACE_CREDENTIALS, AWS_MARKETPLACE_ARN, AWS_CLOUDFORMATION_CREDENTIALS,
 #      GCP_JSON_KEY, GOOGLE_RELEASE_CREDENTIALS.
 #
@@ -75,14 +75,8 @@ function _inside_mantle() {
     source sdk_lib/sdk_container_common.sh
     source ci-automation/ci_automation_common.sh
     source sdk_container/.repo/manifests/version.txt
-    # Needed because we are not the SDK container here
-    source sdk_container/.env
     CHANNEL="$(get_git_channel)"
     VERSION="${FLATCAR_VERSION}"
-    azure_profile_config_file=""
-    secret_to_file azure_profile_config_file "${AZURE_PROFILE}"
-    azure_auth_config_file=""
-    secret_to_file azure_auth_config_file "${AZURE_AUTH_CREDENTIALS}"
     aws_credentials_config_file=""
     secret_to_file aws_credentials_config_file "${AWS_CREDENTIALS}"
     aws_marketplace_credentials_file=""
@@ -244,8 +238,6 @@ function _release_build_impl() {
     source ci-automation/gpg_setup.sh
 
     source sdk_container/.repo/manifests/version.txt
-    # Needed because we are not the SDK container here
-    source sdk_container/.env
     local sdk_version="${FLATCAR_SDK_VERSION}"
     local docker_sdk_vernum=""
     docker_sdk_vernum="$(vernum_to_docker_image_version "${sdk_version}")"
@@ -261,9 +253,9 @@ function _release_build_impl() {
     # A job on each worker prunes old mantle images (docker image prune), no need to do it here
     echo "docker rm -f '${container_name}'" >> ./ci-cleanup.sh
 
-    touch sdk_container/.env # This file should already contain the required credentials as env vars
     docker run --pull always --rm --name="${container_name}" --net host \
-      -w /work -v "$PWD":/work "${mantle_ref}" bash -c "git config --global --add safe.directory /work && source ci-automation/release.sh && _inside_mantle"
+      -w /work -v "$PWD":/work --env-file="sdk_lib/env_mantle.txt" "${mantle_ref}" \
+      bash -c "git config --global --add safe.directory /work && source ci-automation/release.sh && _inside_mantle"
     # Push flatcar_production_ami_*txt and flatcar_production_ami_*json to the right bincache folder
     for arch in amd64 arm64; do
       sudo chown -R "$USER:$USER" "aws-${arch}"
@@ -275,10 +267,6 @@ function _release_build_impl() {
     if [ "${vernum}" = "${sdk_version}" ]; then
       publish_sdk "${docker_sdk_vernum}"
     fi
-    echo "===="
-    echo "Done, now you can copy the images to Origin"
-    echo "===="
-
 
     # Future: trigger update payload signing
 
@@ -292,7 +280,7 @@ function _release_build_impl() {
 TEMPLATE='
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Flatcar Linux on EC2: https://kinvolk.io/docs/flatcar-container-linux/latest/installing/cloud/aws-ec2/",
+  "Description": "Flatcar Linux on EC2: https://www.flatcar.org/docs/latest/installing/cloud/aws-ec2/",
   "Mappings" : {
       "RegionMap" : {
 ###AMIS###

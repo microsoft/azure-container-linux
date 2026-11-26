@@ -1,9 +1,18 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
+
+# Alfredo Tupone <tupone@gentoo.org> (2026-04-23)
+# Requires qtwebengine
+sci-visualization/xyscan
+
+# Mario Haustein <mario.haustein@hrz.tu-chemnitz.de> (2025-10-06)
+# Requires qtwebengine
+media-radio/qlog
 
 # Jay Faulkner <jayf@gentoo.org> (2025-06-01)
 # Requires >=net-libs/nodejs-18[npm]
 dev-util/claude-code
+dev-util/cursor-agent
 
 # Paul Zander <negril.nx+gentoo@gmail.com> (2025-04-04)
 # Requires dev-qt/qtwebengine
@@ -69,6 +78,9 @@ dev-python/jupyter
 dev-python/vpython
 dev-python/widgetsnbextension
 dev-python/ipywidgets
+dev-python/metakernel
+dev-python/octave-kernel
+dev-python/oct2py
 sci-physics/root
 sci-physics/geant4_vmc
 sci-physics/vmc
@@ -85,7 +97,7 @@ dev-qt/qtwebengine
 dev-qt/qtwebview
 dev-python/pyqt6-webengine
 dev-python/qpageview
-app-admin/calamares
+<app-admin/calamares-3.3.14
 app-text/zeal
 app-editors/ghostwriter
 app-editors/retext
@@ -98,6 +110,7 @@ dev-python/spyder
 dev-python/spyder-unittest
 dev-python/spyder-line-profiler
 dev-python/spyder-notebook
+dev-python/spyder-terminal
 dev-util/kdevelop
 dev-util/kdevelop-php
 dev-util/kdevelop-python
@@ -149,14 +162,13 @@ sci-geosciences/qmapshack
 sci-mathematics/rkward
 sys-apps/polychromatic
 www-client/falkon
-www-client/otter
 www-client/qutebrowser
-media-video/jellyfin-media-player
 
 # Andreas Sturmlechner <asturm@gentoo.org> (2021-02-09)
 # Requires net-libs/nodejs
 dev-lang/typescript
 gnome-extra/gnome-shell-extension-pop-shell
+>=gnome-extra/gnome-weather-49
 
 # Andreas K. Hüttel <dilfridge@gentoo.org> (2020-09-20)
 # Binary-only with no x32 support
@@ -171,9 +183,10 @@ net-analyzer/gvm
 dev-libs/amdgpu-pro-opencl
 
 # Thomas Deutschmann <whissi@gentoo.org> (2018-10-23)
-# requires net-libs/nodejs
+# requires net-libs/nodejs. Extend to firefox/thunderbird-l10n
 >=www-client/firefox-63.0
 >=mail-client/thunderbird-68.0
+www-client/firefox-l10n
 
 # Patrick McLean <chutzpah@gentoo.org> (2018-07-12)
 # requires nodejs

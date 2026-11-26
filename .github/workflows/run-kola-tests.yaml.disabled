@@ -17,15 +17,11 @@ on:
 jobs:
   tests:
     name: "Run Kola tests"
-    runs-on:
-      - self-hosted
-      - ubuntu
-      - kola
-      - ${{ matrix.arch }}
+    runs-on: oracle-vm-32cpu-128gb-x86-64
     strategy:
       fail-fast: false
       matrix:
-        arch: ["amd64", "arm64"]
+        arch: ["amd64"]
 
     steps:
       - name: Prepare machine
@@ -34,9 +30,7 @@ jobs:
         run: |
           sudo rm /bin/sh
           sudo ln -s /bin/bash /bin/sh
-          sudo apt-get install -y ca-certificates curl gnupg lsb-release qemu-system git bzip2 jq dnsmasq python3 zstd
-          sudo systemctl stop dnsmasq
-          sudo systemctl mask dnsmasq
+          sudo apt update && sudo apt install -y ca-certificates curl gnupg lsb-release qemu-system git bzip2 jq dnsmasq python3 zstd iproute2 iptables
 
           # Set up MASQUERADE. Don't care much to secure it.
           # This is needed for the VMs kola spins up to have internet access.
@@ -186,9 +180,8 @@ jobs:
 
           source ci-automation/test.sh
 
-          PARALLEL_ARCH=10
+          PARALLEL_ARCH=5
 
-          cat > sdk_container/.env <<EOF
           # export the QEMU_IMAGE_NAME to avoid to download it.
           export QEMU_IMAGE_NAME="/work/flatcar_production_image.bin"
           export QEMU_UEFI_FIRMWARE="/work/flatcar_production_qemu_uefi_efi_code.qcow2"
@@ -200,7 +193,6 @@ jobs:
           # The runner uses lxc containers for kola, and can't use loopback devices to
           # prepare the serial console setting - this means that kola may miss some errors
           export QEMU_KOLA_SKIP_MANGLE=true
-          EOF
 
           export MAX_RETRIES=5
           export SKIP_COPY_TO_BINCACHE=1
@@ -239,10 +231,7 @@ jobs:
     name: "Merge TAP reports and post results"
     needs: tests
     if: always() && !cancelled()
-    runs-on:
-      - self-hosted
-      - ubuntu
-      - kola
+    runs-on: oracle-vm-32cpu-128gb-x86-64
     permissions:
       pull-requests: write
 
@@ -253,7 +242,7 @@ jobs:
         run: |
           sudo rm /bin/sh
           sudo ln -s /bin/bash /bin/sh
-          sudo apt-get install -y ca-certificates curl gnupg lsb-release git bzip2 jq sqlite3
+          sudo apt update && sudo apt install -y ca-certificates curl gnupg lsb-release git bzip2 jq sqlite3
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -284,12 +273,6 @@ jobs:
         with:
           name: amd64-raw-tapfiles
           path: scripts/__TAP__/amd64
-
-      - name: Download arm64 tapfiles
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: arm64-raw-tapfiles
-          path: scripts/__TAP__/arm64
 
       - name: Create Test Summary
         shell: bash

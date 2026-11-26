@@ -40,13 +40,13 @@ with open(os.path.join(outputdir, "grub_modules.config"), "w") as f:
     f.write(json.dumps({"9": {"binaryvalues": [{"prefix": "grub_module", "values": hashvalues}]}}))
 
 with open(os.path.join(outputdir, "kernel_cmdline.config"), "w") as f:
-    f.write(json.dumps({"8": {"asciivalues": [{"prefix": "grub_kernel_cmdline", "values": [{"value": "rootflags=rw mount.usrflags=ro BOOT_IMAGE=/flatcar/vmlinuz-[ab] mount.usr=PARTUUID=\S{36} rootflags=rw mount.usrflags=ro consoleblank=0 root=LABEL=ROOT (console=\S+)? (flatcar.autologin=\S+)? verity.usrhash=\\S{64}", "description": "Flatcar kernel command line %s" % version}]}]}}))
+    f.write(json.dumps({"8": {"asciivalues": [{"prefix": "grub_kernel_cmdline", "values": [{"value": r"rootflags=rw mount.usrflags=ro BOOT_IMAGE=/flatcar/vmlinuz-[ab] mount.usr=PARTUUID=\S{36} rootflags=rw mount.usrflags=ro consoleblank=0 root=LABEL=ROOT (console=\S+)? (flatcar.autologin=\S+)? verity.usrhash=\\S{64}", "description": "Flatcar kernel command line %s" % version}]}]}}))
 
-commands = [{"value": '\[.*\]', "description": "Flatcar Grub configuration %s" % version},
+commands = [{"value": r'\[.*\]', "description": "Flatcar Grub configuration %s" % version},
             {"value": 'gptprio.next -d usr -u usr_uuid', "description": "Flatcar Grub configuration %s" % version},
             {"value": 'insmod all_video', "description": "Flatcar Grub configuration %s" % version},
-            {"value": 'linux /flatcar/vmlinuz-[ab] rootflags=rw mount.usrflags=ro consoleblank=0 root=LABEL=ROOT (console=\S+)? (flatcar.autologin=\S+)?', "description": "Flatcar Grub configuration %s" % version},
-            {"value": 'menuentry Flatcar \S+ --id=flatcar\S* {', "description": "Flatcar Grub configuration %s" % version},
+            {"value": r'linux /flatcar/vmlinuz-[ab] rootflags=rw mount.usrflags=ro consoleblank=0 root=LABEL=ROOT (console=\S+)? (flatcar.autologin=\S+)?', "description": "Flatcar Grub configuration %s" % version},
+            {"value": r'menuentry Flatcar \S+ --id=flatcar\S* {', "description": "Flatcar Grub configuration %s" % version},
             {"value": 'search --no-floppy --set randomize_disk_guid --disk-uuid 00000000-0000-0000-0000-000000000001', "description": "Flatcar Grub configuration %s" % version},
             {"value": 'search --no-floppy --set oem --part-label OEM --hint hd0,gpt1', "description": "Flatcar Grub configuration %s" % version},
             {"value": 'set .+', "description": "Flatcar Grub configuration %s" % version},

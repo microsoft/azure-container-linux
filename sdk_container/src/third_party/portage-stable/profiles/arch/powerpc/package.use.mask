@@ -1,5 +1,38 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
+
+# Alfred Wingate <parona@protonmail.com> (2026-05-13)
+# dev-qt/qtgraphs:6 is not keyworded here
+dev-python/pyside graphs
+
+# Alfred Wingate <parona@protonmail.com> (2026-05-03)
+# dev-libs/libthai not keyworded here
+x11-libs/pango libthai
+
+# Robin H. Johnson <robbat2@gentoo.org> (2026-03-22)
+# sys-block/vdo not keyworded here
+sys-fs/lvm2 vdo
+
+# Sam James <sam@gentoo.org> (2026-01-16)
+# Unkeyworded dependencies (bug #968238)
+media-video/pipewire libcamera
+
+# Alfred Wingate <parona@protonmail.com> (2025-12-24)
+# media-libs/jasper is not keyworded here
+media-libs/gegl jpeg2k
+
+# Alfred Wingate <parona@protonmail.com> (2025-11-23)
+# Requires dev-qt/qtwebengine
+media-sound/easyeffects webengine
+
+# Michał Górny <mgorny@gentoo.org> (2025-10-03)
+# Now keyworded on ppc* too.
+sci-libs/flexiblas -system-blas
+sci-libs/lapack -flexiblas
+virtual/blas -flexiblas
+virtual/cblas -flexiblas
+virtual/lapack -flexiblas
+virtual/lapacke -flexiblas
 
 # Andreas Sturmlechner <asturm@gentoo.org> (2025-08-16)
 # dev-games/ogre is not keyworded here
@@ -144,7 +177,6 @@ app-text/enchant nuspell
 # Adel Kara Slimane <adel.ks@zegrapher.com> (2022-03-14)
 # Untested useflag on other arches, needs keywording
 media-video/ffmpeg vmaf
-media-video/ffmpeg-compat vmaf
 
 # Sam James <sam@gentoo.org> (2021-11-15)
 # librtas is available on (only) ppc*
@@ -268,7 +300,7 @@ app-emulation/qemu capstone
 
 # Andreas Sturmlechner <asturm@gentoo.org> (2018-03-02)
 # Requires unkeyworded deps
->=dev-python/ipython-5.4.1 gui qt5
+>=dev-python/ipython-5.4.1 gui
 
 # Amy Liffey <amynka@gentoo.org> (2018-01-21)
 # dev-libs/cereal not keyworded for ppc
@@ -305,12 +337,10 @@ games-emulation/dosbox glide
 # Thomas Deutschmann <whissi@gentoo.org> (2016-08-26)
 # Enable numa support on supported architectures
 dev-db/mysql -numa
-dev-db/percona-server -numa
 
 # Michael Palimaka <kensington@gentoo.org> (2016-07-07)
 # Requires unkeyworded dependencies
 dev-vcs/subversion kwallet
-net-irc/quassel kde
 sys-auth/polkit kde
 sys-block/gparted kde
 virtual/notification-daemon kde

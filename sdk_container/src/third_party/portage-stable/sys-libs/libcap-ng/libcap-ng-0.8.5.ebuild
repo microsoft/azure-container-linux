@@ -1,12 +1,12 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
 
 # Keep an eye on Fedora's packaging (https://src.fedoraproject.org/rpms/libcap-ng/tree/rawhide) for patches
 # Same maintainer in Fedora as upstream
-PYTHON_COMPAT=( python3_{10..13} )
-inherit autotools flag-o-matic out-of-source-utils python-r1
+PYTHON_COMPAT=( python3_{11..14} )
+inherit autotools dot-a flag-o-matic out-of-source-utils python-r1
 
 DESCRIPTION="POSIX 1003.1e capabilities"
 HOMEPAGE="https://people.redhat.com/sgrubb/libcap-ng/"
@@ -14,7 +14,7 @@ SRC_URI="https://people.redhat.com/sgrubb/${PN}/${P}.tar.gz"
 
 LICENSE="GPL-2+ LGPL-2.1+"
 SLOT="0"
-KEYWORDS="~alpha amd64 arm arm64 ~hppa ~loong ~m68k ~mips ppc ppc64 ~riscv ~s390 ~sparc x86 ~x86-linux"
+KEYWORDS="~alpha amd64 arm arm64 ~hppa ~loong ~m68k ~mips ppc ppc64 ~riscv ~s390 ~sparc x86"
 IUSE="python static-libs"
 REQUIRED_USE="python? ( ${PYTHON_REQUIRED_USE} )"
 
@@ -37,6 +37,9 @@ src_prepare() {
 
 src_configure() {
 	use sparc && replace-flags -O? -O0
+
+	# bug #960469
+	use static-libs && lto-guarantee-fat
 
 	local ECONF_SOURCE="${S}"
 
@@ -96,6 +99,9 @@ src_install() {
 		local BUILD_DIR="${WORKDIR}"/build
 		emake -C "${BUILD_DIR}" DESTDIR="${D}" install
 	fi
+
+	# bug #960469
+	use static-libs && strip-lto-bytecode
 
 	find "${ED}" -name '*.la' -delete || die
 }

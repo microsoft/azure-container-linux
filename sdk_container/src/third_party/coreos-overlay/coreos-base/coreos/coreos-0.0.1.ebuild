@@ -118,7 +118,7 @@ RDEPEND="${RDEPEND}
 	coreos-base/update-ssh-keys
 	coreos-base/update_engine
 	coreos-base/ue-rs
-	dev-db/etcdctl
+	dev-db/etcd
 	dev-debug/strace
 	dev-libs/libsodium
 	dev-libs/openssl
@@ -192,6 +192,7 @@ RDEPEND="${RDEPEND}
 	sys-fs/cryptsetup
 	sys-fs/dosfstools
 	sys-fs/e2fsprogs
+	sys-fs/erofs-utils
 	sys-fs/lsscsi
 	sys-fs/lvm2
 	sys-fs/mdadm

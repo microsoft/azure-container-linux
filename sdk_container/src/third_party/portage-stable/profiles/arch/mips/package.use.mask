@@ -1,5 +1,61 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
+
+# Pacho Ramos <pacho@gentoo.org> (2026-05-09)
+# appstream not keyworded
+app-misc/media-player-info test
+
+# Alfred Wingate <parona@protonmail.com> (2026-05-03)
+# dev-libs/libthai not keyworded here
+x11-libs/pango libthai
+
+# Sam James <sam@gentoo.org> (2026-04-11)
+# Unkeyworded dependencies
+sys-libs/libcap-ng bpf
+
+# Robin H. Johnson <robbat2@gentoo.org> (2026-03-22)
+# sys-block/vdo not keyworded here
+sys-fs/lvm2 vdo
+
+# Ionen Wolkens <ionen@gentoo.org> (2026-03-22)
+# app-text/mdbook is not keyworded here
+>=dev-libs/wayland-1.25.0 doc
+
+# Ionen Wolkens <ionen@gentoo.org> (2026-03-16)
+# media-libs/opencolorio is not keyworded here
+media-video/ffmpeg opencolorio
+
+# Sam James <sam@gentoo.org> (2026-01-16)
+# Unkeyworded dependencies (bug #968238)
+media-video/pipewire libcamera
+
+# Alfred Wingate <parona@protonmail.com> (2025-12-24)
+# media-libs/jasper are not keyworded here
+media-libs/gegl jpeg2k
+
+# Ulrich Müller <ulm@gentoo.org> (2025-12-15)
+# app-text/texlive[xetex] not keyworded, #967505.
+app-text/pdfjam test
+
+# Eli Schwartz <eschwartz@gentoo.org> (2025-11-27)
+# Needs dev-python/mypy for mypyc, not keyworded here
+dev-python/charset-normalizer native-extensions
+
+# Sam James <sam@gentoo.org> (2025-11-15)
+# sys-block/thin-provisioning-tools not keyworded here
+sys-fs/lvm2 thin
+
+# Sam James <sam@gentoo.org> (2025-11-15)
+# gnuplot not keyworded here
+net-misc/ntpsec ntpviz
+
+# Sam James <sam@gentoo.org> (2025-10-31)
+# Needs asciidoctor (ruby)
+net-misc/chrony html
+
+# Philipp Rösner <rndxelement@protonmail.com> (2025-09-23)
+# media-libs/zxingcpp is not keyworded here
+app-text/mupdf barcode
 
 # Eli Schwartz <eschwartz@gentoo.org> (2025-09-05)
 # dev-python/sphinx-tabs is not keyworded.
@@ -104,10 +160,6 @@ dev-perl/Template-Toolkit gd latex vim-syntax
 # requires dev-libs/hidapi to be keyworded
 dev-libs/libfido2 hidapi
 
-# Matt Jolly <kangie@gentoo.org> (2024-11-03)
-# Requires llvm 16 which is not keyworded
-~dev-lang/rust-1.71.1 system-llvm
-
 # Felix Janda <felix.janda@posteo.de> (2024-10-20)
 # requires dev-libs/libcss and net-libs/libdom to be keyworded
 www-client/elinks libcss
@@ -174,7 +226,6 @@ app-crypt/pinentry efl
 app-text/doxygen gui
 dev-build/cmake gui
 dev-db/mysql cjk
-dev-db/percona-server cjk
 dev-libs/libisoburn frontend-optional
 dev-python/uvicorn test-rust
 dev-util/glade gjs
@@ -341,7 +392,6 @@ app-text/enchant nuspell
 # Adel Kara Slimane <adel.ks@zegrapher.com> (2022-03-14)
 # Untested useflag on other arches, needs keywording
 media-video/ffmpeg vmaf
-media-video/ffmpeg-compat vmaf
 
 # James Le Cuirot <chewi@gentoo.org> (2022-02-24)
 # These GRUB platforms are only for MIPS.
@@ -435,10 +485,6 @@ dev-python/twisted conch http2 test
 # net-libs/libnetfilter_conntrack is not keyworded on mips
 net-dns/dnsmasq conntrack
 
-# Davide Pesavento <pesa@gentoo.org> (2015-10-26)
-# Tests require non-keyworded qt5
-dev-qt/qtchooser test
-
 # Mike Frysinger <vapier@gentoo.org> (2015-09-10)
 # Requires matplotlib which requires a bit more.
 dev-python/numpydoc test
@@ -502,3 +548,7 @@ dev-vcs/git cgi
 # Matt Turner <mattst88@gentoo.org> (2012-02-09)
 # mips only use flags
 >=sci-libs/fftw-3 -zbus
+
+# Lukas Schmelting <lschmelting@posteo.com>
+# Depends on unkeyworded x11-misc/xvfb-run
+>=x11-libs/libnotify-0.8.7 test

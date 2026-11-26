@@ -152,6 +152,7 @@ function _garbage_collect_impl() {
         rmpat="${rmpat} ${BUILDCACHE_PATH_PREFIX}/containers/${os_docker_vernum}/flatcar-images-*"
         rmpat="${rmpat} ${BUILDCACHE_PATH_PREFIX}/images/*/${os_vernum}/"
         rmpat="${rmpat} ${BUILDCACHE_PATH_PREFIX}/testing/${os_vernum}/"
+        rmpat="${rmpat} ${BUILDCACHE_PATH_PREFIX}/build-logs/${os_vernum}/"
 
         echo "## The following files will be removed ##"
         $sshcmd "${BUILDCACHE_USER}@${BUILDCACHE_SERVER}" \
@@ -211,6 +212,7 @@ function _garbage_collect_impl() {
                 "images/amd64" \
                 "images/arm64" \
                 "testing" \
+                "build-logs" \
                 ; do
         local fullpath="${BUILDCACHE_PATH_PREFIX}/${dir}"
         echo
@@ -253,16 +255,7 @@ function _garbage_collect_impl() {
 
     local mantle_ref
     mantle_ref=$(cat sdk_container/.repo/manifests/mantle-container)
-    docker run --pull always --rm --net host \
-      --env AZURE_AUTH_CREDENTIALS --env AZURE_PROFILE \
-      --env AWS_ACCESS_KEY_ID --env AWS_SECRET_ACCESS_KEY \
-      --env AWS_CREDENTIALS \
-      --env DIGITALOCEAN_TOKEN_JSON \
-      --env GCP_JSON_KEY \
-      --env VMWARE_ESX_CREDS \
-      --env BRIGHTBOX_CLIENT_ID --env BRIGHTBOX_CLIENT_SECRET \
-      --env AKAMAI_TOKEN \
-      --env STACKIT_SERVICE_ACCOUNT \
+    docker run --pull always --rm --net host --env-file="sdk_lib/env_mantle.txt" \
       -w /work -v "$PWD":/work "${mantle_ref}" /work/ci-automation/garbage_collect_cloud.sh
 
     echo

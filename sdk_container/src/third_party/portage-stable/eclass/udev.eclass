@@ -1,4 +1,4 @@
-# Copyright 1999-2024 Gentoo Authors
+# Copyright 2012-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 # @ECLASS: udev.eclass
@@ -57,9 +57,9 @@ _udev_get_udevdir() {
 	local -x PKG_CONFIG_FDO_SYSROOT_RULES=1
 	if $($(tc-getPKG_CONFIG) --exists udev); then
 		local udevdir="$($(tc-getPKG_CONFIG) --variable=udevdir udev)"
-		echo "${udevdir#${EPREFIX}}"
+		echo "${udevdir#"${EPREFIX}"}"
 	else
-		echo /lib/udev
+		echo /usr/lib/udev
 	fi
 }
 
@@ -130,3 +130,15 @@ udev_reload() {
 }
 
 fi
+
+# @FUNCTION: udev_hwdb_update
+# @DESCRIPTION:
+# Rebuild the systemd hwdb binary database used by udev for hardware
+# property lookups.  Should be called from pkg_postinst and pkg_postrm
+# in packages installing hwdb files.
+udev_hwdb_update() {
+	type systemd-hwdb &>/dev/null || return 0
+	ebegin "Running systemd-hwdb update to regenerate binary udev hardware database"
+	systemd-hwdb update --root "${ROOT}"
+	eend $?
+}

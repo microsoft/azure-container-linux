@@ -1,4 +1,4 @@
-# Copyright 2008-2025 Gentoo Authors
+# Copyright 2008-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -26,7 +26,7 @@ else
 	S="${WORKDIR}"/${PN}-${MY_PV}
 
 	if [[ ${PV} != *_rc* ]] ; then
-		KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~loong ~mips ~ppc ~ppc64 ~riscv ~sparc ~x86"
+		KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~loong ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86"
 	fi
 fi
 
@@ -46,7 +46,7 @@ RESTRICT="test"
 RDEPEND="
 	dev-libs/lzo:2=
 	sys-apps/util-linux:=[static-libs(+)?]
-	sys-libs/zlib:=
+	virtual/zlib:=
 	convert? (
 		sys-fs/e2fsprogs:=
 		reiserfs? (
@@ -63,7 +63,7 @@ DEPEND="
 	static? (
 		dev-libs/lzo:2[static-libs(+)]
 		sys-apps/util-linux:0[static-libs(+)]
-		sys-libs/zlib:0[static-libs(+)]
+		virtual/zlib:=[static-libs(+)]
 		convert? (
 			sys-fs/e2fsprogs[static-libs(+)]
 			reiserfs? (
@@ -98,12 +98,9 @@ pkg_setup() {
 
 if [[ ${PV} != 9999 ]]; then
 	src_unpack() {
-		# Upstream sign the decompressed .tar
 		if use verify-sig; then
-			einfo "Unpacking ${MY_P}.tar.xz ..."
-			verify-sig_verify_detached - "${DISTDIR}"/${MY_P}.tar.sign \
-				< <(xz -cd "${DISTDIR}"/${MY_P}.tar.xz | tee >(tar -xf -))
-			assert "Unpack failed"
+			verify-sig_uncompress_verify_unpack "${DISTDIR}"/${MY_P}.tar.xz \
+				"${DISTDIR}"/${MY_P}.tar.sign
 		else
 			default
 		fi
@@ -152,8 +149,7 @@ src_configure() {
 		python_setup
 	fi
 
-	# bash as a temporary workaround for https://github.com/kdave/btrfs-progs/pull/721
-	CONFIG_SHELL="${BROOT}"/bin/bash econf "${myeconfargs[@]}"
+	econf "${myeconfargs[@]}"
 }
 
 src_compile() {

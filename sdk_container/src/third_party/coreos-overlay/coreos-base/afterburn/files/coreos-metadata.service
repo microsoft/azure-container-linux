@@ -14,8 +14,7 @@ ConditionKernelCommandLine=|coreos.oem.id=gce
 ConditionKernelCommandLine=|flatcar.oem.id=openstack
 ConditionKernelCommandLine=|coreos.oem.id=openstack
 
-ConditionKernelCommandLine=|flatcar.oem.id=packet
-ConditionKernelCommandLine=|coreos.oem.id=packet
+ConditionKernelCommandLine=|flatcar.oem.id=oraclecloud
 
 ConditionKernelCommandLine=|flatcar.oem.id=scaleway
 

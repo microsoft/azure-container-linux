@@ -9,20 +9,12 @@ case "${PACKAGE_OPERATION}" in
         ;;
 esac
 
-# Forward PACKAGE_OPERATION through .bashrc when switching to the SDK user.
-# Replace any previous selection.
-sed -i '/^export PACKAGE_OPERATION=/d' /home/sdk/.bashrc || exit 1
-printf "export PACKAGE_OPERATION='%s'\n" "${PACKAGE_OPERATION}" >> /home/sdk/.bashrc
-
-# su starts a fresh SDK login shell, so forward the cutoff through .bashrc.
-# Clear it even when the current Docker invocation did not request a snapshot.
-sed -i '/^export PACKAGE_SNAPSHOT_TIME=/d' /home/sdk/.bashrc || exit 1
+export PACKAGE_OPERATION
 if [[ -n ${PACKAGE_SNAPSHOT_TIME:-} ]]; then
     if [[ ! ${PACKAGE_SNAPSHOT_TIME} =~ ^[1-9][0-9]{9}$ ]]; then
         echo "PACKAGE_SNAPSHOT_TIME must be a 10-digit positive Unix timestamp" >&2
         exit 2
     fi
-    printf 'export PACKAGE_SNAPSHOT_TIME=%s\n' "$PACKAGE_SNAPSHOT_TIME" >> /home/sdk/.bashrc
 fi
 
 if [ -n "${SDK_USER_ID:-}" ] ; then
@@ -34,6 +26,9 @@ if [ -n "${SDK_GROUP_ID:-}" ] ; then
 fi
 
 chown -R sdk:sdk /home/sdk
+
+# GPG won't use the socket dir if /var/run/${UID} has the wrong permissions.
+install -o sdk -g sdk -m 0700 -d "/run/user/$(id -u sdk)"
 
 # Fix up SDK repo configuration to use the new coreos-overlay name.
 sed -i -r 's/^\[coreos\]/[coreos-overlay]/' /etc/portage/repos.conf/coreos.conf 2>/dev/null
@@ -74,69 +69,82 @@ sed -i -r '/^masters =/s/\bcoreos(\s|$)/coreos-overlay\1/g' /usr/local/portage/c
     fi
 )
 
-# SDK container is launched using the su command below, which does not preserve environment
-# moreover, if multiple shells are attached to the same container,
-# we want all of them to share the same value of the variable, therefore we need to save it in .bashrc
-grep -q 'export MODULE_SIGNING_KEY_DIR' /home/sdk/.bashrc || {
-    MODULE_SIGNING_KEY_DIR=$(su sdk -c "mktemp -d")
-    if [[ ! "$MODULE_SIGNING_KEY_DIR" || ! -d "$MODULE_SIGNING_KEY_DIR" ]]; then
-        echo "Failed to create temporary directory for secure boot keys."
+# If multiple shells are attached to the same container, we want all of them to
+# share the same value of the variable, therefore we need to save it in .bashrc.
+# Check if MODULE_SIGNING_KEY_DIR exists in .bashrc and if the directory actually exists
+if grep -q 'export MODULE_SIGNING_KEY_DIR=' /home/sdk/.bashrc; then
+    # Extract the existing path
+    EXISTING_DIR=$(source /home/sdk/.bashrc 2>/dev/null; echo "$MODULE_SIGNING_KEY_DIR")
+    # If directory doesn't exist (stale from image build), remove the old entries and recreate
+    if [[ ! -d ${EXISTING_DIR} ]]; then
+        echo "Deleting stale module signing directory."
+        sed -i -e '/export MODULE_SIGNING_KEY_DIR=/d' \
+            -e '/export MODULES_SIGN_KEY=/d' \
+            -e '/export MODULES_SIGN_CERT=/d' /home/sdk/.bashrc
+    fi
+fi
+
+# Create key directory if not already configured in .bashrc
+if ! grep -q 'export MODULE_SIGNING_KEY_DIR=' /home/sdk/.bashrc; then
+    if [[ -n ${MODULE_SIGNING_KEY_DIR:-} ]]; then
+        # Pre-set via environment — use as-is
+        :
+    elif [[ ${COREOS_OFFICIAL:-0} -eq 1 ]]; then
+        # For official builds, use ephemeral keys
+        MODULE_SIGNING_KEY_DIR=$(su sdk -c "mktemp -d")
+    else
+        # For unofficial builds, use persistent directory
+        MODULE_SIGNING_KEY_DIR="/home/sdk/.module-signing-keys"
+        su sdk -c "mkdir -p ${MODULE_SIGNING_KEY_DIR@Q}"
+    fi
+    if [[ ! ${MODULE_SIGNING_KEY_DIR} || ! -d ${MODULE_SIGNING_KEY_DIR} ]]; then
+        echo "Failed to create directory for module signing keys."
     else
         echo "export MODULE_SIGNING_KEY_DIR='$MODULE_SIGNING_KEY_DIR'" >> /home/sdk/.bashrc
         echo "export MODULES_SIGN_KEY='${MODULE_SIGNING_KEY_DIR}/certs/modules.pem'" >> /home/sdk/.bashrc
         echo "export MODULES_SIGN_CERT='${MODULE_SIGNING_KEY_DIR}/certs/modules.pub.pem'" >> /home/sdk/.bashrc
     fi
-}
+fi
 
-# This is ugly.
-#   We need to sudo su - sdk -c so the SDK user gets a fresh login.
-#    'sdk' is member of multiple groups, and plain docker USER only
-#    allows specifying membership of a single group.
-#    When a command is passed to the container, we run, respectively:
-#    sudo su - sdk -c "<command>".
-#   Then, we need to preserve whitespaces in arguments of commands
-#    passed to the container, e.g.
-#    ./update_chroot --toolchain_boards="amd64-usr arm64-usr".
-#    This is done via a separate ".cmd" file since we have used up
-#    our quotes for su -c "<cmd>" already.
-
-# Preserve HYBRID mode environment variables for RPM builds
-if [[ -n "${PACKAGE_SOURCE_MODE:-}" ]]; then
-    # Remove any existing entries first
-    sed -i -e '/export PACKAGE_SOURCE_MODE=/d' -e '/export RPM_STAGING_DIR=/d' -e '/export SYSEXT_COMPRESSION=/d' -e '/export BOOTLOADER_MODE=/d' /home/sdk/.bashrc 2>/dev/null || true
-    # Add current values
-    echo "export PACKAGE_SOURCE_MODE='${PACKAGE_SOURCE_MODE}'" >> /home/sdk/.bashrc
-    if [[ -n "${RPM_STAGING_DIR:-}" ]]; then
-        echo "export RPM_STAGING_DIR='${RPM_STAGING_DIR}'" >> /home/sdk/.bashrc
+# Ensure sysext signing keys exist; regenerate if directory or files missing
+if grep -q 'export SYSEXT_SIGNING_KEY_DIR' /home/sdk/.bashrc; then
+    _existing_sysext_dir=$(source /home/sdk/.bashrc 2>/dev/null; echo "$SYSEXT_SIGNING_KEY_DIR")
+    if [[ -z "$_existing_sysext_dir" || ! -d "$_existing_sysext_dir" || ! -s "$_existing_sysext_dir/sysexts.key" || ! -s "$_existing_sysext_dir/sysexts.crt" ]]; then
+        # Drop stale export so block below regenerates
+        sed -i -e '/export SYSEXT_SIGNING_KEY_DIR=/d' /home/sdk/.bashrc
     fi
-    echo "export BOOTLOADER_MODE='${BOOTLOADER_MODE:-uki}'" >> /home/sdk/.bashrc
 fi
-if [[ -n "${SYSEXT_COMPRESSION:-}" ]]; then
-    echo "export SYSEXT_COMPRESSION='${SYSEXT_COMPRESSION}'" >> /home/sdk/.bashrc
-fi
-if [[ -n "${STANDALONE_SYSEXTS_SPEC:-}" ]]; then
-    sed -i -e '/export STANDALONE_SYSEXTS_SPEC=/d' /home/sdk/.bashrc 2>/dev/null || true
-    echo "export STANDALONE_SYSEXTS_SPEC='${STANDALONE_SYSEXTS_SPEC}'" >> /home/sdk/.bashrc
-fi
-# Forward ACL version overrides so common.sh picks them up inside the container
-sed -i -e '/export IMAGE_VERSION=/d' -e '/export IMAGE_VERSION_ID=/d' -e '/export IMAGE_BUILD_ID=/d' /home/sdk/.bashrc 2>/dev/null || true
-if [[ -n "${IMAGE_VERSION:-}" ]]; then
-    echo "export IMAGE_VERSION='${IMAGE_VERSION}'" >> /home/sdk/.bashrc
-fi
-if [[ -n "${IMAGE_VERSION_ID:-}" ]]; then
-    echo "export IMAGE_VERSION_ID='${IMAGE_VERSION_ID}'" >> /home/sdk/.bashrc
-fi
-if [[ -n "${IMAGE_BUILD_ID:-}" ]]; then
-    echo "export IMAGE_BUILD_ID='${IMAGE_BUILD_ID}'" >> /home/sdk/.bashrc
-fi
-# Forward docker sysext injection flag for test image builds
-sed -i -e '/export INJECT_DOCKER_SYSEXT=/d' /home/sdk/.bashrc 2>/dev/null || true
-echo "export INJECT_DOCKER_SYSEXT='${INJECT_DOCKER_SYSEXT:-false}'" >> /home/sdk/.bashrc
-# Forward fasttrack preview repo file for CVE RPM resolution
-sed -i -e '/export FASTTRACK_REPO_FILE=/d' /home/sdk/.bashrc 2>/dev/null || true
-if [[ -n "${FASTTRACK_REPO_FILE:-}" ]]; then
-    printf 'export FASTTRACK_REPO_FILE=%q\n' "${FASTTRACK_REPO_FILE}" >> /home/sdk/.bashrc
-fi
+grep -q 'export SYSEXT_SIGNING_KEY_DIR' /home/sdk/.bashrc || {
+    if [[ -n ${SYSEXT_SIGNING_KEY_DIR:-} ]]; then
+        # Pre-set via environment — use as-is
+        :
+    elif [[ ${COREOS_OFFICIAL:-0} -eq 1 ]]; then
+        SYSEXT_SIGNING_KEY_DIR=$(su sdk -c "mktemp -d")
+    else
+        SYSEXT_SIGNING_KEY_DIR="/home/sdk/.sysext-signing-keys"
+        su sdk -c "mkdir -p ${SYSEXT_SIGNING_KEY_DIR@Q}"
+    fi
+    if [[ ! "$SYSEXT_SIGNING_KEY_DIR" || ! -d "$SYSEXT_SIGNING_KEY_DIR" ]]; then
+        echo "Failed to create directory for sysext signing keys."
+    else
+        echo "export SYSEXT_SIGNING_KEY_DIR='$SYSEXT_SIGNING_KEY_DIR'" >> /home/sdk/.bashrc
+    fi
+    pushd "$SYSEXT_SIGNING_KEY_DIR" > /dev/null
+    build_id=$(source "/mnt/host/source/.repo/manifests/version.txt"; echo "$FLATCAR_BUILD_ID")
+    # Generate sysext signing key only if missing or empty
+    if [[ ! -s sysexts.key || ! -s sysexts.crt ]]; then
+      su sdk -c "openssl req -new -nodes -utf8 \
+        -x509 -batch -sha256 \
+        -days 36000 \
+        -outform PEM \
+        -out sysexts.crt \
+        -keyout sysexts.key \
+        -newkey 4096 \
+        -subj '/CN=Flatcar sysext key/OU=$build_id'" \
+          || echo "Generating sysext signing key failed"
+    fi
+    popd > /dev/null
+}
 
 ACL_IPE_MODE="${ACL_IPE_MODE:-disabled}"
 case "${ACL_IPE_MODE}" in
@@ -179,29 +187,10 @@ case "${ACL_ROOT_HASH_SIGNING_ENABLED}:${ACL_IPE_CAPABLE}:${BOOTLOADER_MODE:-uki
         exit 1
         ;;
 esac
-sed -i \
-    -e '/export ACL_IPE_MODE=/d' \
-    -e '/export ACL_IPE_SIGNING_MODE=/d' \
-    -e '/export ACL_IPE_CAPABLE=/d' \
-    -e '/export ACL_ROOT_HASH_SIGNING_ENABLED=/d' \
-    /home/sdk/.bashrc 2>/dev/null || true
-echo "export ACL_IPE_MODE='${ACL_IPE_MODE}'" >> /home/sdk/.bashrc
-echo "export ACL_IPE_SIGNING_MODE='${ACL_IPE_SIGNING_MODE}'" >> /home/sdk/.bashrc
-echo "export ACL_IPE_CAPABLE='${ACL_IPE_CAPABLE}'" >> /home/sdk/.bashrc
-echo "export ACL_ROOT_HASH_SIGNING_ENABLED='${ACL_ROOT_HASH_SIGNING_ENABLED}'" >> /home/sdk/.bashrc
+export ACL_IPE_MODE ACL_IPE_SIGNING_MODE ACL_IPE_CAPABLE ACL_ROOT_HASH_SIGNING_ENABLED
 
-if [ $# -gt 0 ] ; then
-    cmd="/home/sdk/.cmd"
-    echo -n "exec bash -l -i -c '" >"$cmd"
-    for arg in "$@"; do
-        echo -n "\"$arg\" " >>"$cmd"
-    done
-    echo "'" >>"$cmd"
-    chmod 755 "$cmd"
-    sudo su sdk -c "$cmd"
-    rc=$?
-    rm -f "$cmd"
-    exit $rc
-else
-    exec sudo su -l sdk
-fi
+# We need to sudo -u sdk with bash -l so that the SDK user gets a fresh login.
+# sudo has an -i option to get a login shell, but that cannot be combined with
+# -E to preserve the environment. We already have a relatively clean environment
+# inside the container, but we want to preserve variables passed through Docker.
+exec sudo -u sdk -EH bash -l -i ${1+-c '"${@}"' -- "${@}"}

@@ -27,15 +27,15 @@ ROOT_FS_DIR="$FLAGS_root"
 
 # Set OS branding based on package source mode
 if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
-  OS_NAME="Flatcar Container Linux by Kinvolk"
-  OS_CODENAME="Oklo"
-  OS_ID="flatcar"
-  OS_ID_LIKE="coreos"
-  OS_PRETTY_NAME="$OS_NAME $FLATCAR_VERSION (${OS_CODENAME})"
+  eval $("portageq${FLAGS_board:+-}${FLAGS_board}" envvar -v BRANDING_OS_\*)
+  OS_NAME="$BRANDING_OS_NAME"
+  OS_ID="$BRANDING_OS_ID"
+  OS_ID_LIKE="$BRANDING_OS_ID_LIKE"
+  OS_PRETTY_NAME="$OS_NAME $FLATCAR_VERSION"
+  HOME_URL="$BRANDING_OS_HOME_URL"
+  SUPPORT_URL="$BRANDING_OS_SUPPORT_URL"
+  BUG_REPORT_URL="$BRANDING_OS_BUG_REPORT_URL"
   ANSI_COLOR="38;5;75"
-  HOME_URL="https://flatcar.org/"
-  BUG_REPORT_URL="https://issues.flatcar.org"
-  SUPPORT_URL="https://flatcar.org/"
   CPE_ORG="$OS_ID-linux"
   CPE_DISTRO="${OS_ID}_linux"
 elif [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
@@ -75,14 +75,15 @@ fi
 sudo_clobber "${ROOT_FS_DIR}${DISTRO_SHARE_DIR}/lsb-release" <<EOF
 DISTRIB_ID="$OS_NAME"
 DISTRIB_RELEASE=$_OS_VERSION
-DISTRIB_CODENAME="$OS_CODENAME"
+${OS_CODENAME:+DISTRIB_CODENAME="$OS_CODENAME"}
 DISTRIB_DESCRIPTION="$OS_PRETTY_NAME"
 EOF
 sudo ln -sf "..${DISTRO_SHARE_DIR}/lsb-release" "${ROOT_FS_DIR}/etc/lsb-release"
 
 # And the new standard, os-release
 # https://www.freedesktop.org/software/systemd/man/os-release.html
-  sudo_clobber "${ROOT_FS_DIR}/usr/lib/os-release" <<EOF
+sudo mkdir -p "${ROOT_FS_DIR}/usr/lib"
+sudo_clobber "${ROOT_FS_DIR}/usr/lib/os-release" <<EOF
 NAME="$OS_NAME"
 ID=$OS_ID
 ID_LIKE="$OS_ID_LIKE"

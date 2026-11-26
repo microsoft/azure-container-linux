@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 # When you add an entry to the top of this file, add your name, the date, and
@@ -17,6 +17,20 @@
 
 #--- END OF EXAMPLES ---
 
+# Ionen Wolkens <ionen@gentoo.org> (2026-04-16)
+# media-libs/opencolorio is not stable here and has many dependencies.
+# Not overly worth extra stabilizations over new still scarcely used
+# colour filters. Can revisit if someone wants this.
+media-video/ffmpeg opencolorio
+
+# Andreas Sturmlechner <asturm@gentoo.org> (2025-12-13)
+# media-gfx/asymptote is not stable here, bug #961740
+dev-tex/rubber test
+
+# Sam James <sam@gentoo.org> (2025-11-30)
+# sci-libs/blis does not have stable keywords
+sci-libs/flexiblas blis
+
 # Andreas Sturmlechner <asturm@gentoo.org> (2025-08-29)
 # dev-perl/Template-GD is not stable here. Bug #962143
 dev-perl/Template-Toolkit gd
@@ -28,10 +42,6 @@ dev-perl/Business-ISBN barcode
 # Andreas Sturmlechner <asturm@gentoo.org> (2025-08-29)
 # dev-perl/GDTextUtil is not stable here. Bug #661634
 media-video/vdrsync dvdr
-
-# Andreas Sturmlechner <asturm@gentoo.org> (2025-03-07)
-# KDE Frameworks is no longer stable on x86
-x11-themes/QGnomePlatform qt5
 
 # Sam James <sam@gentoo.org> (2025-02-13)
 # sys-cluster/corosync is marked stable here
@@ -75,16 +85,10 @@ virtual/notification-daemon kde
 # sys-block/nbdkit is not yet marked stable here
 app-emulation/libvirt nbd
 
-# Nowa Ammerlaan <nowa@gentoo.org> (2024-03-21)
-# Experimental, virt-firmware is keyworded only unstable
-sys-kernel/installkernel efistub
-
 # Arthur Zamarin <arthurzam@gentoo.org> (2023-06-03)
 # Destabilizing x86 keywords on sci-*/* packages
 app-metrics/collectd collectd_plugins_gps
-dev-games/openscenegraph las
 dev-libs/efl physics
-media-libs/a52dec djbfft
 dev-python/graphviz test
 dev-python/sympy symengine
 kde-apps/marble gps

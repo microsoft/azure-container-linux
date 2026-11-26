@@ -106,32 +106,13 @@ zip_update_tools() {
     --arch "$(get_sdk_arch)" --output-dir "${BUILD_DIR}" --zip-name "${update_zip}"
 }
 
-# ldconfig cannot generate caches for non-native arches.
-# Use qemu & the native ldconfig to work around that.
-# http://code.google.com/p/chromium/issues/detail?id=378377
 run_ldconfig() {
-  local root_fs_dir=$1
-  case ${ARCH} in
-  arm64)
-    sudo qemu-aarch64 "${root_fs_dir}"/usr/sbin/ldconfig -r "${root_fs_dir}";;
-  x86|amd64)
-    sudo ldconfig -r "${root_fs_dir}";;
-  *)
-    die "Unable to run ldconfig for ARCH ${ARCH}"
-  esac
+  # This wrapper is created by setup_board.
+  sudo "ldconfig-${BOARD}" -r "$1"
 }
 
 run_localedef() {
-  local root_fs_dir="$1" loader=()
-  case ${ARCH} in
-  arm64)
-    loader=( qemu-aarch64 -L "${root_fs_dir}" );;
-  amd64)
-    loader=( "${root_fs_dir}/usr/lib64/ld-linux-x86-64.so.2" \
-               --library-path "${root_fs_dir}/usr/lib64" );;
-  *)
-    die "Unable to run localedef for ARCH ${ARCH}";;
-  esac
+  local root_fs_dir="$1"
   info "Generating C.UTF-8 locale..."
   local i18n="${root_fs_dir}/usr/share/i18n"
   # localedef will silently fall back to /usr/share/i18n if missing so
@@ -139,8 +120,8 @@ run_localedef() {
   [[ -f "${i18n}/charmaps/UTF-8.gz" ]] || die
   [[ -f "${i18n}/locales/C" ]] || die
   sudo mkdir -p "${root_fs_dir}/usr/lib/locale"
-  sudo I18NPATH="${i18n}" "${loader[@]}" "${root_fs_dir}/usr/bin/localedef" \
-      --prefix="${root_fs_dir}" --charmap=UTF-8 --inputfile=C C.UTF-8
+  sudo I18NPATH="${i18n}" "bwrap-${BOARD}" "${root_fs_dir}" /usr/bin/localedef \
+      --charmap=UTF-8 --inputfile=C C.UTF-8
 }
 
 # Basic command to emerge binary packages into the target image.
@@ -154,9 +135,14 @@ emerge_to_image() {
   fi
 
   sudo -E ROOT="${root_fs_dir}" \
-      FEATURES="-ebuild-locks" \
+      FEATURES="-ebuild-locks -merge-wait" \
       PORTAGE_CONFIGROOT="${BUILD_DIR}"/configroot \
-      emerge --usepkgonly --jobs="${NUM_JOBS}" --verbose "$@"
+      emerge \
+      --usepkgonly \
+      --binpkg-respect-use=y \
+      --jobs="${NUM_JOBS}" \
+      --verbose \
+      "$@"
 
   # Shortcut if this was just baselayout
   [[ "$*" == *sys-apps/baselayout ]] && return
@@ -168,26 +154,6 @@ emerge_to_image() {
   # all tests are fatal, for now let the old function skip soname errors.
   ROOT="${root_fs_dir}" PORTAGE_CONFIGROOT="${BUILD_DIR}"/configroot \
       test_image_content "${root_fs_dir}"
-}
-
-# emerge_to_image without a rootfs check; you should use emerge_to_image unless
-# here's a good reason not to.
-emerge_to_image_unchecked() {
-  local root_fs_dir="$1"; shift
-
-  if [[ ${FLAGS_getbinpkg} -eq ${FLAGS_TRUE} ]]; then
-    set -- --getbinpkg "$@"
-  fi
-
-  sudo -E ROOT="${root_fs_dir}" \
-      PORTAGE_CONFIGROOT="${BUILD_DIR}"/configroot \
-      emerge --usepkgonly --jobs="${NUM_JOBS}" --verbose "$@"
-
-  # Shortcut if this was just baselayout
-  [[ "$*" == *sys-apps/baselayout ]] && return
-
-  # Make sure profile.env has been generated
-  sudo -E ROOT="${root_fs_dir}" env-update --no-ldconfig
 }
 
 # Switch to the dev or prod sub-profile
@@ -313,13 +279,12 @@ get_metadata() {
     if [ "${key}" = "SRC_URI" ]; then
         local package_name="$(echo "${pkg%%:*}" | cut -d / -f 2)"
         local ebuild_path="${prefix}/var/db/pkg/${pkg%%:*}/${package_name}.ebuild"
-        # SRC_URI is empty for the special github.com/flatcar projects
         if [ -z "${val}" ]; then
             # The grep invocation gives errors when the ebuild file is not present.
             # This can happen when the binary packages from ./build_packages are outdated.
             val="$(grep "EGIT_REPO_URI=" "${ebuild_path}" | cut -d '"' -f 2)"
             if [ -n "${val}" ]; then
-                # All github.com/flatcar projects specify their commit
+                # If using git, then the package was probably pinned to a commit.
                 local commit=""
                 commit="$(grep "EGIT_COMMIT=" "${ebuild_path}" | cut -d '"' -f 2)"
                 if [ -n "${commit}" ]; then
@@ -331,10 +296,6 @@ get_metadata() {
         if [ -z "${val}" ]; then
             # Do not attempt to postprocess by resolving ${P} and friends because it does not affect production images
             val="$(cat "${ebuild_path}" | tr '\n' ' ' | grep -P -o 'SRC_URI=".*?"' | cut -d '"' -f 2)"
-        fi
-        # Some packages use nothing from the above but EGIT_REPO_URI (currently only app-crypt/go-tspi)
-        if [ -z "${val}" ]; then
-            val="$(grep "EGIT_REPO_URI=" "${ebuild_path}" | cut -d '"' -f 2)"
         fi
         # Replace all mirror://MIRRORNAME/ parts with the actual URL prefix of the mirror
         new_val=""
@@ -622,6 +583,8 @@ finish_image() {
   local image_initrd_contents="${11}"
   local image_initrd_contents_wtd="${12}"
   local image_disk_space_usage="${13}"
+  local image_realinitrd_contents="${14}"
+  local image_realinitrd_contents_wtd="${15}"
 
   local install_grub=0
   local disk_img="${BUILD_DIR}/${image_name}"
@@ -811,8 +774,18 @@ EOF
     sudo setfiles -Dv -r "${root_fs_dir}" "${root_fs_dir}"/etc/selinux/mcs/contexts/files/file_contexts "${root_fs_dir}"/etc
   fi
 
-  # For RPM/ACL mode, use the targeted policy file_contexts
-  if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    # Temporary hack: set group ownership of /etc/{g,}shadow to the
+    # shadow group, that way unix_chkpwd, chage and expiry can act on
+    # those files.
+    #
+    # This permissions setting should likely be done in some ebuild, but
+    # currently files in /usr/share/baselayout are installed by the
+    # baselayout package, we don't want to add more deps to it.
+    sudo chgrp \
+        --reference="${root_fs_dir}/usr/bin/chage" \
+        "${root_fs_dir}"/{etc,usr/share/baselayout}/{g,}shadow
+  else
     finish_image_selinux_rpm "${root_fs_dir}"
   fi
 
@@ -840,13 +813,36 @@ EOF
       finish_image_package_manifest_rpm "${root_fs_dir}" "${image_name%.bin}"
     fi
   fi
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" ]]; then
+    # Now set up a default confext and enable it.
+    # It's important to use dm-verity not only for stricter image policies
+    # but also because it allows us the refresh to identify this image and
+    # skip setting it up again in the final boot, which not only saves us
+    # a daemon-reload during boot but also from /etc contents shortly
+    # disappearing until systemd-sysext uses mount beneath for an atomic
+    # remount. Instead of a temporary directory we first prepare it as
+    # folder and then convert it to a DDI and remove the folder.
+    sudo rm -rf "${root_fs_dir}/usr/lib/confexts/00-flatcar-default"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/confexts/00-flatcar-default"
+    # Do a copy because we keep /etc for the flatcar (.tar) container and the developer container
+    sudo cp -a "${root_fs_dir}/etc" "${root_fs_dir}/usr/lib/confexts/00-flatcar-default/etc"
+    sudo mkdir -p "${root_fs_dir}/usr/lib/confexts/00-flatcar-default/etc/extension-release.d/"
+    echo ID=_any | sudo tee "${root_fs_dir}/usr/lib/confexts/00-flatcar-default/etc/extension-release.d/extension-release.00-flatcar-default" > /dev/null
+    sudo systemd-repart \
+      --private-key="${SYSEXT_SIGNING_KEY_DIR}/sysexts.key" \
+      --certificate="${SYSEXT_SIGNING_KEY_DIR}/sysexts.crt" \
+      --make-ddi=confext \
+      --copy-source="${root_fs_dir}/usr/lib/confexts/00-flatcar-default" \
+      "${root_fs_dir}/usr/lib/confexts/00-flatcar-default.raw"
+    sudo rm -rf "${root_fs_dir}/usr/lib/confexts/00-flatcar-default"
+  fi
 
-  # Remove the rootfs state as it should be recreated through the
-  # tmpfiles and may not be present on updating machines. This
-  # makes sure our tests cover the case of missing files in the
+  # Remove the rootfs state as it should be recreated through tmpfiles
+  # (and for /etc we use a confext) and may not be present on updating machines.
+  # This makes sure our tests cover the case of missing files in the
   # rootfs and don't rely on the new image. Not done for the developer
   # container.
-  if [[ -n "${image_kernel}" ]]; then
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" && -n "${image_kernel}" ]]; then
     local folder
     for folder in "${root_fs_dir}/"*; do
       case "${folder#"${root_fs_dir}"}" in
@@ -1058,6 +1054,20 @@ EOF
   else
     info "RPM mode: Skipping embedded initramfs extraction (Azure Linux kernel has no embedded initramfs)"
   fi
+
+  if [[ "${PACKAGE_SOURCE_MODE}" == "PORTAGE" && ( -n ${image_realinitrd_contents} || -n ${image_realinitrd_contents_wtd} ) ]]; then
+        mkdir -p "${BUILD_DIR}/tmp_initrd_contents"
+        sudo mount "${root_fs_dir}/usr/lib/flatcar/bootengine.img" "${BUILD_DIR}/tmp_initrd_contents"
+        if [[ -n ${image_realinitrd_contents} ]]; then
+            write_contents "${BUILD_DIR}/tmp_initrd_contents" "${BUILD_DIR}/${image_realinitrd_contents}"
+        fi
+
+        if [[ -n ${image_realinitrd_contents_wtd} ]]; then
+            write_contents_with_technical_details "${BUILD_DIR}/tmp_initrd_contents" "${BUILD_DIR}/${image_realinitrd_contents_wtd}"
+        fi
+        sudo umount "${BUILD_DIR}/tmp_initrd_contents"
+        rm -rf "${BUILD_DIR}/tmp_initrd_contents"
+    fi
 
   if [[ -n "${image_disk_space_usage}" ]]; then
       write_disk_space_usage "${root_fs_dir}" "${BUILD_DIR}/${image_disk_space_usage}"

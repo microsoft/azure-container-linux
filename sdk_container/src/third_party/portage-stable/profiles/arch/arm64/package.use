@@ -1,5 +1,11 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
+
+# Ionen Wolkens <ionen@gentoo.org> (2026-01-25)
+# Makes sense as a default on amd64, but pulls somewhat heavier
+# dependencies for arm64 and not everyone needs this.
+app-emulation/wine-staging -wow64
+app-emulation/wine-vanilla -wow64
 
 # Michał Górny <mgorny@gentoo.org> (2024-09-04)
 # Build with debugging support by default to facilitate dev-debug/dtrace
@@ -13,7 +19,3 @@ media-tv/kodi soc
 media-video/ffmpeg soc
 media-video/ffmpeg-compat soc
 media-video/mpv soc
-
-# Alexis Ballier <aballier@gentoo.org> (2017-07-10)
-# Enable the native arch as the default qemu target
-app-emulation/qemu qemu_softmmu_targets_aarch64

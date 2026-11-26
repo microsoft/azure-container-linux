@@ -18,7 +18,8 @@
 #
 #   1. SDK version and OS image version are recorded in sdk_container/.repo/manifests/version.txt
 #   2. Scripts repo version tag of OS image version to be built is available and checked out.
-#   3. Mantle container docker image reference is stored in sdk_container/.repo/manifests/mantle-container.
+#   3. Mantle container name and tag is stored in sdk_container/.repo/manifests/mantle-container
+#         (or MANTLE_REF is set).
 #   4. Vendor image to run tests for are available on buildcache
 #         ( images/[ARCH]/[FLATCAR_VERSION]/ )
 #
@@ -26,16 +27,18 @@
 #
 #   1. Architecture (ARCH) of the TARGET vm images ("arm64", "amd64").
 #   2. Image type to be tested. One of:
-#      ami, azure, azure_pro, digitalocean, gce, gce_pro, packet, qemu, qemu_uefi, vmware
+#      ami, azure, azure_pro, digitalocean, gce, gce_pro, qemu, qemu_uefi, vmware
 #
 # OPTIONAL INPUT:
 #
 #   3. List of tests / test patterns. Defaults to "*" (all tests).
 #      All positional arguments after the first 2 (see above) are tests / patterns of tests to run.
+#   4. Standard input. Use this to run arbitrary commands inside container before starting the tests.
 #
 #   MAX_RETRIES. Environment variable. Number of re-runs to overcome transient failures. Defaults to 20.
 #   PARALLEL_TESTS. Environment variable. Number of test cases to run in parallel.
 #                   Default is image / vendor specific and defined in ci-automation/ci-config.env.
+#   MANTLE_REF. Environment variable. Overrides the Mantle container name and tag to run the tests with.
 #
 # OUTPUT:
 #
@@ -69,21 +72,6 @@
 # as a first step - it will do some common steps that the vendor
 # script would need to make anyway. For more information, please refer
 # to the vendor_test.sh file.
-
-function __escape_multiple() {
-    local out_array_arg_name="${1}"; shift
-    # rest are args to be escape and appended into the array named
-    # after the first arg
-    local -n out_array_arg_ref="${out_array_arg_name}"
-    local arg arg_escaped
-
-    out_array_arg_ref=()
-    for arg; do
-        printf -v arg_escaped '%q' "${arg}"
-        out_array_arg_ref+=( "${arg_escaped}" )
-    done
-}
-# --
 
 function test_run() {
     # Run a subshell, so the traps, environment changes and global
@@ -130,8 +118,8 @@ function _test_run_impl() {
     get_git_channel >"${work_dir}/git_channel"
 
     local container_name="flatcar-tests-${arch}-${docker_vernum}-${image}"
-    local mantle_ref
-    mantle_ref=$(cat sdk_container/.repo/manifests/mantle-container)
+    local -I MANTLE_REF
+    : "${MANTLE_REF:=$(< sdk_container/.repo/manifests/mantle-container)}"
 
     local tap_merged_summary="results-${image}"
     local tap_merged_detailed="results-${image}-detailed"
@@ -142,19 +130,15 @@ function _test_run_impl() {
     # A job on each worker prunes old mantle images (docker image prune)
     echo "docker rm -f '${container_name}'" >> ./ci-cleanup.sh
 
-    local image_escaped
-    printf -v image_escaped '%q' "${image}"
     local common_test_args=(
         "${work_dir}"
         "${tests_dir}"
         "${arch}"
         "${vernum}"
     )
-    local common_test_args_escaped=()
-    __escape_multiple common_test_args_escaped "${common_test_args[@]}"
 
-    local tests_escaped=()
-    __escape_multiple tests_escaped "${@}"
+    local stdin=""
+    [[ ! -t 0 ]] && stdin=$(< /dev/stdin)
 
     # Keep unescaped copy for the fallback in case test_update_reruns.sh
     # fails. The escaped versions have printf-%q quoting (e.g. acl.\*)
@@ -166,13 +150,11 @@ function _test_run_impl() {
     for retry in $(seq "${retries}"); do
         local tapfile="results-run-${retry}.tap"
         local failfile="failed-run-${retry}.txt"
-        local tapfile_escaped
-        printf -v tapfile_escaped '%q' "${tapfile}"
 
         # Determine pull policy based on image reference
         # Local images (no registry prefix or localhost/) should use --pull never
         local pull_policy="always"
-        if [[ ! "${mantle_ref}" == *"/"* ]] || [[ "${mantle_ref}" == "localhost/"* ]]; then
+        if [[ ! "${MANTLE_REF}" == *"/"* ]] || [[ "${MANTLE_REF}" == "localhost/"* ]]; then
             pull_policy="never"
         fi
 
@@ -182,24 +164,19 @@ function _test_run_impl() {
         # Ignore retcode since tests are flaky. We'll re-run failed tests and
         #  determine success based on test results (tapfile).
         set +e
-        touch sdk_container/.env
         docker run --pull "${pull_policy}" --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
-          -w /work -v "$PWD":/work \
-          -e distro_flag="${distro_flag}" \
-          ${AZURE_DISK_URI:+-e AZURE_DISK_URI="${AZURE_DISK_URI}"} \
-          "${mantle_ref}" \
-         bash -c "git config --global --add safe.directory /work && \
-                  source sdk_container/.env && \
-                  ci-automation/vendor-testing/${image_escaped}.sh ${common_test_args_escaped[*]} ${tapfile_escaped} ${tests_escaped[*]}"
+          -w /work -v "$PWD":/work --env-file="sdk_lib/env_mantle.txt" -e "distro_flag=${distro_flag}" -i "${MANTLE_REF}" bash -ec \
+            'git config --global --add safe.directory /work
+            source /dev/stdin
+            ci-automation/vendor-testing/"${1}".sh "${@:2}"' \
+            -- "${image}" "${common_test_args[@]}" "${tapfile}" "${@}" <<< "${stdin}"
         set -e
         rm -f "${work_dir}/first_run"
 
-        # Note: git safe.directory is not set in this run as it does not use git
-        # Wrap in set +e / set -e to prevent a failure here from silently
-        # terminating the retry loop (the subshell runs under set -e).
         set +e
+        # Note: git safe.directory is not set in this run as it does not use git
         docker run --pull "${pull_policy}" --rm --name="${container_name}" --privileged --net host -v /dev:/dev \
-          -w /work -v "$PWD":/work "${mantle_ref}" \
+          -w /work -v "$PWD":/work "${MANTLE_REF}" \
             ci-automation/test_update_reruns.sh \
                 "${arch}" "${vernum}" "${image}" "${retry}" \
                 "${tests_dir}/${tapfile}" \
@@ -240,7 +217,7 @@ function _test_run_impl() {
         echo "Failed tests:"
         printf '%s\n' "${failed_tests[@]}"
         echo "-----------"
-        __escape_multiple tests_escaped "${failed_tests[@]}"
+        set -- "${failed_tests[@]}"
     done
 
     if ${print_give_up}; then

@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -7,7 +7,7 @@ EAPI=8
 # tips & notes.
 
 GUILE_COMPAT=( 2-2 3-0 )
-PYTHON_COMPAT=( python3_{11..13} )
+PYTHON_COMPAT=( python3_{11..14} )
 inherit flag-o-matic guile-single linux-info python-single-r1 strip-linguas toolchain-funcs
 
 export CTARGET=${CTARGET:-${CHOST}}
@@ -37,7 +37,7 @@ case ${PV} in
 		SRC_URI="
 			https://sourceware.org/pub/gdb/snapshots/branch/gdb-weekly-${MY_PV}.tar.xz
 			https://sourceware.org/pub/gdb/snapshots/current/gdb-weekly-${MY_PV}.tar.xz
-			https://dev.gentoo.org/~sam/distfiles/${CATEGORY}/${PN}/gdb-weekly-${MY_PV}.tar.xz
+			https://distfiles.gentoo.org/pub/proj/toolchain/gdb/snapshots/gdb-weekly-${MY_PV}.tar.xz
 		"
 		S="${WORKDIR}/${PN}-${MY_PV}"
 
@@ -51,7 +51,7 @@ case ${PV} in
 		MY_PV="${PV/_p/.}"
 		SRC_URI="
 			https://sourceware.org/pub/gdb/snapshots/branch/gdb-${MY_PV}.tar.xz
-			https://dev.gentoo.org/~sam/distfiles/${CATEGORY}/${PN}/gdb-${MY_PV}.tar.xz
+			https://distfiles.gentoo.org/pub/proj/toolchain/gdb/snapshots/gdb-${MY_PV}.tar.xz
 		"
 		S="${WORKDIR}/${PN}-${MY_PV}"
 		;;
@@ -71,15 +71,14 @@ DESCRIPTION="GNU debugger"
 HOMEPAGE="https://sourceware.org/gdb/"
 SRC_URI="
 	${SRC_URI}
-	${PATCH_DEV:+https://dev.gentoo.org/~${PATCH_DEV}/distfiles/${CATEGORY}/${PN}/${P}-patches-${PATCH_VER}.tar.xz}
-	${PATCH_VER:+mirror://gentoo/${P}-patches-${PATCH_VER}.tar.xz}
+	${PATCH_DEV:+https://distfiles.gentoo.org/pub/proj/toolchain/gdb/patches/${P}-patches-${PATCH_VER}.tar.xz}
 "
 
 LICENSE="GPL-3+ LGPL-2.1+"
 SLOT="0"
-IUSE="babeltrace cet debuginfod guile lzma multitarget nls +python rocm +server sim source-highlight test vanilla xml xxhash zstd"
+IUSE="cet +debuginfod guile lzma multitarget nls +python rocm +server sim source-highlight test vanilla +xml xxhash zstd"
 if [[ -n ${REGULAR_RELEASE} ]] ; then
-	KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~hppa ~loong ~m68k ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86 ~amd64-linux ~x86-linux ~x64-macos ~x64-solaris"
+	KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~hppa ~loong ~m68k ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86 ~x64-macos ~x64-solaris"
 fi
 REQUIRED_USE="
 	guile? ( ${GUILE_REQUIRED_USE} )
@@ -88,14 +87,12 @@ REQUIRED_USE="
 "
 RESTRICT="!test? ( test )"
 
-# <babeltrace-2: bug #951652
 RDEPEND="
 	dev-libs/mpfr:=
 	dev-libs/gmp:=
 	>=sys-libs/ncurses-5.2-r2:=
 	>=sys-libs/readline-7:=
-	sys-libs/zlib
-	babeltrace? ( dev-util/babeltrace:0/1 )
+	virtual/zlib:=
 	debuginfod? (
 		dev-libs/elfutils[debuginfod(-)]
 	)
@@ -138,6 +135,7 @@ pkg_setup() {
 	if [[ ${CHOST} == *-linux-* ]] ; then
 		if kernel_is -ge 6.11.3 ; then
 			# https://forums.gentoo.org/viewtopic-p-8846891.html
+			# See also PR31520.
 			#
 			# Either CONFIG_PROC_MEM_ALWAYS_FORCE or CONFIG_PROC_MEM_FORCE_PTRACE
 			# should be okay, but not CONFIG_PROC_MEM_NO_FORCE.
@@ -198,7 +196,6 @@ src_configure() {
 		# Disable modules that are in a combined binutils/gdb tree. bug #490566
 		--disable-{binutils,etc,gas,gold,gprof,gprofng,ld}
 
-		$(use_with babeltrace)
 		$(use_with debuginfod)
 
 		$(use_enable test unit-tests)
@@ -258,7 +255,7 @@ src_configure() {
 		#
 		# Check which libraries to apply this to with:
 		# "${S}"/gdb/configure --help | grep without-lib | sort
-		--without-lib{babeltrace,expat,gmp,iconv,ipt,lzma,mpfr,xxhash}-prefix
+		--without-lib{expat,gmp,iconv,ipt,lzma,mpfr,xxhash}-prefix
 	)
 
 	# source-highlight is detected with pkg-config: bug #716558
@@ -269,8 +266,7 @@ src_configure() {
 	# ensure proper compiler is detected for Clang builds: bug #831202
 	export GCC_FOR_TARGET="${CC_FOR_TARGET:-$(tc-getCC)}"
 
-	# XXX: bash for https://inbox.sourceware.org/gdb-patches/87ecw08tfk.fsf@gentoo.org/
-	CONFIG_SHELL="${BROOT}"/bin/bash econf "${myconf[@]}"
+	econf "${myconf[@]}"
 }
 
 src_test() {
@@ -334,6 +330,10 @@ src_install() {
 
 	if use python ; then
 		python_optimize "${ED}"/usr/share/gdb/python/gdb
+	fi
+
+	if use kernel_Hurd ; then
+		mv "${ED}"/usr/bin/gcore "${ED}"/usr/bin/gcore.gdb || die
 	fi
 }
 

@@ -7,24 +7,6 @@
 # Revision of the source ebuild, e.g. -r1. default is ""
 : ${COREOS_SOURCE_REVISION:=}
 
-COREOS_SOURCE_VERSION="${PV}${COREOS_SOURCE_REVISION}"
-
-# $COREOS_KERNEL_SOURCE_NAME is the kernel source name to be used for
-# $KERNEL_DIR, e.g. linux-4.19.0-coreos. This comes from upstream, so
-# Flatcar should not change it.
-#
-# On the other hand, $COREOS_SOURCE_NAME is the kernel name to be used for
-# $KV_OUT_DIR in individual coreos-kernel*.ebuild files. That one needs to
-# have a flatcar-specific name. We cannot define another variable like
-# $FLATCAR_SOURCE_NAME, because it will then be rewritten by upstream changes
-# that set $COREOS_SOURCE_NAME by default. In the Gentoo world, the ebuild
-# for each new version has a totally new file name. So it's hard to replace
-# a new $COREOS_SOURCE_NAME variable for every new ebuild.
-# $COREOS_SOURCE_NAME should be a name without a revision suffix (e.g. "-r1"),
-# because $KV_FULL would not include such a suffix.
-COREOS_KERNEL_SOURCE_NAME="linux-${PV/_rc/-rc}-coreos${COREOS_SOURCE_REVISION}"
-COREOS_SOURCE_NAME="linux-${PV/_rc/-rc}-flatcar"
-
 [[ ${EAPI} != [78] ]] && die "Only EAPI 7 and 8 are supported"
 
 inherit linux-info toolchain-funcs
@@ -36,7 +18,7 @@ SRC_URI=""
 IUSE=""
 
 BDEPEND="dev-util/pahole"
-DEPEND="=sys-kernel/coreos-sources-${COREOS_SOURCE_VERSION}"
+DEPEND="=sys-kernel/coreos-sources-${PV}${COREOS_SOURCE_REVISION}"
 
 # Do not analyze or strip installed files
 RESTRICT="binchecks strip"
@@ -44,10 +26,8 @@ RESTRICT="binchecks strip"
 # The build tools are OK and shouldn't trip up multilib-strict.
 QA_MULTILIB_PATHS="usr/lib/modules/.*/build/scripts/kconfig/.*"
 
-# Use source installed by coreos-sources
-# KERNEL_DIR must find the kernel source tree under /usr/src/linux-*-coreos,
-# not /usr/src/linux-*-flatcar, which does not exist at all.
-KERNEL_DIR="${SYSROOT}/usr/src/${COREOS_KERNEL_SOURCE_NAME}"
+# Force linux-info to detect version-matched source installed by coreos-sources
+KERNEL_DIR="${ESYSROOT}/usr/src/linux-${PV/_rc/-rc}-coreos${COREOS_SOURCE_REVISION}"
 
 # Search for an apropriate config in ${FILESDIR}. The config should reflect
 # the kernel version but partial matching is allowed if the config is
@@ -117,10 +97,10 @@ kmake() {
 	if gcc-specs-pie; then
 		kernel_cflags="-nopie -fstack-check=no ${kernel_cflags}"
 	fi
-	emake "--directory=${S}/source" \
+	emake "--directory=${KV_DIR}" \
 		ARCH="${kernel_arch}" \
 		CROSS_COMPILE="${CHOST}-" \
-		KBUILD_OUTPUT="../build" \
+		KBUILD_OUTPUT="${S}/build" \
 		KCFLAGS="${kernel_cflags}" \
 		LDFLAGS="" \
 		"V=1" \
@@ -143,14 +123,18 @@ get_sig_key() {
 		die "MODULE_SIG_KEY is using the default value"
 	fi
 
-	if [[ ${sig_key} != /tmp/* ]]; then
-		die "Refusing to to continue with modules key outside of /tmp, so that it stays in RAM only."
+	# For official builds, enforce /tmp to keep keys in RAM only
+	# For unofficial builds, allow persistent directory
+	if [[ ${COREOS_OFFICIAL:-0} -eq 1 ]]; then
+		if [[ ${sig_key} != /tmp/* ]]; then
+			die "Refusing to continue with modules key outside of /tmp for official builds, so that it stays in RAM only."
+		fi
 	fi
 	if [ "$sig_key" != "${MODULES_SIGN_KEY}" ]; then
 		die "MODULES_SIGN_KEY variable is different than MODULE_SIG_KEY in kernel config."
 	fi
 
-	echo $sig_key
+	echo "$sig_key"
 }
 
 validate_sig_key() {
@@ -165,8 +149,14 @@ setup_keys() {
 
 	echo "Preparing keys at $sig_key"
 
-	mkdir -p $MODULE_SIGNING_KEY_DIR
-	pushd $MODULE_SIGNING_KEY_DIR
+	if [[ ${COREOS_OFFICIAL:-0} -eq 0 ]]; then
+		# Allow portage sandbox to write to the module signing key directory,
+		# which is in home for unofficial builds
+		addwrite "${MODULE_SIGNING_KEY_DIR}"
+	fi
+
+	mkdir -p "$MODULE_SIGNING_KEY_DIR"
+	pushd "$MODULE_SIGNING_KEY_DIR"
 
 	mkdir -p gen_certs || die
 	# based on the default config the kernel auto-generates
@@ -206,91 +196,12 @@ setup_keys() {
 	popd
 }
 
-# Populate /lib/modules/$(uname -r)/{build,source}
-install_build_source() {
-	local kernel_arch=$(tc-arch-kernel)
-	local host_kernel_arch=$(tc-ninja_magic_to_arch kern "${CBUILD}")
-
-	# NOTE: We have to get ${archabspaths} before removing symlinks under
-	# /usr/lib/modules. However, do not exclude "dt-bindings" for now,
-	# as it looks architecture-independent.
-	local archabspaths=($(ls -1d ${D}/usr/lib/modules/${KV_FULL}/source/scripts/dtc/include-prefixes/* \
-		| grep -v dt-bindings ))
-
-	# remove the broken symlinks referencing $ROOT
-	rm "${D}/usr/lib/modules/${KV_FULL}/build" || die
-
-	# Compose list of architectures to be excluded from the kernel modules
-	# tree in the final image. It is an array to be used as a pattern for
-	# grep command below at the end of "find source/scripts" command for
-	# fetching kernel modules list, e.g.:
-	#   find source/scripts -follow -print \
-	#   | grep -E -v -w "include-prefixes/arc|include-prefixes/xtensa"
-	declare -a excarchlist
-	local excarchstr
-
-	for apath in "${archabspaths[@]}"; do
-		local arch
-		arch=$(basename "${apath}")
-		if [[ "${arch}" != "${kernel_arch}" ]]; then
-			excarchlist+=("include-prefixes/${arch}")
-
-			# Do not append delimiter '|' in case of the last element.
-			if [[ "${apath}" != "${archabspaths[-1]}" ]]; then
-				excarchlist+=("|")
-			fi
-		fi
-	done
-
-	# Remove every whitespace from the grep pattern string, to make pattern
-	# matching work well.
-	excarchstr=$(echo "${excarchlist[@]}" | sed -e 's/[[:space:]]*//g')
-
-	# Install a stripped source for out-of-tree module builds (Debian-derived)
-	#
-	# NOTE: we need to exclude unsupported architectures from source/scripts,
-	# to prevent the final image from having unnecessary directories under
-	# /usr/lib/modules/${KV_FULL}/source/scripts/dtc/include-prefixes.
-	# The grep must run with "-w" to exclude exact patterns like either arm
-	# or arm64.
-	{
-		echo source/Makefile
-		find source/arch/${host_kernel_arch} -follow -maxdepth 1 -name 'Makefile*' -print
-		find source/arch/${kernel_arch} -follow -maxdepth 1 -name 'Makefile*' -print
-		find source/arch/${kernel_arch} -follow \( -name 'module.lds' -o -name 'Kbuild.platforms' -o -name 'Platform' \) -print
-		find $(find source/arch/${kernel_arch} -follow \( -name include -o -name scripts \) -follow -type d -print) -print
-		find source/include -follow -print
-		find source/scripts -follow -print | grep -E -v -w "${excarchstr}"
-		find build/ -print
-	} | cpio -pd \
-		--preserve-modification-time \
-		--owner=root:root \
-		--dereference \
-		"${D}/usr/lib/modules/${KV_FULL}" || die
-	# ./build/source is a symbolic link so cpio ends up creating an empty dir.
-	# Restore the symlink.
-	pushd "${D}/usr/lib/modules/${KV_FULL}"
-	rmdir build/source || die
-	ln -sr source build || die
-	# Symlink includes into the build directory to resemble Ubuntu's /lib/modules
-	# layout. This lets the Nvidia driver build when passing SYSSRC=/lib/modules/../build
-	# instead of requiring SYSOUT/SYSSRC.
-	{
-		find source/include -mindepth 1 -maxdepth 1 -type d
-		find source/arch/${kernel_arch}/include -mindepth 1 -maxdepth 1 -type d
-	} | while read src; do
-		dst="${src/source/build}"
-		ln -sr "${src}" "${dst}" || die
-	done || die
-	popd
-}
-
 coreos-kernel_pkg_pretend() {
 	[[ "${MERGE_TYPE}" == binary ]] && return
 
-	if [[ -f "${KERNEL_DIR}/.config" || -d "${KERNEL_DIR}/include/config" ]]
+	if [[ -f "${KV_DIR}/.config" || -d "${KV_DIR}/include/config" ]]
 	then
-		die "Source is not clean! Run make mrproper in ${KERNEL_DIR}"
+		die "Source is not clean! Run make mrproper in ${KV_DIR}"
 	fi
 }
 
@@ -298,14 +209,11 @@ coreos-kernel_pkg_setup() {
 	[[ "${MERGE_TYPE}" == binary ]] && return
 
 	# tc-arch-kernel requires a call to get_version from linux-info.eclass
-	get_version || die "Failed to detect kernel version in ${KERNEL_DIR}"
+	get_version || die "Failed to detect kernel version in ${KV_DIR}"
 }
 
 coreos-kernel_src_unpack() {
-	# we more or less reproduce the layout in /lib/modules/$(uname -r)/
 	mkdir -p "${S}/build" || die
-	mkdir -p "${S}/source" || die
-	ln -s "${KERNEL_DIR}"/* "${S}/source/" || die
 }
 
 coreos-kernel_src_configure() {

@@ -15,6 +15,7 @@ SCRIPT_ROOT="$(cd "$(dirname "$(readlink -f "$0")")/../"; pwd)"
 assert_inside_chroot
 switch_to_strict_mode
 
+. "${BUILD_LIBRARY_DIR}/toolchain_util.sh" || exit 1
 . "${BUILD_LIBRARY_DIR}/build_image_util.sh" || exit 1
 
 # Create a sysext from a package and install it to the OS image.
@@ -71,12 +72,16 @@ create_prod_sysext() {
   # to determine the package target in coreos/base/profile.bashrc
   #
   # SYSEXT_COMPRESSION can be set to override default compression (zstd).
-  local compression_opt=""
+  local compression_opt="--compression=none"
+  if [[ "${PACKAGE_SOURCE_MODE:-PORTAGE}" == "RPM" ]]; then
+    compression_opt="--compression=zstd"
+  fi
   if [[ -n "${SYSEXT_COMPRESSION:-}" ]]; then
     compression_opt="--compression=${SYSEXT_COMPRESSION}"
   fi
 
-  sudo "FLATCAR_BUILD_ID=$FLATCAR_BUILD_ID" \
+  sudo "SYSEXT_SIGNING_KEY_DIR=${SYSEXT_SIGNING_KEY_DIR:-}" \
+      "FLATCAR_BUILD_ID=$FLATCAR_BUILD_ID" \
       "PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE:-PORTAGE}" \
       "RPM_STAGING_DIR=${RPM_STAGING_DIR:-}" \
       "PACKAGE_SNAPSHOT_TIME=${PACKAGE_SNAPSHOT_TIME:-}" \
@@ -122,6 +127,14 @@ sysext_mountdir="${BUILD_DIR}/prod-sysext-work/mounts"
 sysext_base="${sysext_workdir}/base-os.squashfs"
 
 function cleanup() {
+  IFS=':' read -r -a mounted_sysexts <<< "$sysext_lowerdirs"
+  # skip the rootfs
+  mounted_sysexts=("${mounted_sysexts[@]:1}")
+
+  for sysext in "${mounted_sysexts[@]}"; do
+    sudo systemd-dissect --umount --rmdir "$sysext"
+  done
+
   sudo umount "${sysext_mountdir}"/* || true
   rm -rf "${sysext_workdir}" || true
 }
@@ -139,6 +152,7 @@ sudo mksquashfs "${root_fs_dir}" "${sysext_base}" -noappend -xattrs-exclude '^bt
 # for combined overlay later.
 prev_pkginfo=""
 sysext_lowerdirs="${sysext_mountdir}/rootfs-lower"
+mkdir -p "${sysext_mountdir}"
 for sysext in ${sysexts_list//,/ }; do
   # format is "<name>:<group>/<package>"
   name="${sysext%|*}"
@@ -152,12 +166,21 @@ for sysext in ${sysexts_list//,/ }; do
                      "${grp_pkg}" \
                      "${prev_pkginfo}"
 
-  mkdir -p "${sysext_mountdir}/${name}" \
-           "${sysext_mountdir}/${name}_pkginfo"
-  sudo mount -rt squashfs -o loop,nodev "${sysext_output_dir}/${name}.raw" \
-                                    "${sysext_mountdir}/${name}"
-  sudo mount -rt squashfs -o loop,nodev "${sysext_output_dir}/${name}_pkginfo.raw" \
-                                    "${sysext_mountdir}/${name}_pkginfo"
+  sudo systemd-dissect \
+    --read-only \
+    --mount \
+    --mkdir \
+    --image-policy='root=encrypted+unprotected+absent:usr=encrypted+unprotected+absent' \
+    "${sysext_output_dir}/${name}.raw" \
+    "${sysext_mountdir}/${name}"
+
+  sudo systemd-dissect \
+    --read-only \
+    --mount \
+    --mkdir \
+    --image-policy='root=encrypted+unprotected+absent:usr=encrypted+unprotected+absent' \
+    "${sysext_output_dir}/${name}_pkginfo.raw" \
+    "${sysext_mountdir}/${name}_pkginfo"
 
   sysext_lowerdirs="${sysext_lowerdirs}:${sysext_mountdir}/${name}"
   sysext_lowerdirs="${sysext_lowerdirs}:${sysext_mountdir}/${name}_pkginfo"

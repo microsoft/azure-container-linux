@@ -1,6 +1,14 @@
 # Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
 # Distributed under the terms of the GNU General Public License v2
 
+BRANDING_OS_NAME="Flatcar Container Linux by Kinvolk"
+BRANDING_OS_ID="flatcar"
+BRANDING_OS_ID_LIKE="coreos"
+BRANDING_OS_HOME_URL="https://flatcar.org"
+BRANDING_OS_BUG_REPORT_URL="https://issues.flatcar.org"
+BRANDING_OS_SUPPORT_URL="https://groups.google.com/forum/#!forum/flatcar-linux-user"
+BRANDING_OS_PRETTY_NAME="" # Set blank to override "Gentoo Linux" but set dynamically from BRANDING_OS_VERSION.
+
 # ChromeOS-specific: TESTS USE_EXPAND for autotest
 USE_EXPAND="${USE_EXPAND} TESTS"
 
@@ -10,13 +18,13 @@ USE_EXPAND="${USE_EXPAND} GO_VERSION"
 
 USE="${USE} -cracklib -cups -tcpd -berkdb"
 
-# Use Python 3 as the default version
-USE="${USE} -python_single_target_python2_7 python_single_target_python3_11"
-USE="${USE} -python_targets_python2_7 python_targets_python3_11"
+# Use Python 3.12 as the default version.
+PYTHON_SINGLE_TARGET="-pypy3_11 -python3_11 python3_12 -python3_13 -python3_14 -python3_15 -python3_13t -python3_14t -python3_15t"
+PYTHON_TARGETS="-pypy3_11 -python3_11 python3_12 -python3_13 -python3_14 -python3_15 -python3_13t -python3_14t -python3_15t"
 
-# Use Python 3 as the default version
-BOOTSTRAP_USE="${BOOTSTRAP_USE} -python_single_target_python2_7 python_single_target_python3_11"
-BOOTSTRAP_USE="${BOOTSTRAP_USE} -python_targets_python2_7 python_targets_python3_11"
+# Same as above, but for bootstrapping.
+BOOTSTRAP_USE="${BOOTSTRAP_USE} -python_single_target_pypy3_11 -python_single_target_python3_11 python_single_target_python3_12 -python_single_target_python3_13 -python_single_target_python3_14 -python_single_target_python3_15 -python_single_target_python3_13t -python_single_target_python3_14t -python_single_target_python3_15t"
+BOOTSTRAP_USE="${BOOTSTRAP_USE} -python_targets_pypy3_11 -python_targets_python3_11 python_targets_python3_12 -python_targets_python3_13 -python_targets_python3_14 -python_targets_python3_15 -python_targets_python3_13t -python_targets_python3_14t -python_targets_python3_15t"
 
 
 # Never install cron or cron jobs
@@ -46,6 +54,7 @@ BOOTSTRAP_USE="${BOOTSTRAP_USE} xml"
 
 # Set SELinux policy
 POLICY_TYPES="targeted mcs mls"
+SELINUX_POLICY_TYPES="-strict targeted mcs mls"
 
 # Disable packages or optional features with distribution issues.
 ACCEPT_RESTRICT="* -bindist"
@@ -82,13 +91,11 @@ CONFIG_PROTECT="
 
 # Remove libtool .la files for non-plugin libraries.
 # Remove Gentoo init files since we use systemd.
-# Remove build-id, there is some issue with it causing collisions.
 # Remove default files from sys-power/acpid.
 # Do not install default repos.conf, we always put repository configuration in /etc.
 INSTALL_MASK="
   /usr/lib*/*.la
   /etc/init.d /etc/conf.d /etc/user/conf.d /etc/user/init.d
-  /usr/lib/debug/.build-id
   /etc/acpi
   /usr/share/portage/config/repos.conf
 "
@@ -105,8 +112,8 @@ LINGUAS="en"
 PORTAGE_BZIP2_COMMAND="lbzip2"
 PORTAGE_BUNZIP2_COMMAND="lbunzip2"
 
-# Always build binary packages, remove old build logs, avoid running as root.
-FEATURES="buildpkg clean-logs compressdebug parallel-install splitdebug
+# Always remove old build logs, avoid running as root.
+FEATURES="clean-logs compressdebug parallel-install splitdebug
           userfetch userpriv usersandbox ipc-sandbox network-sandbox
           -ccache -merge-sync -binpkg-multi-instance"
 

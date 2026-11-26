@@ -1,4 +1,4 @@
-# Copyright 2023-2025 Gentoo Authors
+# Copyright 2023-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 # @ECLASS: linux-mod-r1.eclass
@@ -211,13 +211,11 @@ fi
 # @DEFAULT_UNSET
 # @DESCRIPTION:
 # Used with USE=modules-sign.  Can be set to hash algorithm to use
-# during signature generation.
+# during signature generation (e.g. sha512).
 #
 # Rather than set this, it is recommended to select using the kernel's
 # configuration to ensure proper support (e.g. CONFIG_MODULE_SIG_SHA256),
 # and then it will be auto-detected here.
-#
-# Valid values: sha512,sha384,sha256,sha224,sha1
 #
 # Default if unset: kernel CONFIG_MODULE_SIG_HASH's value
 
@@ -354,6 +352,7 @@ linux-mod-r1_pkg_setup() {
 	_modules_prepare_cross
 
 	_modules_sanity_gccplugins
+	_modules_sanity_objtool
 }
 
 # @FUNCTION: linux-mod-r1_src_compile
@@ -1277,6 +1276,37 @@ _modules_sanity_modversion() {
 			die "module and source version mismatch in '${mod}'"
 		fi
 	done
+}
+
+# @FUNCTION: _modules_sanity_objtool
+# @INTERNAL
+# @DESCRIPTION:
+# Checks that the kernel's objtool is usable if it exists.  If not,
+# abort right away with an explanation rather than do so later with
+# a confusing error (bug #971092).
+#
+# Ever since it started to use binutils-libs in kernel >=6.19, it has
+# become likely to be broken whenever binutils-libs is upgraded.
+_modules_sanity_objtool() {
+	# ignore cross to keep this simple/safe without doing proper
+	# testing, albeit objtool should in theory be usable on CBUILD
+	tc-is-cross-compiler && return 0
+
+	local objtool=${KV_OUT_DIR}/tools/objtool/objtool
+	# if missing, assume this is a older kernel
+	if [[ -e ${objtool} ]]; then
+		"${objtool}" &>/dev/null
+
+		# without arguments objtool is likely to return 129 unless
+		# one of its libraries is missing which results in 127
+		if [[ ${?} -eq 127 ]]; then
+			eerror "Detected that '${objtool}' is not usable."
+			eerror "This is often because it uses old libraries that have been removed from"
+			eerror "the system. This can typically be fixed by rebuilding the kernel after"
+			eerror "doing \`make clean\` (or re-installing for distribution kernels)."
+			die "kernel ${KV_FULL} needs to be rebuilt"
+		fi
+	fi
 }
 
 # @FUNCTION: _modules_set_makeargs

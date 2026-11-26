@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -20,13 +20,15 @@ case ${PV} in
 	9999|*_alpha*|*_beta*|*_rc*)
 		# Set a negative patchlevel to indicate that it's a pre-release.
 		PLEVEL=-1
+		if [[ ${PV} =~ _pre[0-9]{8}$ ]]; then
+			BASH_COMMIT=
+		fi
 		;;
 	*_p*)
 		PLEVEL=${PV##*_p}
 		;;
 	*)
 		PLEVEL=0
-		;;
 esac
 
 # The version of readline this bash normally ships with. Note that we only use
@@ -40,13 +42,12 @@ if [[ ${PV} == 9999 ]]; then
 	EGIT_REPO_URI="https://git.savannah.gnu.org/git/bash.git"
 	EGIT_BRANCH=devel
 	inherit git-r3
-elif (( PLEVEL < 0 )) && [[ ${PV} == *_p* ]] ; then
+elif (( PLEVEL < 0 )) && [[ ${BASH_COMMIT} ]]; then
 	# It can be useful to have snapshots in the pre-release period once
 	# the first alpha is out, as various bugs get reported and fixed from
 	# the alpha, and the next pre-release is usually quite far away.
 	#
 	# i.e. if it's worth packaging the alpha, it's worth packaging a followup.
-	BASH_COMMIT="b35866a2891a9b069e37ca5684d4309c0391e261"
 	SRC_URI="https://git.savannah.gnu.org/cgit/bash.git/snapshot/bash-${BASH_COMMIT}.tar.gz -> ${P}-${BASH_COMMIT}.tar.gz"
 	S=${WORKDIR}/${PN}-${BASH_COMMIT}
 else
@@ -74,9 +75,12 @@ fi
 LICENSE="GPL-3+"
 SLOT="0"
 if (( PLEVEL >= 0 )); then
-	KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~hppa ~loong ~m68k ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86 ~amd64-linux ~x86-linux ~arm64-macos ~ppc-macos ~x64-macos ~x64-solaris"
+	KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~hppa ~loong ~m68k ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86 ~arm64-macos ~x64-macos ~x64-solaris"
 fi
 IUSE="afs bashlogger examples mem-scramble +net nls plugins pgo +readline"
+# As of 5.4_alpha_pre20251016, bash tests finally exit non-0 on failure.
+# The differences look harmless but need investigation and fixing.
+RESTRICT="test"
 
 DEPEND="
 	>=sys-libs/ncurses-5.2-r2:=
@@ -99,6 +103,9 @@ QA_CONFIGURE_OPTIONS="--disable-static"
 
 PATCHES=(
 	#"${WORKDIR}"/${PN}-${GENTOO_PATCH_VER}/
+
+	# bug #971782
+	"${FILESDIR}"/${PN}-5.3_p9-general-workaround-aliasing-violation-in-REVERSE_LIS.patch
 
 	# Patches to or from Chet, posted to the bug-bash mailing list.
 	"${FILESDIR}/${PN}-5.0-syslog-history-extern.patch"
@@ -123,7 +130,7 @@ src_unpack() {
 
 	if [[ ${PV} == 9999 ]]; then
 		git-r3_src_unpack
-	elif (( PLEVEL < 0 )) && [[ ${PV} == *_p* ]] ; then
+	elif (( PLEVEL < 0 )) && [[ ${BASH_COMMIT} ]]; then
 		default
 	else
 		if use verify-sig; then
@@ -174,7 +181,23 @@ src_configure() {
 	unset -v YACC
 
 	if tc-is-cross-compiler; then
+		# https://lists.gnu.org/archive/html/bug-bash/2025-05/msg00029.html
 		export CFLAGS_FOR_BUILD="${BUILD_CFLAGS} -std=gnu17"
+
+		if use kernel_Hurd ; then
+			# Necessary for cross-built bash for Hurd, otherwise
+			# config.status generation at end of configure will hang
+			# natively.
+			#
+			# https://lists.debian.org/debian-cross/2023/11/msg00000.html
+			# https://lists.gnu.org/archive/html/bug-bash/2024-11/msg00202.html
+			# https://lists.gnu.org/archive/html/bug-bash/2005-04/msg00074.html
+			cat <<-EOF > builtins/psize.sh || die
+			#!/bin/sh
+			echo "#define PIPESIZE 16384"
+			EOF
+			chmod +x builtins/psize.sh || die
+		fi
 	fi
 
 	myconf=(
@@ -271,7 +294,9 @@ src_compile() {
 		# Used in test suite.
 		unset -v A
 
-		emake CFLAGS="${CFLAGS} ${pgo_generate_flags[*]}" -k check
+		# Testsuite isn't expected to pass for bash right now, but it
+		# also doesn't matter for PGO.
+		nonfatal emake CFLAGS="${CFLAGS} ${pgo_generate_flags[*]}" -k check
 
 		if tc-is-clang; then
 			llvm-profdata merge "${T}"/pgo --output="${T}"/pgo/default.profdata || die
@@ -315,7 +340,7 @@ src_install() {
 
 	insinto /etc/bash/bashrc.d
 	my_prefixify DIR_COLORS "${FILESDIR}"/bashrc.d/10-gentoo-color-r2.bash | newins - 10-gentoo-color.bash
-	newins "${FILESDIR}"/bashrc.d/10-gentoo-title-r2.bash 10-gentoo-title.bash
+	newins "${FILESDIR}"/bashrc.d/10-gentoo-title-r3.bash 10-gentoo-title.bash
 
 	insinto /etc/profile.d
 	doins "${FILESDIR}/profile.d/00-prompt-command.sh"
@@ -366,21 +391,41 @@ pkg_preinst() {
 }
 
 pkg_postinst() {
-	local old_ver
+	local IFS old_ver ver
+	local -a versions
 
 	# If /bin/sh does not exist, provide it.
 	if [[ ! -e ${EROOT}/bin/sh ]]; then
 		ln -sf -- bash "${EROOT}"/bin/sh || die
 	fi
 
-	read -r old_ver <<<"${REPLACING_VERSIONS}"
-	if [[ ! $old_ver ]]; then
-		:
-	elif ver_test "$old_ver" -ge "5.2" && ver_test "$old_ver" -ge "5.2_p26-r8"; then
+	if [[ -e ${EROOT}/etc/bash/bashrc.d/15-gentoo-bashrc-check.bash ]]; then
+		ewarn "The following file is no longer packaged and can safely be deleted:"
+		ewarn "${EROOT}/etc/bash/bashrc.d/15-gentoo-bashrc-check.bash"
+	fi
+
+	read -rd '' -a versions <<<"${REPLACING_VERSIONS}"
+	for ver in "${versions[@]}"; do
+		if [[ ! ${old_ver} ]] || ver_test "${ver}" -lt "${old_ver}"; then
+			old_ver=${ver}
+		fi
+	done
+
+	if [[ ! ${old_ver} ]]; then
 		return
 	fi
 
-	while read -r; do ewarn "${REPLY}"; done <<'EOF'
+	{
+		if ver_test "${old_ver}" -ge "5.2" \
+			&& ver_test "${old_ver}" -ge "5.2_p26-r8"
+		then
+			:
+		elif ver_test "${old_ver}" -lt "5.2" \
+			&& ver_test "${old_ver}" -ge "5.1_p16-r8"
+		then
+			:
+		else
+			cat <<'EOF'
 Files under /etc/bash/bashrc.d must now have a suffix of .sh or .bash.
 
 Gentoo now defaults to defining PROMPT_COMMAND as an array. Depending on the
@@ -403,4 +448,40 @@ Those who would prefer for bash never to interfere with the window title may
 now opt out of the default title setting behaviour, either with the "unset -v
 PROMPT_COMMAND" command or by re-defining PROMPT_COMMAND as desired.
 EOF
+		fi
+
+		if ver_test "${old_ver}" -ge "5.3" \
+			&& ver_test "${old_ver}" -ge "5.3_p3-r3"
+		then
+			:
+		elif ver_test "${old_ver}" -lt "5.3" \
+			&& ver_test "${old_ver}" -ge "5.2_p37-r5"
+		then
+			:
+		else
+			cat <<'EOF'
+The window title setting behaviour has been improved. It is now formatted as
+"\u@\h \W", in accordance with the prompting mechanism of bash. For example,
+after switching to the home directory, the current working directory will be
+shown as the <tilde> character.
+
+The value of PROMPT_DIRTRIM is now respected. If this variable is unset, the
+use of the \W prompt string escape will prevail, with the current working
+directory typically being shown as its basename. If set to 0 or greater, \w
+will be used instead, which may be trimmed. This also means that the title
+can be made to show the full path by setting PROMPT_DIRTRIM=0.
+
+For further information, run info '(bash)Bash Variables' or visit
+https://www.gnu.org/software/bash/manual/bash.html#index-PROMPT_005fDIRTRIM.
+EOF
+		fi
+	} \
+	| if [[ ${COLUMNS} == [1-9]*([0-9]) ]] && (( COLUMNS > 80 )); then
+		fmt -w "$(( COLUMNS - 3 ))"
+	else
+		cat
+	fi \
+	| while read -r; do
+		ewarn "${REPLY}"
+	done
 }

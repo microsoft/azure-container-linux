@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -6,8 +6,8 @@ EAPI=8
 # Please bump with app-editors/vim and app-editors/gvim
 
 VIM_VERSION="9.1"
-VIM_PATCHES_VERSION="9.0.2092"
-inherit bash-completion-r1 desktop flag-o-matic prefix toolchain-funcs vim-doc xdg-utils
+VIM_PATCHES_VERSION="9.1.1432"
+inherit desktop flag-o-matic prefix toolchain-funcs vim-doc xdg-utils
 
 if [[ ${PV} == 9999* ]] ; then
 	inherit git-r3
@@ -16,7 +16,8 @@ if [[ ${PV} == 9999* ]] ; then
 else
 	SRC_URI="https://github.com/vim/vim/archive/v${PV}.tar.gz -> vim-${PV}.tar.gz
 		https://gitweb.gentoo.org/proj/vim-patches.git/snapshot/vim-patches-vim-${VIM_PATCHES_VERSION}-patches.tar.bz2"
-	KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~hppa ~loong ~m68k ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86 ~amd64-linux ~x86-linux ~ppc-macos ~x64-macos ~x64-solaris"
+		# https://github.com/douglarek/gentoo-vim-patches/releases/download/vim-${VIM_PATCHES_VERSION}-patches/vim-${VIM_PATCHES_VERSION}-patches.tar.gz"
+	KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~hppa ~loong ~m68k ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86 ~arm64-macos ~x64-macos ~x64-solaris"
 fi
 
 DESCRIPTION="vim and gvim shared files"
@@ -27,6 +28,7 @@ LICENSE="vim"
 SLOT="0"
 IUSE="nls acl minimal"
 
+RDEPEND="dev-util/xxd"
 # ncurses is only needed by ./configure, so no subslot operator required
 DEPEND=">=sys-libs/ncurses-5.2-r2:0"
 BDEPEND="dev-build/autoconf"
@@ -37,6 +39,9 @@ if [[ ${PV} != 9999* ]]; then
 		"${WORKDIR}/vim-patches-vim-${VIM_PATCHES_VERSION}-patches"
 	)
 fi
+
+# unbundle xxd
+PATCHES+=( "${FILESDIR}/vim-core-9.1.1652-r1-unbundle-xxd.patch" )
 
 # platform-specific checks (bug #898406):
 # - acl()     -- Solaris
@@ -130,8 +135,9 @@ src_configure() {
 	export ac_cv_prog_STRIP="$(type -P true ) faking strip"
 
 	local myconf=(
-		--with-modified-by=Gentoo-${PVR}
+		--with-modified-by="Gentoo-${PVR} (RIP Bram)"
 		--enable-gui=no
+		--without-wayland
 		--without-x
 		--disable-darwin
 		--disable-perlinterp
@@ -159,7 +165,6 @@ src_configure() {
 
 src_compile() {
 	emake -j1 -C src auto/osdef.h objects
-	emake tools
 }
 
 src_test() { :; }
@@ -186,7 +191,7 @@ src_install() {
 	# default vimrc is installed by vim-core since it applies to
 	# both vim and gvim
 	insinto /etc/vim/
-	newins "${FILESDIR}"/vimrc-r7 vimrc
+	newins "${FILESDIR}"/vimrc-r8 vimrc
 	eprefixify "${ED}"/etc/vim/vimrc
 
 	if use minimal; then
@@ -208,8 +213,6 @@ src_install() {
 			fi
 		done | xargs -0 rm -f || die
 	fi
-
-	newbashcomp "${FILESDIR}"/xxd-completion xxd
 
 	# install gvim icon since both vim/gvim desktop files reference it
 	doicon -s scalable "${FILESDIR}"/gvim.svg

@@ -108,17 +108,7 @@ info "oem_files: Wrote ${OEM_DEST_DIR}/oem-release"
 # ── Generate grub.cfg (GRUB mode only) ──────────────────────────
 
 if [[ "${BOOTLOADER_MODE}" != "uki" ]]; then
-    grub_frag="${OEM_FILES_DIR}/${OEM_USE}/grub.cfg.frag"
-
-    info "oem_files: Generating grub.cfg for '${OEM_USE}'"
-    {
-        echo "# GRUB settings"
-        echo ""
-        echo "set oem_id=\"${OEM_ID}\""
-        if [[ -f "${grub_frag}" ]]; then
-            cat "${grub_frag}"
-        fi
-    } | sudo tee "${OEM_DEST_DIR}/grub.cfg" > /dev/null
+    sudo install -m0644 "${OEM_FILES_DIR}/${OEM_USE}/grub.cfg" "${OEM_DEST_DIR}/grub.cfg"
 
     info "oem_files: Wrote ${OEM_DEST_DIR}/grub.cfg"
 else

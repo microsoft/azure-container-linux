@@ -1,0 +1,1 @@
+- Enable VNC console serial logs on ARM64 QEMU/KVM instances ([flatcar/scripts#2359](https://github.com/flatcar/scripts/pull/2359))

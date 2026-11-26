@@ -6,6 +6,9 @@ Azure Container Linux (ACL) is a Microsoft derivative of [Flatcar Container Linu
 
 ACL currently tracks **Flatcar Linux stable** as its upstream base.
 
+For a source-level comparison of the previous base and the rebase candidate, see
+[Flatcar 4459.2.4 to 4757.2.4: impact on ACL](flatcar-4757-rebase.md).
+
 ## Relationship with Flatcar
 
 ACL preserves a high degree of parity with Flatcar Linux and enjoys healthy upstream/downstream collaboration: it both pushes its changes upstream and pulls in Flatcar updates on a regular cadence. The core design principles of an immutable, minimal container host with a focus on security and reliability remain intact.

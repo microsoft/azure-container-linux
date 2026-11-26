@@ -2,22 +2,21 @@
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
-EGIT_REPO_URI="https://github.com/flatcar/baselayout.git"
-
-if [[ "${PV}" == 9999 ]]; then
-	inherit git-r3
-	KEYWORDS="~amd64 ~arm64"
-else
-	EGIT_COMMIT="79d3a0c3595dbbea207592dbd9fc2156349764f2" # flatcar-master
-	SRC_URI="https://github.com/flatcar/baselayout/archive/${EGIT_COMMIT}.tar.gz -> flatcar-${PN}-${EGIT_COMMIT}.tar.gz"
-	S="${WORKDIR}/${PN}-${EGIT_COMMIT}"
-	KEYWORDS="amd64 arm64"
-fi
 
 inherit multilib
 
 DESCRIPTION="Filesystem baselayout for Flatcar"
 HOMEPAGE="https://www.flatcar.org/"
+
+if [[ ${PV} == 9999 ]]; then
+	EGIT_REPO_URI="https://github.com/flatcar/baselayout.git"
+	inherit git-r3
+else
+	EGIT_VERSION="9cd8630fd00a78f1af2812791dda0331db963ba7" # flatcar-master
+	SRC_URI="https://github.com/flatcar/baselayout/archive/${EGIT_VERSION}.tar.gz -> flatcar-${PN}-${EGIT_VERSION}.tar.gz"
+	S="${WORKDIR}/${PN}-${EGIT_VERSION}"
+	KEYWORDS="amd64 arm64"
+fi
 
 LICENSE="GPL-2"
 SLOT="0"
@@ -47,12 +46,6 @@ src_prepare() {
 	else
 		# Don't install /etc/issue since it is handled by coreos-init right now
 		rm -f lib/tmpfiles.d/baselayout-etc-issue.conf || die
-	fi
-
-	# sssd not yet building on arm64
-	if use arm64; then
-		sed -i -e 's/ sss//' share/baselayout/nsswitch.conf || die
-		sed -i -e '/pam_sss.so/d' lib/pam.d/* || die
 	fi
 
 	# handle multilib paths.  do it here because we want this behavior
@@ -87,7 +80,8 @@ src_compile() {
 src_install() {
 	emake DESTDIR="${ED}" install
 	# GID 190 is taken from acct-group/systemd-journal eclass
-	SYSTEMD_JOURNAL_GID=${ACCT_GROUP_SYSTEMD_JOURNAL_ID:-190} ROOT_UID=0 ROOT_GID=0 CORE_UID=500 CORE_GID=500 DESTDIR=${D} ./dumb-tmpfiles-proc.sh --exclude d "${ED}/usr/lib/tmpfiles.d" || die
+	SYSTEMD_JOURNAL_GID=${ACCT_GROUP_SYSTEMD_JOURNAL_ID:-190} ROOT_UID=0 ROOT_GID=0 CORE_UID=500 CORE_GID=500 \
+		DESTDIR=${D} ./dumb-tmpfiles-proc.sh --exclude d "${ED}/usr/lib/tmpfiles.d" || die
 
 	insinto /usr/share/baselayout
 	doins Makefile
@@ -99,7 +93,8 @@ pkg_preinst() {
 	local libdirs
 	libdirs=$(get_all_libdirs)
 	emake -C "${ED}/usr/share/${PN}" DESTDIR="${EROOT}" LIBDIRS="${libdirs}" layout
-	SYSTEMD_JOURNAL_GID=${ACCT_GROUP_SYSTEMD_JOURNAL_ID:-190} ROOT_UID=0 ROOT_GID=0 CORE_UID=500 CORE_GID=500 DESTDIR=${D} "${ED}/usr/share/${PN}/dumb-tmpfiles-proc.sh" "${ED}/usr/lib/tmpfiles.d" || die
+	SYSTEMD_JOURNAL_GID=${ACCT_GROUP_SYSTEMD_JOURNAL_ID:-190} ROOT_UID=0 ROOT_GID=0 CORE_UID=500 CORE_GID=500 \
+		DESTDIR=${ROOT} "${ED}/usr/share/${PN}/dumb-tmpfiles-proc.sh" --exclude CZL+ "${ED}/usr/lib/tmpfiles.d" || die
 	rm -f "${ED}/usr/share/${PN}/Makefile" "${ED}/usr/share/${PN}/dumb-tmpfiles-proc.sh" || die
 }
 
@@ -123,9 +118,11 @@ pkg_postinst() {
 		done
 		# Create a compatibility symlink for OEM.
 		ln -sfT ../../oem "${ROOT}/usr/share/oem"
-		# Also create the directory to avoid having dangling
-		# symlinks.
-		mkdir -p "${ROOT}/oem"
+
+		# pam situation was messed up big time, create some
+		# symlinks to point to just a single place
+		ln -snfT "pam" "${ROOT}/usr/lib/pam.d"
+		ln -snfT "../lib/pam" "${ROOT}/usr/share/pam.d"
 	fi
 
 	# The default passwd/group files must exist for some ebuilds

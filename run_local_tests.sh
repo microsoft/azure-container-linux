@@ -1,11 +1,11 @@
 #!/bin/bash
 #
 # Copyright (c) 2023 The Flatcar Maintainers.
-# Licensed under the Apache License, Version 2.0 (the "License"); 
+# Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at                         
+# You may obtain a copy of the License at
 #
-# http://www.apache.org/licenses/LICENSE-2.0                  
+# http://www.apache.org/licenses/LICENSE-2.0
 #
 # QoL wrapper around ci-automation test.sh for running local tests of qemu_uefi image.
 # The devcontainer tests will be skipped since these require a valid commit ref in
@@ -65,16 +65,14 @@ function set_vars() {
     img_name="${img_prefix}_qemu_uefi_test_image.img"
   fi
 
-  cat > sdk_container/.env <<EOF
-export QEMU_IMAGE_NAME=/work/__build__/images/images/${arch@Q}-usr/latest/${img_name@Q}
-export QEMU_UEFI_FIRMWARE=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_efi_code.qcow2
-export QEMU_UEFI_OVMF_VARS=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_efi_vars.qcow2
-export QEMU_UEFI_SECURE_FIRMWARE=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_secure_efi_code.qcow2
-export QEMU_UEFI_SECURE_OVMF_VARS=/work/__build__/images/images/${arch@Q}-usr/latest/${img_prefix@Q}_qemu_uefi_secure_efi_vars.qcow2
-export QEMU_UPDATE_PAYLOAD=/work/__build__/images/images/${arch@Q}-usr/latest/flatcar_test_update.gz
-export PARALLEL_TESTS=${parallel@Q}
-export KOLA_DEBUG=${KOLA_DEBUG:-}
-EOF
+  local images="/work/__build__/images/images/${arch}-usr/latest"
+  export QEMU_IMAGE_NAME="${images}/${img_name}"
+  export QEMU_UEFI_FIRMWARE="${images}/${img_prefix}_qemu_uefi_efi_code.qcow2"
+  export QEMU_UEFI_OVMF_VARS="${images}/${img_prefix}_qemu_uefi_efi_vars.qcow2"
+  export QEMU_UEFI_SECURE_FIRMWARE="${images}/${img_prefix}_qemu_uefi_secure_efi_code.qcow2"
+  export QEMU_UEFI_SECURE_OVMF_VARS="${images}/${img_prefix}_qemu_uefi_secure_efi_vars.qcow2"
+  export QEMU_UPDATE_PAYLOAD="${images}/flatcar_test_update.gz"
+  export PARALLEL_TESTS="${parallel}" PACKAGE_SOURCE_MODE KOLA_DEBUG="${KOLA_DEBUG:-}"
 
   export MAX_RETRIES=${MAX_RUNS:-1}
   echo "[DEBUG] run_local_tests.sh set_vars(): MAX_RUNS=${MAX_RUNS:-<not set>} → MAX_RETRIES=${MAX_RETRIES}"
@@ -100,7 +98,7 @@ function run_local_tests() (
   # Using globs will prevent tests to be run which aren't meant for the OS version we're testing.
   # NOTE that update tests get special handling because qemu_update is a separate "platform".
   if [[ $# -eq 0 ]] ; then
-    tests="$(docker run "${mantle_container}" \
+    tests="$(docker run --rm "${mantle_container}" \
               kola list --platform qemu --board="${arch}-usr" \
               | awk '!/^(devcontainer|Test)/ {if ($1 != "") print gensub(/^([^.]+).*/,"\\1",1,$1) ".*"}' | uniq)"
     update_tests=true
@@ -116,7 +114,7 @@ function run_local_tests() (
 
   source ci-automation/test.sh || exit 1
   set_vars "${arch}" "${parallel}"
-  
+
   echo "================================="
   echo "Using Mantle docker image '${mantle_container}'"
 

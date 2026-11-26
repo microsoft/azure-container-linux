@@ -51,9 +51,6 @@ fi
 # Turn on bash debug support if available for backtraces.
 shopt -s extdebug 2>/dev/null
 
-# Source qemu library path
-. /etc/profile.d/qemu-aarch64.sh 2> /dev/null || true
-
 # Output a backtrace all the way back to the raw invocation, suppressing
 # only the _dump_trace frame itself.
 _dump_trace() {
@@ -164,41 +161,7 @@ die_notrace() {
   for line in "$@"; do
     error "${DIE_PREFIX}${line}"
   done
-  if [[ ! -e "${SCRIPTS_DIR}/NO_DEBUG_OUTPUT_DELETE_ME" && "${SKIP_DIE_DEBUG_OUTPUT:-}" != "true" ]]; then
-      error "${DIE_PREFIX}!!!!!!!!!!!!!!!!!!!!!!!!!"
-      error "${DIE_PREFIX}!! BEGIN DEBUG OUTPUT: !!"
-      error "${DIE_PREFIX}!!!!!!!!!!!!!!!!!!!!!!!!!"
-      error
-      error "${DIE_PREFIX}== MOUNT =="
-      error "${DIE_PREFIX}==========="
-      error_command_output "${DIE_PREFIX}" mount
-      error
-      error "${DIE_PREFIX}== DF =="
-      error "${DIE_PREFIX}========"
-      error_command_output "${DIE_PREFIX}" df -h
-      error
-      # Skip dmesg by default - it's usually too verbose and not helpful
-      if [[ "${SHOW_DMESG_ON_ERROR:-}" == "true" ]]; then
-          error "${DIE_PREFIX}== DMESG =="
-          error "${DIE_PREFIX}==========="
-          error_command_output "${DIE_PREFIX}" sudo dmesg
-          error
-      fi
-      error "${DIE_PREFIX}!!!!!!!!!!!!!!!!!!!!!!!"
-      error "${DIE_PREFIX}!! END DEBUG OUTPUT: !!"
-      error "${DIE_PREFIX}!!!!!!!!!!!!!!!!!!!!!!!"
-      touch "${SCRIPTS_DIR}/NO_DEBUG_OUTPUT_DELETE_ME"
-  fi
   exit 1
-}
-
-error_command_output() {
-    local prefix=${1}; shift
-    # rest are a command to execute
-    local REPLY
-    while read -r; do
-        error "${prefix}${REPLY}"
-    done < <("${@}" 2>&1)
 }
 
 # Simple version comparison routine
@@ -272,39 +235,11 @@ get_gclient_root() {
   fi
 }
 
-# Populate the ENVIRONMENT_ALLOWLIST array.
-load_environment_allowlist() {
-  ENVIRONMENT_ALLOWLIST=(
-    COREOS_OFFICIAL
-    FLATCAR_BUILD_ID
-    FORCE_STAGES
-    GIT_AUTHOR_EMAIL
-    GIT_AUTHOR_NAME
-    GIT_COMMITTER_EMAIL
-    GIT_COMMITTER_NAME
-    GIT_PROXY_COMMAND
-    GIT_SSH
-    RSYNC_PROXY
-    GNUPGHOME
-    GPG_AGENT_INFO
-    SSH_AGENT_PID
-    SSH_AUTH_SOCK
-    USE
-    all_proxy
-    ftp_proxy
-    http_proxy
-    https_proxy
-    no_proxy
-  )
-}
-
 load_environment_var() {
-  local file="$1" name value
-  shift
-  for name in "$@"; do
-    value=$(grep "^${name}=" "${file}" | sed 's|"||g')
-    [[ -n "${value}" ]] && export "${value}"
-  done
+  local file="$1"; shift
+  unset "${@}"
+  . <(grep -f <(printf "^%s=\n" "${@}") "${file}")
+  export "${@}"
 }
 
 # Find root of source tree
@@ -329,8 +264,6 @@ SCRIPTS_DIR="${SRC_ROOT}/scripts"
 BUILD_LIBRARY_DIR="${SCRIPTS_DIR}/build_library"
 REPO_CACHE_DIR="${REPO_ROOT}/.cache"
 REPO_MANIFESTS_DIR="${REPO_ROOT}/.repo/manifests"
-
-rm -f "${SCRIPTS_DIR}/NO_DEBUG_OUTPUT_DELETE_ME" || :
 
 # Source FLATCAR_VERSION_ID from manifest.
 if [[ -f "${REPO_MANIFESTS_DIR}/version.txt" ]]; then

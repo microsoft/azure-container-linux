@@ -79,28 +79,16 @@ function _vm_build_impl() {
 
     apply_local_patches
 
-    # automatically add PXE to formats if we build for Equinix Metal (packet).
-    local has_packet=0
-    local has_pxe=0
-    for format; do
-        [[ "${format}" = 'packet' ]] || [[ "${format}" = 'equinix_metal' ]] && has_packet=1
-        [[ "${format}" = 'pxe' ]] && has_pxe=1
-    done
-
-    [[ ${has_packet} -eq 1 ]] && [[ ${has_pxe} -eq 0 ]] && set -- 'pxe' "${@}"
-
     # Convert platform names (also used to find the test scripts) to image formats they entail
-    formats="$*"
-    if echo "$formats" | tr ' ' '\n' | grep -q '^vmware'; then
-      formats=$(echo "$formats" | tr ' ' '\n' | sed '/vmware.*/d')
-      formats+=" vmware vmware_insecure vmware_ova vmware_raw"
+    printf -v formats "%s\n" "${@}"
+    if grep -q '^vmware' <<< "${formats}"; then
+        formats=$(grep -v '^vmware' <<< "${formats}")
+        printf -v formats "%s\n" ${formats} vmware vmware_ova vmware_raw
     fi
-    if echo "$formats" | tr ' ' '\n' | grep -q -P '^(ami|aws)'; then
-      formats=$(echo "$formats" | tr ' ' '\n' | sed '/ami.*/d' | sed '/aws/d')
-      formats+=" ami ami_vmdk"
+    if grep -q '^ami\|^aws' <<< "${formats}"; then
+        formats=$(grep -v '^ami\|^aws' <<< "${formats}")
+        printf -v formats "%s\n" ${formats} ami ami_vmdk
     fi
-    # Keep compatibility with SDK scripts where "equinix_metal" remains unknown.
-    formats=$(echo "$formats" | tr ' ' '\n' | sed 's/equinix_metal/packet/g')
 
     source sdk_lib/sdk_container_common.sh
 
@@ -116,6 +104,17 @@ function _vm_build_impl() {
     for file in flatcar_production_image.bin.bz2 flatcar_production_image_sysext.squashfs flatcar_production_image.vmlinuz version.txt; do
         copy_from_buildcache "images/${arch}/${vernum}/${file}" "${images_in}"
     done
+
+    # Download prebuilt OEM sysexts
+    source build_library/oem_sysexts.sh
+    local -a oem_ids
+    get_oem_id_list "${arch}" oem_ids
+    local oem_id name
+    for oem_id in "${oem_ids[@]}"; do
+        name="oem-${oem_id}"
+        copy_from_buildcache "images/${arch}/${vernum}/${name}.raw" "${images_in}"
+    done
+
     lbunzip2 "${images_in}/flatcar_production_image.bin.bz2"
     ./run_sdk_container -x ./ci-cleanup.sh -n "${vms_container}" -C "${packages_image}" \
             -v "${vernum}" \
@@ -138,7 +137,7 @@ function _vm_build_impl() {
             COMPRESSION_FORMAT="bz2,none"
         elif [[ "${format}" =~ ^(hyperv|hyperv_vhdx)$ ]];then
             COMPRESSION_FORMAT="zip"
-        elif [[ "${format}" =~ ^(scaleway|kubevirt|proxmoxve|stackit)$ ]];then
+        elif [[ "${format}" =~ ^(scaleway|kubevirt|proxmoxve|stackit|exoscale|oraclecloud)$ ]];then
             COMPRESSION_FORMAT="none"
         elif [[ "${format}" =~ ^(akamai)$ ]];then
             COMPRESSION_FORMAT="gz"

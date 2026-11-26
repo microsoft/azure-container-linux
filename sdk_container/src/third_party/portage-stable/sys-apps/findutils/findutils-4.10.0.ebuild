@@ -1,11 +1,11 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
 
-PYTHON_COMPAT=( python3_{10..13} )
+PYTHON_COMPAT=( python3_{11..14} )
 VERIFY_SIG_OPENPGP_KEY_PATH=/usr/share/openpgp-keys/findutils.asc
-inherit flag-o-matic python-any-r1 verify-sig
+inherit branding flag-o-matic python-any-r1 verify-sig
 
 DESCRIPTION="GNU utilities for finding files"
 HOMEPAGE="https://www.gnu.org/software/findutils/"
@@ -16,8 +16,8 @@ SRC_URI="
 
 LICENSE="GPL-3+"
 SLOT="0"
-KEYWORDS="~alpha amd64 arm arm64 ~hppa ~loong ~m68k ~mips ppc ppc64 ~riscv ~s390 ~sparc x86 ~amd64-linux ~x86-linux ~arm64-macos ~ppc-macos ~x64-macos ~x64-solaris"
-IUSE="nls selinux static test"
+KEYWORDS="~alpha amd64 arm arm64 ~hppa ~loong ~m68k ~mips ppc ppc64 ~riscv ~s390 ~sparc x86 ~arm64-macos ~x64-macos ~x64-solaris"
+IUSE="nls selinux static test test-full"
 RESTRICT="!test? ( test )"
 
 RDEPEND="
@@ -63,16 +63,25 @@ src_configure() {
 		append-cppflags '-D__nonnull\(X\)='
 	fi
 
+	if [[ ${CHOST} == *-solaris* ]] ; then
+		# https://bugs.gentoo.org/975237 needs gnulib update, should be
+		# in next release
+		sed -i -e 's/HAVE_GETLOCALENAME_L/DISABLED/' configure || die
+	fi
+
 	local myeconfargs=(
-		--with-packager="Gentoo"
-		--with-packager-version="${PVR}"
-		--with-packager-bug-reports="https://bugs.gentoo.org/"
 		$(use_enable nls)
 		$(use_with selinux)
 		--libexecdir='$(libdir)'/find
 		# rename to gfind, gxargs for better BSD compatibility
 		--program-prefix=g
 	)
+
+	# https://savannah.gnu.org/support/?111394
+	# This can be removed when we patch dev-build/autoconf, though
+	# packages w/o eautoreconf will still need it.
+	[[ ${enable_year2038} == "no" ]] && myeconfargs+=( --disable-year2038 )
+
 	econf "${myeconfargs[@]}"
 }
 
@@ -84,6 +93,7 @@ src_compile() {
 
 src_test() {
 	local -x SANDBOX_PREDICT=${SANDBOX_PREDICT}
+	local -x RUN_{VERY_,}EXPENSIVE_TESTS=$(usex test-full yes no)
 	addpredict /
 	default
 }

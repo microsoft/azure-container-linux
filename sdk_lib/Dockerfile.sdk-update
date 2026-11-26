@@ -3,22 +3,12 @@ ARG BASE
 FROM ${BASE}
 COPY --chown=sdk:sdk sdk_container/ /mnt/host/source
 COPY --chown=sdk:sdk . /mnt/host/source/src/scripts
-COPY sdk_lib/90_env_keep /etc/sudoers.d/90_env_keep
-RUN chmod 0440 /etc/sudoers.d/90_env_keep
-
-# Disable all sandboxing for SDK updates since some core packages
-#  (like GO) fail to build from a permission error otherwise.
-RUN cp /home/sdk/.bashrc /home/sdk/.bashrc.bak
-RUN echo 'export FEATURES="-sandbox -usersandbox -ipc-sandbox -network-sandbox -pid-sandbox"' \
-        >> /home/sdk/.bashrc
+RUN printf '%s\n' 'Defaults env_keep += "PACKAGE_SNAPSHOT_TIME"' | \
+        install -m0440 /dev/stdin /etc/sudoers.d/91_acl_snapshot
 
 RUN chown sdk:sdk /mnt/host/source
-
-# Regenerate manifest for sdk-depends to pick up the new r58 revision with RPM/DNF5 and UKI tools
-# Use the actual source location since /var/lib/portage/repos/coreos-overlay doesn't exist yet
-RUN sudo bash -c 'cd /mnt/host/source/src/third_party/coreos-overlay/coreos-devel/sdk-depends && for ebuild in *.ebuild; do ebuild "$ebuild" manifest; done'
-
-RUN /home/sdk/sdk_entry.sh ./update_chroot --toolchain_boards="amd64-usr arm64-usr"
+RUN FEATURES="-ipc-sandbox -network-sandbox -pid-sandbox" \
+        /home/sdk/sdk_entry.sh ./update_chroot --toolchain_boards="amd64-usr arm64-usr"
 
 # Rebuild libsolv and DNF5 even when an earlier SDK already installed the same
 # versions: the snapshot-time patches change libsolv's rpm-md data and DNF5's plugins.
@@ -26,6 +16,11 @@ RUN /home/sdk/sdk_entry.sh bash -c 'sudo emerge --ask=n --changed-use --deep dev
 
 RUN /home/sdk/sdk_entry.sh ./setup_board --board="arm64-usr" --regen_configs
 RUN /home/sdk/sdk_entry.sh ./setup_board --board="amd64-usr" --regen_configs
+
+# Clean up ephemeral key directory variables that were added during build
+RUN sed -i -e '/export MODULE_SIGNING_KEY_DIR=/d' \
+        -e '/export MODULES_SIGN_KEY=/d' \
+        -e '/export MODULES_SIGN_CERT=/d' /home/sdk/.bashrc
 
 # RPM and DNF5 tools are now installed automatically via sdk-depends
 # (see sdk_container/src/third_party/coreos-overlay/coreos-devel/sdk-depends/sdk-depends-0.0.1-r57.ebuild)
@@ -77,6 +72,3 @@ RUN bash /mnt/host/source/src/scripts/build_library/rpm/tests/test_rpm_bootstrap
 # Verify ukify is available from systemd[boot,ukify]
 RUN ukify --help >/dev/null 2>&1 || (echo "ERROR: ukify not found or broken" && exit 1)
 
-# Restore original .bashrc to remove sandbox disablement
-RUN mv /home/sdk/.bashrc.bak /home/sdk/.bashrc
-RUN chown sdk:sdk /home/sdk/.bashrc

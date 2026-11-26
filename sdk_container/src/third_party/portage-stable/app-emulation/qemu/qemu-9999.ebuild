@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -8,12 +8,12 @@ EAPI=8
 # (the construct below is to allow overriding from env for script)
 QEMU_DOCS_PREBUILT=${QEMU_DOCS_PREBUILT:-1}
 QEMU_DOCS_PREBUILT_DEV=sam
-QEMU_DOCS_VERSION=$(ver_cut 1-3)
+QEMU_DOCS_VERSION=$(ver_cut 1-2).0
 # Default to generating docs (inc. man pages) if no prebuilt; overridden later
 # bug #830088
 QEMU_DOC_USEFLAG="+doc"
 
-PYTHON_COMPAT=( python3_{11..13} )
+PYTHON_COMPAT=( python3_{12..14} )
 PYTHON_REQ_USE="ensurepip(-),ncurses,readline"
 
 inherit eapi9-ver flag-o-matic linux-info toolchain-funcs python-r1 udev fcaps \
@@ -75,7 +75,6 @@ COMMON_TARGETS="
 	loongarch64
 	m68k
 	microblaze
-	microblazeel
 	mips
 	mips64
 	mips64el
@@ -105,6 +104,7 @@ IUSE_USER_TARGETS="
 	aarch64_be
 	armeb
 	hexagon
+	microblazeel
 	mipsn32
 	mipsn32el
 	ppc64le
@@ -153,7 +153,7 @@ done
 # when available rather than always using the external library.
 ALL_DEPEND="
 	dev-libs/glib:2[static-libs(+)]
-	sys-libs/zlib[static-libs(+)]
+	virtual/zlib:=[static-libs(+)]
 	python? ( ${PYTHON_DEPS} )
 	systemtap? ( dev-debug/systemtap )
 	xattr? ( sys-apps/attr[static-libs(+)] )
@@ -177,8 +177,8 @@ SOFTMMU_TOOLS_DEPEND="
 	fuse? ( >=sys-fs/fuse-3.1:3=[static-libs(+)] )
 	glusterfs? ( >=sys-cluster/glusterfs-3.4.0[static-libs(+)] )
 	gnutls? (
-		>=net-libs/gnutls-3.0:=[static-libs(+)]
-		dev-libs/nettle:=[static-libs(+)]
+		>=net-libs/gnutls-3.7.5:=[static-libs(+)]
+		>=dev-libs/nettle-3.7.3:=[static-libs(+)]
 	)
 	gtk? (
 		x11-libs/gtk+:3[wayland?,X?]
@@ -259,7 +259,7 @@ SEABIOS_VERSION="1.16.3"
 
 X86_FIRMWARE_DEPEND="
 	pin-upstream-blobs? (
-		~sys-firmware/edk2-bin-${EDK2_OVMF_VERSION}
+		~sys-firmware/edk2-bin-${EDK2_OVMF_VERSION}[qemu_softmmu_targets_x86_64(+)]
 		~sys-firmware/ipxe-1.21.1_p20230601[binary,qemu]
 		~sys-firmware/seabios-bin-${SEABIOS_VERSION}
 		~sys-firmware/sgabios-0.1_pre10[binary]
@@ -267,7 +267,7 @@ X86_FIRMWARE_DEPEND="
 	!pin-upstream-blobs? (
 		|| (
 			>=sys-firmware/edk2-${EDK2_OVMF_VERSION}
-			>=sys-firmware/edk2-bin-${EDK2_OVMF_VERSION}
+			>=sys-firmware/edk2-bin-${EDK2_OVMF_VERSION}[qemu_softmmu_targets_x86_64(+)]
 		)
 		sys-firmware/ipxe[qemu]
 		|| (
@@ -291,10 +291,11 @@ PPC_FIRMWARE_DEPEND="
 
 # See bug #913084 for pip dep
 BDEPEND="
-	$(python_gen_impl_dep)
+	${PYTHON_DEPS}
 	dev-python/distlib[${PYTHON_USEDEP}]
 	dev-lang/perl
 	>=dev-build/meson-0.63.0
+	>=dev-util/gdbus-codegen-2.80.5-r1
 	app-alternatives/ninja
 	virtual/pkgconfig
 	doc? (
@@ -332,11 +333,12 @@ RDEPEND="
 "
 
 PATCHES=(
+	"${FILESDIR}"/${PN}-10.1.2-fix_passt.patch
 	"${FILESDIR}"/${PN}-9.0.0-disable-keymap.patch
 	"${FILESDIR}"/${PN}-9.2.0-capstone-include-path.patch
 	"${FILESDIR}"/${PN}-8.1.0-skip-tests.patch
 	"${FILESDIR}"/${PN}-8.1.0-find-sphinx.patch
-	"${FILESDIR}"/${PN}-7.2.16-optionrom-pass-Wl-no-error-rwx-segments.patch
+	"${FILESDIR}"/${PN}-10.2.2-optionrom-pass-Wl-no-error-rwx-segments.patch
 )
 
 QA_PREBUILT="
@@ -422,7 +424,7 @@ pkg_pretend() {
 			use test && CONFIG_CHECK+=" IP_MULTICAST"
 			ERROR_IP_MULTICAST="Test suite requires IP_MULTICAST"
 
-			if use amd64 || use x86 || use amd64-linux || use x86-linux; then
+			if use amd64 || use x86; then
 				if grep -q AuthenticAMD /proc/cpuinfo; then
 					CONFIG_CHECK+=" ~KVM_AMD"
 				elif grep -q GenuineIntel /proc/cpuinfo; then
@@ -665,6 +667,10 @@ qemu_src_configure() {
 	)
 
 	if [[ ! ${buildtype} == "user" ]] ; then
+		# used by passt and spice, enable it because glib is required anyway
+		conf_opts+=(
+			--enable-gio
+		)
 		# audio options
 		local audio_opts=(
 			# Note: backend order matters here: #716202
@@ -898,6 +904,9 @@ src_install() {
 	pax-mark mr "${softmmu_bins[@]}" "${user_bins[@]}" # bug 575594
 	popd >/dev/null || die
 
+	# suid in src_install to allow FEATURES=suidctl to work properly
+	fperms u+s /usr/libexec/qemu-bridge-helper
+
 	# Install config file example for qemu-bridge-helper
 	insinto "/etc/qemu"
 	doins "${FILESDIR}/bridge.conf"
@@ -961,7 +970,7 @@ pkg_postinst() {
 	xdg_icon_cache_update
 
 	[[ -z ${EPREFIX} ]] && [[ -f ${EROOT}/usr/libexec/qemu-bridge-helper ]] && \
-		fcaps -m u+s cap_net_admin "${EROOT}"/usr/libexec/qemu-bridge-helper
+		fcaps -M u-s cap_net_admin "${EROOT}"/usr/libexec/qemu-bridge-helper
 
 	DISABLE_AUTOFORMATTING=true
 	readme.gentoo_print_elog

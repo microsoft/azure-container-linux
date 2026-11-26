@@ -70,6 +70,9 @@ amd64		default/linux/amd64/23.0/x32					dev
 amd64		default/linux/amd64/23.0/x32/systemd				exp
 amd64		default/linux/amd64/23.0/split-usr/x32				exp
 
+# AMD64 Profiles for GNU Hurd
+# MAINTAINER: sam@gentoo.org
+amd64		default/hurd/amd64/23.0						exp
 
 # ARM Profiles
 # @MAINTAINER: arm@gentoo.org
@@ -450,22 +453,32 @@ x86		default/linux/x86/23.0/i486/time64/split-usr			dev
 x86		default/linux/x86/23.0/i486/time64/split-usr/hardened		dev
 x86		default/linux/x86/23.0/i486/time64/split-usr/hardened/selinux	dev
 
+# X86 Profiles for GNU Hurd
+# MAINTAINER: sam@gentoo.org
+x86		default/hurd/x86/23.0/i686					exp
 
 # musl profiles
 # @MAINTAINER: musl@gentoo.org
 amd64		default/linux/amd64/23.0/musl					dev
+amd64		default/linux/amd64/23.0/musl/systemd				dev
 amd64		default/linux/amd64/23.0/musl/llvm				exp
+amd64		default/linux/amd64/23.0/musl/llvm/systemd			exp
 amd64		default/linux/amd64/23.0/musl/hardened				exp
+amd64		default/linux/amd64/23.0/musl/hardened/systemd			exp
 amd64		default/linux/amd64/23.0/musl/hardened/selinux			exp
 amd64		default/linux/amd64/23.0/split-usr/musl				dev
 amd64		default/linux/amd64/23.0/split-usr/musl/llvm			exp
 amd64		default/linux/amd64/23.0/split-usr/musl/hardened		exp
 amd64		default/linux/amd64/23.0/split-usr/musl/hardened/selinux	exp
 arm		default/linux/arm/23.0/armv6j_hf/musl				dev
+arm		default/linux/arm/23.0/armv6j_hf/musl/systemd			exp
 arm		default/linux/arm/23.0/armv6j_hf/musl/hardened			exp
+arm		default/linux/arm/23.0/armv6j_hf/musl/hardened/systemd		exp
 arm		default/linux/arm/23.0/armv6j_hf/musl/hardened/selinux		exp
 arm		default/linux/arm/23.0/armv7a_hf/musl				dev
+arm		default/linux/arm/23.0/armv7a_hf/musl/systemd			dev
 arm		default/linux/arm/23.0/armv7a_hf/musl/hardened			exp
+arm		default/linux/arm/23.0/armv7a_hf/musl/hardened/systemd		exp
 arm		default/linux/arm/23.0/armv7a_hf/musl/hardened/selinux		exp
 arm		default/linux/arm/23.0/split-usr/armv6j_hf/musl			dev
 arm		default/linux/arm/23.0/split-usr/armv6j_hf/musl/hardened	exp
@@ -474,41 +487,57 @@ arm		default/linux/arm/23.0/split-usr/armv7a_hf/musl			dev
 arm		default/linux/arm/23.0/split-usr/armv7a_hf/musl/hardened		exp
 arm		default/linux/arm/23.0/split-usr/armv7a_hf/musl/hardened/selinux	exp
 arm64		default/linux/arm64/23.0/musl					dev
+arm64		default/linux/arm64/23.0/musl/systemd				dev
 arm64		default/linux/arm64/23.0/musl/llvm				exp
+arm64		default/linux/arm64/23.0/musl/llvm/systemd			exp
 arm64		default/linux/arm64/23.0/musl/hardened				exp
+arm64		default/linux/arm64/23.0/musl/hardened/systemd			exp
 arm64		default/linux/arm64/23.0/musl/hardened/selinux			exp
 arm64		default/linux/arm64/23.0/split-usr/musl				dev
 arm64		default/linux/arm64/23.0/split-usr/musl/llvm			exp
 arm64		default/linux/arm64/23.0/split-usr/musl/hardened		exp
 arm64		default/linux/arm64/23.0/split-usr/musl/hardened/selinux	exp
 m68k		default/linux/m68k/23.0/musl					exp
+m68k		default/linux/m68k/23.0/musl/systemd				exp
 m68k		default/linux/m68k/23.0/split-usr/musl				exp
 mips		default/linux/mips/23.0/mipsel/o32/musl				dev
+mips		default/linux/mips/23.0/mipsel/o32/musl/systemd			exp
 mips		default/linux/mips/23.0/mipsel/n64/musl				exp
 mips		default/linux/mips/23.0/o32/musl				dev
+mips		default/linux/mips/23.0/o32/musl/systemd			exp
 mips		default/linux/mips/23.0/n64/musl				exp
 mips		default/linux/mips/23.0/split-usr/mipsel/o32/musl		exp
 mips		default/linux/mips/23.0/split-usr/mipsel/n64/musl		exp
 mips		default/linux/mips/23.0/split-usr/o32/musl			exp
 mips		default/linux/mips/23.0/split-usr/n64/musl			exp
 ppc		default/linux/ppc/23.0/musl					dev
+ppc		default/linux/ppc/23.0/musl/systemd				exp
 ppc		default/linux/ppc/23.0/musl/hardened				exp
+ppc		default/linux/ppc/23.0/musl/hardened/systemd			dev
 ppc		default/linux/ppc/23.0/split-usr/musl				dev
 ppc		default/linux/ppc/23.0/split-usr/musl/hardened			exp
 ppc64		default/linux/ppc64/23.0/musl					dev
+ppc64		default/linux/ppc64/23.0/musl/systemd				dev
 ppc64		default/linux/ppc64/23.0/musl/hardened				exp
+ppc64		default/linux/ppc64/23.0/musl/hardened/systemd			exp
 ppc64		default/linux/ppc64/23.0/split-usr/musl				dev
 ppc64		default/linux/ppc64/23.0/split-usr/musl/hardened		exp
 ppc64		default/linux/ppc64le/23.0/musl					dev
+ppc64		default/linux/ppc64le/23.0/musl/systemd				dev
 ppc64		default/linux/ppc64le/23.0/musl/hardened			exp
+ppc64		default/linux/ppc64le/23.0/musl/hardened/systemd		exp
 ppc64		default/linux/ppc64le/23.0/split-usr/musl			dev
 ppc64		default/linux/ppc64le/23.0/split-usr/musl/hardened		exp
 riscv		default/linux/riscv/23.0/rv64/lp64d/musl			dev
+riscv		default/linux/riscv/23.0/rv64/lp64d/musl/systemd		exp
 riscv		default/linux/riscv/23.0/rv64/lp64/musl				dev
+riscv		default/linux/riscv/23.0/rv64/lp64/musl/systemd			exp
 riscv		default/linux/riscv/23.0/rv64/split-usr/lp64d/musl		dev
 riscv		default/linux/riscv/23.0/rv64/split-usr/lp64/musl		dev
 riscv		default/linux/riscv/23.0/rv32/ilp32d/musl			exp
+riscv		default/linux/riscv/23.0/rv32/ilp32d/musl/systemd		exp
 riscv		default/linux/riscv/23.0/rv32/ilp32/musl			exp
+riscv		default/linux/riscv/23.0/rv32/ilp32/musl/systemd		exp
 riscv		default/linux/riscv/23.0/rv32/split-usr/ilp32d/musl		exp
 riscv		default/linux/riscv/23.0/rv32/split-usr/ilp32/musl		exp
 x86		default/linux/x86/23.0/i686/musl				dev
@@ -524,20 +553,16 @@ x86		default/linux/x86/23.0/i486/split-usr/musl/selinux		exp
 # These are Gentoo Prefix profiles, maintained by the Prefix team
 # @MAINTAINER: prefix@gentoo.org
 
-# Linux Profiles
-amd64-linux	prefix/linux/amd64						exp
-arm-linux	prefix/linux/arm						exp
-ppc64-linux	prefix/linux/ppc64						exp
-ppc64-linux	prefix/linux/ppc64le						exp
-riscv-linux	prefix/linux/riscv						exp
-x86-linux	prefix/linux/x86						exp
-
-# Linux Standalone Profiles
-# ??
+# Linux Profiles (non-RAP)
+# commented out for now, for I don't want them to show up to users
+#amd64		prefix/linux/amd64						exp
+#arm		prefix/linux/arm						exp
+#ppc64		prefix/linux/ppc64						exp
+#ppc64		prefix/linux/ppc64le						exp
+#riscv		prefix/linux/riscv						exp
+#x86		prefix/linux/x86						exp
 
 # macOS Profiles
-ppc-macos	prefix/darwin/macos/10.5/ppc/gcc				exp
-x86-macos	prefix/darwin/macos/10.5/x86/gcc				exp
 x64-macos	prefix/darwin/macos/10.11/x64					exp
 x64-macos	prefix/darwin/macos/10.13/x64					exp
 x64-macos	prefix/darwin/macos/10.13/x64/gcc				exp
@@ -552,6 +577,7 @@ x64-macos	prefix/darwin/macos/12.0/x64/gcc				exp
 x64-macos	prefix/darwin/macos/13.0/x64/gcc				exp
 x64-macos	prefix/darwin/macos/14.0/x64/gcc				exp
 x64-macos	prefix/darwin/macos/15.0/x64/gcc				exp
+x64-macos	prefix/darwin/macos/26.0/x64/gcc				exp
 arm64-macos	prefix/darwin/macos/11.0/arm64					exp
 arm64-macos	prefix/darwin/macos/11.0/arm64/gcc				exp
 arm64-macos	prefix/darwin/macos/12.0/arm64					exp
@@ -559,6 +585,7 @@ arm64-macos	prefix/darwin/macos/12.0/arm64/gcc				exp
 arm64-macos	prefix/darwin/macos/13.0/arm64/gcc				exp
 arm64-macos	prefix/darwin/macos/14.0/arm64/gcc				exp
 arm64-macos	prefix/darwin/macos/15.0/arm64/gcc				exp
+arm64-macos	prefix/darwin/macos/26.0/arm64/gcc				exp
 
 # Solaris Profiles
 x64-solaris	prefix/sunos/solaris/5.11/x64					exp

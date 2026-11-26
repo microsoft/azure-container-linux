@@ -164,10 +164,6 @@ get_sdk_libdir() {
     portageq envvar "LIBDIR_$(get_sdk_arch)"
 }
 
-get_sdk_symlink_lib() {
-    portageq envvar "SYMLINK_LIB"
-}
-
 # Usage: get_sdk_binhost [version...]
 # If no versions are specified the current and SDK versions are used.
 get_sdk_binhost() {
@@ -490,10 +486,14 @@ binutils_set_latest_profile() {
 # The extra flag can be blank, hardenednopie, and so on. See gcc-config -l
 # Usage: gcc_get_latest_profile chost [extra]
 gcc_get_latest_profile() {
-    local prefix="${1}-"
-    local suffix="${2+-$2}"
+    local prefix=${1}
+    local suffix=${2+-${2}}
     local status
-    gcc-config -l | cut -d' ' -f3 | grep "^${prefix}[0-9\\.]*${suffix}$" | tail -n1
+    NO_COLOR=1 gcc-config --list-profiles | \
+        sed -e 's/^\s*//' | \
+        cut -d' ' -f2 | \
+        grep "^${prefix}-[0-9\\.]*${suffix}$" | \
+        tail -n1
 
     # return 1 if anything in the above pipe failed
     for status in ${PIPESTATUS[@]}; do

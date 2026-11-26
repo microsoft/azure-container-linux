@@ -15,7 +15,7 @@ dev-vcs/git		webdav curl
 # I'm not sure we really need it.)
 # Disable websockets, we never had them, and now they are enabled by default.
 net-misc/curl		kerberos telnet -http3 -quic -curl_quic_openssl -websockets
-net-misc/iputils	arping tracepath
+net-misc/iputils	arping tracepath -suid
 sys-devel/gettext	-git
 
 # for profile migration, needs to be enabled despite the fact it's
@@ -28,9 +28,11 @@ dev-vcs/git -perl -iconv
 # removes mta dependencies
 app-admin/sudo -sendmail
 
-# disable hybrid cgroup as we use the unified mode now
 # use lzma which is the default on non-gentoo systems, enable selinux,
-sys-apps/systemd -cgroup-hybrid curl idn lzma selinux tpm
+#
+# Avoid initrd bloat by using OpenSSL instead of gcrypt in systemd.
+# systemd-journal's FSS feature requires gcrypt, but Flatcar doesn't need it.
+sys-apps/systemd -gcrypt curl idn lzma selinux tpm
 net-libs/libmicrohttpd -ssl
 
 # disable kernel config detection and module building
@@ -40,7 +42,7 @@ net-firewall/ipset -modules
 dev-libs/glib -mime
 
 # keep grub build simple
-sys-boot/grub -multislot -themes -fonts -device-mapper
+sys-boot/grub -branding -multislot -themes -fonts -device-mapper
 
 # disable "high performance ssh" patch, turn on kerberos
 net-misc/openssh -hpn kerberos
@@ -103,9 +105,6 @@ app-portage/portage-utils -qmanifest
 # winbind needed by sssd
 net-fs/samba -regedit winbind
 
-# Drop extra dependencies
-sys-libs/ldb -lmdb -python
-
 # Enable nftables backend for the iptables instead of legacy backend
 net-firewall/iptables nftables
 net-firewall/nftables json
@@ -146,7 +145,6 @@ sys-apps/findutils selinux
 # Flatcar defaults formerly defined in coreos-overlay ebuilds
 app-containers/containerd btrfs device-mapper
 app-containers/docker btrfs overlay seccomp
-app-containers/docker-cli hardened
 
 # Drop python dependencies from some SELinux packages.
 #
@@ -159,18 +157,10 @@ sys-fs/zfs minimal -rootfs
 # Do not tinker with /boot partition at installation time.
 sys-firmware/intel-microcode -initramfs
 sys-fs/zfs-kmod -initramfs
+sys-kernel/coreos-firmware -initramfs
 
 # For sys-auth/sssd
-net-dns/bind       gssapi
-net-dns/bind-tools gssapi
-
-# Flatcar can't benefit from this performance boost for several reasons, the
-# main one being the use of binary packages.
-sys-kernel/dracut -dracut-cpio
-
-# Avoid initrd bloat by using OpenSSL instead of gcrypt in systemd.
-# systemd-journal's FSS feature requires gcrypt, but Flatcar doesn't need it.
-sys-apps/systemd -gcrypt
+net-dns/bind gssapi
 
 # Make dracut module available for initrd build.
 sys-apps/azure-vm-utils dracut
@@ -178,17 +168,11 @@ sys-apps/azure-vm-utils dracut
 # Enable SELinux for lxc
 app-containers/lxc selinux
 
-# required by app-containers/incus-6.0.3-r1::portage-stable
-# required by incus (argument)
+# required by app-containers/incus
 dev-libs/raft lz4
-
-# required by app-containers/incus-6.0.3-r1::portage-stable
-# required by incus (argument)
 dev-util/xdelta lzma
 
-# required by app-containers/lxc-6.0.3::portage-stable[tools,caps]
-# required by app-containers/incus-6.0.3-r1::portage-stable
-# required by incus (argument)
+# required by app-containers/lxc[tools,caps] and app-containers/incus
 sys-libs/libcap static-libs
 
 # do not force a dependency on llvm-core/llvm yet
@@ -197,3 +181,28 @@ dev-lang/rust -system-llvm
 # disable mpfr in gawk, this ends up being pulled into initrd, making
 # it grow by another 2mb
 sys-apps/gawk -mpfr
+
+# We never had passwdqc stuff in old pam sys configs, so disable it
+# for now. Maybe this is something to enable later.
+sys-auth/pambase securetty -passwdqc sssd
+
+# We run the server in a container.
+dev-db/etcd -server
+
+# We only need the non-Python-based tools.
+app-emulation/open-vmdk -python
+
+# Avoid pulling extra perl packages
+dev-perl/File-Slurper minimal
+
+# This is only needed for debuginfod support, which we masked.
+dev-libs/elfutils -libarchive
+
+# Needed by net-fs/samba
+net-libs/ngtcp2 gnutls
+
+# Pulls in dev-python/mypy, which pulls in even more stuff.
+dev-python/charset-normalizer -native-extensions
+
+# We only use rust for compiling, not for formatting or linting.
+dev-lang/rust -clippy -doc -rustfmt

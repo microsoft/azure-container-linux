@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -9,9 +9,9 @@ EAPI=8
 #
 # Also recommend subscribing to the coreutils and bug-coreutils MLs.
 
-PYTHON_COMPAT=( python3_{10..13} )
+PYTHON_COMPAT=( python3_{11..14} )
 VERIFY_SIG_OPENPGP_KEY_PATH=/usr/share/openpgp-keys/coreutils.asc
-inherit flag-o-matic python-any-r1 toolchain-funcs verify-sig
+inherit branding flag-o-matic python-any-r1 toolchain-funcs verify-sig
 
 MY_PATCH="${PN}-9.6-patches"
 DESCRIPTION="Standard GNU utilities (chmod, cp, dd, ls, sort, tr, head, wc, who,...)"
@@ -23,7 +23,7 @@ if [[ ${PV} == 9999 ]] ; then
 elif [[ ${PV} == *_p* ]] ; then
 	# Note: could put this in devspace, but if it's gone, we don't want
 	# it in tree anyway. It's just for testing.
-	MY_SNAPSHOT="$(ver_cut 1-2).53-14af8"
+	MY_SNAPSHOT="$(ver_cut 1-2).299-27a7c"
 	SRC_URI="https://www.pixelbeat.org/cu/coreutils-${MY_SNAPSHOT}.tar.xz -> ${P}.tar.xz"
 	SRC_URI+=" verify-sig? ( https://www.pixelbeat.org/cu/coreutils-${MY_SNAPSHOT}.tar.xz.sig -> ${P}.tar.xz.sig )"
 	S="${WORKDIR}"/${PN}-${MY_SNAPSHOT}
@@ -33,14 +33,14 @@ else
 		verify-sig? ( mirror://gnu/${PN}/${P}.tar.xz.sig )
 	"
 
-	KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~hppa ~loong ~m68k ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86 ~x86-linux"
+	KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~hppa ~loong ~m68k ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86"
 fi
 
 SRC_URI+=" !vanilla? ( https://dev.gentoo.org/~sam/distfiles/${CATEGORY}/${PN}/${MY_PATCH}.tar.xz )"
 
 LICENSE="GPL-3+"
 SLOT="0"
-IUSE="acl caps gmp hostname kill multicall nls +openssl selinux +split-usr static test vanilla xattr"
+IUSE="acl caps gmp hostname kill multicall nls +openssl selinux +split-usr static test test-full vanilla xattr"
 RESTRICT="!test? ( test )"
 
 LIB_DEPEND="
@@ -83,6 +83,7 @@ RDEPEND+="
 	!sys-apps/mktemp
 	!<app-forensics/tct-1.18-r1
 	!<net-fs/netatalk-2.0.3-r4
+	!<sys-apps/shadow-4.19.0_rc1
 "
 
 QA_CONFIG_IMPL_DECL_SKIP=(
@@ -115,6 +116,7 @@ src_unpack() {
 src_prepare() {
 	# TODO: past 2025, we may need to add our own hack for bug #907474.
 	local PATCHES=(
+		"${FILESDIR}"/${PN}-9.5-skip-readutmp-test.patch
 		# Upstream patches
 	)
 
@@ -141,18 +143,23 @@ src_prepare() {
 }
 
 src_configure() {
+	# Running Valgrind in an ebuild is too unreliable. Skip such tests.
+	cat <<-EOF >> init.cfg || die
+	require_valgrind_()
+	{
+		skip_ "requires a working valgrind"
+	}
+	EOF
+
 	# TODO: in future (>9.4?), we may want to wire up USE=systemd:
 	# still experimental at the moment, but:
 	# https://git.savannah.gnu.org/cgit/coreutils.git/commit/?id=85edb4afbd119fb69a0d53e1beb71f46c9525dd0
 	local myconf=(
-		--with-packager="Gentoo"
 		--with-packager-version="${PVR} (p${PATCH_VER:-0})"
-		--with-packager-bug-reports="https://bugs.gentoo.org/"
 		# kill/uptime - procps
-		# groups/su   - shadow
 		# hostname    - net-tools
 		--enable-install-program="arch,$(usev hostname),$(usev kill)"
-		--enable-no-install-program="groups,$(usev !hostname),$(usev !kill),su,uptime"
+		--enable-no-install-program="$(usev !hostname),$(usev !kill),su,uptime"
 		$(usev !caps --disable-libcap)
 		$(use_enable nls)
 		$(use_enable acl)
@@ -160,11 +167,17 @@ src_configure() {
 		$(use_enable xattr)
 		$(use_with gmp libgmp)
 		$(use_with openssl)
+		$(use_with selinux)
 	)
 
 	if use gmp ; then
 		myconf+=( --with-libgmp-prefix="${ESYSROOT}"/usr )
 	fi
+
+	# https://savannah.gnu.org/support/?111394
+	# This can be removed when we patch dev-build/autoconf, though
+	# packages w/o eautoreconf will still need it.
+	[[ ${enable_year2038} == "no" ]] && myconf+=( --disable-year2038 )
 
 	if tc-is-cross-compiler && [[ ${CHOST} == *linux* ]] ; then
 		# bug #311569
@@ -180,11 +193,6 @@ src_configure() {
 		append-ldflags -static
 		# bug #321821
 		sed -i '/elf_sys=yes/s:yes:no:' configure || die
-	fi
-
-	if ! use selinux ; then
-		# bug #301782
-		export ac_cv_{header_selinux_{context,flash,selinux}_h,search_setfilecon}=no
 	fi
 
 	econf "${myconf[@]}"
@@ -216,7 +224,7 @@ src_test() {
 
 	addwrite /dev/full
 
-	#local -x RUN_EXPENSIVE_TESTS="yes"
+	local -x RUN_{VERY_,}EXPENSIVE_TESTS=$(usex test-full yes no)
 	#local -x COREUTILS_GROUPS="portage wheel"
 	local -x PATH="${T}/mount-wrappers:${PATH}"
 	local -x gl_public_submodule_commit=

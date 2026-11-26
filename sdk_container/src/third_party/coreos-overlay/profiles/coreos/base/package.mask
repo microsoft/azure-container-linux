@@ -11,22 +11,24 @@
 # certificate store provided in NSS rather than the Gentoo/Debian package.
 >=app-misc/ca-certificates-20000000
 
-# Python 3.12 is in portage-stable (currently testing), so avoid picking it
-# up. Update this to mask later versions when we switch to 3.11.
->=dev-lang/python-3.12
-
 # Update engine needs updating to use a newer version of protobuf.
 >=dev-libs/protobuf-22.0
 
-# Pulls in LLVM and clang.
->=sys-block/thin-provisioning-tools-1.0.14
+# Do not install python versions that were "disabled" in
+# PYTHON_TARGETS. For some reason emerge still insists on installing
+# those as a dependency for some packages.
+<dev-lang/python-3.12
+>=dev-lang/python-3.13
 
-# Too large to fit into our /boot partition - the size grew by 3MB. We
-# mask a specific version in hope that the future update may be smaller,
-# who knows.
-=sys-firmware/intel-microcode-20250512_p20250513
-=sys-firmware/intel-microcode-20250812_p20250813
+# We are using RedHat patches for grub, so until they rebase them on
+# top of 2.14, we are locked out of the update.
+>=sys-boot/grub-2.14
 
-# Make sure that we stay on version 3.4.x for OpenSSL on this branch
-# even if `::portage-stable` holds more recent version (3.5.x)
->=dev-libs/openssl-3.5
+# Breaks virt-firmware, thus breaks creating qemu images. Remove when
+# moving to python 3.13.
+>=dev-python/setuptools-82.0.0
+
+# Go 1.27 is already stable, but the stable 1.27.1 is affected by
+# CVE-2026-111943. Stay on the 1.26 series (1.26.10 has the fix) until a
+# fixed 1.27.x is stable.
+>=dev-lang/go-1.27

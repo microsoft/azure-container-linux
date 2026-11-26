@@ -1,5 +1,59 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
+
+# Alfred Wingate <parona@protonmail.com> (2026-05-13)
+# dev-qt/qtgraphs:6 is not keyworded here
+dev-python/pyside graphs
+
+# Brett A C Sheffield <bacs@librecast.net> (2026-04-22)
+# virtual/pandoc is not keyworded here
+>=dev-libs/xmlsec-1.3.11 doc
+
+# Robin H. Johnson <robbat2@gentoo.org> (2026-03-22)
+# sys-block/vdo not keyworded here
+sys-fs/lvm2 vdo
+
+# Nicolas PARLANT <nicolas.parlant@parhuet.fr> (2026-02-23)
+# x11-libs/qtermwidget is not keyworded here
+app-office/texstudio qtermwidget
+
+# Jaco Kroon <jaco@uls.co.za> (2026-02-06)
+# Requires sys-auth/libyubikey
+net-dialup/freeradius yubikey
+
+# Alfred Wingate <parona@protonmail.com> (2025-11-23)
+# Requires dev-qt/qtwebengine
+media-sound/easyeffects webengine
+
+# Sam James <sam@gentoo.org> (2025-11-16)
+# Needs unkeyworded dev-libs/capstone which fails tests on arm (bug #924922)
+app-emulation/qemu capstone
+dev-util/perf capstone
+
+# Sam James <sam@gentoo.org> (2025-11-01)
+# Needs pandoc.
+media-sound/bluez-alsa man
+
+# Sam James <sam@gentoo.org> (2025-10-28)
+# Portability issues with dev-libs/apache-arrow (bug #923968).
+sci-libs/gdal parquet
+
+# PPN-SD <nicolas.parlant@parhuet.fr> (2025-10-04)
+# media-libs/libemf is not keyworded here
+app-office/dia wmf
+
+# Michał Górny <mgorny@gentoo.org> (2025-10-03)
+# Now keyworded on arm too.
+sci-libs/flexiblas -system-blas
+sci-libs/lapack -flexiblas
+virtual/blas -flexiblas
+virtual/cblas -flexiblas
+virtual/lapack -flexiblas
+virtual/lapacke -flexiblas
+
+# Michał Górny <mgorny@gentoo.org> (2025-09-12)
+# These BLAS/LAPACK providers are keyworded here.
+sci-libs/flexiblas -openblas
 
 # Sam James <sam@gentoo.org> (2025-08-29)
 # net-misc/passt not yet keyworded here
@@ -45,8 +99,9 @@ dev-ml/labltk ocamlopt
 mail-mta/sendmail tinycdb
 
 # Andreas Sturmlechner <asturm@gentoo.org> (2025-04-02)
-# Needs kde-frameworks/breeze-icons which is not keyworded here.
-net-irc/quassel system-icons
+# spell: kde-frameworks/sonnet is not keyworded here
+# system-icons: kde-frameworks/breeze-icons is not keyworded here
+net-irc/quassel spell system-icons
 
 # NRK <nrk@disroot.org> (2025-03-17)
 # media-libs/libyuv is not keyworded
@@ -90,10 +145,6 @@ sys-kernel/dracut test
 sys-auth/polkit kde
 virtual/notification-daemon kde
 
-# Andreas Sturmlechner <asturm@gentoo.org> (2024-07-31)
-# KF6 and media-libs/phonon will drop arm keyword
-app-office/texstudio video
-
 # Michał Górny <mgorny@gentoo.org> (2024-07-24)
 # Full testing requires www-client/firefox.
 dev-python/selenium test-rust
@@ -112,6 +163,7 @@ games-emulation/rmg -dynarec
 # Needs as-yet-unkeyworded KF6 (bug #934215)
 app-crypt/pinentry qt6
 >=app-office/libreoffice-24.2.7.2-r1 kde
+>media-video/vlc-3.9999 gui skins
 
 # Nowa Ammerlaan <nowa@gentoo.org> (2024-06-01)
 # qtnetworkauth, qtremoteobjects and qthttpserver not yet keyworded here
@@ -182,6 +234,7 @@ dev-lang/idris2 test-full
 dev-python/cloudscraper test
 dev-python/qtpy test
 games-util/lgogdownloader gui
+net-irc/quassel urlpreview
 net-misc/seafile-client shibboleth
 
 # Florian Schmaus <flow@gentoo.org> (2022-11-23)
@@ -208,7 +261,6 @@ app-text/enchant nuspell
 # Adel Kara Slimane <adel.ks@zegrapher.com> (2022-03-14)
 # Untested useflag on other arches, needs keywording
 media-video/ffmpeg vmaf
-media-video/ffmpeg-compat vmaf
 
 # Sam James <sam@gentoo.org> (2022-03-10)
 # Boost has support for ARM32
@@ -345,7 +397,7 @@ net-libs/gnutls test-full
 
 # Andreas Sturmlechner <asturm@gentoo.org> (2018-03-02)
 # Requires unkeyworded deps
->=dev-python/ipython-5.4.1 qt5
+>=dev-python/ipython-5.4.1 gui
 
 # Michał Górny <mgorny@gentoo.org> (2017-12-30)
 # Moved from use.mask since they are flags local to one package.
@@ -424,6 +476,7 @@ net-print/hplip -scanner kde
 # Alexis Ballier <aballier@gentoo.org> (2015-04-02)
 # Needs ilmbase (openexr), which does not build and is masked on arm.
 media-libs/freeimage tiff
+sci-libs/opencascade freeimage
 
 # Jason A. Donenfeld <zx2c4@gentoo.org> (2015-02-09)
 # Google does not distribute the widevine plugin for ARM. It must be extracted from a Chromebook,
@@ -544,7 +597,6 @@ net-vpn/tinc vde
 # The QML (V4) and JSC JITs are supported only on amd64/arm/x86,
 # so the flag is masked in the base profile and unmasked here.
 dev-qt/qtdeclarative -jit
-dev-qt/qtscript -jit
 
 # missing keywords
 media-plugins/gst-plugins-meta aac dts dv lame libvisual modplug vcd wavpack

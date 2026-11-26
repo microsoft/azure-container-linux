@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 # This file is only for generic masks. For arch-specific masks (i.e.
@@ -6,33 +6,137 @@
 
 # New entries go on top.
 
-# Andreas Sturmlechner <asturm@gentoo.org> (2025-08-13)
-# This has been going on for long enough. Bug #834469
-<sci-libs/ViSP-3.7 ogre
+# Andreas Sturmlechner <asturm@gentoo.org> (2026-05-15)
+# Various integration packages. Preparing Qt5 last-rites.
+# Removal some time after 2026-05-30.
+app-i18n/fcitx-qt qt5
+app-i18n/uim qt5
+x11-themes/QGnomePlatform qt5
+x11-themes/adwaita-qt qt5
+x11-themes/kvantum qt5
+x11-themes/qtcurve qt5
+
+# Michał Górny <mgorny@gentoo.org> (2026-05-07)
+# Force-enable all PYTHON_TARGETS for python-exec to avoid using private
+# API. Please remember to keep it in sync with python_targets.desc.
+dev-lang/python-exec -python_targets_python3_15
+dev-lang/python-exec -python_targets_python3_15t
+
+# Michael Orlitzky <mjo@gentoo.org> (2026-05-04)
+# This needs an upgrade to >=dev-cpp/eigen-5.0.1 and I don't
+# need the extra headache right now.
+>=sci-libs/libsemigroups-3.5.5 eigen
+
+# Andreas Sturmlechner <asturm@gentoo.org> (2026-04-12)
+# net-wireless/gnuradio and dependencies. Preparing Qt5 last-rites.
+# Bugs #948049, #954887.  Removal some time after 2026-04-30.
+dev-python/pyqtgraph qt5
+net-wireless/gnuradio qt5
+<=net-wireless/gnuradio-3.10.99 channels
+
+# Mike Gilbert <floppym@gentoo.org> (2026-03-20)
+# Only meant for bootstrapping a cross-compiler.
+sys-libs/libxcrypt headers-only
+
+# Michał Górny <mgorny@gentoo.org> (2026-03-19)
+# dev-python/mkdocs have been last rited.
+dev-debug/gef doc
+dev-python/bracex doc
+dev-python/pyspelling doc
+dev-python/wcmatch doc
+media-gfx/hydrus doc
+net-vpn/eduvpn-client doc
+
+# Volkmar W. Pogatzki <gentoo@pogatzki.net> (2026-01-30)
+# No suitable versions of dev-libs/protobuf available.
+~dev-java/protobuf-java-4.33.5 system-protoc
+
+# Sam James <sam@gentoo.org> (2026-02-14)
+# binutils-2.46 changes SFrame format to v3. We don't want binaries
+# distributed with v2 and binutils doesn't support mixing v2+v3. From
+# v3 on, compatibility will be guaranteed. Please rebuild without SFrames
+# first with <binutils-2.46.
+sys-libs/glibc sframe
+
+# Eli Schwartz <eschwartz@gentoo.org> (2026-01-09)
+# tests fail to build during src_compile:
+# - needs demos to be built
+# - OpenGLExampleBrowser.cpp:928:17: error: ‘simpleApp’ was not declared in this scope
+sci-physics/bullet test
+
+# Andreas K. Hüttel <dilfridge@gentoo.org> (2026-01-07)
+# Building glibc with clang is highly experimental and only possible and
+# tested in few configurations. Enabling the useflag clang allows free
+# choice of the compiler. By masking this useflag, the ebuild
+# forcibly resets the compiler to gcc.
+sys-libs/glibc clang
+
+# Volkmar W. Pogatzki <gentoo@pogatzki.net> (2026-01-07)
+# openjfx for OpenJDK 26 and 27 is not yet available.
+dev-java/openjdk:26 javafx
+dev-java/openjdk:27 javafx
+
+# Paul Zander <negril.nx+gentoo@gmail.com> (2025-12-27)
+# breaks with old in-tree sys-cluster/ampi bug #586746 #830093 #815007
+sci-libs/adolc mpi
+
+# Ionen Wolkens <ionen@gentoo.org> (2025-12-24)
+# Packages where cargo.eclass' IUSE=debug cannot easily be supported
+# (use RUSTFLAGS if need debug symbols, see also bug #967921)
+games-strategy/naev debug
+media-libs/subrandr debug
+
+# Andreas Sturmlechner <asturm@gentoo.org> (2025-12-21)
+# gui-libs/hyprland-qtutils fails to build against Qt 6.10, upstream
+# repository was archived.
+gui-wm/hyprland qtutils
+
+# Michał Górny <mgorny@gentoo.org> (2025-12-20)
+# Needs last-rited dev-lang/julia.
+<kde-apps/cantor-25.12.2-r1 julia
+
+# Lukas Schmelting <lschmelting@posteo.com (2025-11-06)
+# https://bugs.gentoo.org/933164
+app-misc/localsearch gif
+
+# Sam James <sam@gentoo.org> (2025-10-29)
+# Help Portage resolve app-crypt/gnupg[verify-sig] with the app-alternatives/gpg
+# transition. The any-of dep in verify-sig.eclass helps a bit, but it struggles
+# after we made app-alternatives/gpg depend on newer gnupg to fix another problem.
+# Users can unmask these locally in /etc/portage/profile/package.use.mask once
+# their upgrade is done.
+app-crypt/gnupg verify-sig
+app-crypt/pinentry verify-sig
+dev-libs/libgcrypt verify-sig
+dev-libs/libgpg-error verify-sig
+dev-libs/libksba verify-sig
+
+# Fabian Groffen <grobian@gentoo.org> (2025-10-18)
+# PAM support is discouraged due to not being secure via Exim
+# https://bugs.gentoo.org/964377
+mail-mta/exim pam
+
+# Michał Górny <mgorny@gentoo.org> (2025-09-27)
+# Building NumPy with ILP64 LAPACK can cause revdeps to segfault if they
+# link to LP64 LAPACK.  To support this properly, we either need to
+# ensure matching index64 flags along the whole chain of dependencies,
+# or support only ILP64 LAPACK implementations that use suffixed
+# symbols (so there are no symbol collisions).  Given the flag was only
+# really added to test if ILP64 packaging works, mask it for the time
+# being.
+dev-python/numpy index64
+
+# Nicolas PARLANT <nicolas.parlant@parhuet.fr> (2025-09-20)
+# Require dev-libs/libtsm, only keyworded on amd64 and x86
+>=media-gfx/fbida-2.14_p20241216 fbcon
 
 # Alfred Wingate <parona@protonmail.com> (2025-08-12)
 # Marked Beta tier upstream. Tests don't work with it.
 dev-games/ogre vulkan
 
-# Andreas K. Hüttel <dilfridge@gentoo.org> (2025-08-06)
-# General mask, to be unmasked on arches where glibc supports this
->=sys-libs/glibc-2.42 sframe
-
-# Ionen Wolkens <ionen@gentoo.org> (2025-08-02)
-# Fails to build, needs looking into but isn't currently needed
-# by anything and can leave it masked for now.
->=media-libs/vips-8.17 vala
-
 # Alfred Wingate (2025-07-31)
 # Missing dependency
 sci-libs/gdal mongodb
-
-# Ivy <openrc@posteo.de> (2025-07-11)
-# app-editors/gnome-text-editor[spell] has been dropped upstream and
-# replaced with app-text/libspelling, but will likely be added back
-# in future releases.
-~app-editors/gnome-text-editor-47.2 spell
-~app-editors/gnome-text-editor-47.4 spell
 
 # Andreas Sturmlechner <asturm@gentoo.org> (2025-06-26)
 # >=kde-plasma/drkonqi-6.3.90 requires systemd, so specifically
@@ -102,11 +206,6 @@ sys-cluster/drbd-utils pacemaker
 # restricted to ancient ffmpeg.
 sci-libs/opencascade ffmpeg
 
-# Sam James <sam@gentoo.org> (2025-02-21)
-# Mask for older GTK to phase in enabling Vulkan for users (and avoid a surprise
-# for stable users, as Vulkan is enabled by default on desktop profiles).
-<gui-libs/gtk-4.16 vulkan
-
 # Michał Górny <mgorny@gentoo.org> (2025-02-20)
 # Requires dev-python/recommonmark with Python 3.10
 <llvm-core/clang-18 doc
@@ -130,13 +229,10 @@ kde-frameworks/knewstuff:5 opds
 # most places.
 dev-build/meson test-full
 
-# Volkmar W. Pogatzki <gentoo@pogatzki.net> (2025-01-09)
-# No suitable versions of dev-libs/protobuf available.
-=dev-java/protobuf-java-4.29.3 system-protoc
-
 # Michał Górny <mgorny@gentoo.org> (2024-12-31)
 # None of the sci-libs/symengine versions work with the modern versions
 # of dev-libs/boost in Gentoo.
+dev-python/symengine boost
 sci-libs/symengine boost
 
 # Conrad Kostecki <conikost@gentoo.org> (2024-12-30)
@@ -156,10 +252,6 @@ media-libs/opencv atlas
 # John M. Harris, Jr. <johnmh@johnmh.me> (2024-12-12)
 # seccomp is only supported with systemd
 sys-apps/fwupd seccomp
-
-# Sam James <sam@gentoo.org> (2024-11-17)
-# The example bindings fail to build.
-~sys-libs/ncurses-6.5_p20241109 cxx
 
 # Joonas Niilola <juippis@gentoo.org> (2024-11-16)
 # Wasm support is (currently) only available on amd64 and arm64.
@@ -183,10 +275,6 @@ dev-libs/elfutils stacktrace
 # Leads to missing symbols while building testcases
 # Masked for further testing.
 dev-cpp/gtest abseil
-
-# Yongxiang Liang <tanekliang@gmail.com> (2024-10-10)
-# Fcitx 4 has been archived.
-app-i18n/mozc fcitx4
 
 # Michael Orlitzky <mjo@gentoo.org> (2024-10-07)
 # Disable "webservices" support for gthumb because it pulls in the old
@@ -390,15 +478,6 @@ mail-client/thunderbird system-icu
 # obvious.
 net-libs/nodejs lto
 
-# Sam James <sam@gentoo.org> (2023-06-29)
-# Insecure old versions of the SSL/TLS protocol.
-net-libs/gnutls sslv2 sslv3
-dev-libs/openssl sslv2 sslv3
-
-# Sam James <sam@gentoo.org> (2023-06-29)
-# Needs <dev-libs/openssl-3 which is EOL beyond September 2023.
-net-misc/curl sslv3
-
 # Joonas Niilola <juippis@gentoo.org> (2023-06-06)
 # Runtime not tested, may require more configuration in the ebuild.
 # Bug: #906509.
@@ -472,8 +551,13 @@ gnome-base/gnome-extra-apps tracker
 # USE=compat / possibly allowing sys-libs/zlib needs to be figured out,
 # but packages want to use the actual zlib-ng library, so we need to
 # mask it and can't hold the whole thing up on the compat effort.
-sys-libs/zlib-ng compat
-sys-libs/minizip-ng compat
+#
+# Michał Górny <mgorny@gentoo.org> (2025-11-04)
+# Unmasking on the revbumped versions that install both the compat
+# library and the regular zlib-ng/minizip-ng library for dependency
+# compatibility.
+<sys-libs/zlib-ng-2.2.5-r1 compat
+<sys-libs/minizip-ng-4.0.10-r1 compat
 
 # Georgy Yakovlev <gyakovlev@gentoo.org> (2022-09-17)
 # po4a crashes while translating
@@ -754,18 +838,9 @@ dev-python/statsmodels doc
 # Here we are following that path too.
 >=sys-libs/glibc-2.33-r2 crypt
 
-# Craig Andrews <candrews@gentoo.org> (2019-09-12)
-# OpenSSL (as of version 1.1.1) doesn't have APIs for QUIC support
-# see https://github.com/openssl/openssl/pull/8797
-net-libs/ngtcp2 openssl
-
 # Thomas Deutschmann <whissi@gentoo.org> (2019-09-02)
 # PGO not yet supported for comm-central, bug #693160
 >=mail-client/thunderbird-68 pgo
-
-# Matt Turner <mattst88@gentoo.org> (2019-09-01)
-# <dev-scheme/guile-2 is package.mask'd
-www-client/elinks guile
 
 # Kent Fredric <kentnl@gentoo.org> (2019-08-07)
 # Newer versions of nqp need newer versions of jdk to run on the jvm,
@@ -788,6 +863,14 @@ mail-client/claws-mail litehtml
 # terms. Masked to prevent accidental installation of these files,
 # bug #318841#c20.
 sys-kernel/linux-firmware unknown-license
+# Updated: Nowa Ammerlaan <nowa@gentoo.org> (2025-12-30)
+# alsa-firmware distributes these same files, sync the behaviour of
+# both packages. Bug #969656.
+sys-firmware/alsa-firmware alsa_cards_korg1212
+sys-firmware/alsa-firmware alsa_cards_maestro3
+sys-firmware/alsa-firmware alsa_cards_sb16
+sys-firmware/alsa-firmware alsa_cards_wavefront
+sys-firmware/alsa-firmware alsa_cards_ymfpci
 
 # Ulrich Müller <ulm@gentoo.org> (2019-04-25)
 # Pulls in media-fonts/kochi-substitute as dependency, which allows
@@ -815,10 +898,6 @@ sys-block/fio static
 # Lars Wendler <polynomial-c@gentoo.org> (2018-03-14)
 # sys-cluster/ceph is only available on amd64 & x86, unmask per arch
 net-fs/samba ceph
-
-# Jan Ziak <0xe2.0x9a.0x9b@gmail.com> (2018-03-14)
-# media-libs/svgalib is not keyworded everywhere
-app-emulation/fuse backend-svga
 
 # Andreas K. Hüttel <dilfridge@gentoo.org> (2018-02-02)
 # This feature is not ready yet pre-2.29-r4, see bug #146882 comment 26
@@ -932,10 +1011,6 @@ media-libs/libsdl2 custom-cflags
 # Bernard Cafarelli <voyageur@gentoo.org> (2013-04-04)
 # Broken for now (segmentation fault on play)
 gnustep-apps/cynthiune flac
-
-# Tom Wijsman <TomWij@gentoo.org> (2013-03-10)
-# Experimental, masked until it compiles and works.
-media-libs/avidemux-core system-ffmpeg
 
 # Jory A. Pratt <anarchy@gentoo.org> (2012-12-15)
 # PGO is known to be busted with most configurations

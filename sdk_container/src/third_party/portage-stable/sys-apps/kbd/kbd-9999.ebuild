@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -22,21 +22,28 @@ fi
 DESCRIPTION="Keyboard and console utilities"
 HOMEPAGE="https://kbd-project.org/"
 
-LICENSE="GPL-2"
+LICENSE="GPL-2+"
 SLOT="0"
-IUSE="nls selinux pam test"
+IUSE="bzip2 lzma nls selinux pam test zlib zstd"
 RESTRICT="!test? ( test )"
 
 DEPEND="
 	app-alternatives/gzip
+	bzip2? ( app-arch/bzip2 )
+	lzma? ( app-arch/xz-utils )
 	pam? (
 		!app-misc/vlock
 		sys-libs/pam
 	)
+	zlib? ( virtual/zlib:= )
+	zstd? ( app-arch/zstd:= )
 "
 RDEPEND="
 	${DEPEND}
-	selinux? ( sec-policy/selinux-loadkeys )
+	selinux? (
+		sec-policy/selinux-loadkeys
+		sec-policy/selinux-vlock
+	)
 "
 BDEPEND="
 	sys-devel/flex
@@ -73,16 +80,16 @@ src_configure() {
 		$(use_enable nls)
 		$(use_enable pam vlock)
 		$(use_enable test tests)
+		$(use_with bzip2)
+		$(use_with lzma)
+		$(use_with zlib)
+		$(use_with zstd)
 	)
 
 	econf "${myeconfargs[@]}"
 }
 
 src_test() {
-	# These tests want a tty and the check passes when it shouldn't
-	# when running via the ebuild.
-	sed -i -e "s:tty 2>/dev/null:false:" tests/testsuite || die
-
 	emake -Onone check TESTSUITEFLAGS="--jobs=$(get_makeopts_jobs)"
 }
 

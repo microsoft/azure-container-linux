@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -13,7 +13,7 @@ SRC_URI+=" verify-sig? ( mirror://gnupg/${PN}/${P}.tar.bz2.sig )"
 
 LICENSE="GPL-2"
 SLOT="0"
-KEYWORDS="~alpha amd64 arm arm64 ~hppa ~loong ~m68k ~mips ppc ppc64 ~riscv ~s390 ~sparc ~x86 ~amd64-linux ~x86-linux ~arm64-macos ~ppc-macos ~x64-macos ~x64-solaris"
+KEYWORDS="~alpha amd64 arm arm64 ~hppa ~loong ~m68k ~mips ppc ppc64 ~riscv ~s390 ~sparc x86 ~arm64-macos ~x64-macos ~x64-solaris"
 IUSE="caps efl emacs gtk keyring ncurses qt6 wayland X"
 
 DEPEND="
@@ -87,7 +87,7 @@ src_configure() {
 	if use qt6 ; then
 		export PATH="$(qt6_get_bindir):${PATH}"
 		export QTLIB="$(qt6_get_libdir):${QTLIB}"
-		export MOC="$(qt6_get_libdir)/qt6/libexec/moc"
+		export MOC="$(qt6_get_libexecdir)/moc"
 
 		myeconfargs+=(
 			$(use_enable wayland kf6-wayland)

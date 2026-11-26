@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -431,7 +431,7 @@ pkg_postinst() {
 
 	if [[ -r /proc/driver/nvidia/version &&
 		$(</proc/driver/nvidia/version) != *"  ${PV}  "* ]]; then
-		ewarn "Currently loaded NVIDIA modules do not match the newly installed"
+		ewarn "\nCurrently loaded NVIDIA modules do not match the newly installed"
 		ewarn "libraries and may prevent launching GPU-accelerated applications."
 		if use modules; then
 			ewarn "Easiest way to fix this is normally to reboot. If still run into issues"
@@ -441,13 +441,12 @@ pkg_postinst() {
 		fi
 	fi
 
-	ewarn
-	ewarn "Be warned/reminded that the 390.xx branch reached end-of-life and"
+	ewarn "\nBe warned/reminded that the 390.xx branch reached end-of-life and"
 	ewarn "NVIDIA is no longer fixing issues (including security). Free to keep"
 	ewarn "using (for now) but it is recommended to either switch to nouveau or"
 	ewarn "replace hardware. Will be kept in-tree while possible, but expect it"
 	ewarn "to be removed likely in late 2027 or earlier if major issues arise."
-	ewarn
-	ewarn "Note that there is no plans to patch in support for kernels branches"
-	ewarn "newer than 6.1.x which will be supported upstream until December 2026."
+	ewarn "\nNote that there is no plans to patch in support for kernels branches"
+	ewarn "newer than 6.1.x which will be supported upstream until December 2027"
+	ewarn "albeit its support *could* end earlier in Gentoo."
 }

@@ -1,13 +1,71 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
+
+# Alfred Wingate <parona@protonmail.com> (2026-05-13)
+# dev-qt/qtgraphs:6 is not keyworded here
+dev-python/pyside graphs
+
+# Robin H. Johnson <robbat2@gentoo.org> (2026-03-22)
+# sys-block/vdo not keyworded here
+sys-fs/lvm2 vdo
+
+# Alfredo Tupone <tupone@gentoo.org> (2026-03-16)
+# dependencies not arm64 ready
+sci-ml/torchvision rocm
+
+# Fabian Groffen <grobian@gentoo.org> (2026-02-11)
+# bitwarden-cli is not available for linux-arm64
+app-admin/vaultwarden cli
+
+# Ionen Wolkens <ionen@gentoo.org> (2026-02-11)
+# net-libs/librist is available here
+media-video/ffmpeg -rist
+
+# Sam James <sam@gentoo.org> (2025-12-23)
+# sys-process/numactl is available here
+sys-fs/fuse -io-uring
+
+# Michał Górny <mgorny@gentoo.org> (2025-11-01)
+# app-crypt/sequoia-chameleon-gnupg is keyworded here.
+app-alternatives/gpg -sequoia
+
+# Ionen Wolkens <ionen@gentoo.org> (2025-10-22)
+# dev-lang/deno-bin is keyworded here
+net-misc/yt-dlp -deno
+
+# Paul Zander <negril.nx+gentoo@gmail.com> (2025-10-18)
+# media-libs/libvmaf is keyworded
+media-libs/x265 -vmaf
+
+# Sam James <sam@gentoo.org> (2025-10-18)
+# dev-python/nvidia-ml-py is not keyworded here
+sys-process/atop video_cards_nvidia
+
+# PPN-SD <nicolas.parlant@parhuet.fr> (2025-10-04)
+# media-libs/libemf is not keyworded here
+app-office/dia wmf
+
+# Michał Górny <mgorny@gentoo.org> (2025-10-03)
+# Now keyworded on arm64 too.
+sci-libs/flexiblas -system-blas
+sci-libs/lapack -flexiblas
+virtual/blas -flexiblas
+virtual/cblas -flexiblas
+virtual/lapack -flexiblas
+virtual/lapacke -flexiblas
+
+# Sasha Finkelstein <fnkl.kernel@gmail.com> (2025-09-17)
+# Arm64-specific ABI
+app-emulation/wine-staging -arm64ec
+app-emulation/wine-vanilla -arm64ec
+
+# Michał Górny <mgorny@gentoo.org> (2025-09-12)
+# These BLAS/LAPACK providers are keyworded here.
+sci-libs/flexiblas -blis -openblas
 
 # Andreas Sturmlechner <asturm@gentoo.org> (2025-08-16)
 # dev-games/ogre is not keyworded here
 >=dev-games/mygui-3.4.1 ogre
-
-# Andreas K. Hüttel <dilfridge@gentoo.org> (2025-08-06)
-# aarch64 supports sframe
->=sys-libs/glibc-2.42 -sframe
 
 # Ionen Wolkens <ionen@gentoo.org> (2025-08-01)
 # dev-qt/qtlanguageserver:6 is keyworded here
@@ -58,11 +116,6 @@ media-libs/libavif libyuv
 sys-devel/gcc -cobol
 
 # Ionen Wolkens <ionen@gentoo.org> (2025-03-10)
-# dev-util/nvidia-cuda-toolkit is keyworded here
-media-video/ffmpeg -npp
-media-video/ffmpeg-compat -npp
-
-# Ionen Wolkens <ionen@gentoo.org> (2025-03-10)
 # Old versions of ffmpeg needing old nv-codec-codecs complicate slots
 # (done here due to the unmasking in arch/arm64).
 <media-video/ffmpeg-5 nvenc
@@ -88,13 +141,10 @@ dev-python/pyside -webview
 # Dependencies e.g. pypy keyworded (not stable) here.
 dev-build/meson -test-full
 
-# Sv. Lockal <lockalsash@gmail.com> (2025-01-11)
-# dev-cpp/prometheus-cpp is not keyworded
-dev-cpp/opentelemetry-cpp prometheus
-
 # Michał Górny <mgorny@gentoo.org> (2024-12-24)
 # OpenMP offloading is supported on 64-bit architectures only.
 llvm-runtimes/clang-runtime -offload
+llvm-runtimes/openmp -offload
 
 # Nowa Ammerlaan <nowa@gentoo.org> (2024-12-20)
 # qtremoteobjects and qthttpserver not yet keyworded here
@@ -242,11 +292,6 @@ app-metrics/collectd collectd_plugins_varnish
 # app-text/nuspell is not keyworded
 app-text/enchant nuspell
 
-# Adel Kara Slimane <adel.ks@zegrapher.com> (2022-03-14)
-# Untested useflag on other arches, needs keywording
-media-video/ffmpeg vmaf
-media-video/ffmpeg-compat vmaf
-
 # Sam James <sam@gentoo.org> (2022-02-26)
 # Supports 64-bit NEON
 >=media-libs/libjpeg-turbo-2.1.3 -cpu_flags_arm_neon
@@ -326,10 +371,6 @@ llvm-runtimes/compiler-rt-sanitizers -ubsan -safestack -cfi -scudo
 llvm-runtimes/compiler-rt-sanitizers -gwp-asan -shadowcallstack
 llvm-runtimes/compiler-rt-sanitizers -libfuzzer -profile -xray -rtsan
 >=llvm-runtimes/compiler-rt-sanitizers-16 -orc
-
-# Roy Bamford <neddyseagoon@gentoo.org> (2020-12-07)
-# media-libs/liblastfm fails to build with tests Bug #758896
-media-sound/clementine lastfm
 
 # Sam James <sam@gentoo.org> (2020-10-03)
 # Builds & tests pass on arm64.

@@ -1,4 +1,4 @@
-# Copyright 2024-2025 Gentoo Authors
+# Copyright 2024-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 # @ECLASS: llvm-r1.eclass
@@ -9,6 +9,7 @@
 # @SUPPORTED_EAPIS: 8
 # @PROVIDES: llvm-utils
 # @BLURB: Provide LLVM_SLOT to build against slotted LLVM
+# @DEPRECATED: llvm-r2.eclass
 # @DESCRIPTION:
 # An eclass to reliably depend on a set of LLVM-related packages
 # in a matching slot.  To use the eclass:
@@ -56,14 +57,14 @@ inherit llvm-utils
 # @DESCRIPTION:
 # Oldest supported LLVM slot.  This is used to automatically filter out
 # unsupported LLVM_COMPAT values.
-_LLVM_OLDEST_SLOT=15
+_LLVM_OLDEST_SLOT=16
 
 # @ECLASS_VARIABLE: _LLVM_NEWEST_STABLE
 # @INTERNAL
 # @DESCRIPTION:
 # The newest stable LLVM version.  Versions newer than that won't
 # be automatically enabled via USE defaults.
-_LLVM_NEWEST_STABLE=20
+_LLVM_NEWEST_STABLE=21
 
 # == control variables ==
 

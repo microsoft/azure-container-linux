@@ -5,8 +5,7 @@ rootfs="${1}"
 : "${PACKAGE_SOURCE_MODE:=PORTAGE}"
 
 # No manpages on Flatcar, no need to ship "stress" tool
-echo ">>> NOTICE: $0: removing 'gen-manpages', 'containerd-stress' from sysext"
-rm -f "${rootfs}/usr/bin/gen-manpages" "${rootfs}/usr/bin/containerd-stress"
+rm -rf "${rootfs:?}"/usr/{bin/{containerd-stress,gen-manpages},lib/debug/}
 
 if [[ "${PACKAGE_SOURCE_MODE}" == "RPM" ]]; then
   # RPM mode ships the Azure Linux unit and config as installed by the RPM. The
@@ -22,5 +21,8 @@ else
   cp -vdR --preserve=mode,timestamps "${files_dir}/"* "${rootfs}"
 fi
 
-mkdir -p "${rootfs}/usr/lib/systemd/system/multi-user.target.d"
-{ echo "[Unit]"; echo "Upholds=containerd.service"; } > "${rootfs}/usr/lib/systemd/system/multi-user.target.d/10-containerd-service.conf"
+install -D -m0644 /dev/stdin "${rootfs}/usr/lib/systemd/system/multi-user.target.d/10-containerd-service.conf" <<EOF
+[Unit]
+Upholds=containerd.service
+EOF
+

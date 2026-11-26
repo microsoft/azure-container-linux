@@ -3,6 +3,8 @@
 acct-group/adm
 acct-group/audio
 acct-group/cdrom
+acct-group/clock
+acct-group/cuse
 acct-group/dialout
 acct-group/disk
 acct-group/dnsmasq
@@ -11,6 +13,7 @@ acct-group/floppy
 acct-group/incus
 acct-group/incus-admin
 acct-group/input
+acct-group/jobserver
 acct-group/kmem
 acct-group/kvm
 acct-group/lp
@@ -29,7 +32,9 @@ acct-group/portage
 acct-group/render
 acct-group/root
 acct-group/sgx
+acct-group/shadow
 acct-group/sshd
+acct-group/sssd
 acct-group/systemd-coredump
 acct-group/systemd-journal
 acct-group/systemd-journal-remote
@@ -62,6 +67,7 @@ acct-user/polkitd
 acct-user/portage
 acct-user/root
 acct-user/sshd
+acct-user/sssd
 acct-user/systemd-coredump
 acct-user/systemd-journal-remote
 acct-user/systemd-network
@@ -79,6 +85,7 @@ app-alternatives/awk
 app-alternatives/bc
 app-alternatives/bzip2
 app-alternatives/cpio
+app-alternatives/gpg
 app-alternatives/gzip
 app-alternatives/lex
 app-alternatives/ninja
@@ -149,6 +156,7 @@ app-editors/nano
 app-editors/vim
 app-editors/vim-core
 
+app-emulation/open-vmdk
 app-emulation/qemu
 app-emulation/qemu-guest-agent
 app-emulation/virt-firmware
@@ -178,9 +186,11 @@ app-shells/gentoo-bashcomp
 app-text/asciidoc
 app-text/build-docbook-catalog
 app-text/docbook-xml-dtd
+app-text/docbook-xsl-ns-stylesheets
 app-text/docbook-xsl-stylesheets
 app-text/mandoc
 app-text/manpager
+app-text/scdoc
 app-text/sgml-common
 app-text/xmlto
 
@@ -207,6 +217,7 @@ dev-cpp/gflags
 dev-cpp/glog
 dev-cpp/gtest
 
+dev-db/etcd
 dev-db/sqlite
 
 dev-debug/gdb
@@ -243,8 +254,10 @@ dev-libs/gmp
 dev-libs/gobject-introspection-common
 dev-libs/inih
 dev-libs/jansson
+dev-libs/jose
 dev-libs/json-c
 dev-libs/jsoncpp
+dev-libs/leancrypto
 dev-libs/libaio
 dev-libs/libassuan
 dev-libs/libbsd
@@ -286,12 +299,15 @@ dev-libs/openssl
 dev-libs/popt
 dev-libs/protobuf
 dev-libs/raft
+dev-libs/rapidjson
 dev-libs/tree-sitter
 dev-libs/tree-sitter-bash
 dev-libs/userspace-rcu
 dev-libs/xmlsec
+dev-libs/xxhash
 dev-libs/yajl
 
+dev-perl/File-Slurper
 dev-perl/Parse-Yapp
 
 dev-python/backports-tarfile
@@ -311,14 +327,13 @@ dev-python/docutils
 dev-python/editables
 dev-python/ensurepip-pip
 dev-python/ensurepip-setuptools
-dev-python/ensurepip-wheels
 dev-python/fasteners
 dev-python/fastjsonschema
 dev-python/flit-core
 dev-python/gentoo-common
 dev-python/gpep517
-dev-python/hatchling
 dev-python/hatch-vcs
+dev-python/hatchling
 dev-python/idna
 dev-python/installer
 dev-python/jaraco-collections
@@ -335,11 +350,9 @@ dev-python/markupsafe
 dev-python/mdurl
 dev-python/more-itertools
 dev-python/msgpack
-dev-python/olefile
 dev-python/packaging
 dev-python/pathspec
 dev-python/pefile
-dev-python/pillow
 dev-python/pip
 dev-python/platformdirs
 dev-python/pluggy
@@ -365,11 +378,13 @@ dev-python/truststore
 dev-python/typing-extensions
 dev-python/uc-micro-py
 dev-python/urllib3
+dev-python/vcs-versioning
 dev-python/wheel
 
 dev-util/bpftool
 dev-util/bsdiff
 dev-util/catalyst
+dev-util/debugedit
 dev-util/gdbus-codegen
 dev-util/glib-utils
 dev-util/gperf
@@ -382,6 +397,7 @@ dev-util/pkgcheck
 dev-util/pkgconf
 dev-util/re2c
 dev-util/xdelta
+dev-util/xxd
 
 dev-vcs/git
 
@@ -391,6 +407,7 @@ eclass/alternatives.eclass
 eclass/app-alternatives.eclass
 eclass/autotools.eclass
 eclass/bash-completion-r1.eclass
+eclass/branding.eclass
 eclass/cargo.eclass
 eclass/check-reqs.eclass
 eclass/cmake-multilib.eclass
@@ -429,6 +446,7 @@ eclass/linux-info.eclass
 eclass/linux-mod-r1.eclass
 eclass/linux-mod.eclass
 eclass/llvm-r1.eclass
+eclass/llvm-r2.eclass
 eclass/llvm-utils.eclass
 eclass/llvm.eclass
 eclass/lua-single.eclass
@@ -487,6 +505,7 @@ eclass/udev.eclass
 eclass/unpacker.eclass
 eclass/user-info.eclass
 eclass/usr-ldscript.eclass
+eclass/vala.eclass
 eclass/vcs-clean.eclass
 eclass/vcs-snapshot.eclass
 eclass/verify-sig.eclass
@@ -503,8 +522,8 @@ licenses
 
 media-libs/libpng
 
-net-analyzer/openbsd-netcat
 net-analyzer/netperf
+net-analyzer/openbsd-netcat
 net-analyzer/tcpdump
 net-analyzer/traceroute
 
@@ -512,7 +531,6 @@ net-dialup/lrzsz
 net-dialup/minicom
 
 net-dns/bind
-net-dns/bind-tools
 net-dns/c-ares
 net-dns/dnsmasq
 net-dns/libidn2
@@ -536,12 +554,12 @@ net-libs/libnetfilter_cttimeout
 net-libs/libnetfilter_queue
 net-libs/libnfnetlink
 net-libs/libnftnl
-net-libs/libnsl
 net-libs/libpcap
 net-libs/libpsl
 net-libs/libslirp
 net-libs/libtirpc
 net-libs/nghttp2
+net-libs/ngtcp2
 net-libs/rpcsvc-proto
 
 net-misc/bridge-utils
@@ -581,6 +599,7 @@ sys-apps/acl
 sys-apps/attr
 sys-apps/azure-vm-utils
 sys-apps/bubblewrap
+sys-apps/busybox
 sys-apps/checkpolicy
 sys-apps/config-site
 sys-apps/coreutils
@@ -624,12 +643,14 @@ sys-apps/sed
 sys-apps/semodule-utils
 sys-apps/shadow
 sys-apps/smartmontools
+sys-apps/systemd
 sys-apps/texinfo
 sys-apps/usbutils
 sys-apps/util-linux
 sys-apps/which
 sys-apps/zram-generator
 
+sys-auth/pambase
 sys-auth/polkit
 sys-auth/sssd
 
@@ -648,6 +669,7 @@ sys-devel/binutils
 sys-devel/binutils-config
 sys-devel/bison
 sys-devel/crossdev
+sys-devel/dwz
 sys-devel/flex
 sys-devel/gcc
 sys-devel/gcc-config
@@ -666,6 +688,7 @@ sys-fs/btrfs-progs
 sys-fs/cryptsetup
 sys-fs/dosfstools
 sys-fs/e2fsprogs
+sys-fs/erofs-utils
 sys-fs/fuse
 sys-fs/fuse-common
 sys-fs/fuse-overlayfs
@@ -691,7 +714,6 @@ sys-libs/cracklib
 sys-libs/efivar
 sys-libs/gdbm
 sys-libs/glibc
-sys-libs/ldb
 sys-libs/libcap
 sys-libs/libcap-ng
 sys-libs/libnvme
@@ -702,6 +724,7 @@ sys-libs/libunwind
 sys-libs/liburing
 sys-libs/libxcrypt
 sys-libs/ncurses
+sys-libs/pam
 sys-libs/readline
 sys-libs/talloc
 sys-libs/tdb
@@ -734,10 +757,10 @@ virtual/openssh
 virtual/os-headers
 virtual/package-manager
 virtual/pager
-virtual/perl-Data-Dumper
+virtual/perl-Carp
 virtual/perl-Encode
+virtual/perl-Exporter
 virtual/perl-ExtUtils-MakeMaker
-virtual/perl-Unicode-Collate
 virtual/pkgconfig
 virtual/resolvconf
 virtual/service-manager

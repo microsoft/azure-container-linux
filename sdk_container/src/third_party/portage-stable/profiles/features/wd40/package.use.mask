@@ -1,9 +1,47 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
+
+# Michał Górny <mgorny@gentoo.org> (2025-05-23)
+# dev-python/pytest-socket now requires dev-python/uv-build.
+dev-ada/e3-core test
+
+# Michał Górny <mgorny@gentoo.org> (2025-05-07)
+# dev-python/mypy now started requiring NIH Rust packages.
+dev-python/charset-normalizer native-extensions
+
+# Michał Górny <mgorny@gentoo.org> (2025-05-02)
+# dev-python/cbor2 has been RIIR-ed, and the fallback Python
+# implementation was removed at the same time.  Cover its revdeps.
+sys-apps/fwupd uefi
+
+# Ionen Wolkens <ionen@gentoo.org> (2026-03-22)
+# app-text/mdbook is written in rust
+>=dev-libs/wayland-1.25.0 doc
+
+# Alfred Wingate <parona@protonmail.com> (2026-02-18)
+# Requires behave->cucumber-expressions->uv-build
+dev-db/mycli test
+
+# Ionen Wolkens <ionen@gentoo.org> (2025-12-24)
+# media-libs/subrandr is written in rust
+media-video/mpv subrandr
+
+# Sam James <sam@gentoo.org> (2025-12-06)
+# Sequoia suite is written in Rust
+app-alternatives/gpg sequoia
+
+# Alfred Wingate <parona@protonmail.com (2025-10-06)
+# Requires gjs which then requires rust through spidermonkey
+media-gfx/gimp javascript
+
+# Michał Górny <mgorny@gentoo.org> (2025-09-15)
+# Tests require dev-python/paramiko.
+dev-python/dulwich test
 
 # Michał Górny <mgorny@gentoo.org> (2025-08-05)
 # Native extensions are using Rust.
 dev-python/fastbencode native-extensions
+dev-python/logbook native-extensions
 
 # Holger Hoffstätte <holger@applied-asynchrony.com> (2025-07-24)
 # dnsdist-2.0.0[yaml] needs Rust
@@ -101,12 +139,13 @@ dev-python/jupyter-client test
 # Michał Górny <mgorny@gentoo.org> (2023-10-15)
 # Need dev-python/notebook.
 dev-python/ipython notebook
+dev-python/matplotlib-inline test
 dev-python/nbclient test
 dev-python/nbconvert test
 
 # Sam James <sam@gentoo.org> (2023-09-06)
 # sys-block/thin-provisioning-tools now needs Rust.
->=sys-fs/lvm2-2.03.22-r2 thin
+sys-fs/lvm2 thin
 
 # Hans de Graaff <graaff@gentoo.org> (2023-09-03)
 # selenium-webdriver is needed for these tests but that requires
@@ -121,6 +160,7 @@ net-misc/zerotier sso
 # Michał Górny <mgorny@gentoo.org> (2023-06-06)
 # Packages needing dev-python/pydantic.
 dev-python/jaraco-itertools test
+dev-python/rich-click test
 dev-python/versioningit test
 dev-python/zipp test
 
@@ -141,14 +181,9 @@ dev-python/django test
 # The JIT compiler in ruby requires rust
 dev-lang/ruby jit
 
-# Sam James <sam@gentoo.org> (2022-12-26)
-# Needs dev-python/mkdocs-redirects->dev-python/twine which is masked on wd40
-dev-debug/gef doc
-
 # Sam James <sam@gentoo.org> (2022-12-11)
 # net-libs/rustls-ffi needs Rust.
 net-misc/curl rustls curl_ssl_rustls
-www-servers/apache apache2_modules_tls
 
 # matoro <matoro_gentoo@matoro.tk> (2022-12-01)
 # tree-sitter-grammar.eclass adds dev-util/tree-sitter-cli as test dep
@@ -206,7 +241,6 @@ dev-python/httpx-socks test
 dev-python/hypercorn test
 dev-python/keystoneauth1 test
 dev-python/libtmux test
-dev-python/locket test
 dev-python/pyjwt test
 dev-python/python-keystoneclient test
 dev-python/python-socks test
@@ -217,11 +251,10 @@ net-misc/stunnel test
 
 # Michał Górny <mgorny@gentoo.org> (2022-07-29)
 # More packages requiring dev-python/pyopenssl or its revdeps.
-app-admin/salt libcloud openssl test
+app-admin/salt libcloud test
 dev-python/aiohttp test
 dev-python/cheroot test
 dev-python/cherrypy ssl
-dev-python/google-auth test
 dev-python/pyftpdlib ssl test
 dev-python/python-novaclient test
 dev-python/requests test
@@ -266,16 +299,6 @@ x11-misc/xscreensaver gdm
 # Cédric Krier <cedk@gentoo.org> (2020-11-10)
 # Rust has no ${arch} keyword
 dev-vcs/mercurial rust
-
-# Joonas Niilola <juippis@gentoo.org> (2020-10-02)
-# Sam James <sam@gentoo.org> (2021-03-11)
-# Michael Orlitzky <mjo@gentoo.org> (2024-07-09)
-# Dependency only keyworded on specific ${arch} profiles.
->=dev-lang/php-8.3.9 avif
-dev-libs/efl avif
-kde-frameworks/kimageformats avif
-media-libs/gd avif
-net-libs/webkit-gtk avif
 
 # Mart Raudsepp <leio@gentoo.org> (2020-08-02)
 # ${arch} has no Rust support, needed by newer gnome-base/librsvg, et al

@@ -1,5 +1,59 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
+
+# Alfred Wingate <parona@protonmail.com> (2026-05-13)
+# dev-qt/qtgraphs:6 is not keyworded here
+dev-python/pyside graphs
+
+# Pacho Ramos <pacho@gentoo.org> (2026-05-09)
+# media-plugins/gst-plugin-gtk4 is not keyworded
+>=net-im/gajim-2.3 voice
+
+# Sam James <sam@gentoo.org> (2026-04-28)
+# dev-cpp/cpp-httplib doesn't support 32-bit arches
+dev-util/ccache http
+
+# Robin H. Johnson <robbat2@gentoo.org> (2026-03-22)
+# sys-block/vdo not keyworded here
+sys-fs/lvm2 vdo
+
+# Mike Gilbert <floppym@gentoo.org> (2025-12-15)
+# arch-specific platform values
+sys-boot/grub -grub_platforms_pc
+
+# Nowa Ammerlaan <nowa@gentoo.org> (2025-12-03)
+# media-video/ffmpeg-chromium is not available here
+dev-libs/nwjs ffmpeg-chromium
+
+# Alfred Wingate <parona@protonmail.com> (2025-11-23)
+# Requires dev-qt/qtwebengine
+media-sound/easyeffects webengine
+
+# Ionen Wolkens <ionen@gentoo.org> (2025-11-13)
+# media-libs/libvmaf is keyworded here
+media-libs/x265 -vmaf
+
+# Michał Górny <mgorny@gentoo.org> (2025-10-03)
+# Now keyworded on x86 too.
+sci-libs/flexiblas -system-blas
+sci-libs/lapack -flexiblas
+virtual/blas -flexiblas
+virtual/cblas -flexiblas
+virtual/lapack -flexiblas
+virtual/lapacke -flexiblas
+
+# Cristian Othón Martínez Vera <cfuga@cfuga.mx> (2025-10-02)
+# Michael Palimaka <kensington@gentoo.org> (2018-10-12)
+# Unmask arch-specific USE flag available on x86
+<net-analyzer/testssl-3.1 -bundled-openssl
+
+# Nicolas PARLANT <nicolas.parlant@parhuet.fr> (2025-09-20)
+# Require dev-libs/libtsm, keyworded here
+>=media-gfx/fbida-2.14_p20241216 -fbcon
+
+# Michał Górny <mgorny@gentoo.org> (2025-09-12)
+# These BLAS/LAPACK providers are keyworded here.
+sci-libs/flexiblas -blis -openblas
 
 # Sam James <sam@gentoo.org> (2025-08-29)
 # net-misc/passt not yet keyworded here
@@ -176,6 +230,7 @@ kde-apps/kde-apps-meta pim
 kde-apps/kdenetwork-meta bittorrent
 kde-apps/umbrello php
 kde-plasma/plasma-nm openconnect
+net-irc/quassel urlpreview
 net-misc/seafile-client shibboleth
 net-p2p/ktorrent rss
 sci-physics/root qt6
@@ -208,11 +263,6 @@ app-vim/jedi test
 # Ben Kohler <bkohler@gentoo.org> (2022-06-07)
 # Disable 64bit builds on x86
 sys-apps/memtest86+ bios64 uefi64 iso64
-
-# Adel Kara Slimane <adel.ks@zegrapher.com> (2022-03-14)
-# Untested useflag on other arches, needs keywording
-media-video/ffmpeg vmaf
-media-video/ffmpeg-compat vmaf
 
 # Sam James <sam@gentoo.org> (2022-03-10)
 # dev-util/hip and its rocm dependencies not keyworded here
@@ -328,10 +378,6 @@ app-admin/syslog-ng test
 # The JIT feature only works on amd64 and x86.
 app-emulation/aranym -jit
 
-# Andreas Sturmlechner <asturm@gentoo.org> (2019-11-20)
-# media-libs/libplacebo is keyworded on x86
-media-video/vlc -libplacebo
-
 # Thomas Deutschmann <whissi@gentoo.org> (2019-11-11)
 # dev-python/pandas is keyworded for x86
 sys-block/fio -python -gnuplot
@@ -368,14 +414,6 @@ app-admin/conserver -freeipmi
 # Tomáš Mózes <hydrapolic@gmail.com> (2019-11-02)
 # Requires dev-db/mongodb which has dropped x86 support
 dev-php/pecl-mongodb test
-
-# Michael Palimaka <kensington@gentoo.org> (2018-10-12)
-# Unmask arch-specific USE flag available on x86
-net-analyzer/testssl -bundled-openssl
-
-# Jan Ziak <0xe2.0x9a.0x9b@gmail.com> (2018-03-14)
-# Expose SVGA backend for x86 users
-app-emulation/fuse -backend-svga
 
 # Thomas Deutschmann <whissi@gentoo.org> (2018-02-10)
 # Requires dev-db/mongodb which has dropped x86 support
@@ -431,7 +469,6 @@ app-metrics/collectd -collectd_plugins_mqtt
 # Thomas Deutschmann <whissi@gentoo.org> (2016-08-26)
 # Enable numa support on supported architectures
 dev-db/mysql -numa
-dev-db/percona-server -numa
 
 # Brian Evans <grknight@gentoo.org> (2016-08-18)
 # Allow jdbc on this arch
@@ -461,10 +498,6 @@ sys-kernel/installkernel -systemd-boot -ukify -uki
 # Ben de Groot <yngwin@gentoo.org> (2015-03-15)
 # media-libs/libbdplus is keyworded on x86, so unmask the useflag
 media-libs/libbluray -bdplus
-
-# Lars Wendler <polynomial-c@gentoo.org> (2014-04-23)
-# Works on 32bit x86
-media-sound/lmms -vst
 
 # Samuli Suominen <ssuominen@gentoo.org> (2014-02-16)
 # Still considered experimental by upstream:
@@ -507,7 +540,6 @@ app-emulation/qemu spice
 # The QML (V4) and JSC JITs are supported only on amd64/arm/x86,
 # so the flag is masked in the base profile and unmasked here.
 dev-qt/qtdeclarative -jit
-dev-qt/qtscript -jit
 
 # Samuli Suominen <ssuominen@gentoo.org> (2011-11-25)
 # Expose USE="suid" for USE="svga" only for x86 users,

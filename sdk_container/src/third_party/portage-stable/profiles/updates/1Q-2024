@@ -18,7 +18,6 @@ move sys-devel/remake dev-build/remake
 move dev-util/valgrind dev-debug/valgrind
 move dev-util/meson-format-array dev-build/meson-format-array
 move dev-util/meson dev-build/meson
-move dev-util/cmake-fedora dev-build/cmake-fedora
 move dev-util/rocm-cmake dev-build/rocm-cmake
 move dev-util/tinycmmc dev-build/tinycmmc
 move dev-util/cmake dev-build/cmake
@@ -87,10 +86,3 @@ move sci-libs/scikit-learn dev-python/scikit-learn
 slotmove =dev-ruby/launchy-3.0.0 0 3
 move dev-python/DBUtils dev-python/dbutils
 move dev-python/aiorpcX dev-python/aiorpcx
-move www-apps/sonarr www-apps/sonarr-bin
-move www-apps/jellyfin www-apps/jellyfin-bin
-move www-apps/radarr www-apps/radarr-bin
-move www-apps/lidarr www-apps/lidarr-bin
-move www-apps/prowlarr www-apps/prowlarr-bin
-move www-apps/readarr www-apps/readarr-bin
-move www-apps/jackett www-apps/jackett-bin

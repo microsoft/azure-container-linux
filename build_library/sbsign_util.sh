@@ -3,10 +3,10 @@
 # found in the LICENSE file.
 
 if [[ ${COREOS_OFFICIAL:-0} -ne 1 ]]; then
-    SBSIGN_KEY="/usr/share/sb_keys/shim.key"
-    SBSIGN_CERT="/usr/share/sb_keys/shim.pem"
+    SBSIGN_KEY="${SBSIGN_KEY:-/usr/share/sb_keys/shim.key}"
+    SBSIGN_CERT="${SBSIGN_CERT:-/usr/share/sb_keys/shim.pem}"
 else
-    SBSIGN_KEY="pkcs11:token=flatcar-sb-dev-hsm-sign-2025"
+    SBSIGN_KEY="pkcs11:token=flatcar-secure-boot-prod-2026-04"
     unset SBSIGN_CERT
 fi
 
@@ -18,7 +18,7 @@ fi
 PKCS11_MODULE_PATH="/usr/${_SDK_LIBDIR}/pkcs11/azure-keyvault-pkcs11.so"
 
 PKCS11_ENV=(
-    AZURE_KEYVAULT_URL="https://flatcar-sb-dev-kv.vault.azure.net/"
+    AZURE_KEYVAULT_URL="https://flatcar-hsm0001.vault.azure.net/"
     PKCS11_MODULE_PATH="${PKCS11_MODULE_PATH}"
     AZURE_KEYVAULT_PKCS11_DEBUG=1
 )

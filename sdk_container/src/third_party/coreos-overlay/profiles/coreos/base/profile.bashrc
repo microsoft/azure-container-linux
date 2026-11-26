@@ -1,8 +1,6 @@
 # Dumping ground for build-time helpers to utilize since SYSROOT/tmp/
 # can be nuked at any time.
 CROS_BUILD_BOARD_TREE="${SYSROOT}/build"
-CROS_BUILD_BOARD_BIN="${CROS_BUILD_BOARD_TREE}/bin"
-
 CROS_ADDONS_TREE="/mnt/host/source/src/third_party/coreos-overlay/coreos"
 
 # Are we merging for the board sysroot, or for the SDK, or for
@@ -12,7 +10,6 @@ CROS_ADDONS_TREE="/mnt/host/source/src/third_party/coreos-overlay/coreos"
 #  - generic-board (board sysroot)
 #  - generic-prod (production image)
 #  - generic-dev (developer container image)
-#  - generic-oem-${name} (image for OEM ${name}, like azure, qemu_uefi)
 #  - generic-sysext-base-${name} (sysext image ${name} built-in into
 #    production image, usually docker or containerd)
 #  - generic-sysext-extra-${name} (extra sysext image ${name}, like
@@ -42,11 +39,6 @@ flatcar_target_ref() {
                     name=${ROOT##*/}
                     name=${name%-extra-sysext-rootfs}
                     type_ref="generic-sysext-extra-${name}"
-                    ;;
-                */*-oem-image-rootfs)
-                    name=${ROOT##*/}
-                    name=${name%-oem-image-rootfs}
-                    type_ref="generic-oem-${name}"
                     ;;
                 */*-oem-sysext-rootfs)
                     name=${ROOT##*/}
@@ -118,10 +110,17 @@ cros_setup_hooks() {
 }
 cros_setup_hooks
 
-# Since we're storing the wrappers in a board sysroot, make sure that
-# is actually in our PATH.
-cros_pre_pkg_setup_sysroot_build_bin_dir() {
-	PATH+=":${CROS_BUILD_BOARD_BIN}"
+# Remove any debug build-id symlinks that are broken because of INSTALL_MASK,
+# and also remove their associated debug files to avoid wasting space.
+cros_post_pkg_preinst_rm_masked_debug_files() {
+	local link debug dir=${ED}/usr/lib/debug
+	[[ -d ${dir}/.build-id ]] || return 0
+	while read -d $'\n' -r link; do
+		debug=$(realpath "${link}.debug") || die
+		rm -f -- "${link}" "${link}.debug" "${debug}" || die
+	done < <(find "${dir}"/.build-id -xtype l ! -name "*.debug")
+	# -delete implies -depth so entire empty trees are deleted.
+	find "${dir}" -type d -empty -delete || die
 }
 
 # Avoid modifications of the preexisting users - these are provided by
@@ -132,6 +131,23 @@ cros_pre_pkg_postinst_no_modifications_of_users() {
         return 0
     fi
     export ACCT_USER_NO_MODIFY=x
+}
+
+# Move pam files from /etc to /usr. It is a no-op for SDK builds.
+#
+# Invoke this in post_src_install hook.
+vendorize_pam_files() {
+    if [[ ${FLATCAR_TYPE} = 'sdk' ]]; then
+        # We don't care about PAM inside SDK.
+        return 0
+    fi
+
+    mkdir -p "${ED}/usr/lib/pam/security"
+
+    tar --create --remove-files --directory "${ED}/etc/security" . | \
+        tar --extract --directory "${ED}/usr/lib/pam/security"
+    tar --create --remove-files --directory "${ED}/etc/pam.d" . | \
+        tar --extract --directory "${ED}/usr/lib/pam"
 }
 
 # Source hooks for SLSA build provenance report generation

@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 # @ECLASS: ruby-utils.eclass
@@ -33,17 +33,19 @@ esac
 # provide for a better first installation experience.
 
 # All stable RUBY_TARGETS
-RUBY_TARGETS_PREFERENCE="ruby32 "
+# Latest Ruby version goes first in the stable list to give dependency
+# preference to the newer Ruby version.
+RUBY_TARGETS_PREFERENCE="ruby33 ruby32 "
 
 # All other active ruby targets
-RUBY_TARGETS_PREFERENCE+="ruby33 ruby34"
+RUBY_TARGETS_PREFERENCE+="ruby34 ruby40"
 
 _ruby_implementation_depend() {
 	local rubypn=
 	local rubyslot=
 
 	case $1 in
-		ruby1[89]|ruby2[0-7]|ruby3[0-4])
+		ruby1[89]|ruby2[0-7]|ruby3[0-4]|ruby40)
 			rubypn="dev-lang/ruby"
 			rubyslot=":${1:4:1}.${1:5}"
 			;;

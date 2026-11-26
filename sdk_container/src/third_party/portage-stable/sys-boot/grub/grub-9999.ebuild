@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -21,24 +21,24 @@ if [[ ${PV} == 9999  ]]; then
 	GRUB_BOOTSTRAP=1
 fi
 
-PYTHON_COMPAT=( python3_{10..13} )
+PYTHON_COMPAT=( python3_{11..14} )
 WANT_LIBTOOL=none
-VERIFY_SIG_OPENPGP_KEY_PATH=/usr/share/openpgp-keys/dkiper.gpg
 
 if [[ -n ${GRUB_AUTORECONF} ]]; then
 	inherit autotools
 fi
 
 inherit bash-completion-r1 eapi9-ver flag-o-matic multibuild optfeature
-inherit python-any-r1 secureboot toolchain-funcs
+inherit python-any-r1 secureboot toolchain-funcs verify-sig
 
 DESCRIPTION="GNU GRUB boot loader"
-HOMEPAGE="https://www.gnu.org/software/grub/"
+HOMEPAGE="https://gnu-grub.freedesktop.org/"
 
 MY_P=${P}
-if [[ ${PV} != 9999 ]]; then
-	inherit verify-sig
-
+if [[ ${PV} == 9999 ]]; then
+	inherit git-r3
+	EGIT_REPO_URI="https://gitlab.freedesktop.org/gnu-grub/grub.git"
+else
 	if [[ ${PV} == *_alpha* || ${PV} == *_beta* || ${PV} == *_rc* ]]; then
 		# The quote style is to work with <=bash-4.2 and >=bash-4.3 #503860
 		MY_P=${P/_/'~'}
@@ -54,31 +54,30 @@ if [[ ${PV} != 9999 ]]; then
 		"
 		S=${WORKDIR}/${P%_*}
 	fi
-	BDEPEND="verify-sig? ( sec-keys/openpgp-keys-danielkiper )"
+	BDEPEND="
+		verify-sig? (
+			sec-keys/openpgp-keys-grub
+			sec-keys/openpgp-keys-unifont
+		)
+	"
 	KEYWORDS="~amd64 ~arm ~arm64 ~loong ~ppc ~ppc64 ~riscv ~sparc ~x86"
-else
-	inherit git-r3
-	EGIT_REPO_URI="https://git.savannah.gnu.org/git/grub.git"
 fi
-
-PATCHES=(
-	"${FILESDIR}"/gfxpayload.patch
-	"${FILESDIR}"/grub-2.02_beta2-KERNEL_GLOBS.patch
-	"${FILESDIR}"/grub-2.06-test-words.patch
-)
 
 DEJAVU_VER=2.37
 DEJAVU=dejavu-fonts-ttf-${DEJAVU_VER}
-UNIFONT=unifont-16.0.02
+UNIFONT=unifont-17.0.02
 SRC_URI+="
-	fonts? ( mirror://gnu/unifont/${UNIFONT}/${UNIFONT}.pcf.gz )
+	fonts? (
+		mirror://gnu/unifont/${UNIFONT}/${UNIFONT}.pcf.gz
+		verify-sig? ( mirror://gnu/unifont/${UNIFONT}/${UNIFONT}.pcf.gz.sig )
+	)
 	themes? ( https://downloads.sourceforge.net/project/dejavu/dejavu/${DEJAVU_VER}/${DEJAVU}.tar.bz2 )
 "
 
 # Includes licenses for dejavu and unifont
 LICENSE="GPL-3+ BSD MIT fonts? ( GPL-2-with-font-exception ) themes? ( CC-BY-SA-3.0 BitstreamVera )"
 SLOT="2/${PVR}"
-IUSE="+device-mapper doc efiemu +fonts mount nls sdl test +themes truetype libzfs"
+IUSE="+branding +device-mapper doc efiemu +fonts mount nls protect sdl test +themes truetype libzfs"
 
 GRUB_ALL_PLATFORMS=( coreboot efi-32 efi-64 emu ieee1275 loongson multiboot
 	qemu qemu-mips pc uboot xen xen-32 xen-pvh )
@@ -129,8 +128,10 @@ DEPEND="
 	truetype? ( media-libs/freetype:2= )
 	ppc? ( >=sys-apps/ibm-powerpc-utils-1.3.5 )
 	ppc64? ( >=sys-apps/ibm-powerpc-utils-1.3.5 )
+	protect? ( dev-libs/libtasn1:= )
 "
 RDEPEND="${DEPEND}
+	branding? ( themes? ( >=sys-boot/grub-themes-gentoo-1.0-r1 ) )
 	kernel_linux? (
 		grub_platforms_efi-32? ( sys-boot/efibootmgr )
 		grub_platforms_efi-64? ( sys-boot/efibootmgr )
@@ -147,7 +148,8 @@ QA_MULTILIB_PATHS="usr/lib/grub/.*"
 QA_WX_LOAD="usr/lib/grub/*"
 
 pkg_setup() {
-	:
+	# skip python-any-r1_pkg_setup: python_setup is called in src_prepare
+	secureboot_pkg_setup
 }
 
 src_unpack() {
@@ -158,9 +160,17 @@ src_unpack() {
 		local GNULIB_REVISION=$(source bootstrap.conf >/dev/null; echo "${GNULIB_REVISION}")
 		git-r3_fetch "${GNULIB_URI}" "${GNULIB_REVISION}"
 		git-r3_checkout "${GNULIB_URI}" gnulib
+		if use nls; then
+			sh linguas.sh || die
+		fi
 		popd >/dev/null || die
 	elif use verify-sig; then
-		verify-sig_verify_detached "${DISTDIR}"/${MY_P}.tar.xz{,.sig}
+		verify-sig_verify_detached "${DISTDIR}"/${MY_P}.tar.xz{,.sig} \
+			"${BROOT}"/usr/share/openpgp-keys/grub.asc
+	fi
+	if use fonts && use verify-sig; then
+		verify-sig_verify_detached "${DISTDIR}"/${UNIFONT}.pcf.gz{,.sig} \
+			"${BROOT}"/usr/share/openpgp-keys/unifont.asc
 	fi
 	default
 }
@@ -172,7 +182,7 @@ src_prepare() {
 
 	if [[ -n ${GRUB_BOOTSTRAP} ]]; then
 		eautopoint --force
-		AUTOPOINT=: AUTORECONF=: ./bootstrap || die
+		AUTOPOINT=: AUTORECONF=: ./bootstrap --skip-po || die
 	elif [[ -n ${GRUB_AUTOGEN} ]]; then
 		FROM_BOOTSTRAP=1 ./autogen.sh || die
 	fi
@@ -221,6 +231,7 @@ grub_configure() {
 		$(use_enable device-mapper)
 		$(use_enable mount grub-mount)
 		$(use_enable nls)
+		$(use_enable protect grub-protect)
 		$(use_enable themes grub-themes)
 		$(use_enable truetype grub-mkfont)
 		$(use_enable libzfs)
@@ -269,6 +280,14 @@ src_configure() {
 	export LEX=flex
 	unset YACC
 
+	local sedargs=(
+		-e "s/@PV@/${PV}/"
+		-e "s/@PVR@/${PVR}/"
+		-e "s/@GEN_GRUB@/5/"
+		-e "s/@GEN_GENTOO@/1/"
+	)
+	sed "${sedargs[@]}" "${FILESDIR}/sbat.csv.in" > "${WORKDIR}/sbat.csv" || die
+
 	MULTIBUILD_VARIANTS=()
 	local p
 	for p in "${GRUB_ALL_PLATFORMS[@]}"; do
@@ -280,7 +299,10 @@ src_configure() {
 
 src_compile() {
 	# Sandbox bug 404013.
-	use libzfs && { addpredict /etc/dfs; addpredict /dev/zfs; }
+	if use libzfs; then
+		addpredict /etc/dfs
+		addpredict /dev/zfs
+	fi
 
 	grub_do emake
 	use doc && grub_do_once emake -C docs html
@@ -367,12 +389,16 @@ src_install() {
 	insinto /etc/default
 	newins "${FILESDIR}"/grub.default-4 grub
 
+	if use branding && use themes ; then
+		sed -i -e 's:^#GRUB_THEME=.*$:GRUB_THEME="/boot/grub/themes/gentoo_glass/theme.txt":g' \
+			"${ED}/etc/default/grub" || die
+	fi
+
 	# https://bugs.gentoo.org/231935
 	dostrip -x /usr/lib/grub
 
-	sed -e "s/%PV%/${PV}/" "${FILESDIR}/sbat.csv" > "${T}/sbat.csv" || die
 	insinto /usr/share/grub
-	doins "${T}/sbat.csv"
+	doins "${WORKDIR}/sbat.csv"
 
 	if use elibc_musl; then
 		# https://bugs.gentoo.org/900348
@@ -399,14 +425,15 @@ pkg_postinst() {
 		ewarn
 	fi
 
-	if has_version 'sys-boot/grub:0'; then
-		elog "A migration guide for GRUB Legacy users is available:"
-		elog "    https://wiki.gentoo.org/wiki/GRUB2_Migration"
-	fi
-
 	if has_version sys-boot/os-prober; then
 		ewarn "Due to security concerns, os-prober is disabled by default."
 		ewarn "Set GRUB_DISABLE_OS_PROBER=false in /etc/default/grub to enable it."
+	fi
+
+	if grep -q GRUB_LINUX_KERNEL_GLOBS "${EROOT}"/etc/default/grub; then
+		ewarn "Support for GRUB_LINUX_KERNEL_GLOBS has been dropped."
+		ewarn "Ensure that your kernels are named appropriately or edit"
+		ewarn "/etc/grub.d/10_linux to compensate."
 	fi
 
 	if use secureboot; then

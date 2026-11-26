@@ -80,30 +80,12 @@ function set_azure_vars() {
   rm -rf "${azure_config_copy}"
   cp -r "${HOME}/.azure" "${azure_config_copy}"
 
-  # Credentials and config read by the mantle container via sdk_container/.env.
-  # DefaultAzureCredential in kola tries multiple auth methods in order.
-  # We set AZURE_CONFIG_DIR so AzureCLICredential can find the token cache,
-  # and also set AZURE_TENANT_ID + AZURE_SUBSCRIPTION_ID for kola's own use.
-  cat > sdk_container/.env <<EOF
-export AZURE_IMAGE_NAME=${azure_image@Q}
-export PARALLEL_TESTS=${parallel@Q}
-export AZURE_LOCATION=${AZURE_LOCATION:-westus2}
-export AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID@Q}
-export AZURE_TENANT_ID=${tenant_id@Q}
-export AZURE_CONFIG_DIR=/work/${azure_config_copy}
-export AZURE_VNET_SUBNET_NAME=${AZURE_VNET_SUBNET_NAME:-}
-export AZURE_USE_PRIVATE_IPS=${AZURE_USE_PRIVATE_IPS:-}
-export PACKAGE_SOURCE_MODE=${PACKAGE_SOURCE_MODE@Q}
-export KOLA_DEBUG=${KOLA_DEBUG:-}
-${AZURE_TOKEN_CREDENTIALS:+export AZURE_TOKEN_CREDENTIALS="${AZURE_TOKEN_CREDENTIALS}"}
-${AZURE_amd64_MACHINE_SIZE:+export AZURE_amd64_MACHINE_SIZE="${AZURE_amd64_MACHINE_SIZE}"}
-${AZURE_arm64_MACHINE_SIZE:+export AZURE_arm64_MACHINE_SIZE="${AZURE_arm64_MACHINE_SIZE}"}
-${AZURE_KOLA_VNET:+export AZURE_KOLA_VNET="${AZURE_KOLA_VNET}"}
-${AZURE_USE_GALLERY:+export AZURE_USE_GALLERY="${AZURE_USE_GALLERY}"}
-${AZURE_RESOURCE_GROUP_TAG:+export AZURE_RESOURCE_GROUP_TAG="${AZURE_RESOURCE_GROUP_TAG}"}
-${AZURE_DISK_URI:+export AZURE_DISK_URI=${AZURE_DISK_URI@Q}}
-${KOLA_TRUSTED_SOURCE_CIDR:+export KOLA_TRUSTED_SOURCE_CIDR=${KOLA_TRUSTED_SOURCE_CIDR@Q}}
-EOF
+  # Docker imports only the variables named in sdk_lib/env_mantle.txt.
+  export AZURE_IMAGE_NAME="${azure_image}" PARALLEL_TESTS="${parallel}"
+  export AZURE_LOCATION="${AZURE_LOCATION:-westus2}" AZURE_SUBSCRIPTION_ID
+  export AZURE_TENANT_ID="${tenant_id}" AZURE_CONFIG_DIR="/work/${azure_config_copy}"
+  export AZURE_VNET_SUBNET_NAME="${AZURE_VNET_SUBNET_NAME:-}" AZURE_USE_PRIVATE_IPS="${AZURE_USE_PRIVATE_IPS:-}"
+  export PACKAGE_SOURCE_MODE KOLA_DEBUG="${KOLA_DEBUG:-}"
 
   # Clean up copied azure config on exit
   echo "rm -rf '${azure_config_copy}'" >> ./ci-cleanup.sh

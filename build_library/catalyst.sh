@@ -25,6 +25,7 @@ BINPKGS=
 DISTDIR=
 TEMPDIR=
 STAGES=
+unset QEMU
 
 DEFINE_string catalyst_root "${DEFAULT_CATALYST_ROOT}" \
     "Path to directory for all catalyst images and other files."
@@ -80,7 +81,8 @@ export ac_cv_posix_semaphores_enabled=yes
 EOF
 }
 
-# Common values for all stage spec files
+# Common values for all stage spec files. Takes a stage number and,
+# optionally, a profile name as parameters.
 catalyst_stage_default() {
 cat <<EOF
 target: stage$1
@@ -89,13 +91,14 @@ rel_type: $TYPE
 portage_confdir: $TEMPDIR/portage
 repos: $FLAGS_coreos_overlay
 keep_repos: portage-stable coreos-overlay
-profile: $FLAGS_profile
+profile: ${2:-$FLAGS_profile}
 snapshot_treeish: $FLAGS_version
 version_stamp: $FLAGS_version
 cflags: -O2 -pipe
 cxxflags: -O2 -pipe
 ldflags: -Wl,-O2 -Wl,--as-needed
 source_subpath: ${SEED}
+${QEMU+interpreter: $(type -P "${QEMU}")}
 EOF
 }
 
@@ -107,7 +110,7 @@ pkgcache_path: ${TEMPDIR}/stage1-${ARCH}-packages
 update_seed: yes
 update_seed_command: --exclude cross-*-cros-linux-gnu/* --exclude dev-lang/rust --exclude dev-lang/rust-bin --ignore-world y --ignore-built-slot-operator-deps y @changed-subslot
 EOF
-catalyst_stage_default 1
+catalyst_stage_default 1 "${FLAGS_profile}/transition"
 }
 
 catalyst_stage3() {
@@ -206,6 +209,16 @@ catalyst_init() {
         SEED="seed/${FLAGS_seed_tarball##*/}"
         SEED="${SEED%.tar.*}"
     fi
+
+    # Emulate the build, if needed. Note the SDK itself may already be emulated,
+    # so check the requested arch against the kernel's real arch, not uname -m.
+    if [[ ${ARCH} != $(get_portage_arch "$(< /proc/sys/kernel/arch)") ]]; then
+        case "${ARCH}" in
+            amd64) QEMU=qemu-x86_64 ;;
+            arm64) QEMU=qemu-aarch64 ;;
+            riscv) QEMU=qemu-riscv64 ;;
+        esac
+    fi
 }
 
 write_configs() {
@@ -225,6 +238,9 @@ write_configs() {
 
     ln -sfT '/mnt/host/source/src/third_party/coreos-overlay/coreos/user-patches' \
         "${TEMPDIR}"/portage/patches
+
+    [[ -n ${QEMU} ]] ||
+        rm "${TEMPDIR}"/portage/package.env/qemu
 }
 
 build_stage() {
@@ -241,13 +257,13 @@ build_stage() {
     fi
 
     info "Starting $stage"
+    # Clean up possible leftovers from possible previous runs
+    rm -rf "$TEMPDIR/$stage-${ARCH}-${FLAGS_version}"
     catalyst \
         "${DEBUG[@]}" \
         --verbose \
         --config "$TEMPDIR/catalyst.conf" \
         --file "$TEMPDIR/${stage}.spec"
-    # Catalyst does not clean up after itself...
-    rm -rf "$TEMPDIR/$stage-${ARCH}-${FLAGS_version}"
     ln -sf "$stage-${ARCH}-${FLAGS_version}.tar.bz2" \
         "$BUILDS/$stage-${ARCH}-latest.tar.bz2"
     info "Finished building $target_tarball"

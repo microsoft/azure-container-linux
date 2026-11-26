@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -25,7 +25,7 @@ IUSE="debug doc +lzma pkcs7 +tools +zlib +zstd"
 RDEPEND="
 	lzma? ( >=app-arch/xz-utils-5.0.4-r1 )
 	pkcs7? ( >=dev-libs/openssl-1.1.0:= )
-	zlib? ( >=sys-libs/zlib-1.2.6 )
+	zlib? ( >=virtual/zlib-1.2.6:= )
 	zstd? ( >=app-arch/zstd-1.5.2-r1:= )
 "
 DEPEND="${RDEPEND}"
@@ -39,6 +39,10 @@ BDEPEND="
 	lzma? ( virtual/pkgconfig )
 	zlib? ( virtual/pkgconfig )
 "
+
+PATCHES=(
+	"${FILESDIR}/${P}-s390.patch"
+)
 
 pkg_setup() {
 	:

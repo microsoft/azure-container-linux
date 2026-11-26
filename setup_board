@@ -92,6 +92,13 @@ generate_all_wrappers() {
   # the board arch matches the SDK arch and therefore emulation is unnecessary.
   qemu=$(type -P "qemu-${BOARD_CHOST%%-*}") || unset qemu
 
+  # If emulation is necessary, then we need to create a placeholder to bind
+  # mount QEMU onto now. This avoids needing root to do it later.
+  if [[ -n ${qemu-} ]]; then
+    sudo mkdir -p "${BOARD_ROOT}${qemu%/*}"
+    sudo touch "${BOARD_ROOT}${qemu}"
+  fi
+
   info "Generating wrapper scripts"
 
   for wrapper in emerge ebuild eclean equery portageq \
@@ -113,8 +120,20 @@ exec ${BOARD_CHOST}-gdb -iex 'set sysroot ${BOARD_ROOT}' "\$@"
 EOF
   wrappers+=( "${wrapper}" )
 
+  # A general purpose wrapper for effectively chrooting using bubblewrap,
+  # together with emulation by QEMU if necessary.
+  wrapper="/usr/local/bin/bwrap-${BOARD_VARIANT}"
+  sudo_clobber "${wrapper}" <<EOF
+#!/bin/sh -e
+_ROOT=\${1?Pass a root directory as the first argument}
+shift
+exec bwrap --bind "\${_ROOT}" / --tmpfs /tmp --dev-bind /dev /dev --proc /proc --bind /sys /sys ${qemu+--ro-bind ${qemu} ${qemu}} -- "\$@"
+EOF
+  wrappers+=( "${wrapper}" )
+
   # ldconfig cannot generate caches for non-native arches. Use QEMU and the
-  # native ldconfig to work around that.
+  # native ldconfig to work around that. Don't use the bwrap wrapper above
+  # because it's unnecessarily complex for this use case.
   wrapper="/usr/local/sbin/ldconfig-${BOARD_VARIANT}"
   sudo_clobber "${wrapper}" <<EOF
 #!/bin/sh
@@ -166,8 +185,6 @@ fi
 get_board_and_variant $FLAGS_board $FLAGS_variant
 
 # Locations we will need
-COREOS_OVERLAY="${REPO_ROOT}/src/third_party/coreos-overlay"
-COREOS_CONFIG="${COREOS_OVERLAY}/coreos/config"
 BOARD_ROOT="/build/${BOARD_VARIANT}"
 BOARD_ETC="${BOARD_ROOT}/etc"
 BOARD_ARCH=$(get_board_arch "$BOARD")
@@ -248,6 +265,17 @@ sudo mkdir -p "${BOARD_ETC}/portage/"{profile,repos.conf}
 sudo ln -sfT "$(portageq get_repo_path / coreos-overlay)/coreos/user-patches" \
    "${BOARD_ETC}/portage/patches"
 sudo cp /etc/portage/repos.conf/* "${BOARD_ETC}"/portage/repos.conf/
+
+for REPO_NAME in $(cat "${REPO_ROOT}"/src/third_party/*/profiles/repo_name); do
+  [[ ${REPO_NAME} == prefix ]] && continue # Ignore for now.
+
+  for CONF in "${REPO_ROOT}/src/third_party/${REPO_NAME}"/coreos/config/portage/*; do
+    [[ ${CONF} == *.md || ! -e ${CONF} ]] && continue
+    sudo mkdir -p "${BOARD_ETC}/portage/${CONF##*/}"
+    sudo ln -snf "${CONF}" "${BOARD_ETC}/portage/${CONF##*/}/${REPO_NAME}.conf"
+  done
+done
+
 # set PORTAGE_CONFIGROOT to tell eselect to modify the profile inside
 # /build/<arch>-usr, but set ROOT to /, so eselect will actually find
 # the profile which is outside /build/<arch>-usr, set SYSROOT to / as
@@ -271,9 +299,7 @@ sudo_clobber "${BOARD_ETC}/portage/make.conf" <<EOF
 # Settings derived from the host environment
 CBUILD="$(portageq envvar CHOST)"
 HOSTCC="$(portageq envvar CHOST)-gcc"
-DISTDIR="$(portageq envvar DISTDIR)"
-MAKEOPTS="$(portageq envvar MAKEOPTS)"
-PORTAGE_USERNAME="$(portageq envvar PORTAGE_USERNAME)"
+$(portageq envvar -v DISTDIR MAKEOPTS PORTAGE_USERNAME FETCHCOMMAND RESUMECOMMAND | sed 's:\$:\\$:g')
 
 # Board specific settings
 CHOST="${BOARD_CHOST}"
@@ -352,11 +378,6 @@ if [[ ${FLAGS_regen_configs} -eq ${FLAGS_FALSE} ]]; then
   "${EMERGE_WRAPPER}" \
       --usepkgonly --getbinpkg --rebuilt-binaries n \
       "${EMERGE_TOOLCHAIN_FLAGS[@]}" "${TOOLCHAIN_PKGS[@]}"
-fi
-
-if [[ ${FLAGS_regen_configs_only} -eq ${FLAGS_FALSE} ]]; then
-  # Setup BOARD_ROOT for QEMU user emulation.
-  setup_qemu_static "${BOARD_ROOT}"
 fi
 
 if [ $FLAGS_default -eq $FLAGS_TRUE ] ; then

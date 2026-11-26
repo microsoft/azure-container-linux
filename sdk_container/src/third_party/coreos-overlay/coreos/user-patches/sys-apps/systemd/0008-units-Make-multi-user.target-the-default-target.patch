@@ -1,0 +1,35 @@
+From 450c8acb76f851bb594f725f834c04b041c2859e Mon Sep 17 00:00:00 2001
+From: Krzesimir Nowak <knowak@microsoft.com>
+Date: Fri, 24 Oct 2025 11:06:57 +0200
+Subject: [PATCH 8/8] units: Make multi-user.target the default target
+
+Signed-off-by: Krzesimir Nowak <knowak@microsoft.com>
+---
+ units/meson.build | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/units/meson.build b/units/meson.build
+index b2cf9bd8f3..74d7f61519 100644
+--- a/units/meson.build
++++ b/units/meson.build
+@@ -48,7 +48,7 @@ units = [
+         { 'file' : 'getty@.service.in' },
+         {
+           'file' : 'graphical.target',
+-          'symlinks' : ['default.target'] + (runlevels ? ['runlevel5.target'] : []),
++          'symlinks' : runlevels ? ['runlevel5.target'] : [],
+         },
+         { 'file' : 'halt.target' },
+         {
+@@ -143,7 +143,7 @@ units = [
+         { 'file' : 'modprobe@.service' },
+         {
+           'file' : 'multi-user.target',
+-          'symlinks' : runlevels ? ['runlevel2.target', 'runlevel3.target', 'runlevel4.target'] : [],
++          'symlinks' : ['default.target'] + (runlevels ? ['runlevel2.target', 'runlevel3.target', 'runlevel4.target'] : []),
+         },
+         {
+           'file' : 'systemd-mute-console.socket',
+-- 
+2.53.0
+

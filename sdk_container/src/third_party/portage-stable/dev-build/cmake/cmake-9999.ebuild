@@ -1,4 +1,4 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
@@ -16,11 +16,13 @@ CMAKE_DOCS_VERSION=4.0.0_rc1
 # See bug #784815
 CMAKE_DOCS_USEFLAG="+doc"
 
+CMAKE_QA_COMPAT_SKIP=1 # bug #964514; cmake itself is the last pkg we worry about
+
 # TODO RunCMake.LinkWhatYouUse fails consistently w/ ninja
 # ... but seems fine as of 3.22.3?
 # TODO ... but bootstrap sometimes(?) fails with ninja now. bug #834759.
 CMAKE_MAKEFILE_GENERATOR="emake"
-CMAKE_REMOVE_MODULES_LIST=( none )
+CMAKE_REMOVE_MODULES_LIST=()
 inherit bash-completion-r1 cmake flag-o-matic multiprocessing \
 	toolchain-funcs xdg-utils
 
@@ -51,7 +53,7 @@ else
 	)"
 
 	if [[ ${PV} != *_rc* ]] ; then
-		KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~hppa ~loong ~m68k ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86 ~amd64-linux ~x86-linux ~arm64-macos ~ppc-macos ~x64-macos ~x64-solaris"
+		KEYWORDS="~alpha ~amd64 ~arm ~arm64 ~hppa ~loong ~m68k ~mips ~ppc ~ppc64 ~riscv ~s390 ~sparc ~x86 ~arm64-macos ~x64-macos ~x64-solaris"
 	fi
 
 	BDEPEND="verify-sig? ( >=sec-keys/openpgp-keys-bradking-20250904 )"
@@ -66,14 +68,15 @@ SLOT="0"
 IUSE="${CMAKE_DOCS_USEFLAG} dap gui ncurses test"
 RESTRICT="!test? ( test )"
 
+# >= 1.51.0-r1 for ppc32 workaround (bug #941738)
 RDEPEND="
 	>=app-arch/libarchive-3.3.3:=
 	app-crypt/rhash:0=
 	>=dev-libs/expat-2.0.1
 	>=dev-libs/jsoncpp-1.9.2-r2:0=
-	>=dev-libs/libuv-1.10.0:=
+	>=dev-libs/libuv-1.51.0-r1:=
 	>=net-misc/curl-7.21.5[ssl]
-	sys-libs/zlib
+	virtual/zlib:=
 	virtual/pkgconfig
 	dap? ( dev-cpp/cppdap )
 	gui? ( dev-qt/qtbase:6[gui,widgets] )
@@ -95,7 +98,6 @@ PATCHES=(
 	"${FILESDIR}"/${PN}-3.27.0_rc1-0001-Don-t-use-.so-for-modules-on-darwin-macos.-Use-.bund.patch
 	"${FILESDIR}"/${PN}-3.27.0_rc1-0002-Set-some-proper-paths-to-make-cmake-find-our-tools.patch
 	# Misc
-	"${FILESDIR}"/${PN}-3.31.6-Prefer-pkgconfig-in-FindBLAS.patch
 	"${FILESDIR}"/${PN}-3.27.0_rc1-0004-Ensure-that-the-correct-version-of-Qt-is-always-used.patch
 	"${FILESDIR}"/${PN}-3.27.0_rc1-0005-Respect-Gentoo-s-Python-eclasses.patch
 	# Cuda
@@ -119,7 +121,7 @@ cmake_src_bootstrap() {
 	# bootstrap script isn't exactly /bin/sh compatible
 	tc-env_build ${CONFIG_SHELL:-sh} ./bootstrap \
 		--prefix="${T}/cmakestrap/" \
-		--parallel=$(makeopts_jobs "${MAKEOPTS}" "$(get_nproc)") \
+		--parallel=$(get_makeopts_jobs "$(get_nproc)") \
 		|| die "Bootstrap failed"
 }
 
@@ -262,21 +264,31 @@ src_test() {
 	pushd "${BUILD_DIR}" > /dev/null || die
 
 	# Excluded tests:
-	#    BootstrapTest: we actually bootstrap it every time so why test it?
-	#    BundleUtilities: bundle creation broken
-	#    CMakeOnly.AllFindModules: pthread issues
-	#    CTest.updatecvs: which fails to commit as root
-	#    Fortran: requires fortran
-	#    RunCMake.CompilerLauncher: also requires fortran
-	#    RunCMake.CPack_RPM: breaks if app-arch/rpm is installed because
-	#        debugedit binary is not in the expected location
-	#    RunCMake.CPack_DEB: breaks if app-arch/dpkg is installed because
-	#        it can't find a deb package that owns libc
-	#    TestUpload, which requires network access
-	#    RunCMake.CMP0125, known failure reported upstream (bug #829414)
-	local myctestargs=(
-		--output-on-failure
-		-E "(BootstrapTest|BundleUtilities|CMakeOnly.AllFindModules|CompileOptions|CTest.UpdateCVS|Fortran|RunCMake.CompilerLauncher|RunCMake.CPack_(DEB|RPM)|TestUpload|RunCMake.CMP0125)" \
+	local CMAKE_SKIP_TESTS=(
+		# BootstrapTest: we actually bootstrap it every time so why test it?
+		"BootstrapTest"
+		# BundleUtilities: bundle creation broken
+		"BundleUtilities"
+		# CMakeOnly.AllFindModules: pthread issues
+		"CMakeOnly.AllFindModules"
+		# TODO
+		"CompileOptions"
+		# CTest.updatecvs: which fails to commit as root
+		"CTest.UpdateCVS"
+		# Fortran: requires fortran
+		"Fortran"
+		# RunCMake.CompilerLauncher: also requires fortran
+		"RunCMake.CompilerLauncher"
+		# RunCMake.CPack_RPM: breaks if app-arch/rpm is installed because
+		#    debugedit binary is not in the expected location
+		# RunCMake.CPack_DEB: breaks if app-arch/dpkg is installed because
+		#    it can't find a deb package that owns libc
+		# RunCMake.CPack_TGZ: requires 64-bit time_t (bug #967480)
+		"RunCMake.CPack_(DEB|RPM|TGZ)"
+		# TestUpload, which requires network access
+		"TestUpload"
+		# RunCMake.CMP0125, known failure reported upstream (bug #829414)
+		"RunCMake.CMP0125"
 	)
 
 	local -x QT_QPA_PLATFORM=offscreen

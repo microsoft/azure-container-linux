@@ -1,25 +1,39 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 EAPI=8
 
-LLVM_COMPAT=( 20 )
+# Bump notes: https://wiki.gentoo.org/wiki/Project:Rust/Rust_bump
+
+LLVM_COMPAT=( 22 )
 PYTHON_COMPAT=( python3_{11..14} )
 
-RUST_PATCH_VER=${PVR}
+# Patches are kept in rust-patches.git, see its README.rst for the versioning
+# scheme.
+#
+# We use _pN from the ebuild version for the patchset but it can be overridden
+# in the ebuild for changes that don't require a revbump.
+#
+# Uncomment this line when the ebuild needs a patchset update but no revbump.
+# RUST_PATCH_VER=${PV}-1
 
 RUST_MAX_VER=${PV%%_*}
+RUST_PV=${PV%%_p*}
+RUST_P=${PN}-${RUST_PV}
+[[ -z ${RUST_PATCH_VER} ]] && RUST_PATCH_VER=${PV}
+
 if [[ ${PV} == *9999* ]]; then
-	RUST_MIN_VER="1.89.0" # Update this as new `beta` releases come out.
+	# Update this as new `beta` releases come out.
+	RUST_MIN_VER="1.94.0"
 elif [[ ${PV} == *beta* ]]; then
-	RUST_MAX_VER="$(ver_cut 1).$(ver_cut 2).0"
 	RUST_MIN_VER="$(ver_cut 1).$(($(ver_cut 2) - 1)).0"
 else
 	RUST_MIN_VER="$(ver_cut 1).$(($(ver_cut 2) - 1)).0"
 fi
 
-inherit check-reqs estack flag-o-matic llvm-r1 multiprocessing optfeature \
-	multilib multilib-build python-any-r1 rust rust-toolchain toolchain-funcs verify-sig
+inherit check-reqs estack flag-o-matic llvm-r1 multiprocessing optfeature
+inherit multilib multilib-build python-any-r1 rust rust-toolchain toolchain-funcs
+inherit verify-sig
 
 if [[ ${PV} = *9999* ]]; then
 	inherit git-r3
@@ -29,19 +43,24 @@ elif [[ ${PV} == *beta* ]]; then
 	betaver=${PV//*beta}
 	BETA_SNAPSHOT="${betaver:0:4}-${betaver:4:2}-${betaver:6:2}"
 	MY_P="rustc-beta"
-	SRC_URI="https://static.rust-lang.org/dist/${BETA_SNAPSHOT}/rustc-beta-src.tar.xz -> rustc-${PV}-src.tar.xz
+	SRC_URI="
+		https://static.rust-lang.org/dist/${BETA_SNAPSHOT}/rustc-beta-src.tar.xz -> rustc-${RUST_PV}-src.tar.xz
 		https://gitweb.gentoo.org/proj/rust-patches.git/snapshot/rust-patches-${RUST_PATCH_VER}.tar.bz2
-		verify-sig? ( https://static.rust-lang.org/dist/${BETA_SNAPSHOT}/rustc-beta-src.tar.xz.asc
-			-> rustc-${PV}-src.tar.xz.asc )
+		verify-sig? (
+			https://static.rust-lang.org/dist/${BETA_SNAPSHOT}/rustc-beta-src.tar.xz.asc
+				-> rustc-${RUST_PV}-src.tar.xz.asc
+		)
 	"
 	S="${WORKDIR}/${MY_P}-src"
 else
-	MY_P="rustc-${PV}"
-	SRC_URI="https://static.rust-lang.org/dist/${MY_P}-src.tar.xz
+	MY_P="rustc-${RUST_PV}"
+	SRC_URI="
+		https://static.rust-lang.org/dist/${MY_P}-src.tar.xz
 		https://gitweb.gentoo.org/proj/rust-patches.git/snapshot/rust-patches-${RUST_PATCH_VER}.tar.bz2
 		verify-sig? ( https://static.rust-lang.org/dist/${MY_P}-src.tar.xz.asc )
 	"
 	S="${WORKDIR}/${MY_P}-src"
+
 	KEYWORDS="~amd64 ~arm ~arm64 ~loong ~mips ~ppc ~ppc64 ~riscv ~sparc ~x86"
 fi
 
@@ -49,23 +68,30 @@ DESCRIPTION="Systems programming language originally developed by Mozilla"
 HOMEPAGE="https://www.rust-lang.org/"
 
 # keep in sync with llvm ebuild of the same version as bundled one.
-ALL_LLVM_TARGETS=( AArch64 AMDGPU ARC ARM AVR BPF CSKY DirectX Hexagon Lanai
-	LoongArch M68k Mips MSP430 NVPTX PowerPC RISCV Sparc SPIRV SystemZ VE
-	WebAssembly X86 XCore Xtensa )
+ALL_LLVM_TARGETS=( AArch64 AMDGPU ARC ARM AVR BPF CSKY DirectX Hexagon Lanai )
+ALL_LLVM_TARGETS+=( LoongArch M68k Mips MSP430 NVPTX PowerPC RISCV Sparc SPIRV )
+ALL_LLVM_TARGETS+=( SystemZ VE WebAssembly X86 XCore Xtensa )
 ALL_LLVM_TARGETS=( "${ALL_LLVM_TARGETS[@]/#/llvm_targets_}" )
 LLVM_TARGET_USEDEPS=${ALL_LLVM_TARGETS[@]/%/(-)?}
 
-# https://github.com/rust-lang/llvm-project/blob/rustc-1.84.0/llvm/CMakeLists.txt
-_ALL_RUST_EXPERIMENTAL_TARGETS=( ARC CSKY DirectX M68k SPIRV Xtensa )
+# https://github.com/rust-lang/llvm-project/blob/rustc-1.87.0/llvm/CMakeLists.txt
+_ALL_RUST_EXPERIMENTAL_TARGETS=( ARC CSKY DirectX M68k Xtensa )
 declare -A ALL_RUST_EXPERIMENTAL_TARGETS
 for _x in "${_ALL_RUST_EXPERIMENTAL_TARGETS[@]}"; do
 	ALL_RUST_EXPERIMENTAL_TARGETS["llvm_targets_${_x}"]=0
 done
 
+# Bare metal targets which can be built on the host system and have no
+# dependency on compiler runtime, libc and unwinder.
+ALL_RUST_SYSROOTS=( bpf wasm )
+ALL_RUST_SYSROOTS=( "${ALL_RUST_SYSROOTS[@]/#/rust_sysroots_}" )
+
 LICENSE="|| ( MIT Apache-2.0 ) BSD BSD-1 BSD-2 BSD-4"
 SLOT="${PV%%_*}" # Beta releases get to share the same SLOT as the eventual stable
 
-IUSE="big-endian clippy cpu_flags_x86_sse2 debug dist doc llvm-libunwind lto rustfmt rust-analyzer rust-src +system-llvm test wasm ${ALL_LLVM_TARGETS[*]}"
+IUSE="big-endian +clippy cpu_flags_x86_sse2 debug dist +doc llvm-libunwind lto"
+IUSE+=" +rustfmt rust-analyzer rust-src +system-llvm test"
+IUSE+=" ${ALL_LLVM_TARGETS[*]} ${ALL_RUST_SYSROOTS[*]}"
 
 if [[ ${PV} = *9999* ]]; then
 	# These USE flags require nightly rust
@@ -80,11 +106,12 @@ for _x in "${ALL_LLVM_TARGETS[@]}"; do
 		ALL_RUST_EXPERIMENTAL_TARGETS["${_x}"]=1
 	fi
 done
-LLVM_DEPEND+=( "	wasm? ( $(llvm_gen_dep 'llvm-core/lld:${LLVM_SLOT}') )" )
+LLVM_DEPEND+=( "	rust_sysroots_wasm? ( $(llvm_gen_dep 'llvm-core/lld:${LLVM_SLOT}') )" )
 LLVM_DEPEND+=( "	$(llvm_gen_dep 'llvm-core/llvm:${LLVM_SLOT}')" )
 
 # dev-libs/oniguruma is used for documentation
-BDEPEND="${PYTHON_DEPS}
+BDEPEND="
+	${PYTHON_DEPS}
 	app-eselect/eselect-rust
 	dev-libs/oniguruma
 	|| (
@@ -97,6 +124,7 @@ BDEPEND="${PYTHON_DEPS}
 			sys-devel/mold
 		)
 	) )
+	rust_sysroots_wasm? ( llvm-core/clang )
 	!system-llvm? (
 		>=dev-build/cmake-3.13.4
 		app-alternatives/ninja
@@ -107,8 +135,9 @@ BDEPEND="${PYTHON_DEPS}
 
 DEPEND="
 	>=app-arch/xz-utils-5.2
-	net-misc/curl:=[http2,ssl]
-	sys-libs/zlib:=
+	dev-db/sqlite:3
+	net-misc/curl[http2,ssl]
+	virtual/zlib:=
 	dev-libs/openssl:0=
 	system-llvm? (
 		${LLVM_DEPEND[*]}
@@ -121,7 +150,8 @@ DEPEND="
 	)
 "
 
-RDEPEND="${DEPEND}
+RDEPEND="
+	${DEPEND}
 	app-eselect/eselect-rust
 	dev-lang/rust-common
 	sys-apps/lsb-release
@@ -129,10 +159,12 @@ RDEPEND="${DEPEND}
 	!dev-lang/rust-bin:stable
 "
 
-REQUIRED_USE="|| ( ${ALL_LLVM_TARGETS[*]} )
+REQUIRED_USE="
+	|| ( ${ALL_LLVM_TARGETS[*]} )
 	rust-analyzer? ( rust-src )
 	test? ( ${ALL_LLVM_TARGETS[*]} )
-	wasm? ( llvm_targets_WebAssembly )
+	rust_sysroots_bpf? ( llvm_targets_BPF )
+	rust_sysroots_wasm? ( llvm_targets_WebAssembly )
 	x86? ( cpu_flags_x86_sse2 )
 "
 
@@ -154,6 +186,7 @@ QA_SONAME="
 
 QA_PRESTRIPPED="
 	usr/lib/${PN}/${SLOT}/lib/rustlib/.*/bin/rust-llvm-dwp
+	usr/lib/${PN}/${SLOT}/lib/rustlib/.*/bin/rust-objcopy
 	usr/lib/${PN}/${SLOT}/lib/rustlib/.*/lib/self-contained/crtn.o
 "
 
@@ -194,7 +227,8 @@ pre_build_checks() {
 			M=$(( $(usex ${ltarget} 256 0) + ${M} ))
 		done
 	fi
-	M=$(( $(usex wasm 256 0) + ${M} ))
+	M=$(( $(usex rust_sysroots_bpf 256 0) + ${M} ))
+	M=$(( $(usex rust_sysroots_wasm 256 0) + ${M} ))
 	M=$(( $(usex debug 2 1) * ${M} ))
 	eshopts_push -s extglob
 	if is-flagq '-g?(gdb)?([1-9])'; then
@@ -291,8 +325,9 @@ src_unpack() {
 		# to ensure that all dependencies are present and up-to-date
 		mkdir "${S}/vendor" || die
 		# This also compiles the 'build helper', there's no way to avoid this.
-		${EPYTHON} "${S}"/x.py vendor -v --config="${T}"/vendor-bootstrap.toml -j$(makeopts_jobs) ||
-			die "Failed to vendor dependencies"
+		${EPYTHON} "${S}"/x.py vendor -v --config="${T}"/vendor-bootstrap.toml \
+			-j$(get_makeopts_jobs) ||
+				die "Failed to vendor dependencies"
 		# TODO: This has to be generated somehow, this is from a 1.84.x tarball I had lying around.
 		cat <<- _EOF_ > "${S}/.cargo/config.toml"
 			[source.crates-io]
@@ -307,7 +342,7 @@ src_unpack() {
 		_EOF_
 	elif use verify-sig ; then
 		# Patch tarballs are not signed (but we trust Gentoo infra)
-		verify-sig_verify_detached "${DISTDIR}"/rustc-${PV}-src.tar.xz{,.asc}
+		verify-sig_verify_detached "${DISTDIR}"/rustc-${RUST_PV}-src.tar.xz{,.asc}
 		default
 	else
 		default
@@ -315,11 +350,6 @@ src_unpack() {
 }
 
 src_prepare() {
-	if [[ ${PV} = *9999* ]]; then
-		# We need to update / generate lockfiles for the workspace
-		${CARGO} generate-lockfile --offline || die "Failed to generate lockfiles"
-	fi
-
 	# Commit patches to the appropriate branch in proj/rust-patches.git
 	# then cut a new tag / tarball. Don't add patches to ${FILESDIR}
 	PATCHES=(
@@ -343,9 +373,7 @@ src_configure() {
 
 	# Avoid bundled copies of libraries
 	export RUSTONIG_SYSTEM_LIBONIG=1
-	# Need to check if these can be optional
-	#export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
-	#export LIBSSH2_SYS_USE_PKG_CONFIG=1
+	export LIBSQLITE3_SYS_USE_PKG_CONFIG=1
 
 	filter-lto # https://bugs.gentoo.org/862109 https://bugs.gentoo.org/866231
 
@@ -355,7 +383,10 @@ src_configure() {
 	for v in $(multilib_get_enabled_abi_pairs); do
 		rust_targets+=",\"$(rust_abi $(get_abi_CHOST ${v##*.}))\""
 	done
-	if use wasm; then
+	if use rust_sysroots_bpf; then
+		rust_targets+=",\"bpfeb-unknown-none\",\"bpfel-unknown-none\""
+	fi
+	if use rust_sysroots_wasm; then
 		rust_targets+=",\"wasm32-unknown-unknown\""
 		if use system-llvm; then
 			# un-hardcode rust-lld linker for this target
@@ -406,6 +437,9 @@ src_configure() {
 			build_channel="stable"
 			;;
 	esac
+
+	# TODO: Add optimized-compiler-builtins for system-llvm to avoid
+	# building bundled compiler-rt.
 	cat <<- _EOF_ > "${S}"/bootstrap.toml
 		# Suppresses a warning about tracking changes which we don't care about.
 		change-id = "ignore"
@@ -505,14 +539,14 @@ src_configure() {
 		omit-git-hash = false
 		dist-src = false
 		remap-debuginfo = true
-		lld = $(usex system-llvm false $(toml_usex wasm))
+		lld = $(usex system-llvm false $(toml_usex rust_sysroots_wasm))
 		$(if use lto && tc-is-clang && ! tc-ld-is-mold; then
 			echo "use-lld = true"
 		fi)
 		# only deny warnings if doc+wasm are NOT requested, documenting stage0 wasm std fails without it
 		# https://github.com/rust-lang/rust/issues/74976
 		# https://github.com/rust-lang/rust/issues/76526
-		deny-warnings = $(usex wasm $(usex doc false true) true)
+		deny-warnings = $(usex rust_sysroots_wasm $(usex doc false true) true)
 		backtrace-on-ice = true
 		jemalloc = false
 		# See https://github.com/rust-lang/rust/issues/121124
@@ -552,11 +586,25 @@ src_configure() {
 			_EOF_
 		fi
 	done
-	if use wasm; then
+	if use rust_sysroots_wasm; then
 		wasm_target="wasm32-unknown-unknown"
-		export CFLAGS_${wasm_target//-/_}="$(filter-flags '-mcpu*' '-march*' '-mtune*'; echo "$CFLAGS")"
+		if tc-is-clang; then
+			local wasm_cc=$(tc-getCC)
+			local wasm_cxx=$(tc-getCXX)
+		else
+			local wasm_cc=${CHOST}-clang
+			local wasm_cxx=${CHOST}-clang++
+		fi
+		export CFLAGS_${wasm_target//-/_}="$(
+			CC="${wasm_cc} --target=wasm32-unknown-unknown"
+			filter-flags '-mcpu*' '-march*' '-mtune*'
+			strip-unsupported-flags
+			echo "${CFLAGS}"
+		)"
 		cat <<- _EOF_ >> "${S}"/bootstrap.toml
 			[target.wasm32-unknown-unknown]
+			cc = "${wasm_cc}"
+			cxx = "${wasm_cxx}"
 			linker = "$(usex system-llvm lld rust-lld)"
 			# wasm target does not have profiler_builtins https://bugs.gentoo.org/848483
 			profiler = false
@@ -621,6 +669,12 @@ src_configure() {
 				musl-root = "$(${cross_toolchain}-gcc -print-sysroot)/usr"
 			_EOF_
 		fi
+		if [[ "${cross_rust_target}" == *-uefi ]]; then
+			# Profiler is not supported on bare-metal
+			cat <<- _EOF_ >> "${S}"/bootstrap.toml
+				profiler = false
+			_EOF_
+		fi
 
 		# append cross target to "normal" target list
 		# example 'target = ["powerpc64le-unknown-linux-gnu"]'
@@ -662,7 +716,8 @@ src_configure() {
 
 src_compile() {
 	# -v will show invocations, -vv "very verbose" is overkill, -vvv "very very verbose" is insane
-	RUST_BACKTRACE=1 "${EPYTHON}" ./x.py build -v --config="${S}"/bootstrap.toml -j$(makeopts_jobs) || die
+	RUST_BACKTRACE=1 "${EPYTHON}" ./x.py build -v \
+		--config="${S}"/bootstrap.toml -j$(get_makeopts_jobs) || die
 }
 
 src_test() {
@@ -670,18 +725,25 @@ src_test() {
 
 	# those are basic and codegen tests.
 	local tests=(
-		codegen
 		codegen-units
-		compile-fail
+		crashes
+		codegen-llvm
 		incremental
 		mir-opt
 		pretty
 		run-make
+		run-make-cargo
+	)
+
+	# tests for standard and core library
+	local std_tests=(
+		std
+		core
 	)
 
 	# fails if llvm is not built with ALL targets.
 	# and known to fail with system llvm sometimes.
-	use system-llvm || tests+=( assembly )
+	use system-llvm || tests+=( assembly-llvm )
 
 	# fragile/expensive/less important tests
 	# or tests that require extra builds
@@ -692,19 +754,18 @@ src_test() {
 			rustdoc-js
 			rustdoc-js-std
 			rustdoc-ui
-			run-make-fulldeps
 			ui
 			ui-fulldeps
 		)
 	fi
 
 	local i failed=()
-	einfo "rust_src_test: enabled tests ${tests[@]/#/src/test/}"
-	for i in "${tests[@]}"; do
-		local t="src/test/${i}"
+	einfo "rust_src_test: enabled tests ${tests[@]} ${std_tests[@]}"
+	for i in "tests/${tests[@]}" "library/${std_tests[@]}"; do
+		local t="${i}"
 		einfo "rust_src_test: running ${t}"
 		if ! RUST_BACKTRACE=1 "${EPYTHON}" ./x.py test -vv --config="${S}"/bootstrap.toml \
-				-j$(makeopts_jobs) --no-doc --no-fail-fast "${t}"
+				-j$(get_makeopts_jobs) --no-doc --no-fail-fast "${t}"
 		then
 				failed+=( "${t}" )
 				eerror "rust_src_test: ${t} failed"
@@ -718,13 +779,15 @@ src_test() {
 }
 
 src_install() {
-	DESTDIR="${D}" "${EPYTHON}" ./x.py install -v --config="${S}"/bootstrap.toml -j$(makeopts_jobs) || die
+	DESTDIR="${D}" "${EPYTHON}" ./x.py install -v \
+		--config="${S}"/bootstrap.toml -j$(get_makeopts_jobs) || die
 
 	docompress /usr/lib/${PN}/${SLOT}/share/man/
 
-	# bug #689562, #689160
+	# bash-completion files are installed by dev-lang/rust-common instead
+	# bug #689562, #689160.
 	rm -v "${ED}/usr/lib/${PN}/${SLOT}/etc/bash_completion.d/cargo" || die
-	rmdir -v "${ED}/usr/lib/${PN}/${SLOT}"/etc{/bash_completion.d,} || die
+	rmdir -v "${ED}/usr/lib/${PN}/${SLOT}/etc/bash_completion.d" || die
 
 	local symlinks=(
 		cargo
@@ -748,7 +811,7 @@ src_install() {
 		# we need realpath on /usr/bin/* symlink return version-appended binary path.
 		# so /usr/bin/rustc should point to /usr/lib/rust/<ver>/bin/rustc-<ver>
 		# need to fix eselect-rust to remove this hack.
-		local ver_i="${i}-${PV%%_*}"
+		local ver_i="${i}-${RUST_PV%%_*}"
 		if [[ -f "${ED}/usr/lib/${PN}/${SLOT}/bin/${i}" ]]; then
 			einfo "Installing ${i} symlink"
 			ln -v "${ED}/usr/lib/${PN}/${SLOT}/bin/${i}" "${ED}/usr/lib/${PN}/${SLOT}/bin/${ver_i}" || die
@@ -764,9 +827,9 @@ src_install() {
 	use rust-analyzer && dosym "${SLOT}/libexec" "/usr/lib/${PN}/libexec-${SLOT}"
 	dosym "${SLOT}/share/man" "/usr/lib/${PN}/man-${SLOT}"
 	dosym "rust/${SLOT}/lib/rustlib" "/usr/lib/rustlib-${SLOT}"
-	dosym "../../lib/${PN}/${SLOT}/share/doc/rust" "/usr/share/doc/${P}"
+	dosym "../../lib/${PN}/${SLOT}/share/doc/rust" "/usr/share/doc/${RUST_P}"
 
-	newenvd - "50${P}" <<-_EOF_
+	newenvd - "50${RUST_P}" <<-_EOF_
 		MANPATH="${EPREFIX}/usr/lib/rust/man-${SLOT}"
 	_EOF_
 
@@ -788,39 +851,39 @@ src_install() {
 	_EOF_
 
 	if use clippy; then
-		echo /usr/bin/clippy-driver >> "${T}/provider-${P}"
-		echo /usr/bin/cargo-clippy >> "${T}/provider-${P}"
+		echo /usr/bin/clippy-driver >> "${T}/provider-${RUST_P}"
+		echo /usr/bin/cargo-clippy >> "${T}/provider-${RUST_P}"
 	fi
 	if [[ ${SLOT} == *9999* ]] && use miri; then
-		echo /usr/bin/miri >> "${T}/provider-${P}"
-		echo /usr/bin/cargo-miri >> "${T}/provider-${P}"
+		echo /usr/bin/miri >> "${T}/provider-${RUST_P}"
+		echo /usr/bin/cargo-miri >> "${T}/provider-${RUST_P}"
 	fi
 	if use rustfmt; then
-		echo /usr/bin/rustfmt >> "${T}/provider-${P}"
-		echo /usr/bin/cargo-fmt >> "${T}/provider-${P}"
+		echo /usr/bin/rustfmt >> "${T}/provider-${RUST_P}"
+		echo /usr/bin/cargo-fmt >> "${T}/provider-${RUST_P}"
 	fi
 	if use rust-analyzer; then
-		echo /usr/lib/rust/libexec >> "${T}/provider-${P}"
-		echo /usr/bin/rust-analyzer >> "${T}/provider-${P}"
+		echo /usr/lib/rust/libexec >> "${T}/provider-${RUST_P}"
+		echo /usr/bin/rust-analyzer >> "${T}/provider-${RUST_P}"
 	fi
 
 	insinto /etc/env.d/rust
 	doins "${T}/provider-${PN}-${SLOT}"
 
 	if use dist; then
-		"${EPYTHON}" ./x.py dist -v --config="${S}"/bootstrap.toml -j$(makeopts_jobs) || die
+		"${EPYTHON}" ./x.py dist -v --config="${S}"/bootstrap.toml \
+			-j$(get_makeopts_jobs) || die
 		insinto "/usr/lib/${PN}/${SLOT}/dist"
 		doins -r "${S}/build/dist/."
 	fi
 }
 
 pkg_postinst() {
-
 	eselect rust update
 
 	if has_version dev-debug/gdb || has_version llvm-core/lldb; then
 		elog "Rust installs helper scripts for calling GDB and LLDB,"
-		elog "for convenience they are installed under /usr/bin/rust-{gdb,lldb}-${PV}."
+		elog "for convenience they are installed under /usr/bin/rust-{gdb,lldb}-${RUST_PV}."
 	fi
 
 	if has_version app-editors/emacs; then

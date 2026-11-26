@@ -137,12 +137,13 @@ test_wrapper_does_not_forward_ipe_security() (
     export AZURE_USE_GALLERY=--azure-use-gallery
     az() { printf 'test-tenant\n'; }
     set_azure_vars arm64 1
-    if grep -Eq 'AZURE_TRUSTED_LAUNCH|AZURE_SECURE_BOOT_CERTIFICATES|ACL_IPE_' sdk_container/.env; then
+    local allowlist="${SCRIPT_DIR}/sdk_lib/env_mantle.txt"
+    if grep -Eq '^(AZURE_TRUSTED_LAUNCH|AZURE_SECURE_BOOT_CERTIFICATES|ACL_IPE_)' "${allowlist}"; then
         echo "Wrapper unexpectedly forwarded IPE launch settings" >&2
         return 1
     fi
-    unset AZURE_USE_GALLERY
-    source sdk_container/.env
+    grep -Fxq AZURE_USE_GALLERY "${allowlist}"
+    grep -Fxq AZURE_IMAGE_NAME "${allowlist}"
     [[ "${AZURE_USE_GALLERY}" == --azure-use-gallery ]]
     [[ "${AZURE_IMAGE_NAME}" == /work/__build__/images/images/arm64-usr/latest/acl_production_azure_test_image.vhd ]]
 )

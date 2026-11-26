@@ -1,5 +1,45 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
+
+# Pacho Ramos <pacho@gentoo.org> (2026-05-09)
+# appstream not keyworded
+app-misc/media-player-info test
+
+# Alfred Wingate <parona@protonmail.com> (2026-05-03)
+# dev-libs/libthai not keyworded here
+x11-libs/pango libthai
+
+# Sam James <sam@gentoo.org> (2026-04-11)
+# Unkeyworded dependencies
+sys-libs/libcap-ng bpf
+
+# Robin H. Johnson <robbat2@gentoo.org> (2026-03-22)
+# sys-block/vdo not keyworded here
+sys-fs/lvm2 vdo
+
+# Ionen Wolkens <ionen@gentoo.org> (2026-03-16)
+# media-libs/opencolorio is not keyworded here
+media-video/ffmpeg opencolorio
+
+# Sam James <sam@gentoo.org> (2026-02-11)
+# sys-libs/libnvme not keyworded here
+sys-fs/lvm2 nvme
+
+# Eli Schwartz <eschwartz@gentoo.org> (2025-11-27)
+# Needs dev-python/mypy for mypyc, not keyworded here
+dev-python/charset-normalizer native-extensions
+
+# Viorel Munteanu <ceamac@gentoo.org> (2025-11-09)
+# Needs media-video/pipewire, not keyworded here
+net-misc/tigervnc wayland
+
+# PPN-SD <nicolas.parlant@parhuet.fr> (2025-10-04)
+# media-libs/libemf is not keyworded here
+app-office/dia wmf
+
+# Philipp Rösner <rndxelement@protonmail.com> (2025-09-23)
+# media-libs/zxingcpp is not keyworded here
+app-text/mupdf barcode
 
 # Andreas Sturmlechner <asturm@gentoo.org> (2025-08-29)
 # dev-perl/Template-GD is not keyworded here. Bug #661634
@@ -262,7 +302,6 @@ media-libs/freetype svg
 # Adel Kara Slimane <adel.ks@zegrapher.com> (2022-03-14)
 # Untested useflag on other arches, needs keywording
 media-video/ffmpeg vmaf
-media-video/ffmpeg-compat vmaf
 
 # Sam James <sam@gentoo.org> (2022-01-29)
 # app-text/ronn-ng not keyworded here, bug #801103
@@ -408,15 +447,11 @@ net-libs/gnome-online-accounts gnome
 # Requires media-libs/mesa[llvm], which is masked.
 dev-python/pyopengl test
 
-# Matt Turner <mattst88@gentoo.org> (2020-03-17)
-# Requires an insane (and always growing) number of ruby deps
-sys-block/thin-provisioning-tools test
-
 # Thomas Deutschmann <whissi@gentoo.org> (2020-03-15)
 # Mask USE=dav1d, media-libs/dav1d is not keyworded
 # Mask USE=libaribb24, media-libs/aribb24 is not keyworded
-media-video/ffmpeg dav1d libaribb24 libtesseract
-media-video/ffmpeg-compat dav1d libaribb24 libtesseract
+media-video/ffmpeg dav1d libaribb24 ocr
+media-video/ffmpeg-compat dav1d libaribb24 ocr
 
 # Andrey Utkin <andrey_utkin@gentoo.org> (2020-03-11)
 # USE=bpf depends on llvm-core/clang which is not keyworded on alpha.
@@ -446,7 +481,6 @@ dev-util/geany-plugins markdown
 # Requires app-text/mecab which isn't yet keyworded
 # on alpha, bug 668674
 dev-db/mysql cjk
-dev-db/percona-server cjk
 
 # Mikle Kolyada <zlogene@gentoo.org> (2018-10-05)
 # Not keyworded (see bug #540540c#8)
@@ -562,10 +596,6 @@ media-sound/rhythmbox upnp-av
 # Pacho Ramos <pacho@gentoo.org> (2015-11-15)
 # Missing keywords
 >=media-plugins/grilo-plugins-0.2.14 upnp-av
-
-# Davide Pesavento <pesa@gentoo.org> (2015-10-26)
-# Tests require non-keyworded qt5
-dev-qt/qtchooser test
 
 # Alexandre Rostovtsev <tetromino@gentoo.org> (2015-09-10)
 # Requires wifi USE flag, which is masked for this arch
@@ -687,3 +717,7 @@ net-dialup/ppp atm
 
 # Needs nut and qstat respectively, neither is keyworded on alpha.
 net-analyzer/nagios-plugins nagios-game
+
+# Lukas Schmelting <lschmelting@posteo.com>
+# Depends on unkeyworded x11-misc/xvfb-run
+>=x11-libs/libnotify-0.8.7 test

@@ -1,8 +1,64 @@
-# Copyright 1999-2025 Gentoo Authors
+# Copyright 1999-2026 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
 
 # NOTE: When masking a USE flag due to missing keywords, please file a keyword
 # request bug for the hppa arch.
+
+# Pacho Ramos <pacho@gentoo.org> (2026-05-09)
+# appstream not keyworded
+app-misc/media-player-info test
+
+# Alfred Wingate <parona@protonmail.com> (2026-05-03)
+# dev-libs/libthai not keyworded here
+x11-libs/pango libthai
+
+# Sam James <sam@gentoo.org> (2026-04-28)
+# dev-cpp/cpp-httplib doesn't support 32-bit arches
+dev-util/ccache http
+
+# Sam James <sam@gentoo.org> (2026-04-11)
+# Unkeyworded dependencies
+sys-libs/libcap-ng bpf
+
+# Robin H. Johnson <robbat2@gentoo.org> (2026-03-22)
+# sys-block/vdo not keyworded here
+sys-fs/lvm2 vdo
+
+# Robin H. Johnson <robbat2@gentoo.org> (2026-03-22)
+# sys-block/thin-provisioning-tools not keyworded here
+sys-fs/lvm2 thin
+
+# Ionen Wolkens <ionen@gentoo.org> (2026-03-16)
+# media-libs/opencolorio is not keyworded here
+media-video/ffmpeg opencolorio
+
+# Sam James <sam@gentoo.org> (2026-02-11)
+# sys-libs/libnvme not keyworded here
+sys-fs/lvm2 nvme
+
+# Alfred Wingate <parona@protonmail.com> (2025-12-24)
+# media-libs/jasper is not keyworded here
+media-libs/gegl jpeg2k
+
+# Eli Schwartz <eschwartz@gentoo.org> (2025-11-27)
+# Needs dev-python/mypy for mypyc, not keyworded here
+dev-python/charset-normalizer native-extensions
+
+# Ionen Wolkens <ionen@gentoo.org> (2025-11-20)
+# Needs llvm-core/clang which is not keyworded here
+dev-qt/qttools qdoc
+
+# Alfred Wingate <parona@protonmail.com> (2025-10-20)
+# sys-libs/libnvme is not keyworded here
+net-misc/networkmanager nbft
+
+# PPN-SD <nicolas.parlant@parhuet.fr> (2025-10-04)
+# media-libs/libemf is not keyworded here
+app-office/dia wmf
+
+# Philipp Rösner <rndxelement@protonmail.com> (2025-09-23)
+# media-libs/zxingcpp is not keyworded here
+app-text/mupdf barcode
 
 # Andreas Sturmlechner <asturm@gentoo.org> (2025-08-29)
 # dev-perl/Template-GD is not keyworded here. Bug #661634
@@ -227,7 +283,6 @@ media-libs/xine-lib dav1d
 # Adel Kara Slimane <adel.ks@zegrapher.com> (2022-03-14)
 # Untested useflag on other arches, needs keywording
 media-video/ffmpeg vmaf
-media-video/ffmpeg-compat vmaf
 
 # Sam James <sam@gentoo.org> (2022-03-06)
 # Unkeyworded dependencies
@@ -275,8 +330,8 @@ media-video/pipewire bluetooth jack-client
 sys-libs/libcap tools
 
 # Michał Górny <mgorny@gentoo.org> (2021-07-25)
-# PyQt5 and wxpython are not keyworded.
-dev-python/ipython gui qt5
+# PyQt6 and wxpython are not keyworded.
+dev-python/ipython gui
 dev-python/matplotlib qt6 wxwidgets
 
 # Matt Turner <mattst88@gentoo.org> (2021-07-23)
@@ -350,8 +405,8 @@ media-sound/vorbis-tools kate
 
 # Rolf Eike Beer <eike@sf-mail.de> (2020-04-14)
 # dependencies not keyworded
-media-video/ffmpeg dav1d libaribb24 libtesseract vidstab
-media-video/ffmpeg-compat dav1d libaribb24 libtesseract vidstab
+media-video/ffmpeg dav1d libaribb24 ocr vidstab
+media-video/ffmpeg-compat dav1d libaribb24 ocr vidstab
 
 # Rolf Eike Beer <eike@sf-mail.de> (2020-04-11)
 # media-gfx/nvidia-texture-tools, media-libs/allegro not keyworded on hppa
@@ -432,8 +487,8 @@ media-video/ffmpeg libilbc zimg
 media-video/ffmpeg-compat libilbc zimg
 
 # Justin Lecher <jlec@gentoo.org> (2017-01-15)
-# unkeyworded rev deps
-dev-games/openscenegraph gdal las
+# unkeyworded rev dep
+dev-games/openscenegraph gdal
 
 # Jeroen Roovers <jer@gentoo.org> (2016-12-28)
 # "#error Unsupported architecture"
