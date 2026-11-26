@@ -35,7 +35,7 @@ if [ -z "$DMESG_OUTPUT" ]; then
 fi
 
 # Only exclude AVCs from this test's known probe, not other container_t denials.
-probe_avc='avc:[[:space:]]+denied[[:space:]]+\{[[:space:]]+read[[:space:]]+\}.*comm="cat" name="acl-selinux-denial\.[^"]+".*scontext=system_u:system_r:container_t:s0.*tcontext=[^[:space:]]*:shadow_t:s0.*tclass=file.*permissive=0'
+probe_avc='avc:[[:space:]]+denied[[:space:]]+\{[[:space:]]+read[[:space:]]+\}.*comm="cat" name="acl-selinux-denial\.[^"]+".*scontext=system_u:system_r:container_t:s0[[:space:]].*tcontext=[^[:space:]]*:shadow_t:s0[[:space:]].*tclass=file.*permissive=0'
 DMESG_AVC_DENIALS=$(echo "$DMESG_OUTPUT" | grep -E "avc:[[:space:]]+denied" | grep -Ev "$probe_avc" || true)
 
 # Also check journalctl for AVC denials

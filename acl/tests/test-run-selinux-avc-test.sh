@@ -55,6 +55,15 @@ check_case 'unrelated AVC still fails' 1 'AVC denials found in dmesg: 1'
 DMESG_LOG='audit: avc: denied { read } comm="cat" name="acl-selinux-denial.abcdef" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
 export DMESG_LOG
 check_case 'prior probe AVC is excluded' 0 'Enforcing SELinux denied container_t read of shadow_t'
+DMESG_LOG='audit: avc: denied { read } comm="cat" name="acl-selinux-denial.abcdef" scontext=system_u:system_r:container_t:s0:c123,c456 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
+export DMESG_LOG
+check_case 'category-tagged source is not excluded' 1 'AVC denials found in dmesg: 1'
+DMESG_LOG='boot completed'
+JOURNAL_LOG='audit: avc: denied { read } comm="cat" name="acl-selinux-denial.abcdef" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0:c123,c456 tclass=file permissive=0'
+export DMESG_LOG JOURNAL_LOG
+check_case 'category-tagged target is not excluded' 1 'AVC denials found in journal: 1'
+JOURNAL_LOG=''
+export JOURNAL_LOG
 DMESG_LOG='audit: avc: denied { write } comm="cat" name="acl-selinux-denial.abcdef" scontext=system_u:system_r:container_t:s0 tcontext=system_u:object_r:shadow_t:s0 tclass=file permissive=0'
 export DMESG_LOG
 check_case 'other access to probe is not excluded' 1 'AVC denials found in dmesg: 1'
