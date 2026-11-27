@@ -48,15 +48,45 @@ assert_docker_call() {
 }
 
 run_container() {
-    local mode="$1" signing_mode="$2" log="$3" status="${4:-up}"
+    local mode="$1" signing_mode="$2" log="$3" status="${4:-up}" fasttrack_repo_file="${5:-}"
     (
         cd "${TEST_DIR}"
         ACL_IPE_MODE="${mode}" \
         ACL_IPE_SIGNING_MODE="${signing_mode}" \
+        FASTTRACK_REPO_FILE="${fasttrack_repo_file}" \
         FAKE_DOCKER_LOG="${log}" \
         FAKE_DOCKER_STATUS="${status}" \
             ./run_sdk_container -C fake-sdk -n reused-container -- true
     )
+}
+
+test_fasttrack_repo_forwarded() {
+    local log="${TEST_DIR}/fasttrack.log"
+    local repo_file="${TEST_DIR}/custom-preview.repo"
+    printf '[fasttrack-preview]\n' > "${repo_file}"
+    : > "${log}"
+
+    run_container disabled ephemeral "${log}" up "${repo_file}"
+    grep -Fq $'\t-e\tFASTTRACK_REPO_FILE=/mnt/host/source/src/scripts/custom-preview.repo\t' "${log}" ||
+        { echo "Translated FastTrack repository path was not forwarded" >&2; return 1; }
+}
+
+test_invalid_fasttrack_repo_rejected() {
+    local log="${TEST_DIR}/invalid-fasttrack.log" output outside_repo
+    if output="$(run_container disabled ephemeral "${log}" up "${TEST_DIR}/missing.repo" 2>&1)"; then
+        echo "Missing FastTrack repository file was accepted" >&2
+        return 1
+    fi
+    [[ "${output}" == *"FastTrack repo file not found"* ]]
+
+    outside_repo="$(mktemp)"
+    if output="$(run_container disabled ephemeral "${log}" up "${outside_repo}" 2>&1)"; then
+        rm -f "${outside_repo}"
+        echo "FastTrack repository outside the source checkout was accepted" >&2
+        return 1
+    fi
+    rm -f "${outside_repo}"
+    [[ "${output}" == *"FastTrack repo file must be inside the source checkout"* ]]
 }
 
 test_mode_forwarded() {
@@ -142,6 +172,8 @@ test_mode_forwarded
 test_invalid_mode_rejected
 test_invalid_signing_mode_rejected
 test_enforcing_mode_rejected
+test_fasttrack_repo_forwarded
+test_invalid_fasttrack_repo_rejected
 test_sdk_entry_root_signing_validation
 
 echo "run_sdk_container IPE mode tests passed"

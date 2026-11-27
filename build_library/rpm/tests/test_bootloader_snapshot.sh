@@ -92,7 +92,7 @@ if (rpm_bootloader_package_file "${work_dir}/disk.img" grub2 x86_64) >/dev/null 
     die "Multiple bootloader RPM versions must fail"
 fi
 
-# FastTrack diagnostic queries must resolve the same snapshot as the install.
+# FastTrack diagnostic and validation queries must resolve the same snapshot as the install.
 fasttrack_repo="${work_dir}/fasttrack-preview.repo"
 fasttrack_root="${work_dir}/fasttrack-root"
 mkdir -p "${fasttrack_root}/etc/yum.repos.d" "${work_dir}/build"
@@ -102,6 +102,9 @@ sudo() {
     if [[ "${1:-}" == "/usr/bin/dnf5" ]]; then
         shift
         printf '%s\n' "$@" >> "${dnf_trace}"
+        if [[ " $* " == *" --latest-limit=1 "* ]]; then
+            printf 'snapshot-test-package\t0:1-1\tx86_64\n'
+        fi
         return 0
     fi
     "$@"
@@ -111,10 +114,13 @@ rpm_umount_pseudofs() { :; }
 remove_denylist_rpm_packages() { :; }
 remove_orphaned_perl_scripts() { :; }
 remove_orphaned_python_scripts() { :; }
+rpm_query_manifest() {
+    printf 'snapshot-test-package\t1-1\t1\t1\tMicrosoft\t(none)\t1\tx86_64\t0\tfixture.src.rpm\n'
+}
 FASTTRACK_REPO_FILE="${fasttrack_repo}"
 BUILD_DIR="${work_dir}/build"
 rpm_install_package "${fasttrack_root}" snapshot-test-package
-[[ "$(grep -Fxc -- '--snapshot-time=1700000000' "${dnf_trace}")" -eq 3 ]] ||
-    die "FastTrack diagnostic queries and install must all preserve PACKAGE_SNAPSHOT_TIME"
-[[ "$(grep -Fxc -- 'repoquery' "${dnf_trace}")" -eq 2 ]] ||
-    die "Expected both FastTrack diagnostic repoqueries to run"
+[[ "$(grep -Fxc -- '--snapshot-time=1700000000' "${dnf_trace}")" -eq 4 ]] ||
+    die "FastTrack diagnostic and validation queries and install must all preserve PACKAGE_SNAPSHOT_TIME"
+[[ "$(grep -Fxc -- 'repoquery' "${dnf_trace}")" -eq 3 ]] ||
+    die "Expected FastTrack diagnostic and validation repoqueries to run"

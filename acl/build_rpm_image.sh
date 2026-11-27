@@ -110,6 +110,8 @@
 #   SYSEXT_COMPRESSION      Sysext compression algorithm (default: zstd)
 #   PACKAGE_SNAPSHOT_TIME   Ten-digit Unix UTC cutoff for RPM and image package resolution;
 #                           requires an SDK with DNF5 snapshot support
+#   FASTTRACK_REPO_FILE     Preview .repo file inside this checkout defining fasttrack-preview;
+#                           bypasses the PMC cutoff and verifies installed preview versions
 #   PACKAGE_OPERATION       Image package handling: report-and-remove (default), report-only,
 #                           or disabled (skip package reports and selected-package removal)
 #   USE_SERIAL_CONSOLE      Use serial console (true) or SSH (false) - default: false

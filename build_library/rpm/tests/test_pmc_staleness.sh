@@ -19,7 +19,8 @@ if [[ "${1:-}" == "--help" ]]; then
 fi
 printf '%s\n' "$@" > "${DNF5_ARGS_FILE}"
 if [[ -n "${EXPECTED_SNAPSHOT_TIME:-}" ]] &&
-    printf '%s\n' "$@" | grep -Fxq -- "--snapshot-time=${EXPECTED_SNAPSHOT_TIME}"; then
+    printf '%s\n' "$@" | grep -Fxq -- "--snapshot-time=${EXPECTED_SNAPSHOT_TIME}" &&
+    ! printf '%s\n' "$@" | grep -Eq -- '^--snapshot-exclude-repos=.*fasttrack-check'; then
     printf '%s' "${DNF5_SNAPSHOT_OUTPUT:-}"
 else
     printf '%s' "${DNF5_OUTPUT:-}"
@@ -175,16 +176,26 @@ fi
 grep -Fq "${tracked_name}: STALE" "${work_dir}/epoch.log" ||
     fail "A newer upstream epoch did not report STALE"
 
-# A post-cutoff PMC package must not change a build pinned to an earlier snapshot.
+# A post-cutoff PMC package remains pinned, while FastTrack candidates bypass the cutoff.
 snapshot_time=1793059200
 post_cutoff_output="${stale_output}"
-for query_mode in pmc fasttrack; do
-    fasttrack_repo_file=""
-    if [[ "${query_mode}" == "fasttrack" ]]; then
-        fasttrack_repo_file="${work_dir}/fasttrack.repo"
-        printf '[fasttrack-preview]\nbaseurl=https://example.invalid/fasttrack\n' > "${fasttrack_repo_file}"
-    fi
-    DNF5_ARGS_FILE="${work_dir}/dnf5-${query_mode}-snapshot-args" \
+DNF5_ARGS_FILE="${work_dir}/dnf5-pmc-snapshot-args" \
+DNF5_OUTPUT="${post_cutoff_output}" \
+DNF5_SNAPSHOT_OUTPUT="${amd64_output}" \
+DNF5_BIN="${work_dir}/bin/dnf5" \
+EXPECTED_SNAPSHOT_TIME="${snapshot_time}" \
+PACKAGE_SNAPSHOT_TIME="${snapshot_time}" \
+BOARD=amd64-usr \
+bash "${CHECKER}" "${work_dir}/root" > "${work_dir}/pmc-snapshot.log" 2>&1 ||
+    fail "PMC staleness query changed outcome due to a post-cutoff package"
+grep -Fxq -- "--snapshot-time=${snapshot_time}" "${work_dir}/dnf5-pmc-snapshot-args" ||
+    fail "PMC staleness query did not preserve PACKAGE_SNAPSHOT_TIME"
+grep -Fxq -- '--snapshot-exclude-repos=azurelinux-local-cache' "${work_dir}/dnf5-pmc-snapshot-args" ||
+    fail "PMC staleness query did not apply the snapshot exclusion policy"
+
+fasttrack_repo_file="${work_dir}/fasttrack.repo"
+printf '[fasttrack-preview]\nbaseurl=https://example.invalid/fasttrack\n' > "${fasttrack_repo_file}"
+if DNF5_ARGS_FILE="${work_dir}/dnf5-fasttrack-snapshot-args" \
     DNF5_OUTPUT="${post_cutoff_output}" \
     DNF5_SNAPSHOT_OUTPUT="${amd64_output}" \
     DNF5_BIN="${work_dir}/bin/dnf5" \
@@ -192,20 +203,17 @@ for query_mode in pmc fasttrack; do
     PACKAGE_SNAPSHOT_TIME="${snapshot_time}" \
     FASTTRACK_REPO_FILE="${fasttrack_repo_file}" \
     BOARD=amd64-usr \
-    bash "${CHECKER}" "${work_dir}/root" > "${work_dir}/${query_mode}-snapshot.log" 2>&1 ||
-        fail "${query_mode} staleness query changed outcome due to a post-cutoff package"
-    grep -Fxq -- "--snapshot-time=${snapshot_time}" "${work_dir}/dnf5-${query_mode}-snapshot-args" ||
-        fail "${query_mode} staleness query did not preserve PACKAGE_SNAPSHOT_TIME"
-    grep -Fxq -- '--snapshot-exclude-repos=azurelinux-local-cache' "${work_dir}/dnf5-${query_mode}-snapshot-args" ||
-        fail "${query_mode} staleness query did not apply the snapshot exclusion policy"
-    if [[ "${query_mode}" == "fasttrack" ]]; then
-        grep -Fxq -- '--repofrompath=fasttrack-check,https://example.invalid/fasttrack' \
-            "${work_dir}/dnf5-${query_mode}-snapshot-args" ||
-            fail "FastTrack staleness query did not include the configured preview repo"
-        grep -Fxq -- '--repo=fasttrack-check' "${work_dir}/dnf5-${query_mode}-snapshot-args" ||
-            fail "FastTrack staleness query did not enable the preview repo"
-    fi
-done
+    bash "${CHECKER}" "${work_dir}/root" > "${work_dir}/fasttrack-snapshot.log" 2>&1; then
+    fail "FastTrack staleness query ignored a post-cutoff preview package"
+fi
+grep -Fxq -- '--snapshot-exclude-repos=azurelinux-local-cache,fasttrack-check' \
+    "${work_dir}/dnf5-fasttrack-snapshot-args" ||
+    fail "FastTrack staleness query did not exempt the preview repo"
+grep -Fxq -- '--repofrompath=fasttrack-check,https://example.invalid/fasttrack' \
+    "${work_dir}/dnf5-fasttrack-snapshot-args" ||
+    fail "FastTrack staleness query did not include the configured preview repo"
+grep -Fxq -- '--repo=fasttrack-check' "${work_dir}/dnf5-fasttrack-snapshot-args" ||
+    fail "FastTrack staleness query did not enable the preview repo"
 
 if DNF5_ARGS_FILE="${work_dir}/dnf5-missing-fasttrack-args" \
     DNF5_OUTPUT="${amd64_output}" DNF5_BIN="${work_dir}/bin/dnf5" \

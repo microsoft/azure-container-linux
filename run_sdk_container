@@ -139,6 +139,20 @@ stat=$(call_docker ps --all --no-trunc --filter name="${filter}${name}\$" --form
 setup_sdk_env
 setup_gsutil
 
+fasttrack_repo_file=""
+if [[ -n "${FASTTRACK_REPO_FILE:-}" ]]; then
+    if [[ ! -f "${FASTTRACK_REPO_FILE}" ]]; then
+        echo "FastTrack repo file not found: ${FASTTRACK_REPO_FILE}" >&2
+        exit 1
+    fi
+    fasttrack_relative_path=$(realpath --relative-to="${PWD}" "${FASTTRACK_REPO_FILE}")
+    if [[ "${fasttrack_relative_path}" == ../* ]]; then
+        echo "FastTrack repo file must be inside the source checkout" >&2
+        exit 1
+    fi
+    fasttrack_repo_file="/mnt/host/source/src/scripts/${fasttrack_relative_path}"
+fi
+
 mkdir -p "__build__/images"
 mkdir -p "sdk_container/.cache/sdks"
 
@@ -184,6 +198,7 @@ if [[ -z ${stat} ]] ; then
         -e SDK_GROUP_ID="$(id -g)"
         -e PACKAGE_SOURCE_MODE="${PACKAGE_SOURCE_MODE:-}"
         -e PACKAGE_SNAPSHOT_TIME="${PACKAGE_SNAPSHOT_TIME:-}"
+        -e FASTTRACK_REPO_FILE="${fasttrack_repo_file}"
         -e PACKAGE_OPERATION="${PACKAGE_OPERATION}"
         -e BOOTLOADER_MODE="${BOOTLOADER_MODE:-uki}"
         -e RPM_STAGING_DIR="/mnt/host/source/src/scripts/__build__/rpm-staging"
@@ -193,8 +208,6 @@ if [[ -z ${stat} ]] ; then
         -e IMAGE_VERSION_ID="${IMAGE_VERSION_ID:-}"
         -e IMAGE_BUILD_ID="${IMAGE_BUILD_ID:-}"
         -e EXTRA_KERNEL_CMDLINE="${EXTRA_KERNEL_CMDLINE:-}"
-        # Translate the generated host path to its location under the container bind mount.
-        -e FASTTRACK_REPO_FILE="${FASTTRACK_REPO_FILE:+/mnt/host/source/src/scripts/__build__/fasttrack-repo/fasttrack-preview.repo}"
         --name="${name}"
         --hostname="${hostname}"
         --entrypoint /bin/bash
@@ -223,9 +236,9 @@ call_docker exec "${name}" sh -c 'cp /etc/hosts /etc/hosts2; umount /etc/hosts ;
 call_docker exec "${tty[@]}" -i \
     -e INJECT_DOCKER_SYSEXT="${INJECT_DOCKER_SYSEXT:-false}" \
     -e PACKAGE_SNAPSHOT_TIME="${PACKAGE_SNAPSHOT_TIME:-}" \
+    -e FASTTRACK_REPO_FILE="${fasttrack_repo_file}" \
     -e PACKAGE_OPERATION="${PACKAGE_OPERATION}" \
     -e ACL_IPE_MODE="${ACL_IPE_MODE}" \
     -e ACL_IPE_SIGNING_MODE="${ACL_IPE_SIGNING_MODE}" \
     -e ACL_ROOT_HASH_SIGNING_ENABLED="${ACL_ROOT_HASH_SIGNING_ENABLED:-false}" \
-    -e FASTTRACK_REPO_FILE="${FASTTRACK_REPO_FILE:+/mnt/host/source/src/scripts/__build__/fasttrack-repo/fasttrack-preview.repo}" \
     "${name}" /mnt/host/source/src/scripts/sdk_lib/sdk_entry.sh "$@"

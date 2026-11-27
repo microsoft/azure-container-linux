@@ -38,7 +38,11 @@ if [[ -n "${PACKAGE_SNAPSHOT_TIME:-}" ]]; then
         error "SDK DNF5 does not support --snapshot-time; rebuild the SDK with the snapshot plugin"
         exit 1
     fi
-    snapshot_args+=(--snapshot-time="${PACKAGE_SNAPSHOT_TIME}" --snapshot-exclude-repos=azurelinux-local-cache)
+    snapshot_excluded_repos=azurelinux-local-cache
+    if [[ -n "${FASTTRACK_REPO_FILE:-}" ]]; then
+        snapshot_excluded_repos+=,fasttrack-check
+    fi
+    snapshot_args+=(--snapshot-time="${PACKAGE_SNAPSHOT_TIME}" --snapshot-exclude-repos="${snapshot_excluded_repos}")
 fi
 
 # Use BOARD when available so cross-architecture builds query the target repos.

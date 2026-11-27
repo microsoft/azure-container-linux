@@ -83,12 +83,14 @@ def main():
                 ("snapshot-demo", "4", None),
                 ("grub2", "1", CUTOFF - 1),
                 ("grub2", "2", CUTOFF + 1),
+                ("kernel", "1", CUTOFF - 1),
             ],
         )
         write_repo(
             root / "local",
             [("grub2", "9", CUTOFF + 1), ("snapshot-local", "1", CUTOFF + 1)],
         )
+        write_repo(root / "fasttrack", [("kernel", "2", CUTOFF + 1)])
         repos = root / "repos"
         repos.mkdir()
         (repos / "snapshot.repo").write_text(
@@ -99,6 +101,9 @@ def main():
             f"baseurl={(root / 'local').as_uri()}\n"
             "enabled=1\ngpgcheck=0\npriority=1\n"
             "excludepkgs=grub2 grub2-efi grub2-efi-binary shim systemd-boot\n"
+            "[fasttrack-preview]\n"
+            f"baseurl={(root / 'fasttrack').as_uri()}\n"
+            "enabled=1\ngpgcheck=0\npriority=1\n"
         )
         base = [
             "/usr/bin/dnf5",
@@ -108,6 +113,7 @@ def main():
             "--disable-repo=*",
             "--enable-repo=snapshot-test",
             "--enable-repo=azurelinux-local-cache",
+            "--enable-repo=fasttrack-preview",
         ]
 
         def run(*args):
@@ -146,6 +152,17 @@ def main():
             raise AssertionError("Locally built packages must remain eligible after the cutoff")
         if versions(CUTOFF, "grub2") != {"grub2-1"}:
             raise AssertionError("Retained local or newer upstream bootloader RPM bypassed the cutoff")
+        if versions(CUTOFF, "kernel") != {"kernel-1"}:
+            raise AssertionError("A non-exempt preview must still obey the cutoff")
+        preview = run(
+            f"--snapshot-time={CUTOFF}",
+            "--snapshot-exclude-repos=azurelinux-local-cache,fasttrack-preview",
+            "repoquery", "--available", "--latest-limit=1",
+            "--queryformat=%{name}-%{epoch}:%{version}-%{release}\n",
+            "kernel",
+        )
+        if set(preview.splitlines()) != {"kernel-0:2-1"}:
+            raise AssertionError(f"Expected the newer FastTrack kernel, got {preview!r}")
 
         destination = root / "downloads"
         run(
@@ -161,6 +178,13 @@ def main():
         expected = {"grub2-1-1.noarch.rpm", "snapshot-demo-2-1.noarch.rpm"}
         if actual != expected:
             raise AssertionError(f"Downloaded {actual}, expected {expected}")
+        run(
+            f"--snapshot-time={CUTOFF}",
+            "--snapshot-exclude-repos=azurelinux-local-cache,fasttrack-preview",
+            "download", f"--destdir={destination}", "kernel",
+        )
+        if not (destination / "kernel-2-1.noarch.rpm").is_file():
+            raise AssertionError("Download did not select the post-cutoff FastTrack kernel")
 
 
 if __name__ == "__main__":
